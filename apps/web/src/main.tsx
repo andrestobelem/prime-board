@@ -4,7 +4,10 @@
 import { createRoot } from "react-dom/client";
 import { setApiKey } from "./api.ts";
 import { App } from "./App.tsx";
+import { watchSystemTheme } from "./theme.ts";
 import "./styles.css";
+
+watchSystemTheme();
 
 const params = new URLSearchParams(window.location.search);
 const keyFromUrl = params.get("key");

@@ -1,4 +1,5 @@
 /* Tema Linear-like: oscuro, denso, tipografía del sistema (spec §9). */
+/* Tema oscuro (default). El tema activo se resuelve en <html data-theme>. */
 :root {
   --bg: #0f1011;
   --bg-sidebar: #131416;
@@ -13,6 +14,22 @@
   --accent-hover: #6e7ae2;
   --danger: #eb5757;
   --radius: 6px;
+}
+
+/* Tema claro (AT-150): paleta Linear-like sobre blanco. */
+html[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-sidebar: #f7f8f8;
+  --surface: #f1f2f4;
+  --surface-hover: #e8eaec;
+  --border: #d9dbdf;
+  --border-subtle: #e8e9eb;
+  --text: #282a30;
+  --text-muted: #6b6f76;
+  --text-faint: #9a9ea6;
+  --accent: #5e6ad2;
+  --accent-hover: #4f5ac2;
+  --danger: #d94b4b;
 }
 
 * { box-sizing: border-box; }

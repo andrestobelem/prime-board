@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { gql } from "../api.ts";
 import { navigate } from "../router.tsx";
+import { setThemePreference } from "../theme.ts";
 import type { ShellData } from "../App.tsx";
 
 interface PaletteItem {
@@ -56,6 +57,12 @@ export function Palette({ shell, onClose, onNewIssue }: PaletteProps) {
       kind: "navigate",
       run: () => { onClose(); navigate("/settings"); },
     },
+    ...(["dark", "light", "system"] as const).map((mode) => ({
+      id: `theme-${mode}`,
+      label: `Theme: ${mode[0]!.toUpperCase()}${mode.slice(1)}`,
+      kind: "theme",
+      run: () => { setThemePreference(mode); onClose(); },
+    })),
   ];
 
   const lower = query.trim().toLowerCase();
