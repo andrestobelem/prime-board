@@ -9,7 +9,7 @@ import { Link } from "../router.tsx";
 const ISSUE_QUERY = `query($id: ID!) {
   issue(id: $id) {
     id identifier title description priority url branchName createdAt
-    team { id key name states { id name type color position } labels { id name color } }
+    team { id key name states { id name type color position } labels { id name color } projects { id name } }
     state { id name type }
     assignee { id name type }
     creator { id name type }
@@ -21,7 +21,6 @@ const ISSUE_QUERY = `query($id: ID!) {
     activity { id type actor { name type } payload createdAt }
   }
   actors { id name type }
-  projects { id name }
 }`;
 
 function Markdown({ text }: { text: string }) {
@@ -239,7 +238,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             onChange={(event) => update({ projectId: event.target.value || null })}
           >
             <option value="">No project</option>
-            {result.data.projects.map((project: any) => (
+            {issue.team.projects.map((project: any) => (
               <option key={project.id} value={project.id}>{project.name}</option>
             ))}
           </select>

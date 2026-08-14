@@ -45,12 +45,14 @@ export function Palette({ shell, onClose, onNewIssue }: PaletteProps) {
         run: () => { onClose(); navigate(`/board/${team.key}`); },
       },
     ]),
-    ...shell.projects.map((project) => ({
-      id: `project-${project.id}`,
-      label: `Go to project ${project.name}`,
-      kind: "navigate",
-      run: () => { onClose(); navigate(`/project/${project.id}`); },
-    })),
+    ...shell.teams.flatMap((team) =>
+      team.projects.map((project) => ({
+        id: `project-${project.id}`,
+        label: `Go to project ${project.name} (${team.key})`,
+        kind: "navigate",
+        run: () => { onClose(); navigate(`/project/${project.id}`); },
+      })),
+    ),
     {
       id: "settings",
       label: "Open settings",

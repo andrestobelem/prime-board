@@ -16,14 +16,17 @@ import { TeamView } from "./views/TeamView.tsx";
 
 const SHELL_QUERY = `{
   workspace { id name }
-  teams { id key name }
-  projects { id name state }
+  teams { id key name projects { id name state } }
 }`;
 
 export interface ShellData {
   workspace: { id: string; name: string };
-  teams: Array<{ id: string; key: string; name: string }>;
-  projects: Array<{ id: string; name: string; state: string }>;
+  teams: Array<{
+    id: string;
+    key: string;
+    name: string;
+    projects: Array<{ id: string; name: string; state: string }>;
+  }>;
 }
 
 export function App() {
@@ -93,7 +96,9 @@ export function App() {
     );
     content = <IssueView issueRef={param} />;
   } else if (section === "project" && param) {
-    const project = shell.data?.projects.find((candidate) => candidate.id === param);
+    const project = shell.data?.teams
+      .flatMap((team) => team.projects)
+      .find((candidate) => candidate.id === param);
     topbar = (
       <>
         <span className="crumb">Projects</span>
@@ -133,11 +138,7 @@ export function App() {
 
   return (
     <div className="app">
-      <Sidebar
-        workspace={shell.data?.workspace ?? null}
-        teams={teams}
-        projects={shell.data?.projects ?? []}
-      />
+      <Sidebar workspace={shell.data?.workspace ?? null} teams={teams} />
       <div className="main">
         {topbar && <div className="topbar">{topbar}</div>}
         <div className="content">{content}</div>

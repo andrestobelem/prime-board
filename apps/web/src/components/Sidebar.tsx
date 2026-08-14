@@ -1,13 +1,17 @@
-// Sidebar Linear-like: workspace, teams, proyectos y settings.
+// Sidebar Linear-like: workspace y teams con sus proyectos anidados (AT-152).
 import { Link, useRoute } from "../router.tsx";
 
 interface SidebarProps {
   workspace: { name: string } | null;
-  teams: Array<{ id: string; key: string; name: string }>;
-  projects: Array<{ id: string; name: string }>;
+  teams: Array<{
+    id: string;
+    key: string;
+    name: string;
+    projects: Array<{ id: string; name: string }>;
+  }>;
 }
 
-export function Sidebar({ workspace, teams, projects }: SidebarProps) {
+export function Sidebar({ workspace, teams }: SidebarProps) {
   const route = useRoute();
   const active = (path: string) => (`/${route.join("/")}` === path ? "active" : "");
   return (
@@ -16,17 +20,23 @@ export function Sidebar({ workspace, teams, projects }: SidebarProps) {
         <span className="logo">pb</span>
         {workspace?.name ?? "prime-board"}
       </div>
-      <div className="section">Teams</div>
       {teams.map((team) => (
-        <Link key={team.id} to={`/team/${team.key}`} className={active(`/team/${team.key}`)}>
-          <span style={{ color: "var(--text-faint)" }}>#</span> {team.name}
-        </Link>
-      ))}
-      <div className="section">Projects</div>
-      {projects.map((project) => (
-        <Link key={project.id} to={`/project/${project.id}`} className={active(`/project/${project.id}`)}>
-          <span style={{ color: "var(--text-faint)" }}>▦</span> {project.name}
-        </Link>
+        <div key={team.id}>
+          <div className="section">{team.name}</div>
+          <Link to={`/team/${team.key}`} className={active(`/team/${team.key}`)}>
+            <span style={{ color: "var(--text-faint)" }}>#</span> Issues
+          </Link>
+          {team.projects.map((project) => (
+            <Link
+              key={project.id}
+              to={`/project/${project.id}`}
+              className={active(`/project/${project.id}`)}
+              // Anidado bajo el team, como en Linear.
+            >
+              <span style={{ color: "var(--text-faint)", paddingLeft: 10 }}>▦</span> {project.name}
+            </Link>
+          ))}
+        </div>
       ))}
       <div className="spacer" />
       <div className="hint"><kbd>C</kbd> new issue · <kbd>⌘K</kbd> commands</div>
