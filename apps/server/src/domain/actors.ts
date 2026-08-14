@@ -1,5 +1,9 @@
-// Mapeo de filas snake_case a la forma camelCase que expone la API.
+// Dominio de actores (humanos y agentes) y sus API keys.
+import type { Database } from "bun:sqlite";
 import type { ActorRow } from "../auth/viewer.ts";
+import { generateApiKey, hashApiKey } from "../auth/keys.ts";
+import { apiError } from "../graphql/errors.ts";
+import { newId, now } from "../db/util.ts";
 
 export function mapActor(row: ActorRow) {
   return {
@@ -9,4 +13,69 @@ export function mapActor(row: ActorRow) {
     type: row.type,
     createdAt: row.created_at,
   };
+}
+
+export function getActor(db: Database, id: string): ActorRow | null {
+  return db.query("SELECT * FROM actors WHERE id = ?1").get(id) as ActorRow | null;
+}
+
+export function listActors(db: Database, type?: string | null): ActorRow[] {
+  if (type) {
+    return db.query("SELECT * FROM actors WHERE type = ?1 ORDER BY created_at").all(type) as ActorRow[];
+  }
+  return db.query("SELECT * FROM actors ORDER BY created_at").all() as ActorRow[];
+}
+
+export function createActor(
+  db: Database,
+  input: { name: string; type: string; email?: string | null },
+): ActorRow {
+  const name = input.name.trim();
+  if (!name) throw apiError("VALIDATION_FAILED", "Actor name cannot be empty");
+  if (input.type !== "human" && input.type !== "agent") {
+    throw apiError("VALIDATION_FAILED", `Invalid actor type: ${input.type}`);
+  }
+  const id = newId();
+  const timestamp = now();
+  db.query(
+    "INSERT INTO actors (id, name, email, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+  ).run(id, name, input.email ?? null, input.type, timestamp, timestamp);
+  return getActor(db, id)!;
+}
+
+export interface ApiKeyRow {
+  id: string;
+  actor_id: string;
+  name: string;
+  hash: string;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export function mapApiKey(row: ApiKeyRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    actorId: row.actor_id,
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at,
+  };
+}
+
+/** Crea una key para un actor. Devuelve la key en claro UNA sola vez. */
+export function createApiKey(
+  db: Database,
+  input: { actorId: string; name: string },
+): { row: ApiKeyRow; key: string } {
+  const actor = getActor(db, input.actorId);
+  if (!actor) throw apiError("NOT_FOUND", "Actor not found");
+  if (!input.name.trim()) throw apiError("VALIDATION_FAILED", "API key name cannot be empty");
+
+  const key = generateApiKey();
+  const id = newId();
+  db.query(
+    "INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+  ).run(id, input.actorId, input.name.trim(), hashApiKey(key), now());
+  const row = db.query("SELECT * FROM api_keys WHERE id = ?1").get(id) as ApiKeyRow;
+  return { row, key };
 }

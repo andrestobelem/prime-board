@@ -1,6 +1,12 @@
 // Resolvers raíz del esquema. Se ensamblan por dominio a medida que crece la API.
 import { GraphQLScalarType, Kind } from "graphql";
-import { mapActor } from "../domain/actors.ts";
+import {
+  createActor, createApiKey, getActor, listActors, mapActor, mapApiKey,
+} from "../domain/actors.ts";
+import {
+  createTeam, createWorkflowState, getTeam, listTeamStates, mapTeam, mapWorkflowState,
+  type TeamRow,
+} from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { apiError, requireViewer } from "./errors.ts";
 
@@ -22,6 +28,21 @@ export const resolvers = {
   DateTime,
   JSON: JSONScalar,
   ActorType: { HUMAN: "human", AGENT: "agent" },
+  StateType: {
+    TRIAGE: "triage", BACKLOG: "backlog", UNSTARTED: "unstarted",
+    STARTED: "started", COMPLETED: "completed", CANCELED: "canceled",
+  },
+
+  Team: {
+    states: (team: { id: string }, _args: unknown, context: Context) =>
+      listTeamStates(context.db, team.id).map(mapWorkflowState),
+  },
+
+  ApiKey: {
+    actor: (apiKey: { actorId: string }, _args: unknown, context: Context) =>
+      mapActor(getActor(context.db, apiKey.actorId)!),
+  },
+
   Query: {
     viewer: (_parent: unknown, _args: unknown, context: Context) =>
       mapActor(requireViewer(context)),
@@ -32,6 +53,59 @@ export const resolvers = {
         .get() as { id: string; name: string; url_key: string; created_at: string } | null;
       if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
       return { id: row.id, name: row.name, urlKey: row.url_key, createdAt: row.created_at };
+    },
+    teams: (_parent: unknown, _args: unknown, context: Context) => {
+      requireViewer(context);
+      const rows = context.db.query("SELECT * FROM teams ORDER BY created_at").all() as TeamRow[];
+      return rows.map(mapTeam);
+    },
+    team: (_parent: unknown, args: { id?: string; key?: string }, context: Context) => {
+      requireViewer(context);
+      const row = getTeam(context.db, args);
+      return row ? mapTeam(row) : null;
+    },
+    actors: (_parent: unknown, args: { type?: string }, context: Context) => {
+      requireViewer(context);
+      return listActors(context.db, args.type).map(mapActor);
+    },
+  },
+
+  Mutation: {
+    teamCreate: (
+      _parent: unknown,
+      args: { input: { name: string; key: string; description?: string | null } },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      return { success: true, team: mapTeam(createTeam(context.db, args.input)) };
+    },
+    actorCreate: (
+      _parent: unknown,
+      args: { input: { name: string; type: string; email?: string | null } },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      return { success: true, actor: mapActor(createActor(context.db, args.input)) };
+    },
+    apiKeyCreate: (
+      _parent: unknown,
+      args: { input: { actorId: string; name: string } },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      const { row, key } = createApiKey(context.db, args.input);
+      return { success: true, apiKey: mapApiKey(row), key };
+    },
+    workflowStateCreate: (
+      _parent: unknown,
+      args: { input: { teamId: string; name: string; type: string; color?: string | null; position?: number | null } },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      return {
+        success: true,
+        workflowState: mapWorkflowState(createWorkflowState(context.db, args.input)),
+      };
     },
   },
 };
