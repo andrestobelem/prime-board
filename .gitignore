@@ -114,3 +114,6 @@ dist
 
 # scratchpad (trabajo temporal, no se versiona)
 scratchpad/
+
+# build de la UI
+apps/web/dist/

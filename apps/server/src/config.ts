@@ -6,6 +6,8 @@ export interface Config {
   port: number;
   dbPath: string;
   dev: boolean;
+  /** Carpeta con la UI buildeada (apps/web/dist); si no existe, la raíz responde JSON. */
+  webDist: string;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -13,5 +15,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     port: Number(env.PRIME_BOARD_PORT ?? 3333),
     dbPath: env.PRIME_BOARD_DB ?? join(homedir(), ".prime-board", "prime-board.db"),
     dev: env.NODE_ENV !== "production",
+    webDist: env.PRIME_BOARD_WEB_DIST ?? join(import.meta.dir, "..", "..", "web", "dist"),
   };
 }

@@ -19,7 +19,7 @@ export function createTestApp(): TestApp {
   db.exec("PRAGMA foreign_keys = ON;");
   migrate(db);
   const seed = bootstrap(db);
-  const config: Config = { port: 0, dbPath: ":memory:", dev: true };
+  const config: Config = { port: 0, dbPath: ":memory:", dev: true, webDist: "/nonexistent" };
   // Reintentos casi inmediatos para que los tests de webhooks sean rápidos.
   const { server, events } = createApp({ db, config, webhookOptions: { retryDelays: [5, 5, 5] } });
   return {

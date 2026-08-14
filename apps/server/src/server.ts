@@ -1,5 +1,6 @@
 // Servidor HTTP: /graphql (GraphQL Yoga, GraphiQL en dev), /health y raíz.
 import type { Database } from "bun:sqlite";
+import { join } from "node:path";
 import { createSchema, createYoga } from "graphql-yoga";
 import { APP_NAME, APP_VERSION, typeDefs } from "@prime-board/schema";
 import { resolveViewer } from "./auth/viewer.ts";
@@ -33,16 +34,32 @@ export function createApp({ db, config, webhookOptions }: AppDeps) {
 
   const server = Bun.serve({
     port: config.port,
-    fetch(request) {
+    async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname.startsWith("/graphql")) {
         return yoga.fetch(request);
       }
-      if (url.pathname === "/") {
-        return Response.json({ name: APP_NAME, version: APP_VERSION, graphql: "/graphql" });
-      }
       if (url.pathname === "/health") {
         return Response.json({ status: "ok" });
+      }
+
+      // UI estática buildeada (si existe). Los clientes de API (sin Accept html
+      // o rutas desconocidas no-GET) siguen recibiendo JSON.
+      if (request.method === "GET") {
+        const assetPath = url.pathname === "/" ? "/index.html" : url.pathname;
+        const asset = Bun.file(join(config.webDist, assetPath.replaceAll("..", "")));
+        if (await asset.exists()) {
+          return new Response(asset);
+        }
+        // Fallback SPA: cualquier ruta navegable devuelve index.html.
+        if (request.headers.get("accept")?.includes("text/html")) {
+          const index = Bun.file(join(config.webDist, "index.html"));
+          if (await index.exists()) return new Response(index);
+        }
+      }
+
+      if (url.pathname === "/") {
+        return Response.json({ name: APP_NAME, version: APP_VERSION, graphql: "/graphql" });
       }
       return Response.json({ error: "Not found" }, { status: 404 });
     },
