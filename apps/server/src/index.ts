@@ -3,7 +3,7 @@
 import { loadConfig } from "./config.ts";
 import { openDatabase } from "./db/database.ts";
 import { bootstrap } from "./db/seed.ts";
-import { createServer } from "./server.ts";
+import { createApp } from "./server.ts";
 
 const config = loadConfig();
 const db = openDatabase(config.dbPath);
@@ -15,6 +15,7 @@ if (result.created && result.adminApiKey) {
   console.log(`Admin API key (save it now, it will not be shown again): ${result.adminApiKey}`);
 }
 
-const server = createServer(config.port);
+const server = createApp({ db, config });
 console.log(`prime-board server listening on http://localhost:${server.port}`);
+console.log(`GraphQL endpoint: http://localhost:${server.port}/graphql`);
 console.log(`database: ${config.dbPath}`);

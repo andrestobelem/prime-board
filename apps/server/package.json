@@ -6,6 +6,8 @@
     "dev": "bun --watch src/index.ts"
   },
   "dependencies": {
-    "@prime-board/schema": "workspace:*"
+    "@prime-board/schema": "workspace:*",
+    "graphql": "^17.0.2",
+    "graphql-yoga": "^5.21.3"
   }
 }

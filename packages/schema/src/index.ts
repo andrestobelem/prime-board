@@ -1,4 +1,4 @@
-// Constantes compartidas del monorepo.
-// El esquema GraphQL (SDL) y los tipos compartidos van a vivir acá (AT-132+).
+// Constantes compartidas del monorepo y SDL del esquema GraphQL.
 export const APP_NAME = "prime-board";
 export const APP_VERSION = "0.0.1";
+export { typeDefs } from "./sdl.ts";
