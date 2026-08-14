@@ -49,6 +49,7 @@ export const typeDefs = /* GraphQL */ `
     description: String
     states: [WorkflowState!]!
     labels: [Label!]!
+    projects: [Project!]!
     createdAt: DateTime!
   }
 
@@ -139,6 +140,7 @@ export const typeDefs = /* GraphQL */ `
     state: ProjectState!
     lead: Actor
     targetDate: DateTime
+    teams: [Team!]!
     issues(first: Int = 50): IssueConnection!
     createdAt: DateTime!
     updatedAt: DateTime!
@@ -313,6 +315,8 @@ export const typeDefs = /* GraphQL */ `
     state: ProjectState
     leadId: ID
     targetDate: DateTime
+    """Teams del proyecto; omitir = todos los teams actuales (compat)."""
+    teamIds: [ID!]
   }
 
   input ProjectUpdateInput {
@@ -321,6 +325,8 @@ export const typeDefs = /* GraphQL */ `
     state: ProjectState
     leadId: ID
     targetDate: DateTime
+    """Reemplaza el set de teams del proyecto."""
+    teamIds: [ID!]
   }
 
   type ProjectPayload {
@@ -359,7 +365,7 @@ export const typeDefs = /* GraphQL */ `
     issues(filter: IssueFilter, first: Int = 50, after: String, orderBy: IssueOrder = CREATED_DESC): IssueConnection!
     """Labels visibles para un team (workspace + propias); sin team, todas."""
     labels(team: ID): [Label!]!
-    projects(state: ProjectState): [Project!]!
+    projects(state: ProjectState, team: ID): [Project!]!
     project(id: ID!): Project
     webhooks: [Webhook!]!
   }

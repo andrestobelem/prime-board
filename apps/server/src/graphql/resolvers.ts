@@ -13,6 +13,7 @@ import { issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
 import { createLabel, listLabels, mapLabel } from "../domain/labels.ts";
 import { createWebhook, deleteWebhook, listWebhooks, mapWebhook } from "../domain/webhooks.ts";
+import { listProjects, mapProject } from "../domain/projects.ts";
 
 // Scalars passthrough: los timestamps viajan como strings ISO-8601 UTC.
 const DateTime = new GraphQLScalarType({
@@ -46,6 +47,8 @@ export const resolvers = {
       listTeamStates(context.db, team.id).map(mapWorkflowState),
     labels: (team: { id: string }, _args: unknown, context: Context) =>
       listLabels(context.db, team.id).map(mapLabel),
+    projects: (team: { id: string }, _args: unknown, context: Context) =>
+      listProjects(context.db, null, team.id).map(mapProject),
   },
 
   Issue: issueResolvers.Issue,

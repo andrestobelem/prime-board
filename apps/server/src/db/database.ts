@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import migration0001 from "./migrations/0001_init.sql" with { type: "text" };
+import migration0002 from "./migrations/0002_project_teams.sql" with { type: "text" };
 import { now } from "./util.ts";
 
 interface Migration {
@@ -13,6 +14,7 @@ interface Migration {
 
 const MIGRATIONS: Migration[] = [
   { version: 1, name: "init", sql: migration0001 },
+  { version: 2, name: "project_teams", sql: migration0002 },
 ];
 
 export function openDatabase(path: string): Database {

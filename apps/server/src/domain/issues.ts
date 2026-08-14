@@ -8,6 +8,7 @@ import {
   type IssueFilter, type IssueOrder,
 } from "./filters.ts";
 import { applyLabelOps, type LabelOps } from "./labels.ts";
+import { projectIncludesTeam } from "./projects.ts";
 import { getTeam } from "./teams.ts";
 
 export interface IssueRow {
@@ -142,6 +143,9 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
   if (input.projectId) {
     const project = db.query("SELECT id FROM projects WHERE id = ?1").get(input.projectId);
     if (!project) throw apiError("NOT_FOUND", "Project not found");
+    if (!projectIncludesTeam(db, input.projectId, team.id)) {
+      throw apiError("VALIDATION_FAILED", "Project does not include the issue's team");
+    }
   }
 
   const id = newId();
@@ -250,6 +254,9 @@ export function updateIssue(
       if (input.projectId !== null) {
         const project = db.query("SELECT id FROM projects WHERE id = ?1").get(input.projectId);
         if (!project) throw apiError("NOT_FOUND", "Project not found");
+        if (!projectIncludesTeam(db, input.projectId, issue.team_id)) {
+          throw apiError("VALIDATION_FAILED", "Project does not include the issue's team");
+        }
       }
       push("project_id", input.projectId);
       changes.push({ field: "project", from: issue.project_id, to: input.projectId });

@@ -1,7 +1,10 @@
 // Resolvers del dominio project (AT-137). Se ensamblan en resolvers.ts.
 import { getActor, mapActor } from "../domain/actors.ts";
 import { listIssues, mapIssue } from "../domain/issues.ts";
-import { createProject, getProject, listProjects, mapProject, updateProject } from "../domain/projects.ts";
+import {
+  createProject, getProject, listProjects, listProjectTeamIds, mapProject, updateProject,
+} from "../domain/projects.ts";
+import { getTeam, mapTeam } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { requireViewer } from "./errors.ts";
 
@@ -11,6 +14,10 @@ export const projectResolvers = {
   Project: {
     lead: (project: MappedProject, _args: unknown, context: Context) =>
       project.leadId ? mapActor(getActor(context.db, project.leadId)!) : null,
+    teams: (project: MappedProject, _args: unknown, context: Context) =>
+      listProjectTeamIds(context.db, project.id).map((teamId) =>
+        mapTeam(getTeam(context.db, { id: teamId })!),
+      ),
     issues: (project: MappedProject, args: { first?: number }, context: Context) => {
       const first = Math.min(Math.max(args.first ?? 50, 1), 250);
       const page = listIssues(context.db, { filter: { project: { eq: project.id } }, first });
@@ -22,9 +29,9 @@ export const projectResolvers = {
   },
 
   Query: {
-    projects: (_parent: unknown, args: { state?: string }, context: Context) => {
+    projects: (_parent: unknown, args: { state?: string; team?: string }, context: Context) => {
       requireViewer(context);
-      return listProjects(context.db, args.state).map(mapProject);
+      return listProjects(context.db, args.state, args.team).map(mapProject);
     },
     project: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);

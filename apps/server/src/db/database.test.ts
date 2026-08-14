@@ -41,10 +41,13 @@ describe("openDatabase", () => {
 
   it("es idempotente: reabrir no re-aplica migraciones", () => {
     const path = tempDbPath();
-    openDatabase(path).close();
+    const first = openDatabase(path);
+    const initial = first.query("SELECT count(*) AS n FROM _migrations").get() as { n: number };
+    first.close();
     const db = openDatabase(path);
-    const count = db.query("SELECT count(*) AS n FROM _migrations").get() as { n: number };
-    expect(count.n).toBe(1);
+    const after = db.query("SELECT count(*) AS n FROM _migrations").get() as { n: number };
+    expect(after.n).toBe(initial.n);
+    expect(after.n).toBeGreaterThanOrEqual(2);
     db.close();
   });
 });

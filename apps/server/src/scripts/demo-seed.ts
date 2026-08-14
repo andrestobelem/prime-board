@@ -44,6 +44,7 @@ const project = createProject(db, {
   description: "Sample project to explore prime-board",
   state: "started",
   leadId: agent.id,
+  teamIds: [team.id],
 });
 
 // Issues variados: estados, prioridades, sub-issues, labels y comentarios.

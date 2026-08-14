@@ -38,15 +38,56 @@ export function getProject(db: Database, id: string): ProjectRow | null {
   return db.query("SELECT * FROM projects WHERE id = ?1").get(id) as ProjectRow | null;
 }
 
-export function listProjects(db: Database, state?: string | null): ProjectRow[] {
+export function listProjects(
+  db: Database,
+  state?: string | null,
+  teamId?: string | null,
+): ProjectRow[] {
+  const where: string[] = ["archived_at IS NULL"];
+  const params: unknown[] = [];
   if (state) {
-    return db
-      .query("SELECT * FROM projects WHERE state = ?1 AND archived_at IS NULL ORDER BY created_at")
-      .all(state) as ProjectRow[];
+    params.push(state);
+    where.push(`state = ?${params.length}`);
+  }
+  if (teamId) {
+    params.push(teamId);
+    where.push(`id IN (SELECT project_id FROM project_teams WHERE team_id = ?${params.length})`);
   }
   return db
-    .query("SELECT * FROM projects WHERE archived_at IS NULL ORDER BY created_at")
-    .all() as ProjectRow[];
+    .query(`SELECT * FROM projects WHERE ${where.join(" AND ")} ORDER BY created_at`)
+    .all(...(params as never[])) as ProjectRow[];
+}
+
+/** Teams asociados a un proyecto (relación N:M, paridad con Linear). */
+export function listProjectTeamIds(db: Database, projectId: string): string[] {
+  return db
+    .query("SELECT team_id FROM project_teams WHERE project_id = ?1")
+    .values(projectId)
+    .map((row) => row[0] as string);
+}
+
+export function projectIncludesTeam(db: Database, projectId: string, teamId: string): boolean {
+  return Boolean(
+    db.query("SELECT 1 FROM project_teams WHERE project_id = ?1 AND team_id = ?2").get(projectId, teamId),
+  );
+}
+
+function setProjectTeams(db: Database, projectId: string, teamIds: string[]): void {
+  if (teamIds.length === 0) {
+    throw apiError("VALIDATION_FAILED", "A project must belong to at least one team");
+  }
+  for (const teamId of teamIds) {
+    const team = db.query("SELECT id FROM teams WHERE id = ?1").get(teamId);
+    if (!team) throw apiError("NOT_FOUND", `Team not found: ${teamId}`);
+  }
+  db.query("DELETE FROM project_teams WHERE project_id = ?1").run(projectId);
+  for (const teamId of new Set(teamIds)) {
+    db.query("INSERT INTO project_teams (project_id, team_id) VALUES (?1, ?2)").run(projectId, teamId);
+  }
+}
+
+function allTeamIds(db: Database): string[] {
+  return db.query("SELECT id FROM teams").values().map((row) => row[0] as string);
 }
 
 function validate(db: Database, input: { state?: string | null; leadId?: string | null }): void {
@@ -66,6 +107,7 @@ export function createProject(
     state?: string | null;
     leadId?: string | null;
     targetDate?: string | null;
+    teamIds?: string[] | null;
   },
 ): ProjectRow {
   const name = input.name.trim();
@@ -73,14 +115,19 @@ export function createProject(
   validate(db, input);
 
   const id = newId();
-  const timestamp = now();
-  db.query(
-    `INSERT INTO projects (id, name, description, state, lead_id, target_date, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
-  ).run(
-    id, name, input.description ?? null, input.state ?? "backlog",
-    input.leadId ?? null, input.targetDate ?? null, timestamp,
-  );
+  db.transaction(() => {
+    const timestamp = now();
+    db.query(
+      `INSERT INTO projects (id, name, description, state, lead_id, target_date, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
+    ).run(
+      id, name, input.description ?? null, input.state ?? "backlog",
+      input.leadId ?? null, input.targetDate ?? null, timestamp,
+    );
+    // Sin teamIds explícitos, el proyecto se asocia a todos los teams actuales
+    // (compatibilidad con clientes previos a AT-152).
+    setProjectTeams(db, id, input.teamIds ?? allTeamIds(db));
+  })();
   return getProject(db, id)!;
 }
 
@@ -93,11 +140,13 @@ export function updateProject(
     state?: string | null;
     leadId?: string | null;
     targetDate?: string | null;
+    teamIds?: string[] | null;
   },
 ): ProjectRow {
   const project = getProject(db, id);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
   validate(db, input);
+  if (input.teamIds) setProjectTeams(db, id, input.teamIds);
 
   const sets: string[] = [];
   const params: unknown[] = [];
