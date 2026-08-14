@@ -10,6 +10,7 @@ import {
 import type { Context } from "./context.ts";
 import { apiError, requireViewer } from "./errors.ts";
 import { issueResolvers } from "./issue-resolvers.ts";
+import { projectResolvers } from "./project-resolvers.ts";
 import { createLabel, listLabels, mapLabel } from "../domain/labels.ts";
 
 // Scalars passthrough: los timestamps viajan como strings ISO-8601 UTC.
@@ -34,6 +35,10 @@ export const resolvers = {
     TRIAGE: "triage", BACKLOG: "backlog", UNSTARTED: "unstarted",
     STARTED: "started", COMPLETED: "completed", CANCELED: "canceled",
   },
+  ProjectState: {
+    BACKLOG: "backlog", PLANNED: "planned", STARTED: "started",
+    PAUSED: "paused", COMPLETED: "completed", CANCELED: "canceled",
+  },
 
   Team: {
     states: (team: { id: string }, _args: unknown, context: Context) =>
@@ -43,6 +48,7 @@ export const resolvers = {
   },
 
   Issue: issueResolvers.Issue,
+  Project: projectResolvers.Project,
   Comment: issueResolvers.Comment,
   Activity: issueResolvers.Activity,
 
@@ -53,6 +59,7 @@ export const resolvers = {
 
   Query: {
     ...issueResolvers.Query,
+    ...projectResolvers.Query,
     viewer: (_parent: unknown, _args: unknown, context: Context) =>
       mapActor(requireViewer(context)),
     workspace: (_parent: unknown, _args: unknown, context: Context) => {
@@ -85,6 +92,7 @@ export const resolvers = {
 
   Mutation: {
     ...issueResolvers.Mutation,
+    ...projectResolvers.Mutation,
     teamCreate: (
       _parent: unknown,
       args: { input: { name: string; key: string; description?: string | null } },

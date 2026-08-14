@@ -301,6 +301,7 @@ export interface SimpleIssueFilter {
   team?: { eq?: string | null } | null;
   state?: { eq?: string | null } | null;
   assignee?: { eq?: string | null } | null;
+  project?: { eq?: string | null } | null;
 }
 
 export function listIssues(
@@ -317,6 +318,7 @@ export function listIssues(
   if (filter?.team?.eq) add("issues.team_id = ?", filter.team.eq);
   if (filter?.state?.eq) add("issues.state_id = ?", filter.state.eq);
   if (filter?.assignee?.eq) add("issues.assignee_id = ?", filter.assignee.eq);
+  if (filter?.project?.eq) add("issues.project_id = ?", filter.project.eq);
 
   const rows = db
     .query(

@@ -82,6 +82,7 @@ export const typeDefs = /* GraphQL */ `
     parent: Issue
     children: [Issue!]!
     labels: [Label!]!
+    project: Project
     comments: [Comment!]!
     """Historial append-only de cambios del issue."""
     activity: [Activity!]!
@@ -119,6 +120,28 @@ export const typeDefs = /* GraphQL */ `
     actor: Actor!
     payload: JSON!
     createdAt: DateTime!
+  }
+
+  enum ProjectState {
+    BACKLOG
+    PLANNED
+    STARTED
+    PAUSED
+    COMPLETED
+    CANCELED
+  }
+
+  type Project {
+    id: ID!
+    name: String!
+    description: String
+    state: ProjectState!
+    lead: Actor
+    targetDate: DateTime
+    issues(first: Int = 50): IssueConnection!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    archivedAt: DateTime
   }
 
   input TeamCreateInput {
@@ -190,6 +213,7 @@ export const typeDefs = /* GraphQL */ `
     team: IDComparator
     state: IDComparator
     assignee: IDComparator
+    project: IDComparator
   }
 
   input IssueCreateInput {
@@ -235,6 +259,27 @@ export const typeDefs = /* GraphQL */ `
     comment: Comment!
   }
 
+  input ProjectCreateInput {
+    name: String!
+    description: String
+    state: ProjectState
+    leadId: ID
+    targetDate: DateTime
+  }
+
+  input ProjectUpdateInput {
+    name: String
+    description: String
+    state: ProjectState
+    leadId: ID
+    targetDate: DateTime
+  }
+
+  type ProjectPayload {
+    success: Boolean!
+    project: Project!
+  }
+
   type Query {
     """Actor autenticado por la API key del header Authorization."""
     viewer: Actor!
@@ -247,6 +292,8 @@ export const typeDefs = /* GraphQL */ `
     issues(filter: IssueFilter, first: Int = 50, after: String): IssueConnection!
     """Labels visibles para un team (workspace + propias); sin team, todas."""
     labels(team: ID): [Label!]!
+    projects(state: ProjectState): [Project!]!
+    project(id: ID!): Project
   }
 
   type Mutation {
@@ -259,5 +306,7 @@ export const typeDefs = /* GraphQL */ `
     issueArchive(id: ID!): IssuePayload!
     labelCreate(input: LabelCreateInput!): LabelPayload!
     commentCreate(input: CommentCreateInput!): CommentPayload!
+    projectCreate(input: ProjectCreateInput!): ProjectPayload!
+    projectUpdate(id: ID!, input: ProjectUpdateInput!): ProjectPayload!
   }
 `;
