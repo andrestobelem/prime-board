@@ -15,6 +15,12 @@ Confirmadas con el dueño del proyecto:
 | Modelo de uso | **Local-first, single-tenant** | Un proceso local con un workspace, igual que corre prime-agent. Auth simple por API keys. |
 | UI | **Sí, lo más parecida a Linear posible** | Requisito explícito: la UI es parte de la identidad del clon (dark-first, densa, keyboard-first, command palette). |
 
+> **Decisión revisada (2026-08-14):** se evaluó usar PostgreSQL y se **ratificó SQLite puro**.
+> Racional: con local-first single-tenant el único escritor es el proceso Bun (la limitación
+> de concurrencia de SQLite no aplica), el volumen esperado es trivial, y Postgres rompería
+> la premisa de cero configuración. Se reabre solo si la visión cambia a hosteado/multi-tenant,
+> múltiples instancias del server, o escritores externos directos a la DB.
+
 ## Lista cerrada del MVP
 
 Regla de oro heredada de Linear: **paridad total de API** — todo lo que está en esta
