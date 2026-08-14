@@ -205,15 +205,54 @@ export const typeDefs = /* GraphQL */ `
 
   input IDComparator {
     eq: ID
+    neq: ID
     in: [ID!]
+    nin: [ID!]
+    """true: el campo es NULL; false: no es NULL."""
+    null: Boolean
   }
 
-  """Filtro mínimo (AT-134); se amplía con and/or, search y más comparadores en AT-138."""
+  input IntComparator {
+    eq: Int
+    neq: Int
+    in: [Int!]
+    gte: Int
+    lte: Int
+  }
+
+  input StateTypeComparator {
+    eq: StateType
+    in: [StateType!]
+  }
+
+  input LabelComparator {
+    includes: ID
+    includesAll: [ID!]
+  }
+
+  """Filtro componible: los campos se combinan con AND; and/or anidan sub-filtros."""
   input IssueFilter {
     team: IDComparator
     state: IDComparator
+    stateType: StateTypeComparator
     assignee: IDComparator
+    creator: IDComparator
     project: IDComparator
+    parent: IDComparator
+    priority: IntComparator
+    labels: LabelComparator
+    """Full-text sobre título y descripción."""
+    search: String
+    includeArchived: Boolean
+    and: [IssueFilter!]
+    or: [IssueFilter!]
+  }
+
+  enum IssueOrder {
+    CREATED_ASC
+    CREATED_DESC
+    UPDATED_ASC
+    UPDATED_DESC
   }
 
   input IssueCreateInput {
@@ -289,7 +328,7 @@ export const typeDefs = /* GraphQL */ `
     actors(type: ActorType): [Actor!]!
     """Acepta UUID o identificador legible (AT-126)."""
     issue(id: ID!): Issue
-    issues(filter: IssueFilter, first: Int = 50, after: String): IssueConnection!
+    issues(filter: IssueFilter, first: Int = 50, after: String, orderBy: IssueOrder = CREATED_DESC): IssueConnection!
     """Labels visibles para un team (workspace + propias); sin team, todas."""
     labels(team: ID): [Label!]!
     projects(state: ProjectState): [Project!]!

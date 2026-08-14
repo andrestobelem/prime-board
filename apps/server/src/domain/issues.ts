@@ -3,6 +3,10 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { recordActivity } from "./activity.ts";
+import {
+  buildIssueFilter, decodeCursor, encodeCursor, ORDER_COLUMNS, ParamSink,
+  type IssueFilter, type IssueOrder,
+} from "./filters.ts";
 import { applyLabelOps, type LabelOps } from "./labels.ts";
 import { getTeam } from "./teams.ts";
 
@@ -295,36 +299,53 @@ export function listChildren(db: Database, issueId: string): IssueRow[] {
     .all(issueId) as IssueRow[];
 }
 
-// Listado con filtro mínimo (team/state/assignee); AT-138 lo reemplaza por
-// filtros componibles + cursores reales.
-export interface SimpleIssueFilter {
-  team?: { eq?: string | null } | null;
-  state?: { eq?: string | null } | null;
-  assignee?: { eq?: string | null } | null;
-  project?: { eq?: string | null } | null;
+// Listado con filtros componibles, orden estable y paginación por cursor (AT-138).
+
+export interface ListIssuesOptions {
+  filter?: IssueFilter | null;
+  first: number;
+  after?: string | null;
+  orderBy?: IssueOrder | null;
 }
 
-export function listIssues(
-  db: Database,
-  filter: SimpleIssueFilter | null | undefined,
-  first: number,
-): { rows: IssueRow[]; hasNextPage: boolean } {
-  const where: string[] = ["issues.archived_at IS NULL"];
-  const params: unknown[] = [];
-  const add = (clause: string, value: unknown) => {
-    params.push(value);
-    where.push(clause.replace("?", `?${params.length}`));
-  };
-  if (filter?.team?.eq) add("issues.team_id = ?", filter.team.eq);
-  if (filter?.state?.eq) add("issues.state_id = ?", filter.state.eq);
-  if (filter?.assignee?.eq) add("issues.assignee_id = ?", filter.assignee.eq);
-  if (filter?.project?.eq) add("issues.project_id = ?", filter.project.eq);
+export interface IssuePage {
+  rows: IssueRow[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+export function listIssues(db: Database, options: ListIssuesOptions): IssuePage {
+  const params = new ParamSink();
+  const filter = options.filter ?? {};
+  const clauses = [buildIssueFilter(filter, params)];
+  if (!filter.includeArchived) clauses.push("issues.archived_at IS NULL");
+
+  const order = ORDER_COLUMNS[options.orderBy ?? "CREATED_DESC"];
+  if (options.after) {
+    const decoded = decodeCursor(options.after);
+    if (decoded) {
+      const comparator = order.direction === "DESC" ? "<" : ">";
+      clauses.push(
+        `(${order.column}, issues.id) ${comparator} (${params.add(decoded[0])}, ${params.add(decoded[1])})`,
+      );
+    }
+  }
 
   const rows = db
     .query(
-      `${SELECT_ISSUE} WHERE ${where.join(" AND ")}
-       ORDER BY issues.created_at DESC, issues.id DESC LIMIT ${first + 1}`,
+      `${SELECT_ISSUE} WHERE ${clauses.join(" AND ")}
+       ORDER BY ${order.column} ${order.direction}, issues.id ${order.direction}
+       LIMIT ${options.first + 1}`,
     )
-    .all(...(params as never[])) as IssueRow[];
-  return { rows: rows.slice(0, first), hasNextPage: rows.length > first };
+    .all(...(params.values as never[])) as IssueRow[];
+
+  const page = rows.slice(0, options.first);
+  const last = page[page.length - 1];
+  const orderValue = (row: IssueRow): string =>
+    order.column === "issues.updated_at" ? row.updated_at : row.created_at;
+  return {
+    rows: page,
+    hasNextPage: rows.length > options.first,
+    endCursor: last ? encodeCursor(orderValue(last), last.id) : null,
+  };
 }

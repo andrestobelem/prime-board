@@ -1,9 +1,10 @@
 // Resolvers del dominio issue (AT-134). Se ensamblan en resolvers.ts.
 import { getActor, mapActor } from "../domain/actors.ts";
+import type { IssueFilter, IssueOrder } from "../domain/filters.ts";
 import {
   archiveIssue, createIssue, getIssue, getIssueByRef, identifierOf, listChildren,
   listIssues, mapIssue, slugify, updateIssue,
-  type IssueCreateInput, type IssueRow, type IssueUpdateInput, type SimpleIssueFilter,
+  type IssueCreateInput, type IssueRow, type IssueUpdateInput,
 } from "../domain/issues.ts";
 import { listActivity, mapActivity } from "../domain/activity.ts";
 import { createComment, listComments, mapComment } from "../domain/comments.ts";
@@ -73,15 +74,20 @@ export const issueResolvers = {
     },
     issues: (
       _parent: unknown,
-      args: { filter?: SimpleIssueFilter; first?: number; after?: string },
+      args: { filter?: IssueFilter; first?: number; after?: string; orderBy?: IssueOrder },
       context: Context,
     ) => {
       requireViewer(context);
       const first = Math.min(Math.max(args.first ?? 50, 1), 250);
-      const { rows, hasNextPage } = listIssues(context.db, args.filter, first);
+      const page = listIssues(context.db, {
+        filter: args.filter,
+        first,
+        after: args.after,
+        orderBy: args.orderBy,
+      });
       return {
-        nodes: rows.map(mapIssue),
-        pageInfo: { hasNextPage, endCursor: null },
+        nodes: page.rows.map(mapIssue),
+        pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
       };
     },
   },

@@ -13,12 +13,11 @@ export const projectResolvers = {
       project.leadId ? mapActor(getActor(context.db, project.leadId)!) : null,
     issues: (project: MappedProject, args: { first?: number }, context: Context) => {
       const first = Math.min(Math.max(args.first ?? 50, 1), 250);
-      const { rows, hasNextPage } = listIssues(
-        context.db,
-        { project: { eq: project.id } },
-        first,
-      );
-      return { nodes: rows.map(mapIssue), pageInfo: { hasNextPage, endCursor: null } };
+      const page = listIssues(context.db, { filter: { project: { eq: project.id } }, first });
+      return {
+        nodes: page.rows.map(mapIssue),
+        pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+      };
     },
   },
 
