@@ -38,7 +38,8 @@ beforeAll(async () => {
     stderr: "pipe",
   });
   // Espera el arranque y captura la key impresa una única vez.
-  const reader = server.stdout.getReader();
+  const stdout = server.stdout as ReadableStream<Uint8Array>;
+  const reader = stdout.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   while (!buffer.includes("listening")) {
