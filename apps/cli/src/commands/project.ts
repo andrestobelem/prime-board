@@ -4,16 +4,16 @@ import { gqlRequest } from "../api.ts";
 import { loadConfig } from "../config.ts";
 import { UsageError } from "../errors.ts";
 import { issueLine, printJson } from "../format.ts";
-import { resolveViewerId } from "../resolve.ts";
+import { resolveTeam, resolveViewerId } from "../resolve.ts";
 
 const PROJECT_FIELDS = `id name description state targetDate
   lead { id name type } createdAt updatedAt`;
 
 const USAGE = `Usage:
-  pb project list [--state backlog|planned|started|paused|completed|canceled] [--json]
+  pb project list [--state NAME] [--team KEY] [--json]
   pb project view <ID> [--json]
-  pb project create --name TEXT [--description TEXT] [--state NAME] [--lead me|ID]
-                    [--target-date YYYY-MM-DD] [--json]`;
+  pb project create --name TEXT [--team KEY ...] [--description TEXT] [--state NAME]
+                    [--lead me|ID] [--target-date YYYY-MM-DD] [--json]`;
 
 export async function projectCommand(argv: string[]): Promise<void> {
   const action = argv[0];
@@ -22,11 +22,12 @@ export async function projectCommand(argv: string[]): Promise<void> {
   if (action === "list") {
     const { values } = parseArgs({
       args: argv.slice(1),
-      options: { state: { type: "string" }, json: { type: "boolean" } },
+      options: { state: { type: "string" }, team: { type: "string" }, json: { type: "boolean" } },
     });
-    const data = await gqlRequest(config, `query($state: ProjectState) {
-      projects(state: $state) { ${PROJECT_FIELDS} }
-    }`, { state: values.state ? values.state.toUpperCase() : null });
+    const teamId = values.team ? (await resolveTeam(config, values.team)).id : null;
+    const data = await gqlRequest(config, `query($state: ProjectState, $team: ID) {
+      projects(state: $state, team: $team) { ${PROJECT_FIELDS} }
+    }`, { state: values.state ? values.state.toUpperCase() : null, team: teamId });
     if (values.json) return printJson(data.projects);
     for (const project of data.projects) {
       const lead = project.lead ? `  lead: ${project.lead.name}` : "";
