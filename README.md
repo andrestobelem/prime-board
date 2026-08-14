@@ -11,9 +11,22 @@ aunque debería poder usarse con otros.
 [`docs/specs/mvp.md`](docs/specs/mvp.md): Bun + TypeScript + SQLite, API GraphQL,
 local-first single-tenant, con CLI, MCP server y UI Linear-like.
 
-**Próximo:** implementación en tres hitos — núcleo del backend (Parte 2), interfaces
-para agentes (Parte 3) y UI web (Parte 4). Los tickets viven en Linear, proyecto
-`prime-board` del workspace `andrestobelem`.
+**Parte 2 — Núcleo del backend: completa.** API GraphQL operativa sobre SQLite:
+teams, actores humano/agente con API keys, issues con sub-issues y actividad,
+labels, proyectos, filtros componibles + full-text (FTS5), paginación por cursor
+y webhooks firmados con HMAC. 43 tests.
+
+**Próximo:** interfaces para agentes — CLI `pb` y MCP server (Parte 3), y UI web
+Linear-like (Parte 4). Los tickets viven en Linear, proyecto `prime-board` del
+workspace `andrestobelem`.
+
+### Quick start
+
+```bash
+bun install
+bun run server   # imprime la API key de admin en el primer arranque
+# GraphQL en http://localhost:3333/graphql (GraphiQL en dev)
+```
 
 ## Convenciones
 
