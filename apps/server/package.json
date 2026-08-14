@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "start": "bun src/index.ts",
-    "dev": "bun --watch src/index.ts"
+    "dev": "bun --watch src/index.ts",
+    "seed": "bun src/scripts/demo-seed.ts"
   },
   "dependencies": {
     "@prime-board/schema": "workspace:*",
