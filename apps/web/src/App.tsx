@@ -4,6 +4,7 @@ import { Sidebar } from "./components/Sidebar.tsx";
 import { Link, useRoute } from "./router.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 import { BoardView } from "./views/BoardView.tsx";
+import { IssueView } from "./views/IssueView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
 
 const SHELL_QUERY = `{
@@ -46,6 +47,16 @@ export function App() {
   } else if (section === "settings") {
     topbar = <span className="title">Settings</span>;
     content = <SettingsView />;
+  } else if (section === "issue" && param) {
+    const teamKey = param.split("-")[0];
+    topbar = (
+      <>
+        <Link to={`/team/${teamKey}`}><span className="crumb">{teamKey}</span></Link>
+        <span className="crumb">›</span>
+        <span className="title">{param}</span>
+      </>
+    );
+    content = <IssueView issueRef={param} />;
   } else if ((section === "team" || section === "board") && param) {
     const team = teams.find((candidate) => candidate.key === param);
     topbar = (
