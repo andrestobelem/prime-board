@@ -16,6 +16,25 @@ import { requireViewer } from "./errors.ts";
 
 type MappedIssue = ReturnType<typeof mapIssue>;
 
+/** Forma plana del issue para payloads de webhooks. */
+function issueEventData(row: IssueRow) {
+  return {
+    id: row.id,
+    identifier: identifierOf(row),
+    title: row.title,
+    description: row.description,
+    priority: row.priority,
+    teamId: row.team_id,
+    stateId: row.state_id,
+    assigneeId: row.assignee_id,
+    parentId: row.parent_id,
+    projectId: row.project_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    archivedAt: row.archived_at,
+  };
+}
+
 export const issueResolvers = {
   Issue: {
     team: (issue: MappedIssue, _args: unknown, context: Context) =>
@@ -95,7 +114,9 @@ export const issueResolvers = {
   Mutation: {
     issueCreate: (_parent: unknown, args: { input: IssueCreateInput }, context: Context) => {
       const viewer = requireViewer(context);
-      return { success: true, issue: mapIssue(createIssue(context.db, viewer.id, args.input)) };
+      const row = createIssue(context.db, viewer.id, args.input);
+      context.events.emit("issue.created", viewer, issueEventData(row));
+      return { success: true, issue: mapIssue(row) };
     },
     issueUpdate: (
       _parent: unknown,
@@ -103,12 +124,20 @@ export const issueResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
-      const { row } = updateIssue(context.db, viewer.id, args.id, args.input);
+      const { row, changes } = updateIssue(context.db, viewer.id, args.id, args.input);
+      if (changes.length > 0) {
+        const changeMap = Object.fromEntries(
+          changes.map((change) => [change.field, { from: change.from, to: change.to }]),
+        );
+        context.events.emit("issue.updated", viewer, issueEventData(row), changeMap);
+      }
       return { success: true, issue: mapIssue(row) };
     },
     issueArchive: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
-      return { success: true, issue: mapIssue(archiveIssue(context.db, viewer.id, args.id)) };
+      const row = archiveIssue(context.db, viewer.id, args.id);
+      context.events.emit("issue.archived", viewer, issueEventData(row));
+      return { success: true, issue: mapIssue(row) };
     },
     commentCreate: (
       _parent: unknown,
@@ -116,7 +145,16 @@ export const issueResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
-      return { success: true, comment: mapComment(createComment(context.db, viewer.id, args.input)) };
+      const row = createComment(context.db, viewer.id, args.input);
+      const issue = getIssue(context.db, row.issue_id)!;
+      context.events.emit("comment.created", viewer, {
+        id: row.id,
+        issueId: row.issue_id,
+        issueIdentifier: identifierOf(issue),
+        body: row.body,
+        createdAt: row.created_at,
+      });
+      return { success: true, comment: mapComment(row) };
     },
   },
 };

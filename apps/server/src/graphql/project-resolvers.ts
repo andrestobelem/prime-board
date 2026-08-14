@@ -39,16 +39,20 @@ export const projectResolvers = {
       args: { input: Parameters<typeof createProject>[1] },
       context: Context,
     ) => {
-      requireViewer(context);
-      return { success: true, project: mapProject(createProject(context.db, args.input)) };
+      const viewer = requireViewer(context);
+      const project = mapProject(createProject(context.db, args.input));
+      context.events.emit("project.created", viewer, project);
+      return { success: true, project };
     },
     projectUpdate: (
       _parent: unknown,
       args: { id: string; input: Parameters<typeof updateProject>[2] },
       context: Context,
     ) => {
-      requireViewer(context);
-      return { success: true, project: mapProject(updateProject(context.db, args.id, args.input)) };
+      const viewer = requireViewer(context);
+      const project = mapProject(updateProject(context.db, args.id, args.input));
+      context.events.emit("project.updated", viewer, project);
+      return { success: true, project };
     },
   },
 };

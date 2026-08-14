@@ -144,6 +144,14 @@ export const typeDefs = /* GraphQL */ `
     archivedAt: DateTime
   }
 
+  type Webhook {
+    id: ID!
+    url: String!
+    events: [String!]!
+    enabled: Boolean!
+    createdAt: DateTime!
+  }
+
   input TeamCreateInput {
     name: String!
     key: String!
@@ -319,6 +327,25 @@ export const typeDefs = /* GraphQL */ `
     project: Project!
   }
 
+  input WebhookCreateInput {
+    url: String!
+    """Omitir para autogenerar; se devuelve una única vez."""
+    secret: String
+    """Eventos suscriptos; omitir para todos ("*")."""
+    events: [String!]
+  }
+
+  type WebhookPayload {
+    success: Boolean!
+    webhook: Webhook!
+    """El secret con el que se firman las entregas. Guardalo: no se vuelve a mostrar."""
+    secret: String!
+  }
+
+  type DeletePayload {
+    success: Boolean!
+  }
+
   type Query {
     """Actor autenticado por la API key del header Authorization."""
     viewer: Actor!
@@ -333,6 +360,7 @@ export const typeDefs = /* GraphQL */ `
     labels(team: ID): [Label!]!
     projects(state: ProjectState): [Project!]!
     project(id: ID!): Project
+    webhooks: [Webhook!]!
   }
 
   type Mutation {
@@ -347,5 +375,7 @@ export const typeDefs = /* GraphQL */ `
     commentCreate(input: CommentCreateInput!): CommentPayload!
     projectCreate(input: ProjectCreateInput!): ProjectPayload!
     projectUpdate(id: ID!, input: ProjectUpdateInput!): ProjectPayload!
+    webhookCreate(input: WebhookCreateInput!): WebhookPayload!
+    webhookDelete(id: ID!): DeletePayload!
   }
 `;

@@ -12,6 +12,7 @@ import { apiError, requireViewer } from "./errors.ts";
 import { issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
 import { createLabel, listLabels, mapLabel } from "../domain/labels.ts";
+import { createWebhook, deleteWebhook, listWebhooks, mapWebhook } from "../domain/webhooks.ts";
 
 // Scalars passthrough: los timestamps viajan como strings ISO-8601 UTC.
 const DateTime = new GraphQLScalarType({
@@ -88,6 +89,10 @@ export const resolvers = {
       requireViewer(context);
       return listLabels(context.db, args.team).map(mapLabel);
     },
+    webhooks: (_parent: unknown, _args: unknown, context: Context) => {
+      requireViewer(context);
+      return listWebhooks(context.db).map(mapWebhook);
+    },
   },
 
   Mutation: {
@@ -117,6 +122,19 @@ export const resolvers = {
       requireViewer(context);
       const { row, key } = createApiKey(context.db, args.input);
       return { success: true, apiKey: mapApiKey(row), key };
+    },
+    webhookCreate: (
+      _parent: unknown,
+      args: { input: { url: string; secret?: string | null; events?: string[] | null } },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      const { row, secret } = createWebhook(context.db, args.input);
+      return { success: true, webhook: mapWebhook(row), secret };
+    },
+    webhookDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+      requireViewer(context);
+      return { success: deleteWebhook(context.db, args.id) };
     },
     labelCreate: (
       _parent: unknown,

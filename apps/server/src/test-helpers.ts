@@ -4,12 +4,13 @@ import { migrate } from "./db/database.ts";
 import { bootstrap } from "./db/seed.ts";
 import { createApp } from "./server.ts";
 import type { Config } from "./config.ts";
+import type { WebhookDispatcher } from "./webhooks/dispatcher.ts";
 
 export interface TestApp {
   db: Database;
-  server: ReturnType<typeof createApp>;
   url: string;
   apiKey: string;
+  events: WebhookDispatcher;
   stop: () => void;
 }
 
@@ -19,12 +20,13 @@ export function createTestApp(): TestApp {
   migrate(db);
   const seed = bootstrap(db);
   const config: Config = { port: 0, dbPath: ":memory:", dev: true };
-  const server = createApp({ db, config });
+  // Reintentos casi inmediatos para que los tests de webhooks sean rápidos.
+  const { server, events } = createApp({ db, config, webhookOptions: { retryDelays: [5, 5, 5] } });
   return {
     db,
-    server,
     url: `http://localhost:${server.port}`,
     apiKey: seed.adminApiKey!,
+    events,
     stop: () => {
       server.stop(true);
       db.close();
