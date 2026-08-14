@@ -10,6 +10,7 @@ import { Link, useRoute } from "./router.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 import { BoardView } from "./views/BoardView.tsx";
 import { IssueView } from "./views/IssueView.tsx";
+import { MembersView } from "./views/MembersView.tsx";
 import { ProjectView } from "./views/ProjectView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
 
@@ -78,6 +79,9 @@ export function App() {
   } else if (section === "settings") {
     topbar = <span className="title">Settings</span>;
     content = <SettingsView />;
+  } else if (section === "members") {
+    topbar = <span className="title">Members</span>;
+    content = <MembersView />;
   } else if (section === "issue" && param) {
     const teamKey = param.split("-")[0];
     topbar = (

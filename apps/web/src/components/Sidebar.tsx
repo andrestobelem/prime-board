@@ -30,6 +30,7 @@ export function Sidebar({ workspace, teams, projects }: SidebarProps) {
       ))}
       <div className="spacer" />
       <div className="hint"><kbd>C</kbd> new issue · <kbd>⌘K</kbd> commands</div>
+      <Link to="/members" className={active("/members")}>◉ Members</Link>
       <Link to="/settings" className={active("/settings")}>⚙ Settings</Link>
     </nav>
   );
