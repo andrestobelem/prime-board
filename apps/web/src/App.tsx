@@ -3,6 +3,7 @@ import { getApiKey, useQuery } from "./api.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { Link, useRoute } from "./router.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
+import { BoardView } from "./views/BoardView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
 
 const SHELL_QUERY = `{
@@ -62,7 +63,9 @@ export function App() {
         </span>
       </>
     );
-    content = <TeamView teamKey={param} teamId={team?.id ?? null} />;
+    content = section === "board"
+      ? <BoardView teamKey={param} teamId={team?.id ?? null} />
+      : <TeamView teamKey={param} teamId={team?.id ?? null} />;
   } else if (shell.data) {
     if (defaultTeam) {
       window.location.hash = `#/team/${defaultTeam}`;
