@@ -62,6 +62,19 @@ export function mapApiKey(row: ApiKeyRow) {
   };
 }
 
+export function listApiKeys(db: Database, actorId: string): ApiKeyRow[] {
+  return db
+    .query("SELECT * FROM api_keys WHERE actor_id = ?1 ORDER BY created_at")
+    .all(actorId) as ApiKeyRow[];
+}
+
+export function deleteApiKey(db: Database, id: string): boolean {
+  const existing = db.query("SELECT id FROM api_keys WHERE id = ?1").get(id);
+  if (!existing) throw apiError("NOT_FOUND", "API key not found");
+  db.query("DELETE FROM api_keys WHERE id = ?1").run(id);
+  return true;
+}
+
 /** Crea una key para un actor. Devuelve la key en claro UNA sola vez. */
 export function createApiKey(
   db: Database,

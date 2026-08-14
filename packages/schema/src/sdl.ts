@@ -23,6 +23,7 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     email: String
     type: ActorType!
+    apiKeys: [ApiKey!]!
     createdAt: DateTime!
   }
 
@@ -367,6 +368,7 @@ export const typeDefs = /* GraphQL */ `
     teamCreate(input: TeamCreateInput!): TeamPayload!
     actorCreate(input: ActorCreateInput!): ActorPayload!
     apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyPayload!
+    apiKeyDelete(id: ID!): DeletePayload!
     workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
     issueCreate(input: IssueCreateInput!): IssuePayload!
     issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!

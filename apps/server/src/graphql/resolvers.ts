@@ -1,7 +1,7 @@
 // Resolvers raíz del esquema. Se ensamblan por dominio a medida que crece la API.
 import { GraphQLScalarType, Kind } from "graphql";
 import {
-  createActor, createApiKey, getActor, listActors, mapActor, mapApiKey,
+  createActor, createApiKey, deleteApiKey, getActor, listActors, listApiKeys, mapActor, mapApiKey,
 } from "../domain/actors.ts";
 import {
   createTeam, createWorkflowState, getTeam, listTeamStates, mapTeam, mapWorkflowState,
@@ -56,6 +56,11 @@ export const resolvers = {
   ApiKey: {
     actor: (apiKey: { actorId: string }, _args: unknown, context: Context) =>
       mapActor(getActor(context.db, apiKey.actorId)!),
+  },
+
+  Actor: {
+    apiKeys: (actor: { id: string }, _args: unknown, context: Context) =>
+      listApiKeys(context.db, actor.id).map(mapApiKey),
   },
 
   Query: {
@@ -122,6 +127,10 @@ export const resolvers = {
       requireViewer(context);
       const { row, key } = createApiKey(context.db, args.input);
       return { success: true, apiKey: mapApiKey(row), key };
+    },
+    apiKeyDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+      requireViewer(context);
+      return { success: deleteApiKey(context.db, args.id) };
     },
     webhookCreate: (
       _parent: unknown,
