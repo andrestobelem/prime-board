@@ -16,6 +16,31 @@ export type ActivityType =
   | "commented"
   | "archived";
 
+export interface ActivityRow {
+  id: string;
+  issue_id: string;
+  actor_id: string;
+  type: ActivityType;
+  payload: string;
+  created_at: string;
+}
+
+export function mapActivity(row: ActivityRow) {
+  return {
+    id: row.id,
+    type: row.type,
+    actorId: row.actor_id,
+    payload: JSON.parse(row.payload),
+    createdAt: row.created_at,
+  };
+}
+
+export function listActivity(db: Database, issueId: string): ActivityRow[] {
+  return db
+    .query("SELECT * FROM activity WHERE issue_id = ?1 ORDER BY created_at, id")
+    .all(issueId) as ActivityRow[];
+}
+
 export function recordActivity(
   db: Database,
   issueId: string,

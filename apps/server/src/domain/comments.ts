@@ -1,0 +1,52 @@
+// Dominio de comentarios: markdown plano sobre issues (spec §3).
+import type { Database } from "bun:sqlite";
+import { apiError } from "../graphql/errors.ts";
+import { newId, now } from "../db/util.ts";
+import { recordActivity } from "./activity.ts";
+import { getIssueByRef } from "./issues.ts";
+
+export interface CommentRow {
+  id: string;
+  issue_id: string;
+  actor_id: string;
+  body: string;
+  created_at: string;
+  edited_at: string | null;
+}
+
+export function mapComment(row: CommentRow) {
+  return {
+    id: row.id,
+    body: row.body,
+    actorId: row.actor_id,
+    issueId: row.issue_id,
+    createdAt: row.created_at,
+    editedAt: row.edited_at,
+  };
+}
+
+export function listComments(db: Database, issueId: string): CommentRow[] {
+  return db
+    .query("SELECT * FROM comments WHERE issue_id = ?1 ORDER BY created_at, id")
+    .all(issueId) as CommentRow[];
+}
+
+export function createComment(
+  db: Database,
+  actorId: string,
+  input: { issueId: string; body: string },
+): CommentRow {
+  const issue = getIssueByRef(db, input.issueId);
+  if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${input.issueId}`);
+  const body = input.body.trim();
+  if (!body) throw apiError("VALIDATION_FAILED", "Comment body cannot be empty");
+
+  const id = newId();
+  db.transaction(() => {
+    db.query(
+      "INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+    ).run(id, issue.id, actorId, body, now());
+    recordActivity(db, issue.id, actorId, "commented", { commentId: id });
+  })();
+  return db.query("SELECT * FROM comments WHERE id = ?1").get(id) as CommentRow;
+}

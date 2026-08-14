@@ -5,6 +5,8 @@ import {
   listIssues, mapIssue, slugify, updateIssue,
   type IssueCreateInput, type IssueRow, type IssueUpdateInput, type SimpleIssueFilter,
 } from "../domain/issues.ts";
+import { listActivity, mapActivity } from "../domain/activity.ts";
+import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getTeam, listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
@@ -33,6 +35,10 @@ export const issueResolvers = {
       listChildren(context.db, issue.id).map(mapIssue),
     labels: (issue: MappedIssue, _args: unknown, context: Context) =>
       listIssueLabels(context.db, issue.id).map(mapLabel),
+    comments: (issue: MappedIssue, _args: unknown, context: Context) =>
+      listComments(context.db, issue.id).map(mapComment),
+    activity: (issue: MappedIssue, _args: unknown, context: Context) =>
+      listActivity(context.db, issue.id).map(mapActivity),
     url: (issue: MappedIssue, _args: unknown, context: Context) =>
       `http://localhost:${context.config.port}/issue/${issue.identifier}`,
     branchName: (issue: MappedIssue, _args: unknown, context: Context) => {
@@ -42,6 +48,18 @@ export const issueResolvers = {
       const slug = slugify(row.title);
       return `${prefix}/${identifierOf(row).toLowerCase()}${slug ? `-${slug}` : ""}`;
     },
+  },
+
+  Comment: {
+    actor: (comment: { actorId: string }, _args: unknown, context: Context) =>
+      mapActor(getActor(context.db, comment.actorId)!),
+    issue: (comment: { issueId: string }, _args: unknown, context: Context) =>
+      mapIssue(getIssue(context.db, comment.issueId)!),
+  },
+
+  Activity: {
+    actor: (activity: { actorId: string }, _args: unknown, context: Context) =>
+      mapActor(getActor(context.db, activity.actorId)!),
   },
 
   Query: {
@@ -82,6 +100,14 @@ export const issueResolvers = {
     issueArchive: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       return { success: true, issue: mapIssue(archiveIssue(context.db, viewer.id, args.id)) };
+    },
+    commentCreate: (
+      _parent: unknown,
+      args: { input: { issueId: string; body: string } },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      return { success: true, comment: mapComment(createComment(context.db, viewer.id, args.input)) };
     },
   },
 };

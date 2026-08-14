@@ -43,6 +43,8 @@ export const resolvers = {
   },
 
   Issue: issueResolvers.Issue,
+  Comment: issueResolvers.Comment,
+  Activity: issueResolvers.Activity,
 
   ApiKey: {
     actor: (apiKey: { actorId: string }, _args: unknown, context: Context) =>

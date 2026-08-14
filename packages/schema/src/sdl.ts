@@ -82,6 +82,9 @@ export const typeDefs = /* GraphQL */ `
     parent: Issue
     children: [Issue!]!
     labels: [Label!]!
+    comments: [Comment!]!
+    """Historial append-only de cambios del issue."""
+    activity: [Activity!]!
     """Deep-link a la UI."""
     url: String!
     """Nombre de branch sugerido, p. ej. agent/at-126-titulo."""
@@ -99,6 +102,23 @@ export const typeDefs = /* GraphQL */ `
   type IssueConnection {
     nodes: [Issue!]!
     pageInfo: PageInfo!
+  }
+
+  type Comment {
+    id: ID!
+    body: String!
+    actor: Actor!
+    issue: Issue!
+    createdAt: DateTime!
+    editedAt: DateTime
+  }
+
+  type Activity {
+    id: ID!
+    type: String!
+    actor: Actor!
+    payload: JSON!
+    createdAt: DateTime!
   }
 
   input TeamCreateInput {
@@ -204,6 +224,17 @@ export const typeDefs = /* GraphQL */ `
     issue: Issue!
   }
 
+  input CommentCreateInput {
+    """Acepta UUID o identificador legible (AT-126)."""
+    issueId: ID!
+    body: String!
+  }
+
+  type CommentPayload {
+    success: Boolean!
+    comment: Comment!
+  }
+
   type Query {
     """Actor autenticado por la API key del header Authorization."""
     viewer: Actor!
@@ -227,5 +258,6 @@ export const typeDefs = /* GraphQL */ `
     issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!
     issueArchive(id: ID!): IssuePayload!
     labelCreate(input: LabelCreateInput!): LabelPayload!
+    commentCreate(input: CommentCreateInput!): CommentPayload!
   }
 `;
