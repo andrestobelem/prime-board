@@ -1,0 +1,10 @@
+{
+  "name": "@prime-board/cli",
+  "private": true,
+  "bin": {
+    "pb": "src/index.ts"
+  },
+  "dependencies": {
+    "@prime-board/schema": "workspace:*"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@prime-board/schema",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

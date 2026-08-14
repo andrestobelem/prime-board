@@ -1,0 +1,10 @@
+{
+  "name": "@prime-board/mcp",
+  "private": true,
+  "bin": {
+    "pb-mcp": "src/index.ts"
+  },
+  "dependencies": {
+    "@prime-board/schema": "workspace:*"
+  }
+}
