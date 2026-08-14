@@ -58,6 +58,39 @@ export const typeDefs = /* GraphQL */ `
     lastUsedAt: DateTime
   }
 
+  type Issue {
+    id: ID!
+    """Identificador legible e inmutable, p. ej. AT-126."""
+    identifier: String!
+    title: String!
+    description: String
+    team: Team!
+    state: WorkflowState!
+    """0 none, 1 urgent, 2 high, 3 medium, 4 low (como Linear)."""
+    priority: Int!
+    assignee: Actor
+    creator: Actor!
+    parent: Issue
+    children: [Issue!]!
+    """Deep-link a la UI."""
+    url: String!
+    """Nombre de branch sugerido, p. ej. agent/at-126-titulo."""
+    branchName: String!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    archivedAt: DateTime
+  }
+
+  type PageInfo {
+    hasNextPage: Boolean!
+    endCursor: String
+  }
+
+  type IssueConnection {
+    nodes: [Issue!]!
+    pageInfo: PageInfo!
+  }
+
   input TeamCreateInput {
     name: String!
     key: String!
@@ -105,6 +138,46 @@ export const typeDefs = /* GraphQL */ `
     workflowState: WorkflowState!
   }
 
+  input IDComparator {
+    eq: ID
+    in: [ID!]
+  }
+
+  """Filtro mínimo (AT-134); se amplía con and/or, search y más comparadores en AT-138."""
+  input IssueFilter {
+    team: IDComparator
+    state: IDComparator
+    assignee: IDComparator
+  }
+
+  input IssueCreateInput {
+    teamId: ID
+    teamKey: String
+    title: String!
+    description: String
+    stateId: ID
+    priority: Int
+    assigneeId: ID
+    parentId: ID
+    projectId: ID
+  }
+
+  input IssueUpdateInput {
+    title: String
+    description: String
+    stateId: ID
+    priority: Int
+    assigneeId: ID
+    parentId: ID
+    projectId: ID
+    sortOrder: Float
+  }
+
+  type IssuePayload {
+    success: Boolean!
+    issue: Issue!
+  }
+
   type Query {
     """Actor autenticado por la API key del header Authorization."""
     viewer: Actor!
@@ -112,6 +185,9 @@ export const typeDefs = /* GraphQL */ `
     teams: [Team!]!
     team(id: ID, key: String): Team
     actors(type: ActorType): [Actor!]!
+    """Acepta UUID o identificador legible (AT-126)."""
+    issue(id: ID!): Issue
+    issues(filter: IssueFilter, first: Int = 50, after: String): IssueConnection!
   }
 
   type Mutation {
@@ -119,5 +195,8 @@ export const typeDefs = /* GraphQL */ `
     actorCreate(input: ActorCreateInput!): ActorPayload!
     apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyPayload!
     workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
+    issueCreate(input: IssueCreateInput!): IssuePayload!
+    issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!
+    issueArchive(id: ID!): IssuePayload!
   }
 `;

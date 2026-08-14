@@ -9,6 +9,7 @@ import {
 } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { apiError, requireViewer } from "./errors.ts";
+import { issueResolvers } from "./issue-resolvers.ts";
 
 // Scalars passthrough: los timestamps viajan como strings ISO-8601 UTC.
 const DateTime = new GraphQLScalarType({
@@ -38,12 +39,15 @@ export const resolvers = {
       listTeamStates(context.db, team.id).map(mapWorkflowState),
   },
 
+  Issue: issueResolvers.Issue,
+
   ApiKey: {
     actor: (apiKey: { actorId: string }, _args: unknown, context: Context) =>
       mapActor(getActor(context.db, apiKey.actorId)!),
   },
 
   Query: {
+    ...issueResolvers.Query,
     viewer: (_parent: unknown, _args: unknown, context: Context) =>
       mapActor(requireViewer(context)),
     workspace: (_parent: unknown, _args: unknown, context: Context) => {
@@ -71,6 +75,7 @@ export const resolvers = {
   },
 
   Mutation: {
+    ...issueResolvers.Mutation,
     teamCreate: (
       _parent: unknown,
       args: { input: { name: string; key: string; description?: string | null } },
