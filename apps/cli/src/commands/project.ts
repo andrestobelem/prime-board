@@ -65,11 +65,17 @@ export async function projectCommand(argv: string[]): Promise<void> {
       args: argv.slice(1),
       options: {
         name: { type: "string" }, description: { type: "string" }, state: { type: "string" },
-        lead: { type: "string" }, "target-date": { type: "string" }, json: { type: "boolean" },
+        lead: { type: "string" }, "target-date": { type: "string" },
+        team: { type: "string", multiple: true }, json: { type: "boolean" },
       },
     });
     if (!values.name) throw new UsageError(USAGE);
     const input: Record<string, unknown> = { name: values.name };
+    if (values.team?.length) {
+      input.teamIds = await Promise.all(
+        values.team.map(async (key) => (await resolveTeam(config, key)).id),
+      );
+    }
     if (values.description) input.description = values.description;
     if (values.state) input.state = values.state.toUpperCase();
     if (values.lead) {

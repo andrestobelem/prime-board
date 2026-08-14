@@ -209,14 +209,18 @@ export function createServer(config: McpConfig): McpServer {
   });
 
   server.registerTool("list_projects", {
-    description: "List projects, optionally filtered by state.",
+    description: "List projects, optionally filtered by state or team.",
     inputSchema: {
       state: z.enum(["backlog", "planned", "started", "paused", "completed", "canceled"]).optional(),
+      team: z.string().optional().describe("Team key or ID"),
     },
-  }, async ({ state }) => {
-    const data = await gqlRequest(config, `query($state: ProjectState) {
-      projects(state: $state) { id name description state targetDate lead { id name } }
-    }`, { state: state ? state.toUpperCase() : null });
+  }, async ({ state, team }) => {
+    const teamId = team ? (await resolveTeam(config, team)).id : null;
+    const data = await gqlRequest(config, `query($state: ProjectState, $team: ID) {
+      projects(state: $state, team: $team) {
+        id name description state targetDate lead { id name } teams { key }
+      }
+    }`, { state: state ? state.toUpperCase() : null, team: teamId });
     return json(data.projects);
   });
 
@@ -243,9 +247,15 @@ export function createServer(config: McpConfig): McpServer {
       state: z.enum(["backlog", "planned", "started", "paused", "completed", "canceled"]).optional(),
       lead: z.string().optional().describe('Actor ID, name or "me"'),
       targetDate: z.string().optional(),
+      teams: z.array(z.string()).optional().describe("Team keys or IDs"),
     },
   }, async (args) => {
     const input: Record<string, unknown> = {};
+    if (args.teams !== undefined) {
+      input.teamIds = await Promise.all(
+        args.teams.map(async (ref: string) => (await resolveTeam(config, ref)).id),
+      );
+    }
     if (args.name !== undefined) input.name = args.name;
     if (args.description !== undefined) input.description = args.description;
     if (args.state !== undefined) input.state = args.state.toUpperCase();
