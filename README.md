@@ -21,15 +21,19 @@ teams, webhooks; `--json`, exit codes estables) y MCP server por stdio con las
 mismas 14 tools que el MCP de Linear. Guía completa en
 [`docs/guia-agentes.md`](docs/guia-agentes.md) y datos de demo con `bun run seed`.
 
-**Próximo:** UI web Linear-like (Parte 4). Los tickets viven en Linear, proyecto
-`prime-board` del workspace `andrestobelem`.
+**Parte 4 — UI web: completa. 🎉 MVP terminado.** UI Linear-like servida por el
+mismo proceso: lista agrupada por estado con navegación por teclado, board con
+drag & drop, detalle con edición inline y markdown, creación rápida (`C`),
+command palette (`⌘K`) con búsqueda full-text, y vista de proyecto.
 
 ### Quick start
 
 ```bash
 bun install
+bun run build    # buildea la UI
 bun run server   # imprime la API key de admin en el primer arranque
-# GraphQL en http://localhost:3333/graphql (GraphiQL en dev)
+bun run seed     # (opcional) datos de demo + un agente con su key
+# UI en http://localhost:3333/?key=pb_...  ·  GraphQL en /graphql (GraphiQL en dev)
 ```
 
 ## Convenciones
