@@ -1,0 +1,11 @@
+{
+  "name": "@prime-board/server",
+  "private": true,
+  "scripts": {
+    "start": "bun src/index.ts",
+    "dev": "bun --watch src/index.ts"
+  },
+  "dependencies": {
+    "@prime-board/schema": "workspace:*"
+  }
+}
