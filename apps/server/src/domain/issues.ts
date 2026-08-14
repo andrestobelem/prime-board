@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { recordActivity } from "./activity.ts";
+import { applyLabelOps, type LabelOps } from "./labels.ts";
 import { getTeam } from "./teams.ts";
 
 export interface IssueRow {
@@ -169,7 +170,7 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
   return getIssue(db, id)!;
 }
 
-export interface IssueUpdateInput {
+export interface IssueUpdateInput extends LabelOps {
   title?: string | null;
   description?: string | null;
   stateId?: string | null;
@@ -252,6 +253,19 @@ export function updateIssue(
     }
     if (input.sortOrder != null && input.sortOrder !== issue.sort_order) {
       push("sort_order", input.sortOrder);
+    }
+
+    const labelsChanged = applyLabelOps(db, actorId, issue, input);
+    if (labelsChanged) {
+      changes.push({ field: "labels", from: null, to: null });
+      if (sets.length === 0) {
+        push("updated_at", now());
+        params.push(issue.id);
+        db.query(`UPDATE issues SET updated_at = ?1 WHERE id = ?2`).run(...(params as never[]));
+        // updated_at ya quedó seteado; evita duplicar el UPDATE de abajo.
+        sets.length = 0;
+        params.length = 0;
+      }
     }
 
     if (sets.length > 0) {

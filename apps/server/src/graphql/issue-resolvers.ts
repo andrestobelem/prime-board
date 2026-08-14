@@ -5,6 +5,7 @@ import {
   listIssues, mapIssue, slugify, updateIssue,
   type IssueCreateInput, type IssueRow, type IssueUpdateInput, type SimpleIssueFilter,
 } from "../domain/issues.ts";
+import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getTeam, listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { requireViewer } from "./errors.ts";
@@ -30,6 +31,8 @@ export const issueResolvers = {
     },
     children: (issue: MappedIssue, _args: unknown, context: Context) =>
       listChildren(context.db, issue.id).map(mapIssue),
+    labels: (issue: MappedIssue, _args: unknown, context: Context) =>
+      listIssueLabels(context.db, issue.id).map(mapLabel),
     url: (issue: MappedIssue, _args: unknown, context: Context) =>
       `http://localhost:${context.config.port}/issue/${issue.identifier}`,
     branchName: (issue: MappedIssue, _args: unknown, context: Context) => {

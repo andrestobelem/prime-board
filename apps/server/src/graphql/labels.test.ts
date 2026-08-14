@@ -1,0 +1,74 @@
+// Tests de AT-135: labels de workspace y de team aplicadas a issues.
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
+
+let app: TestApp;
+let teamId: string;
+let bugId: string;
+let urgentId: string;
+
+beforeAll(async () => {
+  app = createTestApp();
+  const team = await gql(app, `{ team(key: "PB") { id } }`);
+  teamId = team.data!.team.id;
+  const bug = await gql(app, `
+    mutation($teamId: ID!) { labelCreate(input: { name: "bug", color: "#eb5757", teamId: $teamId }) { label { id } } }
+  `, { teamId });
+  bugId = bug.data!.labelCreate.label.id;
+  const urgent = await gql(app, `
+    mutation { labelCreate(input: { name: "agent:review" }) { label { id teamId } } }
+  `);
+  urgentId = urgent.data!.labelCreate.label.id;
+  await gql(app, `mutation { issueCreate(input: { teamKey: "PB", title: "Labeled issue" }) { issue { id } } }`);
+});
+afterAll(() => app.stop());
+
+describe("labels", () => {
+  it("distingue labels de workspace (teamId null) y de team", async () => {
+    const result = await gql(app, `query($team: ID) { labels(team: $team) { name teamId } }`, { team: teamId });
+    const byName = Object.fromEntries(result.data!.labels.map((l: any) => [l.name, l.teamId]));
+    expect(byName["agent:review"]).toBeNull();
+    expect(byName["bug"]).toBe(teamId);
+  });
+
+  it("rechaza duplicados en el mismo scope", async () => {
+    const dup = await gql(app, `mutation { labelCreate(input: { name: "agent:review" }) { success } }`);
+    expect(dup.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("etiqueta un issue con add/remove y set completo", async () => {
+    const added = await gql(app, `
+      mutation($add: [ID!]) {
+        issueUpdate(id: "PB-1", input: { addLabelIds: $add }) { issue { labels { name } } }
+      }
+    `, { add: [bugId, urgentId] });
+    expect(added.data!.issueUpdate.issue.labels.map((l: any) => l.name).sort()).toEqual([
+      "agent:review", "bug",
+    ]);
+
+    const removed = await gql(app, `
+      mutation($remove: [ID!]) {
+        issueUpdate(id: "PB-1", input: { removeLabelIds: $remove }) { issue { labels { name } } }
+      }
+    `, { remove: [bugId] });
+    expect(removed.data!.issueUpdate.issue.labels.map((l: any) => l.name)).toEqual(["agent:review"]);
+
+    const set = await gql(app, `
+      mutation($set: [ID!]) {
+        issueUpdate(id: "PB-1", input: { labelIds: $set }) { issue { labels { name } } }
+      }
+    `, { set: [bugId] });
+    expect(set.data!.issueUpdate.issue.labels.map((l: any) => l.name)).toEqual(["bug"]);
+  });
+
+  it("rechaza labels de otro team", async () => {
+    const other = await gql(app, `mutation { teamCreate(input: { name: "Other", key: "OX" }) { team { id } } }`);
+    const foreign = await gql(app, `
+      mutation($teamId: ID!) { labelCreate(input: { name: "foreign", teamId: $teamId }) { label { id } } }
+    `, { teamId: other.data!.teamCreate.team.id });
+    const bad = await gql(app, `
+      mutation($add: [ID!]) { issueUpdate(id: "PB-1", input: { addLabelIds: $add }) { success } }
+    `, { add: [foreign.data!.labelCreate.label.id] });
+    expect(bad.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+});

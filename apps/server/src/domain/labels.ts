@@ -1,0 +1,101 @@
+// Dominio de labels: de workspace (team_id NULL) y de team (spec §3).
+import type { Database } from "bun:sqlite";
+import { apiError } from "../graphql/errors.ts";
+import { newId, now } from "../db/util.ts";
+import { recordActivity } from "./activity.ts";
+import type { IssueRow } from "./issues.ts";
+
+export interface LabelRow {
+  id: string;
+  name: string;
+  color: string;
+  team_id: string | null;
+  created_at: string;
+}
+
+export function mapLabel(row: LabelRow) {
+  return { id: row.id, name: row.name, color: row.color, teamId: row.team_id };
+}
+
+export function createLabel(
+  db: Database,
+  input: { name: string; color?: string | null; teamId?: string | null },
+): LabelRow {
+  const name = input.name.trim();
+  if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
+  if (input.teamId) {
+    const team = db.query("SELECT id FROM teams WHERE id = ?1").get(input.teamId);
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
+  }
+  // UNIQUE(team_id, name) no cubre NULL en SQLite: chequeo explícito.
+  const duplicate = input.teamId
+    ? db.query("SELECT id FROM labels WHERE team_id = ?1 AND name = ?2").get(input.teamId, name)
+    : db.query("SELECT id FROM labels WHERE team_id IS NULL AND name = ?1").get(name);
+  if (duplicate) throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
+
+  const id = newId();
+  db.query("INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+    .run(id, name, input.color ?? "#95a2b3", input.teamId ?? null, now());
+  return db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow;
+}
+
+/** Labels visibles para un team: las de workspace + las propias. Sin team: todas. */
+export function listLabels(db: Database, teamId?: string | null): LabelRow[] {
+  if (teamId) {
+    return db
+      .query("SELECT * FROM labels WHERE team_id IS NULL OR team_id = ?1 ORDER BY name")
+      .all(teamId) as LabelRow[];
+  }
+  return db.query("SELECT * FROM labels ORDER BY name").all() as LabelRow[];
+}
+
+export function listIssueLabels(db: Database, issueId: string): LabelRow[] {
+  return db
+    .query(
+      `SELECT labels.* FROM labels
+       JOIN issue_labels ON issue_labels.label_id = labels.id
+       WHERE issue_labels.issue_id = ?1 ORDER BY labels.name`,
+    )
+    .all(issueId) as LabelRow[];
+}
+
+function assertApplicable(db: Database, issue: IssueRow, labelId: string): LabelRow {
+  const label = db.query("SELECT * FROM labels WHERE id = ?1").get(labelId) as LabelRow | null;
+  if (!label) throw apiError("NOT_FOUND", `Label not found: ${labelId}`);
+  if (label.team_id !== null && label.team_id !== issue.team_id) {
+    throw apiError("VALIDATION_FAILED", `Label ${label.name} belongs to another team`);
+  }
+  return label;
+}
+
+export interface LabelOps {
+  labelIds?: string[] | null;
+  addLabelIds?: string[] | null;
+  removeLabelIds?: string[] | null;
+}
+
+/** Aplica set/add/remove de labels a un issue, registrando actividad. */
+export function applyLabelOps(db: Database, actorId: string, issue: IssueRow, ops: LabelOps): boolean {
+  const current = new Set(listIssueLabels(db, issue.id).map((label) => label.id));
+  let target = new Set(current);
+
+  if (ops.labelIds != null) target = new Set(ops.labelIds);
+  for (const id of ops.addLabelIds ?? []) target.add(id);
+  for (const id of ops.removeLabelIds ?? []) target.delete(id);
+
+  const toAdd = [...target].filter((id) => !current.has(id));
+  const toRemove = [...current].filter((id) => !target.has(id));
+  if (toAdd.length === 0 && toRemove.length === 0) return false;
+
+  for (const labelId of toAdd) {
+    const label = assertApplicable(db, issue, labelId);
+    db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(issue.id, labelId);
+    recordActivity(db, issue.id, actorId, "labeled", { label: label.name });
+  }
+  for (const labelId of toRemove) {
+    const label = db.query("SELECT name FROM labels WHERE id = ?1").get(labelId) as { name: string } | null;
+    db.query("DELETE FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2").run(issue.id, labelId);
+    recordActivity(db, issue.id, actorId, "unlabeled", { label: label?.name ?? labelId });
+  }
+  return true;
+}

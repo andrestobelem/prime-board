@@ -10,6 +10,7 @@ import {
 import type { Context } from "./context.ts";
 import { apiError, requireViewer } from "./errors.ts";
 import { issueResolvers } from "./issue-resolvers.ts";
+import { createLabel, listLabels, mapLabel } from "../domain/labels.ts";
 
 // Scalars passthrough: los timestamps viajan como strings ISO-8601 UTC.
 const DateTime = new GraphQLScalarType({
@@ -37,6 +38,8 @@ export const resolvers = {
   Team: {
     states: (team: { id: string }, _args: unknown, context: Context) =>
       listTeamStates(context.db, team.id).map(mapWorkflowState),
+    labels: (team: { id: string }, _args: unknown, context: Context) =>
+      listLabels(context.db, team.id).map(mapLabel),
   },
 
   Issue: issueResolvers.Issue,
@@ -72,6 +75,10 @@ export const resolvers = {
       requireViewer(context);
       return listActors(context.db, args.type).map(mapActor);
     },
+    labels: (_parent: unknown, args: { team?: string }, context: Context) => {
+      requireViewer(context);
+      return listLabels(context.db, args.team).map(mapLabel);
+    },
   },
 
   Mutation: {
@@ -100,6 +107,14 @@ export const resolvers = {
       requireViewer(context);
       const { row, key } = createApiKey(context.db, args.input);
       return { success: true, apiKey: mapApiKey(row), key };
+    },
+    labelCreate: (
+      _parent: unknown,
+      args: { input: { name: string; color?: string | null; teamId?: string | null } },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      return { success: true, label: mapLabel(createLabel(context.db, args.input)) };
     },
     workflowStateCreate: (
       _parent: unknown,

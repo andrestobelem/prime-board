@@ -47,7 +47,16 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     description: String
     states: [WorkflowState!]!
+    labels: [Label!]!
     createdAt: DateTime!
+  }
+
+  type Label {
+    id: ID!
+    name: String!
+    color: String!
+    """NULL para labels de workspace."""
+    teamId: ID
   }
 
   type ApiKey {
@@ -72,6 +81,7 @@ export const typeDefs = /* GraphQL */ `
     creator: Actor!
     parent: Issue
     children: [Issue!]!
+    labels: [Label!]!
     """Deep-link a la UI."""
     url: String!
     """Nombre de branch sugerido, p. ej. agent/at-126-titulo."""
@@ -138,6 +148,18 @@ export const typeDefs = /* GraphQL */ `
     workflowState: WorkflowState!
   }
 
+  input LabelCreateInput {
+    name: String!
+    color: String
+    """Omitir para crear una label de workspace."""
+    teamId: ID
+  }
+
+  type LabelPayload {
+    success: Boolean!
+    label: Label!
+  }
+
   input IDComparator {
     eq: ID
     in: [ID!]
@@ -171,6 +193,10 @@ export const typeDefs = /* GraphQL */ `
     parentId: ID
     projectId: ID
     sortOrder: Float
+    """Reemplaza el set completo de labels."""
+    labelIds: [ID!]
+    addLabelIds: [ID!]
+    removeLabelIds: [ID!]
   }
 
   type IssuePayload {
@@ -188,6 +214,8 @@ export const typeDefs = /* GraphQL */ `
     """Acepta UUID o identificador legible (AT-126)."""
     issue(id: ID!): Issue
     issues(filter: IssueFilter, first: Int = 50, after: String): IssueConnection!
+    """Labels visibles para un team (workspace + propias); sin team, todas."""
+    labels(team: ID): [Label!]!
   }
 
   type Mutation {
@@ -198,5 +226,6 @@ export const typeDefs = /* GraphQL */ `
     issueCreate(input: IssueCreateInput!): IssuePayload!
     issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!
     issueArchive(id: ID!): IssuePayload!
+    labelCreate(input: LabelCreateInput!): LabelPayload!
   }
 `;
