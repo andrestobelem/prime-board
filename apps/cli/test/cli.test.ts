@@ -123,3 +123,47 @@ describe("pb issue", () => {
     expect(invalid.exitCode).toBe(1);
   });
 });
+
+describe("pb project / team / webhook", () => {
+  it("crea y lista proyectos con lead y estado", () => {
+    const created = pb([
+      "project", "create", "--name", "Agent ops", "--state", "started", "--lead", "me", "--json",
+    ]);
+    expect(created.code).toBe(0);
+    const project = JSON.parse(created.out);
+    expect(project.state).toBe("STARTED");
+    expect(project.lead.name).toBe("admin");
+
+    const listed = pb(["project", "list", "--state", "started", "--json"]);
+    expect(JSON.parse(listed.out).map((p: any) => p.name)).toEqual(["Agent ops"]);
+
+    // asocia un issue y lo ve en la vista del proyecto
+    pb(["issue", "update", "PB-1", "--project", project.id]);
+    const view = pb(["project", "view", project.id, "--json"]);
+    expect(JSON.parse(view.out).issues.nodes.map((n: any) => n.identifier)).toEqual(["PB-1"]);
+  });
+
+  it("lista teams", () => {
+    const result = pb(["team", "list", "--json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out).map((t: any) => t.key)).toEqual(["PB"]);
+  });
+
+  it("crea, lista y borra webhooks mostrando el secret una sola vez", () => {
+    const created = pb([
+      "webhook", "create", "--url", "http://localhost:9/hook", "--events", "issue.created,comment.created", "--json",
+    ]);
+    expect(created.code).toBe(0);
+    const payload = JSON.parse(created.out);
+    expect(payload.secret.length).toBeGreaterThan(10);
+    expect(payload.webhook.events).toEqual(["issue.created", "comment.created"]);
+
+    const listed = pb(["webhook", "list", "--json"]);
+    expect(JSON.parse(listed.out).length).toBe(1);
+
+    const deleted = pb(["webhook", "delete", payload.webhook.id]);
+    expect(deleted.code).toBe(0);
+    const after = pb(["webhook", "list", "--json"]);
+    expect(JSON.parse(after.out).length).toBe(0);
+  });
+});

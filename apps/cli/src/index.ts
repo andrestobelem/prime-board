@@ -4,6 +4,9 @@
 import { APP_VERSION } from "@prime-board/schema";
 import { authCommand } from "./commands/auth.ts";
 import { issueCommand } from "./commands/issue.ts";
+import { projectCommand } from "./commands/project.ts";
+import { teamCommand } from "./commands/team.ts";
+import { webhookCommand } from "./commands/webhook.ts";
 import { ApiError, UsageError } from "./errors.ts";
 
 const HELP = `pb ${APP_VERSION} — prime-board CLI
@@ -14,6 +17,9 @@ Commands:
   auth login --url <url> --key <api-key>   Save credentials
   auth status                              Show current viewer
   issue list|view|create|update|comment    Work with issues
+  project list|view|create                 Work with projects
+  team list                                List teams
+  webhook list|create|delete               Manage webhooks
 
 Run \`pb <command>\` without arguments for detailed usage.
 Environment: PRIME_BOARD_URL, PRIME_BOARD_API_KEY override the saved config.`;
@@ -25,6 +31,12 @@ async function main(): Promise<void> {
       return authCommand(rest);
     case "issue":
       return issueCommand(rest);
+    case "project":
+      return projectCommand(rest);
+    case "team":
+      return teamCommand(rest);
+    case "webhook":
+      return webhookCommand(rest);
     case "--version":
     case "-v":
       console.log(APP_VERSION);
