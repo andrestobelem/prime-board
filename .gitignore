@@ -111,3 +111,6 @@ dist
 
 # TernJS port file
 .tern-port
+
+# scratchpad (trabajo temporal, no se versiona)
+scratchpad/
