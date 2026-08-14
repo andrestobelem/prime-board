@@ -16,9 +16,13 @@ teams, actores humano/agente con API keys, issues con sub-issues y actividad,
 labels, proyectos, filtros componibles + full-text (FTS5), paginación por cursor
 y webhooks firmados con HMAC. 43 tests.
 
-**Próximo:** interfaces para agentes — CLI `pb` y MCP server (Parte 3), y UI web
-Linear-like (Parte 4). Los tickets viven en Linear, proyecto `prime-board` del
-workspace `andrestobelem`.
+**Parte 3 — Interfaces para agentes: completa.** CLI `pb` (issues, proyectos,
+teams, webhooks; `--json`, exit codes estables) y MCP server por stdio con las
+mismas 14 tools que el MCP de Linear. Guía completa en
+[`docs/guia-agentes.md`](docs/guia-agentes.md) y datos de demo con `bun run seed`.
+
+**Próximo:** UI web Linear-like (Parte 4). Los tickets viven en Linear, proyecto
+`prime-board` del workspace `andrestobelem`.
 
 ### Quick start
 
