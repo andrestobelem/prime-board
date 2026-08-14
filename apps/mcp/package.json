@@ -5,6 +5,8 @@
     "pb-mcp": "src/index.ts"
   },
   "dependencies": {
-    "@prime-board/schema": "workspace:*"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@prime-board/schema": "workspace:*",
+    "zod": "^4.4.3"
   }
 }
