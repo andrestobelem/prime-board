@@ -10,6 +10,7 @@ import { Link, useRoute } from "./router.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 import { BoardView } from "./views/BoardView.tsx";
 import { IssueView } from "./views/IssueView.tsx";
+import { ProjectView } from "./views/ProjectView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
 
 const SHELL_QUERY = `{
@@ -87,6 +88,16 @@ export function App() {
       </>
     );
     content = <IssueView issueRef={param} />;
+  } else if (section === "project" && param) {
+    const project = shell.data?.projects.find((candidate) => candidate.id === param);
+    topbar = (
+      <>
+        <span className="crumb">Projects</span>
+        <span className="crumb">›</span>
+        <span className="title">{project?.name ?? "Project"}</span>
+      </>
+    );
+    content = <ProjectView projectId={param} />;
   } else if ((section === "team" || section === "board") && param) {
     const team = teams.find((candidate) => candidate.key === param);
     topbar = (
