@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-151","payload":{"title":"UI: gestión de usuarios y agentes (members)"},"ts":"2026-08-14T22:05:39.048Z","type":"created"}
+{"actor":"claude","issue":"AT-151","payload":{"title":"UI: gestión de usuarios y agentes (members)","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T22:05:39.048Z","type":"created"}
 {"actor":"claude","issue":"AT-151","payload":{"label":"web"},"ts":"2026-08-15T02:29:59.104Z","type":"labeled"}
 {"actor":"claude","issue":"AT-151","payload":{"label":"graphql"},"ts":"2026-08-15T02:29:59.104Z","type":"labeled"}
 {"actor":"claude","issue":"AT-151","payload":{"from":"Parte 5 — Feedback del MVP","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.084Z","type":"project_changed"}

@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-157","payload":{"title":"Fase 2 — Importador: reconstruir la DB desde el repo"},"ts":"2026-08-15T04:36:08.055Z","type":"created"}
+{"actor":"claude","issue":"AT-157","payload":{"title":"Fase 2 — Importador: reconstruir la DB desde el repo","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-15T04:36:08.055Z","type":"created"}
 {"actor":"claude","issue":"AT-157","payload":{"label":"db"},"ts":"2026-08-15T04:36:08.057Z","type":"labeled"}
 {"actor":"claude","issue":"AT-157","payload":{"label":"cli"},"ts":"2026-08-15T04:36:08.057Z","type":"labeled"}
 {"actor":"claude","issue":"AT-157","payload":{"label":"epic:repo-truth"},"ts":"2026-08-15T04:47:09.362Z","type":"labeled"}
@@ -6,3 +6,5 @@
 {"actor":"claude","issue":"AT-157","payload":{"from":null,"to":"Fase 2 — Importador"},"ts":"2026-08-15T04:55:39.762Z","type":"milestone_changed"}
 {"actor":"claude","issue":"AT-157","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T05:06:03.594Z","type":"state_changed"}
 {"actor":"claude","issue":"AT-157","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T05:06:03.595Z","type":"assigned"}
+{"actor":"claude","issue":"AT-157","payload":{},"ts":"2026-08-15T05:07:51.834Z","type":"commented"}
+{"actor":"claude","issue":"AT-157","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T05:07:51.840Z","type":"state_changed"}

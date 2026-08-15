@@ -46,13 +46,38 @@ function buildLookups(db: Database): Lookups {
 }
 
 /** Traduce los ids de un payload de actividad a nombres legibles y estables. */
-function resolvePayload(type: string, payload: Record<string, unknown>, lookups: Lookups): Record<string, unknown> {
+function resolvePayload(
+  type: string,
+  payload: Record<string, unknown>,
+  lookups: Lookups,
+  teamKeys: Map<string, string>,
+  identifiers: Map<string, string>,
+): Record<string, unknown> {
+  if (type === "commented") {
+    // El id del comentario es un UUID que se regenera en cada rebuild: fuera del repo.
+    const { commentId, ...rest } = payload as Record<string, unknown>;
+    void commentId;
+    return rest;
+  }
+  if (type === "created") {
+    // El evento `created` trae el estado inicial completo: se traduce entero.
+    const { teamId, stateId, assigneeId, parentId, projectId, milestoneId, ...rest } = payload as Record<string, any>;
+    return {
+      ...rest,
+      team: teamId ? teamKeys.get(teamId) ?? null : null,
+      state: stateId ? lookups.states.get(stateId) ?? null : null,
+      assignee: assigneeId ? lookups.actors.get(assigneeId) ?? null : null,
+      parent: parentId ? identifiers.get(parentId) ?? null : null,
+      project: projectId ? lookups.projects.get(projectId) ?? null : null,
+      milestone: milestoneId ? lookups.milestones.get(milestoneId) ?? null : null,
+    };
+  }
   const map: Record<string, Map<string, string>> = {
     state_changed: lookups.states,
     assigned: lookups.actors,
     project_changed: lookups.projects,
     milestone_changed: lookups.milestones,
-    parent_changed: new Map(),
+    parent_changed: identifiers,
   };
   const table = map[type];
   if (!table) return payload;
@@ -85,6 +110,12 @@ export function exportBoard(db: Database, rootDir: string, options: ExportOption
   mkdirSync(join(base, "log"), { recursive: true });
 
   const lookups = buildLookups(db);
+  const teamKeys = new Map(db.query("SELECT id, key FROM teams").values().map((r) => [r[0] as string, r[1] as string]));
+  const identifiers = new Map(
+    db.query(
+      "SELECT issues.id, teams.key || '-' || issues.number FROM issues JOIN teams ON teams.id = issues.team_id",
+    ).values().map((r) => [r[0] as string, r[1] as string]),
+  );
   let files = 0;
   const write = (path: string, contents: string) => {
     Bun.write(path, contents);
@@ -203,7 +234,7 @@ export function exportBoard(db: Database, rootDir: string, options: ExportOption
       return JSON.stringify({
         actor: lookups.actors.get(event.actor_id) ?? null,
         issue: identifier,
-        payload: resolvePayload(event.type, JSON.parse(event.payload), lookups),
+        payload: resolvePayload(event.type, JSON.parse(event.payload), lookups, teamKeys, identifiers),
         ts: event.created_at,
         type: event.type,
       });

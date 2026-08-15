@@ -1,6 +1,6 @@
-{"actor":"claude","issue":"AT-27","payload":{"title":"Importer: preservar fechas y autor originales"},"ts":"2026-08-15T02:30:26.635Z","type":"created"}
+{"actor":"claude","issue":"AT-27","payload":{"title":"Importer: preservar fechas y autor originales","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-15T02:30:26.635Z","type":"created"}
 {"actor":"claude","issue":"AT-27","payload":{"label":"feedback"},"ts":"2026-08-15T02:30:26.641Z","type":"labeled"}
 {"actor":"claude","issue":"AT-27","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T04:49:34.862Z","type":"state_changed"}
 {"actor":"claude","issue":"AT-27","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T04:49:34.862Z","type":"assigned"}
-{"actor":"claude","issue":"AT-27","payload":{"commentId":"01a003c1-d18f-7000-bf35-e1bb3f375319"},"ts":"2026-08-15T04:50:28.880Z","type":"commented"}
+{"actor":"claude","issue":"AT-27","payload":{},"ts":"2026-08-15T04:50:28.880Z","type":"commented"}
 {"actor":"claude","issue":"AT-27","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T04:50:28.886Z","type":"state_changed"}

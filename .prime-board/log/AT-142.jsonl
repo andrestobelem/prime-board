@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-142","payload":{"title":"MCP server con tools espejo de Linear"},"ts":"2026-08-14T20:09:36.054Z","type":"created"}
+{"actor":"claude","issue":"AT-142","payload":{"title":"MCP server con tools espejo de Linear","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T20:09:36.054Z","type":"created"}
 {"actor":"claude","issue":"AT-142","payload":{"label":"mcp"},"ts":"2026-08-15T02:29:59.067Z","type":"labeled"}
 {"actor":"claude","issue":"AT-142","payload":{"from":"Parte 3 — Interfaces para agentes","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.063Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-142","payload":{"from":null,"to":"Parte 3 — Interfaces para agentes"},"ts":"2026-08-15T04:58:51.063Z","type":"milestone_changed"}

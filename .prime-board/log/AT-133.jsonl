@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-133","payload":{"title":"GraphQL: teams, actores y API keys"},"ts":"2026-08-14T20:09:02.864Z","type":"created"}
+{"actor":"claude","issue":"AT-133","payload":{"title":"GraphQL: teams, actores y API keys","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T20:09:02.864Z","type":"created"}
 {"actor":"claude","issue":"AT-133","payload":{"label":"graphql"},"ts":"2026-08-15T02:29:59.029Z","type":"labeled"}
 {"actor":"claude","issue":"AT-133","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.052Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-133","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.052Z","type":"milestone_changed"}

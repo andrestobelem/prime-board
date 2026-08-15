@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-144","payload":{"title":"Shell de la UI Linear-like"},"ts":"2026-08-14T20:09:42.515Z","type":"created"}
+{"actor":"claude","issue":"AT-144","payload":{"title":"Shell de la UI Linear-like","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T20:09:42.515Z","type":"created"}
 {"actor":"claude","issue":"AT-144","payload":{"label":"web"},"ts":"2026-08-15T02:29:59.076Z","type":"labeled"}
 {"actor":"claude","issue":"AT-144","payload":{"from":"Parte 4 — UI web","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.078Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-144","payload":{"from":null,"to":"Parte 4 — UI web"},"ts":"2026-08-15T04:58:51.078Z","type":"milestone_changed"}

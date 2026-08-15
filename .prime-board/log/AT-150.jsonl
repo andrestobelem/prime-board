@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-150","payload":{"title":"UI: selector de tema dark / light / system"},"ts":"2026-08-14T22:05:06.061Z","type":"created"}
+{"actor":"claude","issue":"AT-150","payload":{"title":"UI: selector de tema dark / light / system","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T22:05:06.061Z","type":"created"}
 {"actor":"claude","issue":"AT-150","payload":{"label":"web"},"ts":"2026-08-15T02:29:59.099Z","type":"labeled"}
 {"actor":"claude","issue":"AT-150","payload":{"from":"Parte 5 — Feedback del MVP","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.085Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-150","payload":{"from":null,"to":"Parte 5 — Feedback del MVP"},"ts":"2026-08-15T04:58:51.085Z","type":"milestone_changed"}

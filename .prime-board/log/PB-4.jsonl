@@ -1,2 +1,2 @@
-{"actor":"admin","issue":"PB-4","payload":{"title":"Install prime-board"},"ts":"2026-08-14T21:56:43.844Z","type":"created"}
+{"actor":"admin","issue":"PB-4","payload":{"title":"Install prime-board","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T21:56:43.844Z","type":"created"}
 {"actor":"admin","issue":"PB-4","payload":{"from":"Backlog","to":"Done"},"ts":"2026-08-14T21:56:43.844Z","type":"state_changed"}

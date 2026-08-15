@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-145","payload":{"title":"Lista de issues agrupada por estado"},"ts":"2026-08-14T20:09:46.114Z","type":"created"}
+{"actor":"claude","issue":"AT-145","payload":{"title":"Lista de issues agrupada por estado","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T20:09:46.114Z","type":"created"}
 {"actor":"claude","issue":"AT-145","payload":{"label":"web"},"ts":"2026-08-15T02:29:59.080Z","type":"labeled"}
 {"actor":"claude","issue":"AT-145","payload":{"from":"Parte 4 — UI web","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.077Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-145","payload":{"from":null,"to":"Parte 4 — UI web"},"ts":"2026-08-15T04:58:51.077Z","type":"milestone_changed"}

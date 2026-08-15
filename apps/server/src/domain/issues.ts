@@ -214,7 +214,20 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
       input.priority ?? 0, input.assigneeId ?? null, input.parentId ?? null,
       input.projectId ?? null, input.milestoneId ?? null, creatorId, 0, timestamp,
     );
-    recordActivity(db, id, creatorId, "created", { title }, createdAt ?? undefined);
+    // Payload completo: el log tiene que alcanzar para reconstruir el issue
+    // sin depender del snapshot (AT-165, prerequisito de la Fase 3).
+    recordActivity(db, id, creatorId, "created", {
+      title,
+      description: input.description ?? null,
+      teamId: team.id,
+      number: numbered.number,
+      priority: input.priority ?? 0,
+      stateId,
+      assigneeId: input.assigneeId ?? null,
+      parentId: input.parentId ?? null,
+      projectId: input.projectId ?? null,
+      milestoneId: input.milestoneId ?? null,
+    }, createdAt ?? undefined);
     if (input.labelIds?.length) {
       applyLabelOps(db, actorId, getIssue(db, id)!, { labelIds: input.labelIds });
     }
@@ -269,7 +282,7 @@ export function updateIssue(
     if (input.description !== undefined && input.description !== issue.description) {
       push("description", input.description);
       changes.push({ field: "description", from: issue.description, to: input.description });
-      recordActivity(db, issue.id, actorId, "description_changed", {});
+      recordActivity(db, issue.id, actorId, "description_changed", { to: input.description ?? null });
     }
     if (input.stateId != null && input.stateId !== issue.state_id) {
       validateState(db, issue.team_id, input.stateId);

@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-131","payload":{"title":"Esquema SQLite, migraciones y seed inicial"},"ts":"2026-08-14T20:08:57.125Z","type":"created"}
+{"actor":"claude","issue":"AT-131","payload":{"title":"Esquema SQLite, migraciones y seed inicial","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T20:08:57.125Z","type":"created"}
 {"actor":"claude","issue":"AT-131","payload":{"label":"db"},"ts":"2026-08-15T02:29:59.020Z","type":"labeled"}
 {"actor":"claude","issue":"AT-131","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.054Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-131","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.054Z","type":"milestone_changed"}

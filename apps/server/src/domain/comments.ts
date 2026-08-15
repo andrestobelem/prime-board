@@ -55,7 +55,8 @@ export function createComment(
     db.query(
       "INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
     ).run(id, issue.id, author, body, timestamp);
-    recordActivity(db, issue.id, author, "commented", { commentId: id }, input.createdAt ?? undefined);
+    // El body va en el evento para que el log pueda reconstruir el comentario.
+    recordActivity(db, issue.id, author, "commented", { commentId: id, body }, input.createdAt ?? undefined);
   })();
   return db.query("SELECT * FROM comments WHERE id = ?1").get(id) as CommentRow;
 }

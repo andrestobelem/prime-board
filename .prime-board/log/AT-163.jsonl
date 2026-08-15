@@ -1,2 +1,2 @@
-{"actor":"claude","issue":"AT-163","payload":{"title":"Board: columnas por otro criterio que no sea estado"},"ts":"2026-08-15T05:00:20.241Z","type":"created"}
+{"actor":"claude","issue":"AT-163","payload":{"title":"Board: columnas por otro criterio que no sea estado","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-15T05:00:20.241Z","type":"created"}
 {"actor":"claude","issue":"AT-163","payload":{"label":"web"},"ts":"2026-08-15T05:00:20.241Z","type":"labeled"}

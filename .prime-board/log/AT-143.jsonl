@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-143","payload":{"title":"Guía de uso para agentes y seeds de demo"},"ts":"2026-08-14T20:09:39.475Z","type":"created"}
+{"actor":"claude","issue":"AT-143","payload":{"title":"Guía de uso para agentes y seeds de demo","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T20:09:39.475Z","type":"created"}
 {"actor":"claude","issue":"AT-143","payload":{"label":"docs"},"ts":"2026-08-15T02:29:59.072Z","type":"labeled"}
 {"actor":"claude","issue":"AT-143","payload":{"from":"Parte 3 — Interfaces para agentes","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.062Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-143","payload":{"from":null,"to":"Parte 3 — Interfaces para agentes"},"ts":"2026-08-15T04:58:51.062Z","type":"milestone_changed"}

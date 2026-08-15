@@ -1,6 +1,6 @@
 {
   "archivedAt": null,
-  "assignee": null,
+  "assignee": "claude",
   "comments": [],
   "createdAt": "2026-08-15T05:05:01.953Z",
   "creator": "claude",
@@ -14,8 +14,8 @@
   "parent": null,
   "priority": 2,
   "project": null,
-  "state": "Backlog",
+  "state": "In Progress",
   "team": "AT",
   "title": "Los eventos del log no alcanzan para reconstruir un issue",
-  "updatedAt": "2026-08-15T05:05:01.953Z"
+  "updatedAt": "2026-08-15T05:08:52.691Z"
 }

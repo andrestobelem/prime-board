@@ -52,7 +52,7 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       const id = newId();
       actorIds.set(actor.name!, id);
       db.query("INSERT INTO actors (id, name, email, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)")
-        .run(id, actor.name, actor.email ?? null, actor.type, timestamp);
+        .run(id, actor.name as string, actor.email ?? null, actor.type as string, timestamp);
     }
 
     // 4. Teams, estados y labels (clave: team key + nombre).
@@ -80,9 +80,9 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
     }
     for (const label of readJson(join(base, "meta", "workspace-labels.json")) as Array<Record<string, string>>) {
       const labelId = newId();
-      labelIds.set(label.name, labelId);
+      labelIds.set(label.name!, labelId);
       db.query("INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, NULL, ?4)")
-        .run(labelId, label.name, label.color, timestamp);
+        .run(labelId, label.name as string, label.color as string, timestamp);
     }
 
     // 5. Proyectos y milestones.
@@ -174,6 +174,51 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       void teamKey;
     }
 
+    // 9. Historial desde el log. El export guarda nombres; acá se resuelven de
+    // nuevo a ids para que la DB quede igual que antes del rebuild (round-trip).
+    // actorIds/projectIds/issueIds ya están indexados por clave natural.
+    const byName = {
+      actors: actorIds,
+      projects: projectIds,
+      issues: issueIds,
+      states: new Map<string, string>(),
+      milestones: new Map<string, string>(),
+    };
+    for (const [key, id] of stateIds) byName.states.set(key.split("/")[1]!, id);
+    for (const [key, id] of milestoneIds) byName.milestones.set(key.split("/")[1]!, id);
+
+    const denormalize = (type: string, payload: Record<string, unknown>): Record<string, unknown> => {
+      const lookup = (table: Map<string, string>, value: unknown) =>
+        typeof value === "string" ? table.get(value) ?? null : null;
+      if (type === "created") {
+        const { team, state, assignee, parent, project, milestone, ...rest } = payload as Record<string, any>;
+        return {
+          ...rest,
+          teamId: team ? teamIds.get(team) ?? null : null,
+          stateId: lookup(byName.states, state),
+          assigneeId: lookup(byName.actors, assignee),
+          parentId: lookup(byName.issues, parent),
+          projectId: lookup(byName.projects, project),
+          milestoneId: lookup(byName.milestones, milestone),
+        };
+      }
+      const tables: Record<string, Map<string, string>> = {
+        state_changed: byName.states,
+        assigned: byName.actors,
+        project_changed: byName.projects,
+        milestone_changed: byName.milestones,
+        parent_changed: byName.issues,
+      };
+      const table = tables[type];
+      if (!table) return payload;
+      const translate = (value: unknown) => (typeof value === "string" ? table.get(value) ?? value : value);
+      return {
+        ...payload,
+        ...(payload.from !== undefined ? { from: translate(payload.from) } : {}),
+        ...(payload.to !== undefined ? { to: translate(payload.to) } : {}),
+      };
+    };
+
     // 9. Historial desde el log.
     for (const file of readdirSync(join(base, "log")).filter((f) => f.endsWith(".jsonl"))) {
       const identifier = file.replace(/\.jsonl$/, "");
@@ -186,7 +231,7 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         db.query(
           "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         ).run(newId(), issueId, actorIds.get(event.actor) ?? [...actorIds.values()][0]!,
-              event.type, JSON.stringify(event.payload ?? {}), event.ts);
+              event.type, JSON.stringify(denormalize(event.type, event.payload ?? {})), event.ts);
         result.events += 1;
       }
     }
@@ -196,13 +241,15 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       const actorId = actorIds.get(key.actor_name as string);
       if (!actorId) continue;
       db.query("INSERT INTO api_keys (id, actor_id, name, hash, last_used_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
-        .run(newId(), actorId, key.name, key.hash, key.last_used_at, key.created_at);
+        .run(newId(), actorId, key.name as string, key.hash as string,
+             (key.last_used_at ?? null) as string | null, key.created_at as string);
       result.preservedKeys += 1;
     }
     for (const hook of webhooks) {
       db.query(
         "INSERT INTO webhooks (id, url, secret, events, enabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-      ).run(hook.id, hook.url, hook.secret, hook.events, hook.enabled, hook.created_at);
+      ).run(hook.id as string, hook.url as string, hook.secret as string,
+            hook.events as string, hook.enabled as number, hook.created_at as string);
     }
   })();
 

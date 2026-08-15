@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-130","payload":{"title":"Bootstrap del monorepo Bun + TypeScript"},"ts":"2026-08-14T20:08:53.455Z","type":"created"}
+{"actor":"claude","issue":"AT-130","payload":{"title":"Bootstrap del monorepo Bun + TypeScript","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T20:08:53.455Z","type":"created"}
 {"actor":"claude","issue":"AT-130","payload":{"label":"infra"},"ts":"2026-08-15T02:29:59.015Z","type":"labeled"}
 {"actor":"claude","issue":"AT-130","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.056Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-130","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.056Z","type":"milestone_changed"}

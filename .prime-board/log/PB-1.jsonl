@@ -1,5 +1,5 @@
-{"actor":"admin","issue":"PB-1","payload":{"title":"Explore the prime-board API"},"ts":"2026-08-14T21:56:43.842Z","type":"created"}
+{"actor":"admin","issue":"PB-1","payload":{"title":"Explore the prime-board API","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T21:56:43.842Z","type":"created"}
 {"actor":"admin","issue":"PB-1","payload":{"label":"agent:review"},"ts":"2026-08-14T21:56:43.843Z","type":"labeled"}
-{"actor":"demo-agent","issue":"PB-1","payload":{"commentId":"01a00247-04c4-7004-ac15-a5a86b683048"},"ts":"2026-08-14T21:56:43.844Z","type":"commented"}
-{"actor":"admin","issue":"PB-1","payload":{"commentId":"01a00247-04c4-7006-9498-ad1fc723b0a7"},"ts":"2026-08-14T21:56:43.844Z","type":"commented"}
+{"actor":"demo-agent","issue":"PB-1","payload":{},"ts":"2026-08-14T21:56:43.844Z","type":"commented"}
+{"actor":"admin","issue":"PB-1","payload":{},"ts":"2026-08-14T21:56:43.844Z","type":"commented"}
 {"actor":"admin","issue":"PB-1","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T03:38:46.060Z","type":"state_changed"}

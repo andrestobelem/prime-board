@@ -1,3 +1,3 @@
-{"actor":"claude","issue":"AT-164","payload":{"title":"Borrar estados del workflow (con migración de issues)"},"ts":"2026-08-15T05:02:23.501Z","type":"created"}
+{"actor":"claude","issue":"AT-164","payload":{"title":"Borrar estados del workflow (con migración de issues)","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-15T05:02:23.501Z","type":"created"}
 {"actor":"claude","issue":"AT-164","payload":{"label":"graphql"},"ts":"2026-08-15T05:02:23.502Z","type":"labeled"}
 {"actor":"claude","issue":"AT-164","payload":{"label":"web"},"ts":"2026-08-15T05:02:23.502Z","type":"labeled"}

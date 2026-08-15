@@ -119,4 +119,27 @@ describe("exportBoard", () => {
       rmSync(only, { recursive: true, force: true });
     }
   });
+
+  it("el evento created trae el estado inicial completo (AT-165)", () => {
+    const lines = readFileSync(join(dir, ".prime-board", "log", "PB-1.jsonl"), "utf8").trim().split("\n");
+    const created = JSON.parse(lines[0]!);
+    expect(created.type).toBe("created");
+    // Sin esto el log no alcanza para reconstruir el issue sin el snapshot.
+    expect(created.payload).toMatchObject({
+      title: "Exportame",
+      description: "cuerpo",
+      number: 1,
+      priority: 2,
+      team: "PB",
+      project: "Proyecto",
+      milestone: "Hito 1",
+    });
+  });
+
+  it("no filtra UUIDs internos en los eventos", () => {
+    const lines = readFileSync(join(dir, ".prime-board", "log", "PB-1.jsonl"), "utf8");
+    expect(lines).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/);
+    // El comentario conserva el body, que es lo que importa para reconstruirlo.
+    expect(lines).toContain('"body":"un comentario"');
+  });
 });

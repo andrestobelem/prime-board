@@ -1,10 +1,10 @@
-{"actor":"claude","issue":"AT-153","payload":{"title":"Investigar réplica de los tickets en el repo (Dolt vs export versionado)"},"ts":"2026-08-15T04:13:28.725Z","type":"created"}
+{"actor":"claude","issue":"AT-153","payload":{"title":"Investigar réplica de los tickets en el repo (Dolt vs export versionado)","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-15T04:13:28.725Z","type":"created"}
 {"actor":"claude","issue":"AT-153","payload":{"label":"research"},"ts":"2026-08-15T04:13:28.729Z","type":"labeled"}
 {"actor":"claude","issue":"AT-153","payload":{"label":"db"},"ts":"2026-08-15T04:13:28.729Z","type":"labeled"}
 {"actor":"claude","issue":"AT-153","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T04:22:38.880Z","type":"state_changed"}
 {"actor":"claude","issue":"AT-153","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T04:22:38.881Z","type":"assigned"}
-{"actor":"claude","issue":"AT-153","payload":{"commentId":"01a003a8-dcde-7000-8907-71ed9ca3affa"},"ts":"2026-08-15T04:23:13.374Z","type":"commented"}
-{"actor":"claude","issue":"AT-153","payload":{"commentId":"01a003b4-6964-7000-9edb-5298c34e35f6"},"ts":"2026-08-15T04:35:50.245Z","type":"commented"}
+{"actor":"claude","issue":"AT-153","payload":{},"ts":"2026-08-15T04:23:13.374Z","type":"commented"}
+{"actor":"claude","issue":"AT-153","payload":{},"ts":"2026-08-15T04:35:50.245Z","type":"commented"}
 {"actor":"claude","issue":"AT-153","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T04:35:50.254Z","type":"state_changed"}
 {"actor":"claude","issue":"AT-153","payload":{"label":"epic:repo-truth"},"ts":"2026-08-15T04:47:09.357Z","type":"labeled"}
 {"actor":"claude","issue":"AT-153","payload":{"from":null,"to":"Repo como fuente de verdad"},"ts":"2026-08-15T04:55:39.749Z","type":"project_changed"}

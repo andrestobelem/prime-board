@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-152","payload":{"title":"Proyectos asociados a teams"},"ts":"2026-08-14T22:05:42.343Z","type":"created"}
+{"actor":"claude","issue":"AT-152","payload":{"title":"Proyectos asociados a teams","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T22:05:42.343Z","type":"created"}
 {"actor":"claude","issue":"AT-152","payload":{"label":"graphql"},"ts":"2026-08-15T02:29:59.107Z","type":"labeled"}
 {"actor":"claude","issue":"AT-152","payload":{"label":"web"},"ts":"2026-08-15T02:29:59.107Z","type":"labeled"}
 {"actor":"claude","issue":"AT-152","payload":{"from":"Parte 5 — Feedback del MVP","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.083Z","type":"project_changed"}

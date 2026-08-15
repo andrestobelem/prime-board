@@ -1,4 +1,4 @@
-{"actor":"claude","issue":"AT-137","payload":{"title":"GraphQL: proyectos"},"ts":"2026-08-14T20:09:16.527Z","type":"created"}
+{"actor":"claude","issue":"AT-137","payload":{"title":"GraphQL: proyectos","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T20:09:16.527Z","type":"created"}
 {"actor":"claude","issue":"AT-137","payload":{"label":"graphql"},"ts":"2026-08-15T02:29:59.047Z","type":"labeled"}
 {"actor":"claude","issue":"AT-137","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.045Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-137","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.045Z","type":"milestone_changed"}
