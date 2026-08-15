@@ -7,6 +7,7 @@ import { Icon } from "../components/icons.tsx";
 const QUERY = `query($key: String) {
   team(key: $key) {
     id key name
+    defaultState { id }
     states { id name type color position }
     labels { id name color teamId }
   }
@@ -73,7 +74,29 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
               onBlur={(event) => updateState(state.id, { color: event.target.value })}
               style={{ width: 42, padding: 2 }}
             />
-            <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+            <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+              {state.id === team.defaultState.id ? (
+                <span
+                  title="New issues without an explicit state land here"
+                  style={{ fontSize: 11, color: "var(--text-muted)", border: "1px solid var(--border)",
+                           borderRadius: 4, padding: "1px 6px", marginRight: 6 }}
+                >
+                  Default
+                </span>
+              ) : (
+                <button
+                  className="btn secondary"
+                  title="Make this the default state for new issues"
+                  style={{ fontSize: 11, marginRight: 6 }}
+                  onClick={() =>
+                    mutate(`mutation($id: ID!, $input: TeamUpdateInput!) {
+                      teamUpdate(id: $id, input: $input) { success }
+                    }`, { id: team.id, input: { defaultStateId: state.id } })
+                  }
+                >
+                  Set default
+                </button>
+              )}
               <button
                 style={{ color: "var(--danger)", marginRight: 6 }}
                 title="Borrar estado (migra sus issues)"
