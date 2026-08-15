@@ -32,5 +32,17 @@ para que lo usen agentes (en principio prime-agent, aunque debería poder usarse
 
 ## Skills
 
-- Las skills se instalan en el repo (a nivel proyecto) con el Skills CLI:
-  `npx skills add <paquete>` (catálogo en https://skills.sh).
+Las skills del repo viven en **`.agents/skills/`** y se traen con el Skills CLI
+(catálogo en https://skills.sh):
+
+```bash
+npx skills add <paquete> --agent universal --copy
+```
+
+- `--agent universal` es el target que escribe en `.agents/` (la convención genérica,
+  no atada a un agente concreto). **No usar `--agent "*"`**: instala en ~50 directorios
+  distintos (`.claude`, `.cursor`, `.windsurf`, …) y ensucia el repo.
+- `--copy` guarda copias reales en vez de symlinks, para que las skills viajen con el
+  repo y funcionen en cualquier clon.
+- `skills-lock.json` queda versionado; `npx skills experimental_install` restaura desde ahí.
+- Las skills corren con permisos del agente: revisarlas antes de usarlas.
