@@ -138,3 +138,41 @@ describe("issue relations en el repo", () => {
     }
   });
 });
+
+describe("validación de ciclos en relaciones de bloqueo (AT-176)", () => {
+  beforeAll(async () => {
+    for (const title of ["Ciclo A", "Ciclo B", "Ciclo C"]) {
+      await gql(app, `mutation($t: String!) {
+        issueCreate(input: { teamKey: "PB", title: $t }) { success }
+      }`, { t: title });
+    }
+    // PB-4 bloqueado por PB-5: blocks(PB-5 → PB-4).
+    await createRelation("PB-4", "PB-5", "BLOCKED_BY");
+  });
+
+  it("rechaza un ciclo directo (A bloqueado por B, B bloqueado por A)", async () => {
+    const result = await createRelation("PB-5", "PB-4", "BLOCKED_BY");
+    expect(result.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+    expect(result.errors?.[0]?.message).toContain("cycle");
+    expect(result.errors?.[0]?.message).toContain("PB-4");
+    expect(result.errors?.[0]?.message).toContain("PB-5");
+  });
+
+  it("rechaza un ciclo transitivo (A→B→C→A)", async () => {
+    // PB-5 bloqueado por PB-6: blocks(PB-6 → PB-5). Cadena: PB-6 → PB-5 → PB-4.
+    const ok = await createRelation("PB-5", "PB-6", "BLOCKED_BY");
+    expect(ok.errors).toBeUndefined();
+    // Cerrar el ciclo: PB-6 bloqueado por PB-4 → blocks(PB-4 → PB-6).
+    const result = await createRelation("PB-6", "PB-4", "BLOCKED_BY");
+    expect(result.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+    for (const ident of ["PB-4", "PB-5", "PB-6"]) {
+      expect(result.errors?.[0]?.message).toContain(ident);
+    }
+  });
+
+  it("el grafo queda intacto tras el rechazo", async () => {
+    expect(await relationsOf("PB-6")).toMatchObject([
+      { type: "BLOCKS", relatedIssue: { identifier: "PB-5" } },
+    ]);
+  });
+});

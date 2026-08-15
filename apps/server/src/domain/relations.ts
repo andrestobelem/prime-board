@@ -7,7 +7,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { recordActivity } from "./activity.ts";
-import { getIssueByRef, identifierOf, type IssueRow } from "./issues.ts";
+import { getIssue, getIssueByRef, identifierOf, type IssueRow } from "./issues.ts";
 
 /** Tipos canónicos: como se guardan en la tabla. */
 export type StoredRelationType = "blocks";
@@ -55,6 +55,44 @@ export function listRelations(db: Database, issueId: string): RelationView[] {
   );
 }
 
+/**
+ * Rechaza una relación de bloqueo que cierre un ciclo (AT-176): si el bloqueado
+ * ya bloquea (transitivamente) al bloqueante, agregar blocks(source → target)
+ * dejaría el grafo sin solución y el frontier de /wayfinder vacío para siempre.
+ */
+function assertNoBlockingCycle(db: Database, source: IssueRow, target: IssueRow): void {
+  // BFS sobre las aristas blocks desde target: ¿se llega a source?
+  const parents = new Map<string, string>();
+  const queue = [target.id];
+  const seen = new Set([target.id]);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (current === source.id) {
+      // Reconstruye el camino target → … → source para nombrar el ciclo completo.
+      const path: string[] = [];
+      for (let node: string | undefined = source.id; node; node = parents.get(node)) {
+        path.push(node);
+      }
+      const cycle = [source.id, target.id, ...path.reverse().slice(1)]
+        .map((id) => identifierOf(getIssue(db, id)!));
+      throw apiError(
+        "VALIDATION_FAILED",
+        `Relation would create a blocking cycle: ${cycle.join(" → ")}`,
+      );
+    }
+    const next = db
+      .query("SELECT related_id FROM issue_relations WHERE issue_id = ?1 AND type = 'blocks'")
+      .values(current)
+      .map((row) => row[0] as string);
+    for (const neighbor of next) {
+      if (seen.has(neighbor)) continue;
+      seen.add(neighbor);
+      parents.set(neighbor, current);
+      queue.push(neighbor);
+    }
+  }
+}
+
 export interface RelationCreateInput {
   /** Acepta UUID o identificador legible (AT-126). */
   issueId: string;
@@ -96,6 +134,8 @@ export function createRelation(
       `Relation already exists: ${identifierOf(source)} ${type} ${identifierOf(target)}`,
     );
   }
+
+  if (type === "blocks") assertNoBlockingCycle(db, source, target);
 
   const id = newId();
   db.transaction(() => {
