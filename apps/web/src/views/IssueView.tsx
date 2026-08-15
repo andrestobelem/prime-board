@@ -1,9 +1,9 @@
 // Detalle de issue (AT-147): edición inline de título/descripción (markdown),
 // panel de propiedades, sub-issues, comentarios e historial de actividad.
-import { marked } from "marked";
 import { useEffect, useState } from "react";
 import { mutate, useQuery } from "../api.ts";
 import { Avatar, LabelChip, PRIORITY_NAMES, StateDot } from "../components/bits.tsx";
+import { renderMarkdown } from "../markdown.ts";
 import { Link } from "../router.tsx";
 
 const ISSUE_QUERY = `query($id: ID!) {
@@ -24,12 +24,8 @@ const ISSUE_QUERY = `query($id: ID!) {
 }`;
 
 function Markdown({ text }: { text: string }) {
-  return (
-    <div
-      className="markdown"
-      dangerouslySetInnerHTML={{ __html: marked.parse(text, { async: false }) }}
-    />
-  );
+  // El HTML ya viene sanitizado por renderMarkdown (ver markdown.ts).
+  return <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
 }
 
 const ACTIVITY_TEXT: Record<string, (payload: any) => string> = {

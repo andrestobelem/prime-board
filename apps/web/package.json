@@ -2,14 +2,17 @@
   "name": "@prime-board/web",
   "private": true,
   "dependencies": {
+    "dompurify": "^3.4.13",
     "marked": "^18.0.9",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
+    "jsdom": "^30.0.1",
     "vite": "^8.2.1"
   },
   "scripts": {
