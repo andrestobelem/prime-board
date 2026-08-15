@@ -52,8 +52,14 @@ const ACTIVITY_TEXT: Record<string, (payload: any) => string> = {
 const RELATION_LABELS: Record<string, string> = {
   BLOCKS: "blocks",
   BLOCKED_BY: "blocked by",
+  RELATED: "related to",
+  DUPLICATE_OF: "duplicate of",
+  DUPLICATED_BY: "duplicated by",
   blocks: "blocks",
   blocked_by: "blocked by",
+  related: "related to",
+  duplicate_of: "duplicate of",
+  duplicated_by: "duplicated by",
 };
 
 function timeAgo(iso: string): string {
@@ -214,6 +220,8 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           <select value={relationType} onChange={(event) => setRelationType(event.target.value)}>
             <option value="BLOCKED_BY">blocked by</option>
             <option value="BLOCKS">blocks</option>
+            <option value="RELATED">related to</option>
+            <option value="DUPLICATE_OF">duplicate of</option>
           </select>
           <input
             placeholder="Issue ID, e.g. PB-12"
