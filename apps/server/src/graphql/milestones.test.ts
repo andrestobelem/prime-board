@@ -120,4 +120,36 @@ describe("milestones", () => {
     expect(moved.data!.issueUpdate.issue.project.name).toBe("Otro");
     expect(moved.data!.issueUpdate.issue.milestone).toBeNull();
   });
+
+  it("borra un milestone y deja sus issues sin milestone (AT-160)", async () => {
+    const created = await gql(app, `
+      mutation($p: ID!) { milestoneCreate(input: { projectId: $p, name: "Descartable" }) { milestone { id } } }
+    `, { p: projectId });
+    const milestoneId = created.data!.milestoneCreate.milestone.id;
+    const issue = await gql(app, `
+      mutation($p: ID!, $m: ID!) {
+        issueCreate(input: { teamKey: "PB", title: "Queda huérfano", projectId: $p, milestoneId: $m }) {
+          issue { id }
+        }
+      }
+    `, { p: projectId, m: milestoneId });
+
+    const deleted = await gql(app, `mutation($id: ID!) { milestoneDelete(id: $id) { success orphanedIssues } }`,
+      { id: milestoneId });
+    expect(deleted.data!.milestoneDelete).toEqual({ success: true, orphanedIssues: 1 });
+
+    // El issue sigue existiendo, sin milestone.
+    const after = await gql(app, `query($id: ID!) { issue(id: $id) { title milestone { name } } }`,
+      { id: issue.data!.issueCreate.issue.id });
+    expect(after.data!.issue.title).toBe("Queda huérfano");
+    expect(after.data!.issue.milestone).toBeNull();
+
+    const list = await gql(app, `query($id: ID!) { project(id: $id) { milestones { name } } }`, { id: projectId });
+    expect(list.data!.project.milestones.map((m: any) => m.name)).not.toContain("Descartable");
+  });
+
+  it("borrar un milestone inexistente da NOT_FOUND", async () => {
+    const bad = await gql(app, `mutation { milestoneDelete(id: "nope") { success } }`);
+    expect(bad.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+  });
 });

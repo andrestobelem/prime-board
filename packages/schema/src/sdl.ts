@@ -403,6 +403,12 @@ export const typeDefs = /* GraphQL */ `
     milestone: Milestone!
   }
 
+  type MilestoneDeletePayload {
+    success: Boolean!
+    """Cantidad de issues que quedaron sin milestone."""
+    orphanedIssues: Int!
+  }
+
   type Query {
     """Actor autenticado por la API key del header Authorization."""
     viewer: Actor!
@@ -437,6 +443,8 @@ export const typeDefs = /* GraphQL */ `
     projectUnarchive(id: ID!): ProjectPayload!
     milestoneCreate(input: MilestoneCreateInput!): MilestonePayload!
     milestoneUpdate(id: ID!, input: MilestoneUpdateInput!): MilestonePayload!
+    """Borra el milestone; los issues asignados quedan sin milestone."""
+    milestoneDelete(id: ID!): MilestoneDeletePayload!
     webhookCreate(input: WebhookCreateInput!): WebhookPayload!
     webhookDelete(id: ID!): DeletePayload!
   }

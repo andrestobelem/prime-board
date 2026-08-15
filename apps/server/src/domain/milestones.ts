@@ -92,6 +92,25 @@ export function updateMilestone(
   return getMilestone(db, id)!;
 }
 
+/**
+ * Borra un milestone. Los issues asignados quedan sin milestone (no se borran ni
+ * se bloquea la operación): el milestone es una agrupación, no una dependencia.
+ */
+export function deleteMilestone(db: Database, id: string): number {
+  const milestone = getMilestone(db, id);
+  if (!milestone) throw apiError("NOT_FOUND", "Milestone not found");
+  let affected = 0;
+  db.transaction(() => {
+    const orphaned = db
+      .query("SELECT count(*) AS n FROM issues WHERE milestone_id = ?1")
+      .get(id) as { n: number };
+    affected = orphaned.n;
+    db.query("UPDATE issues SET milestone_id = NULL WHERE milestone_id = ?1").run(id);
+    db.query("DELETE FROM milestones WHERE id = ?1").run(id);
+  })();
+  return affected;
+}
+
 /** Un issue solo puede apuntar a un milestone del proyecto en el que está. */
 export function assertMilestoneMatchesProject(
   db: Database,

@@ -5,7 +5,7 @@ import {
   archiveProject, createProject, getProject, listProjects, listProjectTeamIds, mapProject, updateProject,
 } from "../domain/projects.ts";
 import {
-  createMilestone, getMilestone, listMilestones, mapMilestone, updateMilestone,
+  createMilestone, deleteMilestone, getMilestone, listMilestones, mapMilestone, updateMilestone,
 } from "../domain/milestones.ts";
 import { getTeam, mapTeam } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
@@ -83,6 +83,10 @@ export const projectResolvers = {
       const project = mapProject(createProject(context.db, args.input));
       context.events.emit("project.created", viewer, project);
       return { success: true, project };
+    },
+    milestoneDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+      requireViewer(context);
+      return { success: true, orphanedIssues: deleteMilestone(context.db, args.id) };
     },
     projectArchive: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
