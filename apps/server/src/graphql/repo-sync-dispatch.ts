@@ -68,6 +68,13 @@ type AnyResolver = (...args: any[]) => unknown;
  * resolver no sincronizó nada y la mutation no está excluida. El segundo
  * argumento posicional de un resolver GraphQL es siempre `context` (índice 2).
  */
+/**
+ * Marca no enumerable en el objeto que devuelve withRepoSyncDispatch — así un
+ * test puede verificar que el Mutation map que de verdad usa el server pasó
+ * por acá, sin depender de leer el código fuente (AT-195).
+ */
+export const DISPATCHED = Symbol("repoSyncDispatched");
+
 export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(mutations: T): T {
   const wrapped: Record<string, AnyResolver> = {};
   for (const [name, resolver] of Object.entries(mutations)) {
@@ -92,5 +99,6 @@ export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(muta
       return result;
     };
   }
+  Object.defineProperty(wrapped, DISPATCHED, { value: true, enumerable: false });
   return wrapped as T;
 }
