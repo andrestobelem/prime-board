@@ -38,12 +38,21 @@ export function getProject(db: Database, id: string): ProjectRow | null {
   return db.query("SELECT * FROM projects WHERE id = ?1").get(id) as ProjectRow | null;
 }
 
+export function archiveProject(db: Database, id: string, archived: boolean): ProjectRow {
+  const project = getProject(db, id);
+  if (!project) throw apiError("NOT_FOUND", "Project not found");
+  db.query("UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3")
+    .run(archived ? now() : null, now(), id);
+  return getProject(db, id)!;
+}
+
 export function listProjects(
   db: Database,
   state?: string | null,
   teamId?: string | null,
+  includeArchived = false,
 ): ProjectRow[] {
-  const where: string[] = ["archived_at IS NULL"];
+  const where: string[] = includeArchived ? [] : ["archived_at IS NULL"];
   const params: unknown[] = [];
   if (state) {
     params.push(state);
@@ -53,8 +62,9 @@ export function listProjects(
     params.push(teamId);
     where.push(`id IN (SELECT project_id FROM project_teams WHERE team_id = ?${params.length})`);
   }
+  const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
   return db
-    .query(`SELECT * FROM projects WHERE ${where.join(" AND ")} ORDER BY created_at`)
+    .query(`SELECT * FROM projects ${clause} ORDER BY created_at`)
     .all(...(params as never[])) as ProjectRow[];
 }
 

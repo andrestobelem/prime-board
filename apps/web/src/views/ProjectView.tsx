@@ -1,5 +1,6 @@
 // Vista de proyecto (AT-149): header con estado/lead/fecha y la lista de issues.
-import { useQuery } from "../api.ts";
+import { mutate, useQuery } from "../api.ts";
+import { navigate } from "../router.tsx";
 import { Avatar } from "../components/bits.tsx";
 import { IssueList, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
@@ -54,6 +55,16 @@ export function ProjectView({ projectId }: { projectId: string }) {
           >
             {project.state.toLowerCase()}
           </span>
+          <button
+            className="btn secondary"
+            style={{ marginLeft: "auto" }}
+            onClick={async () => {
+              await mutate(`mutation($id: ID!) { projectArchive(id: $id) { success } }`, { id: project.id });
+              navigate("/");
+            }}
+          >
+            Archive
+          </button>
         </div>
         <div style={{
           display: "flex", gap: 16, marginTop: 8,

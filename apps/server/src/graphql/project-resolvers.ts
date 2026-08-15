@@ -2,7 +2,7 @@
 import { getActor, mapActor } from "../domain/actors.ts";
 import { listIssues, mapIssue } from "../domain/issues.ts";
 import {
-  createProject, getProject, listProjects, listProjectTeamIds, mapProject, updateProject,
+  archiveProject, createProject, getProject, listProjects, listProjectTeamIds, mapProject, updateProject,
 } from "../domain/projects.ts";
 import {
   createMilestone, getMilestone, listMilestones, mapMilestone, updateMilestone,
@@ -58,9 +58,13 @@ export const projectResolvers = {
   },
 
   Query: {
-    projects: (_parent: unknown, args: { state?: string; team?: string }, context: Context) => {
+    projects: (
+      _parent: unknown,
+      args: { state?: string; team?: string; includeArchived?: boolean },
+      context: Context,
+    ) => {
       requireViewer(context);
-      return listProjects(context.db, args.state, args.team).map(mapProject);
+      return listProjects(context.db, args.state, args.team, args.includeArchived).map(mapProject);
     },
     project: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
@@ -79,6 +83,14 @@ export const projectResolvers = {
       const project = mapProject(createProject(context.db, args.input));
       context.events.emit("project.created", viewer, project);
       return { success: true, project };
+    },
+    projectArchive: (_parent: unknown, args: { id: string }, context: Context) => {
+      requireViewer(context);
+      return { success: true, project: mapProject(archiveProject(context.db, args.id, true)) };
+    },
+    projectUnarchive: (_parent: unknown, args: { id: string }, context: Context) => {
+      requireViewer(context);
+      return { success: true, project: mapProject(archiveProject(context.db, args.id, false)) };
     },
     milestoneCreate: (
       _parent: unknown,

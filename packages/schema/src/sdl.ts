@@ -415,7 +415,7 @@ export const typeDefs = /* GraphQL */ `
     issues(filter: IssueFilter, first: Int = 50, after: String, orderBy: IssueOrder = CREATED_DESC): IssueConnection!
     """Labels visibles para un team (workspace + propias); sin team, todas."""
     labels(team: ID): [Label!]!
-    projects(state: ProjectState, team: ID): [Project!]!
+    projects(state: ProjectState, team: ID, includeArchived: Boolean = false): [Project!]!
     project(id: ID!): Project
     webhooks: [Webhook!]!
   }
@@ -433,6 +433,8 @@ export const typeDefs = /* GraphQL */ `
     commentCreate(input: CommentCreateInput!): CommentPayload!
     projectCreate(input: ProjectCreateInput!): ProjectPayload!
     projectUpdate(id: ID!, input: ProjectUpdateInput!): ProjectPayload!
+    projectArchive(id: ID!): ProjectPayload!
+    projectUnarchive(id: ID!): ProjectPayload!
     milestoneCreate(input: MilestoneCreateInput!): MilestonePayload!
     milestoneUpdate(id: ID!, input: MilestoneUpdateInput!): MilestonePayload!
     webhookCreate(input: WebhookCreateInput!): WebhookPayload!

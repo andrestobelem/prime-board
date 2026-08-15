@@ -1,4 +1,5 @@
 // Sidebar Linear-like: workspace y teams con sus proyectos anidados (AT-152).
+import { useState } from "react";
 import { Link, useRoute } from "../router.tsx";
 
 interface SidebarProps {
@@ -7,12 +8,16 @@ interface SidebarProps {
     id: string;
     key: string;
     name: string;
-    projects: Array<{ id: string; name: string }>;
+    projects: Array<{ id: string; name: string; state: string }>;
   }>;
 }
 
+const CLOSED_STATES = ["COMPLETED", "CANCELED"];
+
 export function Sidebar({ workspace, teams }: SidebarProps) {
   const route = useRoute();
+  // Los proyectos cerrados se colapsan para no saturar el sidebar (AT-30).
+  const [showClosed, setShowClosed] = useState<Record<string, boolean>>({});
   const active = (path: string) => (`/${route.join("/")}` === path ? "active" : "");
   return (
     <nav className="sidebar">
@@ -26,16 +31,39 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
           <Link to={`/team/${team.key}`} className={active(`/team/${team.key}`)}>
             <span style={{ color: "var(--text-faint)" }}>#</span> Issues
           </Link>
-          {team.projects.map((project) => (
+          {team.projects.filter((p) => !CLOSED_STATES.includes(p.state)).map((project) => (
             <Link
               key={project.id}
               to={`/project/${project.id}`}
               className={active(`/project/${project.id}`)}
-              // Anidado bajo el team, como en Linear.
             >
               <span style={{ color: "var(--text-faint)", paddingLeft: 10 }}>▦</span> {project.name}
             </Link>
           ))}
+          {team.projects.some((p) => CLOSED_STATES.includes(p.state)) && (
+            <>
+              <button
+                className="nav"
+                onClick={() => setShowClosed((s) => ({ ...s, [team.id]: !s[team.id] }))}
+              >
+                <span style={{ color: "var(--text-faint)", paddingLeft: 10 }}>
+                  {showClosed[team.id] ? "▾" : "▸"}
+                </span>
+                Completados ({team.projects.filter((p) => CLOSED_STATES.includes(p.state)).length})
+              </button>
+              {showClosed[team.id] &&
+                team.projects.filter((p) => CLOSED_STATES.includes(p.state)).map((project) => (
+                  <Link
+                    key={project.id}
+                    to={`/project/${project.id}`}
+                    className={active(`/project/${project.id}`)}
+                  >
+                    <span style={{ color: "var(--text-faint)", paddingLeft: 20 }}>▦</span>
+                    <span style={{ opacity: 0.7 }}>{project.name}</span>
+                  </Link>
+                ))}
+            </>
+          )}
         </div>
       ))}
       <div className="spacer" />
