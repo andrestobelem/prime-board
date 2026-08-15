@@ -53,7 +53,8 @@ describe("exportBoard", () => {
 
     const base = join(dir, ".prime-board");
     expect(readdirSync(join(base, "meta")).sort()).toEqual([
-      "actors.json", "projects.json", "teams.json", "workspace-labels.json", "workspace.json",
+      "actors.json", "export.json", "projects.json", "teams.json",
+      "workspace-labels.json", "workspace.json",
     ]);
     expect(readdirSync(join(base, "issues"))).toEqual(["PB-1.json"]);
     expect(readdirSync(join(base, "log"))).toEqual(["PB-1.jsonl"]);

@@ -98,6 +98,12 @@ export function exportBoard(db: Database, rootDir: string, options: ExportOption
     throw new Error(`Team not found: ${options.teamKey}`);
   }
 
+  // Alcance del export: un rebuild desde un export parcial borraría lo que no
+  // está en el repo, así que queda registrado y el importador lo verifica.
+  write(join(base, "meta", "export.json"), stableStringify({
+    scope: options.teamKey ? `team:${options.teamKey.toUpperCase()}` : "workspace",
+  }));
+
   // ---- meta ----
   const workspace = db.query("SELECT name, url_key FROM workspace LIMIT 1").get() as
     | { name: string; url_key: string }

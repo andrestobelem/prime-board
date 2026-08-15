@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "seed": "bun run --cwd apps/server seed",
     "build": "bun run --cwd apps/web build",
-    "export": "bun run --cwd apps/server export"
+    "export": "bun run --cwd apps/server export",
+    "rebuild": "bun run --cwd apps/server rebuild"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
