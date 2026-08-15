@@ -3,3 +3,8 @@
 {"actor":"admin","issue":"AT-190","payload":{"label":"graphql"},"ts":"2026-08-15T09:59:17.315Z","type":"labeled"}
 {"actor":"admin","issue":"AT-190","payload":{"type":"blocked_by","issue":"AT-187"},"ts":"2026-08-15T09:59:45.080Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-190","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-15T10:00:01.680Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-190","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-15T10:34:14.970Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-190","payload":{"from":null,"to":"admin"},"ts":"2026-08-15T10:34:14.970Z","type":"assigned"}
+{"actor":"admin","issue":"AT-190","payload":{"from":"In Progress","to":"Todo"},"ts":"2026-08-15T10:35:32.583Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-190","payload":{"from":"Todo","to":"In Progress"},"ts":"2026-08-15T10:35:32.640Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-190","payload":{"from":4,"to":2},"ts":"2026-08-15T10:35:32.640Z","type":"priority_changed"}
