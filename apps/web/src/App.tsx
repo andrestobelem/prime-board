@@ -108,17 +108,41 @@ export function App() {
       </>
     );
     content = <IssueView issueRef={param} />;
-  } else if (section === "project" && param) {
+  } else if ((section === "project" || section === "project-board") && param) {
     const project = shell.data?.teams
       .flatMap((team) => team.projects)
       .find((candidate) => candidate.id === param);
+    const boardActive = section === "project-board";
     topbar = (
       <>
-        <Switcher teams={teams} current={{ kind: "project", id: param }} view="team" />
+        <Switcher
+          teams={teams}
+          current={{ kind: "project", id: param }}
+          view={boardActive ? "board" : "team"}
+        />
         {project?.state && <span className="crumb">{project.state.toLowerCase()}</span>}
+        <span className="right">
+          {boardActive && (
+            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
+              {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
+                <option key={key} value={key}>Agrupar por {GROUP_LABELS[key].toLowerCase()}</option>
+              ))}
+            </select>
+          )}
+          <span className="tabs">
+            <Link to={`/project/${param}`}>
+              <button className={boardActive ? "" : "active"}>List</button>
+            </Link>
+            <Link to={`/project-board/${param}`}>
+              <button className={boardActive ? "active" : ""}>Board</button>
+            </Link>
+          </span>
+        </span>
       </>
     );
-    content = <ProjectView projectId={param} />;
+    content = boardActive
+      ? <BoardView scope={{ kind: "project", projectId: param }} groupBy={groupBy} />
+      : <ProjectView projectId={param} />;
   } else if ((section === "team" || section === "board") && param) {
     const team = teams.find((candidate) => candidate.key === param);
     topbar = (
@@ -153,7 +177,7 @@ export function App() {
       </>
     );
     content = section === "board"
-      ? <BoardView teamKey={param} teamId={team?.id ?? null} groupBy={groupBy} />
+      ? <BoardView scope={{ kind: "team", teamKey: param, teamId: team?.id ?? null }} groupBy={groupBy} />
       : <TeamView teamKey={param} teamId={team?.id ?? null} groupBy={groupBy} />;
   } else if (shell.data) {
     if (defaultTeam) {

@@ -64,7 +64,8 @@ export function Switcher({ teams, current, view }: SwitcherProps) {
           kind: "project",
           closed: CLOSED_STATES.includes(project.state),
           active: current.kind === "project" && current.id === project.id,
-          go: () => navigate(`/project/${project.id}`),
+          // La vista elegida se preserva también al saltar de proyecto (AT-182).
+          go: () => navigate(view === "board" ? `/project-board/${project.id}` : `/project/${project.id}`),
         });
       }
     }

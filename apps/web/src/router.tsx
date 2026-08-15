@@ -1,4 +1,5 @@
-// Router por hash: #/team/PB, #/board/PB, #/issue/PB-1, #/project/<id>, #/settings.
+// Router por hash: #/team/PB, #/board/PB, #/issue/PB-1, #/project/<id>,
+// #/project-board/<id>, #/settings.
 import { useEffect, useState, type ReactNode } from "react";
 
 export function useRoute(): string[] {
