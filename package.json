@@ -10,7 +10,8 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "seed": "bun run --cwd apps/server seed",
-    "build": "bun run --cwd apps/web build"
+    "build": "bun run --cwd apps/web build",
+    "export": "bun run --cwd apps/server export"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

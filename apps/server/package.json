@@ -4,7 +4,8 @@
   "scripts": {
     "start": "bun src/index.ts",
     "dev": "bun --watch src/index.ts",
-    "seed": "bun src/scripts/demo-seed.ts"
+    "seed": "bun src/scripts/demo-seed.ts",
+    "export": "bun src/scripts/export.ts"
   },
   "dependencies": {
     "@prime-board/schema": "workspace:*",
