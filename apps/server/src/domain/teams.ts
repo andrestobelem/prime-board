@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { seedTeamWorkflow } from "../db/seed.ts";
 import { newId, now } from "../db/util.ts";
+import { recordActivity } from "./activity.ts";
 
 export interface TeamRow {
   id: string;
@@ -85,6 +86,65 @@ export function createTeam(
 }
 
 const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"];
+
+/**
+ * Borra un estado migrando sus issues a otro (AT-164). `issues.state_id` es NOT
+ * NULL: sin destino no hay borrado posible. Se protegen dos invariantes: el team
+ * no puede quedarse sin estados, ni sin un estado `completed` (el board necesita
+ * uno para cerrar trabajo y el progreso de milestones se calcula con él).
+ */
+export function deleteWorkflowState(
+  db: Database,
+  actorId: string,
+  id: string,
+  moveToStateId?: string | null,
+): number {
+  const state = db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow | null;
+  if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
+
+  const siblings = db
+    .query("SELECT * FROM workflow_states WHERE team_id = ?1 AND id != ?2")
+    .all(state.team_id, id) as WorkflowStateRow[];
+  if (siblings.length === 0) {
+    throw apiError("VALIDATION_FAILED", "A team must keep at least one workflow state");
+  }
+  if (state.type === "completed" && !siblings.some((candidate) => candidate.type === "completed")) {
+    throw apiError("VALIDATION_FAILED", "A team must keep at least one completed state");
+  }
+
+  const affected = db
+    .query("SELECT count(*) AS n FROM issues WHERE state_id = ?1")
+    .get(id) as { n: number };
+
+  let target: WorkflowStateRow | null = null;
+  if (affected.n > 0) {
+    if (!moveToStateId) {
+      throw apiError(
+        "VALIDATION_FAILED",
+        `State has ${affected.n} issue(s): provide moveToStateId to migrate them`,
+      );
+    }
+    target = siblings.find((candidate) => candidate.id === moveToStateId) ?? null;
+    if (!target) {
+      throw apiError("VALIDATION_FAILED", "moveToStateId must be another state of the same team");
+    }
+  }
+
+  db.transaction(() => {
+    if (target) {
+      const issues = db.query("SELECT id FROM issues WHERE state_id = ?1").values(id).map((row) => row[0] as string);
+      db.query("UPDATE issues SET state_id = ?1, updated_at = ?2 WHERE state_id = ?3")
+        .run(target.id, now(), id);
+      // Cada migración queda en el historial, como cualquier cambio de estado.
+      for (const issueId of issues) {
+        recordActivity(db, issueId, actorId, "state_changed", { from: id, to: target.id, reason: "state_deleted" });
+      }
+    }
+    db.query("DELETE FROM workflow_states WHERE id = ?1").run(id);
+  })();
+
+  return affected.n;
+}
 
 export function updateWorkflowState(
   db: Database,

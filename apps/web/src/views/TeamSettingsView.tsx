@@ -73,6 +73,24 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
               style={{ width: 42, padding: 2 }}
             />
             <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+              <button
+                style={{ color: "var(--danger)", marginRight: 6 }}
+                title="Borrar estado (migra sus issues)"
+                onClick={async () => {
+                  // El destino se pide solo si hace falta: la API lo exige cuando hay issues.
+                  const others = team.states.filter((candidate: any) => candidate.id !== state.id);
+                  const target = others[0];
+                  try {
+                    await mutate(`mutation($id: ID!, $to: ID) {
+                      workflowStateDelete(id: $id, moveToStateId: $to) { movedIssues }
+                    }`, { id: state.id, to: target?.id ?? null });
+                  } catch (error) {
+                    window.alert(String(error));
+                  }
+                }}
+              >
+                Delete
+              </button>
               <button className="btn secondary" disabled={index === 0} onClick={() => move(index, -1)}>↑</button>
               <button
                 className="btn secondary"

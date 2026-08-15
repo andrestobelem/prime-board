@@ -5,7 +5,7 @@ import {
 } from "../domain/actors.ts";
 import {
   createTeam, createWorkflowState, getTeam, listTeamStates, mapTeam, mapWorkflowState,
-  updateWorkflowState, type TeamRow,
+  deleteWorkflowState, updateWorkflowState, type TeamRow,
 } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { apiError, requireViewer } from "./errors.ts";
@@ -172,6 +172,16 @@ export const resolvers = {
       const state = mapWorkflowState(updateWorkflowState(context.db, args.id, args.input));
       context.repo?.sync();
       return { success: true, workflowState: state };
+    },
+    workflowStateDelete: (
+      _parent: unknown,
+      args: { id: string; moveToStateId?: string | null },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      const moved = deleteWorkflowState(context.db, viewer.id, args.id, args.moveToStateId);
+      context.repo?.sync();
+      return { success: true, movedIssues: moved };
     },
     labelUpdate: (
       _parent: unknown,

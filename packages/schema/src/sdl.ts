@@ -247,6 +247,12 @@ export const typeDefs = /* GraphQL */ `
     affectedIssues: Int!
   }
 
+  type WorkflowStateDeletePayload {
+    success: Boolean!
+    """Issues migrados al estado destino."""
+    movedIssues: Int!
+  }
+
   input IDComparator {
     eq: ID
     neq: ID
@@ -451,6 +457,8 @@ export const typeDefs = /* GraphQL */ `
     apiKeyDelete(id: ID!): DeletePayload!
     workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
     workflowStateUpdate(id: ID!, input: WorkflowStateUpdateInput!): WorkflowStatePayload!
+    """Borra el estado; moveToStateId es obligatorio si tiene issues."""
+    workflowStateDelete(id: ID!, moveToStateId: ID): WorkflowStateDeletePayload!
     issueCreate(input: IssueCreateInput!): IssuePayload!
     issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!
     issueArchive(id: ID!): IssuePayload!
