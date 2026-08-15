@@ -84,13 +84,24 @@ function intClauses(column: string, comparator: IntComparator, params: ParamSink
   return clauses;
 }
 
-/** Sanitiza la query FTS: cada término entre comillas, unidos con AND implícito. */
+/**
+ * Sanitiza la query FTS: cada término entre comillas, unidos con AND implícito.
+ * Se agrega `*` para búsqueda por prefijo, de modo que "webhook" encuentre
+ * "webhooks" (FTS5 no hace stemming). Los términos entrecomillados por el
+ * usuario se respetan como frase exacta, sin prefijo.
+ */
 export function ftsQuery(search: string): string {
-  return search
+  // Separa frases entre comillas ("foo bar") del resto de los términos.
+  const phrases = [...search.matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+  const rest = search.replace(/"[^"]*"/g, " ");
+
+  const exact = phrases.map((phrase) => `"${phrase.replaceAll('"', '""')}"`);
+  const prefixes = rest
     .split(/\s+/)
     .filter(Boolean)
-    .map((term) => `"${term.replaceAll('"', '""')}"`)
-    .join(" ");
+    .map((term) => `"${term.replaceAll('"', '""')}"*`);
+
+  return [...exact, ...prefixes].join(" ");
 }
 
 export function buildIssueFilter(filter: IssueFilter, params: ParamSink): string {
