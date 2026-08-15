@@ -31,7 +31,7 @@ describe("repo sync en cada escritura", () => {
       mutation { issueCreate(input: { teamKey: "PB", title: "Va al repo" }) { issue { identifier } } }
     `);
     expect(result.errors).toBeUndefined();
-    expect(existsSync(join(repoDir, ".prime-board", "issues", "PB-1.json"))).toBe(true);
+    expect(existsSync(join(repoDir, ".prime-board", "issues", "PB-1.md"))).toBe(true);
     const events = logFor("PB-1").map((line) => JSON.parse(line));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: "created", issue: "PB-1" });
@@ -48,9 +48,10 @@ describe("repo sync en cada escritura", () => {
     const types = logFor("PB-1").map((line) => JSON.parse(line).type);
     expect(types).toEqual(["created", "state_changed", "priority_changed", "commented"]);
 
-    const snapshot = JSON.parse(readFileSync(join(repoDir, ".prime-board", "issues", "PB-1.json"), "utf8"));
-    expect(snapshot.state).toBe("In Progress");
-    expect(snapshot.comments[0].body).toBe("listo");
+    const snapshot = readFileSync(join(repoDir, ".prime-board", "issues", "PB-1.md"), "utf8");
+    expect(snapshot).toContain("state: In Progress");
+    // El comentario vive en el log, no duplicado en el snapshot.
+    expect(logFor("PB-1").at(-1)).toContain('"body":"listo"');
   });
 
   it("los cambios de metadata también se replican", async () => {

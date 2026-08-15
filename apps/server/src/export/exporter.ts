@@ -7,6 +7,7 @@
 import type { Database } from "bun:sqlite";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { stringify as toYaml } from "yaml";
 
 /** JSON con claves ordenadas: sin esto, el diff cambia por reordenamientos casuales. */
 function stableStringify(value: unknown): string {
@@ -198,10 +199,12 @@ export function exportBoard(db: Database, rootDir: string, options: ExportOption
         ).get(issue.parent_id) as { ident: string } | null)
       : null;
 
-    write(join(base, "issues", `${identifier}.json`), stableStringify({
+    // Markdown con front-matter: legible en el diff de un PR (AT-159).
+    // Los comentarios NO se duplican acá: ya viven en el log como eventos
+    // `commented` con autor, fecha y body — el importador los reconstruye de ahí.
+    const frontMatter = {
       id: identifier,
       title: issue.title,
-      description: issue.description,
       team: issue.team_key,
       state: lookups.states.get(issue.state_id) ?? null,
       priority: issue.priority,
@@ -216,15 +219,10 @@ export function exportBoard(db: Database, rootDir: string, options: ExportOption
       createdAt: issue.created_at,
       updatedAt: issue.updated_at,
       archivedAt: issue.archived_at,
-      comments: db
-        .query("SELECT actor_id, body, created_at FROM comments WHERE issue_id = ?1 ORDER BY created_at, id")
-        .all(issue.id)
-        .map((row: any) => ({
-          actor: lookups.actors.get(row.actor_id) ?? null,
-          body: row.body,
-          createdAt: row.created_at,
-        })),
-    }));
+    };
+    const yaml = toYaml(frontMatter, { sortMapEntries: true, lineWidth: 0 });
+    const body = issue.description ? `\n${String(issue.description).replace(/\s*$/, "")}\n` : "";
+    write(join(base, "issues", `${identifier}.md`), `---\n${yaml}---\n\n# ${issue.title}\n${body}`);
 
     const activity = db
       .query("SELECT actor_id, type, payload, created_at FROM activity WHERE issue_id = ?1 ORDER BY created_at, id")

@@ -7,6 +7,7 @@
 import type { Database } from "bun:sqlite";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { newId, now } from "../db/util.ts";
 
 export interface RebuildResult {
@@ -17,6 +18,17 @@ export interface RebuildResult {
 }
 
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+
+/** Lee un issue en markdown: front-matter YAML + `# título` + descripción. */
+function readIssueMarkdown(path: string): Record<string, any> {
+  const raw = readFileSync(path, "utf8");
+  const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) throw new Error(`Invalid issue file (missing front matter): ${path}`);
+  const meta = parseYaml(match[1]!) as Record<string, any>;
+  // El cuerpo arranca con el `# título`; la descripción es lo que sigue.
+  const body = match[2]!.replace(/^\s*#[^\n]*\n?/, "").trim();
+  return { ...meta, description: body.length > 0 ? body : null };
+}
 
 export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
   const base = join(rootDir, ".prime-board");
@@ -117,8 +129,8 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
     // 6. Issues: primera pasada sin parent (se resuelve después).
     const issueIds = new Map<string, string>();
     const snapshots = readdirSync(join(base, "issues"))
-      .filter((file) => file.endsWith(".json"))
-      .map((file) => readJson(join(base, "issues", file)) as Record<string, any>)
+      .filter((file) => file.endsWith(".md"))
+      .map((file) => readIssueMarkdown(join(base, "issues", file)))
       .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 
     for (const issue of snapshots) {
@@ -146,11 +158,6 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         if (labelId) {
           db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(id, labelId);
         }
-      }
-      for (const comment of issue.comments ?? []) {
-        db.query("INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
-          .run(newId(), id, actorIds.get(comment.actor) ?? null, comment.body, comment.createdAt);
-        result.comments += 1;
       }
       result.issues += 1;
     }
@@ -228,9 +235,17 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       if (!contents) continue;
       for (const line of contents.split("\n")) {
         const event = JSON.parse(line);
+        const actorId = actorIds.get(event.actor) ?? [...actorIds.values()][0]!;
+        // Los comentarios se reconstruyen desde el log: el evento `commented` ya
+        // trae autor, fecha y body (AT-165), así que no se duplican en el snapshot.
+        if (event.type === "commented" && event.payload?.body) {
+          db.query("INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+            .run(newId(), issueId, actorId, event.payload.body as string, event.ts as string);
+          result.comments += 1;
+        }
         db.query(
           "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        ).run(newId(), issueId, actorIds.get(event.actor) ?? [...actorIds.values()][0]!,
+        ).run(newId(), issueId, actorId,
               event.type, JSON.stringify(denormalize(event.type, event.payload ?? {})), event.ts);
         result.events += 1;
       }

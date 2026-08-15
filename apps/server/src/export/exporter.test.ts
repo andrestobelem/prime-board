@@ -56,19 +56,24 @@ describe("exportBoard", () => {
       "actors.json", "export.json", "projects.json", "teams.json",
       "workspace-labels.json", "workspace.json",
     ]);
-    expect(readdirSync(join(base, "issues"))).toEqual(["PB-1.json"]);
+    expect(readdirSync(join(base, "issues"))).toEqual(["PB-1.md"]);
     expect(readdirSync(join(base, "log"))).toEqual(["PB-1.jsonl"]);
   });
 
-  it("usa claves naturales en vez de UUIDs", () => {
-    const issue = JSON.parse(readFileSync(join(dir, ".prime-board", "issues", "PB-1.json"), "utf8"));
-    expect(issue).toMatchObject({
-      id: "PB-1", title: "Exportame", team: "PB", state: "In Progress",
-      priority: 2, creator: "admin", project: "Proyecto", milestone: "Hito 1", labels: ["bug"],
-    });
-    expect(issue.comments[0]).toMatchObject({ actor: "admin", body: "un comentario" });
-    // Ningún UUID suelto en el snapshot.
-    expect(JSON.stringify(issue)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/);
+  it("escribe markdown legible con front-matter y claves naturales", () => {
+    const raw = readFileSync(join(dir, ".prime-board", "issues", "PB-1.md"), "utf8");
+    // Front-matter YAML con claves naturales.
+    for (const line of [
+      "id: PB-1", "team: PB", "state: In Progress", "priority: 2",
+      "creator: admin", "project: Proyecto", "milestone: Hito 1",
+    ]) {
+      expect(raw).toContain(line);
+    }
+    // Título y descripción como markdown de verdad.
+    expect(raw).toContain("# Exportame");
+    expect(raw).toContain("cuerpo");
+    // Ningún UUID suelto.
+    expect(raw).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/);
   });
 
   it("traduce los ids del log a nombres legibles", () => {
