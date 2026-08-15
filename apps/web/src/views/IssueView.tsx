@@ -31,22 +31,35 @@ function Markdown({ text }: { text: string }) {
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
 }
 
+// AT-190: state_changed/assigned/project_changed/milestone_changed/parent_changed
+// llegan con nombres reales (no ids) porque el resolver de Activity.payload ya
+// los tradujo con el esquema compartido (AT-187) — acá solo se arma el texto.
+function fromTo(label: string, payload: { from?: string | null; to?: string | null }): string {
+  const { from, to } = payload;
+  if (from == null && to == null) return `changed ${label}`;
+  if (from == null) return `set ${label} to ${to}`;
+  if (to == null) return `cleared ${label} (was ${from})`;
+  return `changed ${label} from ${from} to ${to}`;
+}
+
 const ACTIVITY_TEXT: Record<string, (payload: any) => string> = {
   created: () => "created the issue",
   title_changed: () => "changed the title",
   description_changed: () => "updated the description",
-  state_changed: () => "changed the state",
-  priority_changed: (payload) =>
-    `set priority to ${PRIORITY_NAMES[payload.to] ?? payload.to}`,
-  assigned: () => "changed the assignee",
-  parent_changed: () => "changed the parent",
-  project_changed: () => "changed the project",
+  state_changed: (payload) => fromTo("the state", payload),
+  priority_changed: (payload) => `set priority to ${PRIORITY_NAMES[payload.to] ?? payload.to}`,
+  assigned: (payload) => fromTo("the assignee", payload),
+  parent_changed: (payload) => fromTo("the parent", payload),
+  project_changed: (payload) => fromTo("the project", payload),
+  milestone_changed: (payload) => fromTo("the milestone", payload),
   labeled: (payload) => `added label "${payload.label}"`,
   unlabeled: (payload) => `removed label "${payload.label}"`,
   commented: () => "commented",
   archived: () => "archived the issue",
-  relation_added: (payload) => `added relation ${RELATION_LABELS[payload.type] ?? payload.type} ${payload.issue}`,
-  relation_removed: (payload) => `removed relation ${RELATION_LABELS[payload.type] ?? payload.type} ${payload.issue}`,
+  relation_added: (payload) =>
+    `added relation ${RELATION_LABELS[payload.type] ?? payload.type} ${payload.issue}`,
+  relation_removed: (payload) =>
+    `removed relation ${RELATION_LABELS[payload.type] ?? payload.type} ${payload.issue}`,
 };
 
 const RELATION_LABELS: Record<string, string> = {
@@ -94,9 +107,12 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   if (!issue) return <div className="empty">Issue {issueRef} not found.</div>;
 
   const update = (input: Record<string, unknown>) =>
-    mutate(`mutation($id: ID!, $input: IssueUpdateInput!) {
+    mutate(
+      `mutation($id: ID!, $input: IssueUpdateInput!) {
       issueUpdate(id: $id, input: $input) { success }
-    }`, { id: issue.id, input });
+    }`,
+      { id: issue.id, input },
+    );
 
   function saveTitle() {
     const trimmed = title.trim();
@@ -112,9 +128,12 @@ export function IssueView({ issueRef }: { issueRef: string }) {
     const body = comment.trim();
     if (!body) return;
     setComment("");
-    await mutate(`mutation($input: CommentCreateInput!) {
+    await mutate(
+      `mutation($input: CommentCreateInput!) {
       commentCreate(input: $input) { comment { id } }
-    }`, { input: { issueId: issue.id, body } });
+    }`,
+      { input: { issueId: issue.id, body } },
+    );
   }
 
   async function addRelation() {
@@ -122,9 +141,12 @@ export function IssueView({ issueRef }: { issueRef: string }) {
     if (!ref) return;
     setRelationError(null);
     try {
-      await mutate(`mutation($input: IssueRelationCreateInput!) {
+      await mutate(
+        `mutation($input: IssueRelationCreateInput!) {
         issueRelationCreate(input: $input) { success }
-      }`, { input: { issueId: issue.id, relatedIssueId: ref, type: relationType } });
+      }`,
+        { input: { issueId: issue.id, relatedIssueId: ref, type: relationType } },
+      );
       setRelationRef("");
     } catch (error) {
       setRelationError((error as Error).message);
@@ -164,7 +186,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
                 }}
               />
               <div className="composer actions" style={{ marginTop: 6 }}>
-                <button className="btn" onClick={saveDescription}>Save</button>
+                <button className="btn" onClick={saveDescription}>
+                  Save
+                </button>
               </div>
             </div>
           ) : issue.description ? (
@@ -185,7 +209,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
               <div className="sub-issue" key={child.identifier}>
                 <StateIcon state={child.state} />
                 <Link to={`/issue/${child.identifier}`}>
-                  <span style={{ color: "var(--text-faint)", marginRight: 6 }}>{child.identifier}</span>
+                  <span style={{ color: "var(--text-faint)", marginRight: 6 }}>
+                    {child.identifier}
+                  </span>
                   {child.title}
                 </Link>
               </div>
@@ -230,8 +256,12 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             onKeyDown={(event) => event.key === "Enter" && addRelation()}
             style={{ width: 140 }}
           />
-          <button className="btn" onClick={addRelation}>Link</button>
-          {relationError && <span style={{ color: "var(--red, #eb5757)", fontSize: 12 }}>{relationError}</span>}
+          <button className="btn" onClick={addRelation}>
+            Link
+          </button>
+          {relationError && (
+            <span style={{ color: "var(--red, #eb5757)", fontSize: 12 }}>{relationError}</span>
+          )}
         </div>
 
         <div className="section-title">Comments</div>
@@ -255,14 +285,19 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             }}
           />
           <div className="actions">
-            <button className="btn" onClick={submitComment}>Comment</button>
+            <button className="btn" onClick={submitComment}>
+              Comment
+            </button>
           </div>
         </div>
 
         <div className="section-title">Activity</div>
         {issue.activity.map((entry: any) => (
           <div className="activity-item" key={entry.id}>
-            <span className="who">{entry.actor.name}{entry.actor.type === "AGENT" && <Icon name="bot" size={12} />}</span>
+            <span className="who">
+              {entry.actor.name}
+              {entry.actor.type === "AGENT" && <Icon name="bot" size={12} />}
+            </span>
             <span>{(ACTIVITY_TEXT[entry.type] ?? (() => entry.type))(entry.payload)}</span>
             <span style={{ marginLeft: "auto" }}>{timeAgo(entry.createdAt)}</span>
           </div>
@@ -277,7 +312,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             onChange={(event) => update({ stateId: event.target.value })}
           >
             {issue.team.states.map((state: any) => (
-              <option key={state.id} value={state.id}>{state.name}</option>
+              <option key={state.id} value={state.id}>
+                {state.name}
+              </option>
             ))}
           </select>
         </div>
@@ -288,7 +325,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             onChange={(event) => update({ priority: Number(event.target.value) })}
           >
             {PRIORITY_NAMES.map((name, index) => (
-              <option key={name} value={index}>{name}</option>
+              <option key={name} value={index}>
+                {name}
+              </option>
             ))}
           </select>
         </div>
@@ -301,7 +340,8 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             <option value="">Unassigned</option>
             {result.data.actors.map((actor: any) => (
               <option key={actor.id} value={actor.id}>
-                {actor.name}{actor.type === "AGENT" ? " (agent)" : ""}
+                {actor.name}
+                {actor.type === "AGENT" ? " (agent)" : ""}
               </option>
             ))}
           </select>
@@ -314,7 +354,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           >
             <option value="">No project</option>
             {issue.team.projects.map((project: any) => (
-              <option key={project.id} value={project.id}>{project.name}</option>
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
             ))}
           </select>
         </div>
@@ -327,7 +369,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             >
               <option value="">No milestone</option>
               {issue.project.milestones.map((milestone: any) => (
-                <option key={milestone.id} value={milestone.id}>{milestone.name}</option>
+                <option key={milestone.id} value={milestone.id}>
+                  {milestone.name}
+                </option>
               ))}
             </select>
           </div>

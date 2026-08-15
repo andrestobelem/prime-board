@@ -2,17 +2,32 @@
 import { getActor, mapActor } from "../domain/actors.ts";
 import type { IssueFilter, IssueOrder } from "../domain/filters.ts";
 import {
-  archiveIssue, createIssue, getIssue, getIssueByRef, identifierOf, listChildren,
-  listIssues, mapIssue, slugify, updateIssue,
-  type IssueCreateInput, type IssueRow, type IssueUpdateInput,
+  archiveIssue,
+  createIssue,
+  getIssue,
+  getIssueByRef,
+  identifierOf,
+  listChildren,
+  listIssues,
+  mapIssue,
+  slugify,
+  updateIssue,
+  type IssueCreateInput,
+  type IssueRow,
+  type IssueUpdateInput,
 } from "../domain/issues.ts";
 import { listActivity, mapActivity } from "../domain/activity.ts";
+import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
 import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getMilestone, mapMilestone } from "../domain/milestones.ts";
 import { getProject, mapProject } from "../domain/projects.ts";
 import {
-  createRelation, deleteRelation, listRelations, mapRelation, type RelationType,
+  createRelation,
+  deleteRelation,
+  listRelations,
+  mapRelation,
+  type RelationType,
 } from "../domain/relations.ts";
 import { getTeam, listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
@@ -63,7 +78,9 @@ export const issueResolvers = {
     project: (issue: MappedIssue, _args: unknown, context: Context) =>
       issue._row.project_id ? mapProject(getProject(context.db, issue._row.project_id)!) : null,
     milestone: (issue: MappedIssue, _args: unknown, context: Context) =>
-      issue._row.milestone_id ? mapMilestone(getMilestone(context.db, issue._row.milestone_id)!) : null,
+      issue._row.milestone_id
+        ? mapMilestone(getMilestone(context.db, issue._row.milestone_id)!)
+        : null,
     comments: (issue: MappedIssue, _args: unknown, context: Context) =>
       listComments(context.db, issue.id).map(mapComment),
     relations: (issue: MappedIssue, _args: unknown, context: Context) =>
@@ -96,6 +113,29 @@ export const issueResolvers = {
   Activity: {
     actor: (activity: { actorId: string }, _args: unknown, context: Context) =>
       mapActor(getActor(context.db, activity.actorId)!),
+    // Traduce ids a nombres reales antes de mandar el payload al cliente
+    // (AT-190): el esquema de referencias (AT-187) es el mismo que usan
+    // exporter/importer, solo cambia el resolve — acá consulta la DB en vivo
+    // en vez de un lookup pre-armado, porque no hay un export de por medio.
+    payload: (
+      activity: { type: string; payload: Record<string, unknown> },
+      _args: unknown,
+      context: Context,
+    ) => {
+      const queries: Record<RefTable, string> = {
+        states: "SELECT name FROM workflow_states WHERE id = ?1",
+        actors: "SELECT name FROM actors WHERE id = ?1",
+        projects: "SELECT name FROM projects WHERE id = ?1",
+        milestones: "SELECT name FROM milestones WHERE id = ?1",
+        teams: "SELECT key AS name FROM teams WHERE id = ?1",
+        issues:
+          "SELECT teams.key || '-' || issues.number AS name FROM issues " +
+          "JOIN teams ON teams.id = issues.team_id WHERE issues.id = ?1",
+      };
+      const resolve = (table: RefTable, value: string): string | undefined =>
+        (context.db.query(queries[table]).get(value) as { name: string } | null)?.name;
+      return translateActivityRefs(activity.type, activity.payload, resolve);
+    },
   },
 
   Query: {
@@ -163,7 +203,10 @@ export const issueResolvers = {
       const viewer = requireViewer(context);
       const created = createRelation(context.db, viewer.id, args.input);
       context.events.emit("issue.updated", viewer, issueEventData(created.issue), {
-        relations: { from: null, to: { type: created.view.type, issue: identifierOf(created.relatedIssue) } },
+        relations: {
+          from: null,
+          to: { type: created.view.type, issue: identifierOf(created.relatedIssue) },
+        },
       });
       context.repo?.syncIssue(created.issue.id);
       context.repo?.syncIssue(created.relatedIssue.id);
