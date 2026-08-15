@@ -5,13 +5,13 @@ import {
 } from "../domain/actors.ts";
 import {
   createTeam, createWorkflowState, getTeam, listTeamStates, mapTeam, mapWorkflowState,
-  type TeamRow,
+  updateWorkflowState, type TeamRow,
 } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { apiError, requireViewer } from "./errors.ts";
 import { issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
-import { createLabel, listLabels, mapLabel } from "../domain/labels.ts";
+import { createLabel, deleteLabel, listLabels, mapLabel, updateLabel } from "../domain/labels.ts";
 import { createWebhook, deleteWebhook, listWebhooks, mapWebhook } from "../domain/webhooks.ts";
 import { listProjects, mapProject } from "../domain/projects.ts";
 
@@ -156,6 +156,26 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       return { success: true, label: mapLabel(createLabel(context.db, args.input)) };
+    },
+    workflowStateUpdate: (
+      _parent: unknown,
+      args: { id: string; input: Parameters<typeof updateWorkflowState>[2] },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      return { success: true, workflowState: mapWorkflowState(updateWorkflowState(context.db, args.id, args.input)) };
+    },
+    labelUpdate: (
+      _parent: unknown,
+      args: { id: string; input: { name?: string | null; color?: string | null } },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      return { success: true, label: mapLabel(updateLabel(context.db, args.id, args.input)) };
+    },
+    labelDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+      requireViewer(context);
+      return { success: true, affectedIssues: deleteLabel(context.db, args.id) };
     },
     workflowStateCreate: (
       _parent: unknown,

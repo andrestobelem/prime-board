@@ -12,6 +12,7 @@ import { BoardView } from "./views/BoardView.tsx";
 import { IssueView } from "./views/IssueView.tsx";
 import { MembersView } from "./views/MembersView.tsx";
 import { ProjectView } from "./views/ProjectView.tsx";
+import { TeamSettingsView } from "./views/TeamSettingsView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
 
 const SHELL_QUERY = `{
@@ -83,6 +84,15 @@ export function App() {
   } else if (section === "settings") {
     topbar = <span className="title">Settings</span>;
     content = <SettingsView />;
+  } else if (section === "team-settings" && param) {
+    topbar = (
+      <>
+        <Link to={`/team/${param}`}><span className="crumb">{param}</span></Link>
+        <span className="crumb">›</span>
+        <span className="title">Estados y labels</span>
+      </>
+    );
+    content = <TeamSettingsView teamKey={param} />;
   } else if (section === "members") {
     topbar = <span className="title">Members</span>;
     content = <MembersView />;
@@ -114,6 +124,11 @@ export function App() {
       <>
         <span className="title">{team?.name ?? param}</span>
         <span className="right">
+          {(section === "team" || section === "board") && (
+            <Link to={`/team-settings/${param}`}>
+              <button className="btn secondary">⚙ Team</button>
+            </Link>
+          )}
           {section === "team" && (
             <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
               {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (

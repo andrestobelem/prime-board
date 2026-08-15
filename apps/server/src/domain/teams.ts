@@ -86,6 +86,43 @@ export function createTeam(
 
 const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"];
 
+export function updateWorkflowState(
+  db: Database,
+  id: string,
+  input: { name?: string | null; type?: string | null; color?: string | null; position?: number | null },
+): WorkflowStateRow {
+  const state = db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow | null;
+  if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
+  if (input.type != null && !STATE_TYPES.includes(input.type)) {
+    throw apiError("VALIDATION_FAILED", `Invalid state type: ${input.type}`);
+  }
+  if (input.name != null) {
+    const name = input.name.trim();
+    if (!name) throw apiError("VALIDATION_FAILED", "State name cannot be empty");
+    const duplicate = db
+      .query("SELECT id FROM workflow_states WHERE team_id = ?1 AND name = ?2 AND id != ?3")
+      .get(state.team_id, name, id);
+    if (duplicate) throw apiError("VALIDATION_FAILED", "State name already exists in this team");
+  }
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  const push = (column: string, value: unknown) => {
+    sets.push(`${column} = ?${params.length + 1}`);
+    params.push(value);
+  };
+  if (input.name != null) push("name", input.name.trim());
+  if (input.type != null) push("type", input.type);
+  if (input.color != null) push("color", input.color);
+  if (input.position != null) push("position", input.position);
+  if (sets.length > 0) {
+    push("updated_at", now());
+    params.push(id);
+    db.query(`UPDATE workflow_states SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(...(params as never[]));
+  }
+  return db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow;
+}
+
 export function createWorkflowState(
   db: Database,
   input: { teamId: string; name: string; type: string; color?: string | null; position?: number | null },

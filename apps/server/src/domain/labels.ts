@@ -39,6 +39,46 @@ export function createLabel(
   return db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow;
 }
 
+export function updateLabel(
+  db: Database,
+  id: string,
+  input: { name?: string | null; color?: string | null },
+): LabelRow {
+  const label = db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow | null;
+  if (!label) throw apiError("NOT_FOUND", "Label not found");
+  if (input.name != null) {
+    const name = input.name.trim();
+    if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
+    const duplicate = label.team_id
+      ? db.query("SELECT id FROM labels WHERE team_id = ?1 AND name = ?2 AND id != ?3").get(label.team_id, name, id)
+      : db.query("SELECT id FROM labels WHERE team_id IS NULL AND name = ?1 AND id != ?2").get(name, id);
+    if (duplicate) throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
+  }
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (input.name != null) { params.push(input.name.trim()); sets.push(`name = ?${params.length}`); }
+  if (input.color != null) { params.push(input.color); sets.push(`color = ?${params.length}`); }
+  if (sets.length > 0) {
+    params.push(id);
+    db.query(`UPDATE labels SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(...(params as never[]));
+  }
+  return db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow;
+}
+
+/** Borra la label y la quita de todos los issues que la tenían. */
+export function deleteLabel(db: Database, id: string): number {
+  const label = db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow | null;
+  if (!label) throw apiError("NOT_FOUND", "Label not found");
+  let affected = 0;
+  db.transaction(() => {
+    const used = db.query("SELECT count(*) AS n FROM issue_labels WHERE label_id = ?1").get(id) as { n: number };
+    affected = used.n;
+    db.query("DELETE FROM issue_labels WHERE label_id = ?1").run(id);
+    db.query("DELETE FROM labels WHERE id = ?1").run(id);
+  })();
+  return affected;
+}
+
 /** Labels visibles para un team: las de workspace + las propias. Sin team: todas. */
 export function listLabels(db: Database, teamId?: string | null): LabelRow[] {
   if (teamId) {

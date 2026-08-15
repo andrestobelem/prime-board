@@ -229,6 +229,24 @@ export const typeDefs = /* GraphQL */ `
     label: Label!
   }
 
+  input WorkflowStateUpdateInput {
+    name: String
+    type: StateType
+    color: String
+    position: Float
+  }
+
+  input LabelUpdateInput {
+    name: String
+    color: String
+  }
+
+  type LabelDeletePayload {
+    success: Boolean!
+    """Cantidad de issues de los que se quitó la label."""
+    affectedIssues: Int!
+  }
+
   input IDComparator {
     eq: ID
     neq: ID
@@ -432,10 +450,13 @@ export const typeDefs = /* GraphQL */ `
     apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyPayload!
     apiKeyDelete(id: ID!): DeletePayload!
     workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
+    workflowStateUpdate(id: ID!, input: WorkflowStateUpdateInput!): WorkflowStatePayload!
     issueCreate(input: IssueCreateInput!): IssuePayload!
     issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!
     issueArchive(id: ID!): IssuePayload!
     labelCreate(input: LabelCreateInput!): LabelPayload!
+    labelUpdate(id: ID!, input: LabelUpdateInput!): LabelPayload!
+    labelDelete(id: ID!): LabelDeletePayload!
     commentCreate(input: CommentCreateInput!): CommentPayload!
     projectCreate(input: ProjectCreateInput!): ProjectPayload!
     projectUpdate(id: ID!, input: ProjectUpdateInput!): ProjectPayload!
