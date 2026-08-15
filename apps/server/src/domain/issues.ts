@@ -132,6 +132,8 @@ export interface IssueCreateInput {
   assigneeId?: string | null;
   parentId?: string | null;
   projectId?: string | null;
+  /** Labels a aplicar en la creación (evita un issueUpdate extra en imports). */
+  labelIds?: string[] | null;
 }
 
 export function createIssue(db: Database, actorId: string, input: IssueCreateInput): IssueRow {
@@ -193,6 +195,9 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
       input.projectId ?? null, actorId, 0, timestamp,
     );
     recordActivity(db, id, actorId, "created", { title });
+    if (input.labelIds?.length) {
+      applyLabelOps(db, actorId, getIssue(db, id)!, { labelIds: input.labelIds });
+    }
   })();
   return getIssue(db, id)!;
 }

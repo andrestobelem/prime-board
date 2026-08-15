@@ -173,18 +173,13 @@ export function createServer(config: McpConfig): McpServer {
       if (!parent.issue) throw new Error(`NOT_FOUND: Parent issue not found: ${args.parent}`);
       input.parentId = parent.issue.id;
     }
+    if (args.labels?.length) {
+      input.labelIds = await resolveLabelIds(config, team.id, args.labels);
+    }
     const data = await gqlRequest(config, `mutation($input: IssueCreateInput!) {
       issueCreate(input: $input) { issue { id ${ISSUE_FIELDS} } }
     }`, { input });
-    let issue = data.issueCreate.issue;
-    if (args.labels?.length) {
-      const labelIds = await resolveLabelIds(config, team.id, args.labels);
-      const updated = await gqlRequest(config, `mutation($id: ID!, $labels: [ID!]) {
-        issueUpdate(id: $id, input: { labelIds: $labels }) { issue { ${ISSUE_FIELDS} } }
-      }`, { id: issue.id, labels: labelIds });
-      issue = updated.issueUpdate.issue;
-    }
-    return json(issue);
+    return json(data.issueCreate.issue);
   });
 
   server.registerTool("list_comments", {

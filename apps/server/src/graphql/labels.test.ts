@@ -71,4 +71,30 @@ describe("labels", () => {
     `, { add: [foreign.data!.labelCreate.label.id] });
     expect(bad.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
   });
+
+  it("aplica labels en la creación, sin issueUpdate extra (AT-28)", async () => {
+    const result = await gql(app, `
+      mutation($labels: [ID!]) {
+        issueCreate(input: { teamKey: "PB", title: "Con labels de una", labelIds: $labels }) {
+          issue { identifier labels { name } }
+        }
+      }
+    `, { labels: [bugId, urgentId] });
+    expect(result.errors).toBeUndefined();
+    expect(result.data!.issueCreate.issue.labels.map((l: any) => l.name).sort())
+      .toEqual(["agent:review", "bug"]);
+  });
+
+  it("rechaza en la creación labels de otro team", async () => {
+    const other = await gql(app, `mutation { teamCreate(input: { name: "Third", key: "TH" }) { team { id } } }`);
+    const foreign = await gql(app, `
+      mutation($teamId: ID!) { labelCreate(input: { name: "third-label", teamId: $teamId }) { label { id } } }
+    `, { teamId: other.data!.teamCreate.team.id });
+    const bad = await gql(app, `
+      mutation($labels: [ID!]) {
+        issueCreate(input: { teamKey: "PB", title: "Nope", labelIds: $labels }) { success }
+      }
+    `, { labels: [foreign.data!.labelCreate.label.id] });
+    expect(bad.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
 });

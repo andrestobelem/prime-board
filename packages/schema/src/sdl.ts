@@ -278,6 +278,8 @@ export const typeDefs = /* GraphQL */ `
     assigneeId: ID
     parentId: ID
     projectId: ID
+    """Labels a aplicar al crear (evita un issueUpdate extra)."""
+    labelIds: [ID!]
   }
 
   input IssueUpdateInput {

@@ -121,19 +121,14 @@ export async function issueCommand(argv: string[]): Promise<void> {
     if (values.assignee) input.assigneeId = await resolveAssignee(config, values.assignee);
     if (values.parent) input.parentId = (await resolveIssue(config, values.parent)).id;
     if (values.project) input.projectId = values.project;
+    if (values.label?.length) {
+      input.labelIds = await resolveLabels(config, team.id, values.label);
+    }
 
     const data = await gqlRequest(config, `mutation($input: IssueCreateInput!) {
       issueCreate(input: $input) { issue { id ${ISSUE_FIELDS} } }
     }`, { input });
-    let issue = data.issueCreate.issue;
-
-    if (values.label?.length) {
-      const labelIds = await resolveLabels(config, team.id, values.label);
-      const updated = await gqlRequest(config, `mutation($id: ID!, $labels: [ID!]) {
-        issueUpdate(id: $id, input: { addLabelIds: $labels }) { issue { ${ISSUE_FIELDS} } }
-      }`, { id: issue.id, labels: labelIds });
-      issue = updated.issueUpdate.issue;
-    }
+    const issue = data.issueCreate.issue;
     if (values.json) return printJson(issue);
     console.log(`Created ${issue.identifier}: ${issue.title}`);
     console.log(issue.url);
