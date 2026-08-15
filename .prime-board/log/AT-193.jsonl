@@ -3,3 +3,8 @@
 {"actor":"admin","issue":"AT-193","payload":{"type":"blocked_by","issue":"AT-191"},"ts":"2026-08-15T09:59:45.169Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-193","payload":{"type":"blocks","issue":"AT-195"},"ts":"2026-08-15T09:59:45.284Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-193","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-15T10:00:01.786Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-193","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-15T10:46:26.889Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-193","payload":{"from":null,"to":"admin"},"ts":"2026-08-15T10:46:26.889Z","type":"assigned"}
+{"actor":"admin","issue":"AT-193","payload":{"body":"sanity AT-193"},"ts":"2026-08-15T10:47:58.114Z","type":"commented"}
+{"actor":"admin","issue":"AT-193","payload":{"body":"Hecho en 84c7124. Se borraron las 8 llamadas (context.repo?.sync() y context.repo?.syncIssue(id)) de issue-resolvers.ts.\n\nTrade-off documentado en el commit: commentCreate/issueRelationCreate/issueRelationDelete usaban el camino caliente syncIssue(id) de AT-166; ahora caen en el sync() completo de respaldo del despacho. Si el volumen lo justifica en el futuro, haría falta enseñarle al despacho a extraer issue ids afectados — no lo intenté acá por el riesgo de reintroducir la extracción bespoke por mutation que AT-187 vino a eliminar del otro lado.\n\nVerificado en vivo: comentario real en AT-193 sin ninguna línea manual, apareció en .prime-board/log/AT-193.jsonl. bun test: 181 pass."},"ts":"2026-08-15T10:48:20.292Z","type":"commented"}
+{"actor":"admin","issue":"AT-193","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T10:48:20.346Z","type":"state_changed"}
