@@ -1,0 +1,12 @@
+{"actor":"claude","issue":"AT-156","payload":{"title":"Fase 1 — Exportador: réplica de los tickets en el repo"},"ts":"2026-08-15T04:36:08.049Z","type":"created"}
+{"actor":"claude","issue":"AT-156","payload":{"label":"db"},"ts":"2026-08-15T04:36:08.052Z","type":"labeled"}
+{"actor":"claude","issue":"AT-156","payload":{"label":"cli"},"ts":"2026-08-15T04:36:08.052Z","type":"labeled"}
+{"actor":"claude","issue":"AT-156","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T04:46:34.306Z","type":"state_changed"}
+{"actor":"claude","issue":"AT-156","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T04:46:34.306Z","type":"assigned"}
+{"actor":"claude","issue":"AT-156","payload":{"from":"In Progress","to":"Backlog"},"ts":"2026-08-15T04:47:09.341Z","type":"state_changed"}
+{"actor":"claude","issue":"AT-156","payload":{"from":"claude","to":null},"ts":"2026-08-15T04:47:09.341Z","type":"assigned"}
+{"actor":"claude","issue":"AT-156","payload":{"label":"epic:repo-truth"},"ts":"2026-08-15T04:47:09.360Z","type":"labeled"}
+{"actor":"claude","issue":"AT-156","payload":{"from":null,"to":"Repo como fuente de verdad"},"ts":"2026-08-15T04:55:39.756Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-156","payload":{"from":null,"to":"Fase 1 — Exportador"},"ts":"2026-08-15T04:55:39.756Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-156","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T05:03:37.335Z","type":"state_changed"}
+{"actor":"claude","issue":"AT-156","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T05:03:37.335Z","type":"assigned"}

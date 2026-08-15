@@ -1,0 +1,4 @@
+{"actor":"claude","issue":"AT-136","payload":{"title":"GraphQL: comentarios e historial de actividad"},"ts":"2026-08-14T20:09:13.525Z","type":"created"}
+{"actor":"claude","issue":"AT-136","payload":{"label":"graphql"},"ts":"2026-08-15T02:29:59.043Z","type":"labeled"}
+{"actor":"claude","issue":"AT-136","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.047Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-136","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.047Z","type":"milestone_changed"}

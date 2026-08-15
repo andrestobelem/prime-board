@@ -1,0 +1,22 @@
+{
+  "archivedAt": null,
+  "assignee": null,
+  "comments": [],
+  "createdAt": "2026-08-15T04:36:08.055Z",
+  "creator": "claude",
+  "description": "Segundo paso de AT-153. `pb rebuild` borra el índice SQLite y lo reconstruye reproduciendo los logs de `.prime-board/log/`.\n\n- Reducer de eventos → estado actual (probado en el experimento de AT-153).\n- `next_issue_number` se deriva del log (`max(number) + 1`), no se persiste.\n- Test de round-trip: export → rebuild → export produce archivos idénticos.\n\n**Hito real:** a partir de acá se puede borrar la DB sin perder nada.",
+  "id": "AT-157",
+  "labels": [
+    "cli",
+    "db",
+    "epic:repo-truth"
+  ],
+  "milestone": "Fase 2 — Importador",
+  "parent": null,
+  "priority": 2,
+  "project": "Repo como fuente de verdad",
+  "state": "Backlog",
+  "team": "AT",
+  "title": "Fase 2 — Importador: reconstruir la DB desde el repo",
+  "updatedAt": "2026-08-15T04:55:39.762Z"
+}

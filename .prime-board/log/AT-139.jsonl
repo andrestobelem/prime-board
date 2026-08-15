@@ -1,0 +1,4 @@
+{"actor":"claude","issue":"AT-139","payload":{"title":"Webhooks: registro y despacho firmado"},"ts":"2026-08-14T20:09:23.714Z","type":"created"}
+{"actor":"claude","issue":"AT-139","payload":{"label":"webhooks"},"ts":"2026-08-15T02:29:59.058Z","type":"labeled"}
+{"actor":"claude","issue":"AT-139","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.041Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-139","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.041Z","type":"milestone_changed"}

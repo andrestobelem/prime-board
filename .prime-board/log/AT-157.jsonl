@@ -1,0 +1,6 @@
+{"actor":"claude","issue":"AT-157","payload":{"title":"Fase 2 — Importador: reconstruir la DB desde el repo"},"ts":"2026-08-15T04:36:08.055Z","type":"created"}
+{"actor":"claude","issue":"AT-157","payload":{"label":"db"},"ts":"2026-08-15T04:36:08.057Z","type":"labeled"}
+{"actor":"claude","issue":"AT-157","payload":{"label":"cli"},"ts":"2026-08-15T04:36:08.057Z","type":"labeled"}
+{"actor":"claude","issue":"AT-157","payload":{"label":"epic:repo-truth"},"ts":"2026-08-15T04:47:09.362Z","type":"labeled"}
+{"actor":"claude","issue":"AT-157","payload":{"from":null,"to":"Repo como fuente de verdad"},"ts":"2026-08-15T04:55:39.762Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-157","payload":{"from":null,"to":"Fase 2 — Importador"},"ts":"2026-08-15T04:55:39.762Z","type":"milestone_changed"}

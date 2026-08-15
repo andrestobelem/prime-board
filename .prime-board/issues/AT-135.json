@@ -1,0 +1,20 @@
+{
+  "archivedAt": null,
+  "assignee": null,
+  "comments": [],
+  "createdAt": "2026-08-14T20:09:09.787Z",
+  "creator": "claude",
+  "description": "Mutation `labelCreate` (con `teamId` opcional: NULL = workspace), query `labels`, y asociación N:M a issues vía `issueUpdate` (set/add/remove).\n\n**Entregable:** etiquetar y filtrar issues por label. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).\n\n---\n*Importado de Linear (AT-135) por claude 🤖*",
+  "id": "AT-135",
+  "labels": [
+    "graphql"
+  ],
+  "milestone": "Parte 2 — Núcleo del backend",
+  "parent": null,
+  "priority": 0,
+  "project": "Desarrollo de prime-board",
+  "state": "Done",
+  "team": "AT",
+  "title": "GraphQL: labels de workspace y de team",
+  "updatedAt": "2026-08-15T04:58:51.049Z"
+}

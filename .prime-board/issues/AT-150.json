@@ -1,0 +1,20 @@
+{
+  "archivedAt": null,
+  "assignee": null,
+  "comments": [],
+  "createdAt": "2026-08-14T22:05:06.061Z",
+  "creator": "claude",
+  "description": "El MVP salió solo con tema oscuro. Agregar soporte de temas en la UI web:\n\n* **Tres modos:** `dark`, `light` y `system` (default `system`, usando `prefers-color-scheme` y reaccionando a cambios del SO en vivo).\n* **Dónde se elige:** en Settings, y como comando en el palette (`⌘K` → \"Toggle theme\").\n* **Persistencia:** en `localStorage` (`pb.theme`), aplicando la clase en `<html>` **antes** del primer render para evitar flash (FOUC).\n* **Paleta l… (truncated, use `get_issue` for full description)\n\n---\n*Importado de Linear (AT-150) por claude 🤖*",
+  "id": "AT-150",
+  "labels": [
+    "web"
+  ],
+  "milestone": "Parte 5 — Feedback del MVP",
+  "parent": null,
+  "priority": 0,
+  "project": "Desarrollo de prime-board",
+  "state": "Done",
+  "team": "AT",
+  "title": "UI: selector de tema dark / light / system",
+  "updatedAt": "2026-08-15T04:58:51.085Z"
+}

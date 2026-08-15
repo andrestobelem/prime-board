@@ -1,0 +1,5 @@
+{"actor":"claude","issue":"AT-32","payload":{"title":"issueCreate: aceptar number para conservar identificadores en imports"},"ts":"2026-08-15T03:39:42.012Z","type":"created"}
+{"actor":"claude","issue":"AT-32","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T03:39:42.020Z","type":"state_changed"}
+{"actor":"claude","issue":"AT-32","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T03:39:42.020Z","type":"assigned"}
+{"actor":"claude","issue":"AT-32","payload":{"commentId":"01a00382-63a4-7000-a9c7-5bb435f86344"},"ts":"2026-08-15T03:41:11.972Z","type":"commented"}
+{"actor":"claude","issue":"AT-32","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T03:41:11.983Z","type":"state_changed"}

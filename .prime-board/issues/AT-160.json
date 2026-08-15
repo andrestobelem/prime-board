@@ -1,0 +1,26 @@
+{
+  "archivedAt": null,
+  "assignee": "claude",
+  "comments": [
+    {
+      "actor": "claude",
+      "body": "Hecho. `milestoneDelete` con la política que proponía el ticket: **los issues asignados quedan sin milestone**, no se borran ni se bloquea la operación (un milestone es una agrupación, no una dependencia).\n\nEl payload devuelve `orphanedIssues` con cuántos quedaron sueltos, así el cliente puede avisar antes/después. Todo en una transacción.\n\n2 tests nuevos: borrado con issue huérfano verificado (el issue sobrevive, el milestone desaparece del proyecto) y NOT_FOUND.",
+      "createdAt": "2026-08-15T04:58:15.452Z"
+    }
+  ],
+  "createdAt": "2026-08-15T04:56:01.040Z",
+  "creator": "claude",
+  "description": "`milestoneCreate` y `milestoneUpdate` existen, pero no hay forma de eliminar un milestone. Si se crea uno por error queda para siempre y ocupa lugar en la vista de proyecto.\n\nAgregar `milestoneDelete` (¿o `archivedAt` como en proyectos/issues?), decidiendo qué pasa con los issues asignados: quedar sin milestone (propuesta) o bloquear el borrado.\n\n*Encontrado implementando AT-29.*",
+  "id": "AT-160",
+  "labels": [
+    "graphql"
+  ],
+  "milestone": null,
+  "parent": null,
+  "priority": 3,
+  "project": null,
+  "state": "Done",
+  "team": "AT",
+  "title": "Milestones: falta borrar/archivar",
+  "updatedAt": "2026-08-15T04:58:15.457Z"
+}

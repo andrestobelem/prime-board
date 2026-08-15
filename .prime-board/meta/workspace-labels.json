@@ -1,0 +1,18 @@
+[
+  {
+    "color": "#5e6ad2",
+    "name": "agent:review"
+  },
+  {
+    "color": "#bb87fc",
+    "name": "epic:repo-truth"
+  },
+  {
+    "color": "#bb87fc",
+    "name": "research"
+  },
+  {
+    "color": "#eb5757",
+    "name": "security"
+  }
+]

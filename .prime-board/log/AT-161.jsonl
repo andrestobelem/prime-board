@@ -1,0 +1,6 @@
+{"actor":"claude","issue":"AT-161","payload":{"title":"Lista y board no agrupan por milestone"},"ts":"2026-08-15T04:56:01.047Z","type":"created"}
+{"actor":"claude","issue":"AT-161","payload":{"label":"web"},"ts":"2026-08-15T04:56:01.047Z","type":"labeled"}
+{"actor":"claude","issue":"AT-161","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T04:59:01.994Z","type":"state_changed"}
+{"actor":"claude","issue":"AT-161","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T04:59:01.994Z","type":"assigned"}
+{"actor":"claude","issue":"AT-161","payload":{"commentId":"01a003ca-d784-7000-b893-fc25e58c7759"},"ts":"2026-08-15T05:00:20.228Z","type":"commented"}
+{"actor":"claude","issue":"AT-161","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T05:00:20.235Z","type":"state_changed"}

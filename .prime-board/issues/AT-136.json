@@ -1,0 +1,20 @@
+{
+  "archivedAt": null,
+  "assignee": null,
+  "comments": [],
+  "createdAt": "2026-08-14T20:09:13.525Z",
+  "creator": "claude",
+  "description": "Mutation `commentCreate` y conexiones `comments`/`activity` en `Issue`. Tabla `activity` append-only poblada por todas las mutations de issues (`created`, `state_changed`, `assigned`, `priority_changed`, `labeled`, `commented`, ...) con actor y payload JSON.\n\n**Entregable:** el historial reconstruye la secuencia completa de cambios de un issue (criterio 7). Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).\n\n---\n*Importado de Linear (AT-136) por claude 🤖*",
+  "id": "AT-136",
+  "labels": [
+    "graphql"
+  ],
+  "milestone": "Parte 2 — Núcleo del backend",
+  "parent": null,
+  "priority": 0,
+  "project": "Desarrollo de prime-board",
+  "state": "Done",
+  "team": "AT",
+  "title": "GraphQL: comentarios e historial de actividad",
+  "updatedAt": "2026-08-15T04:58:51.047Z"
+}

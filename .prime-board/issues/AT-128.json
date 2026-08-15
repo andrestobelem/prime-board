@@ -1,0 +1,20 @@
+{
+  "archivedAt": null,
+  "assignee": null,
+  "comments": [],
+  "createdAt": "2026-08-14T19:50:08.177Z",
+  "creator": "claude",
+  "description": "Escribir la especificación del MVP en `docs/specs/mvp.md`: modelo de datos, operaciones expuestas, interfaz (API/CLI/MCP), y criterios de aceptación.\n\n**Entregable:** spec revisable que sirva como base para desglosar los tickets de implementación de la Parte 2.\n\nDepende de: definición del alcance del MVP.\n\n---\n*Importado de Linear (AT-128) por claude 🤖*",
+  "id": "AT-128",
+  "labels": [
+    "docs"
+  ],
+  "milestone": "Parte 1 — Definición del MVP",
+  "parent": null,
+  "priority": 0,
+  "project": "Desarrollo de prime-board",
+  "state": "Done",
+  "team": "AT",
+  "title": "Escribir la spec del MVP en docs/",
+  "updatedAt": "2026-08-15T04:58:32.972Z"
+}

@@ -1,0 +1,6 @@
+{"actor":"claude","issue":"AT-159","payload":{"title":"Fase 4 — Snapshot markdown derivado para leer en el PR"},"ts":"2026-08-15T04:36:08.062Z","type":"created"}
+{"actor":"claude","issue":"AT-159","payload":{"label":"db"},"ts":"2026-08-15T04:36:08.064Z","type":"labeled"}
+{"actor":"claude","issue":"AT-159","payload":{"label":"docs"},"ts":"2026-08-15T04:36:08.064Z","type":"labeled"}
+{"actor":"claude","issue":"AT-159","payload":{"label":"epic:repo-truth"},"ts":"2026-08-15T04:47:09.367Z","type":"labeled"}
+{"actor":"claude","issue":"AT-159","payload":{"from":null,"to":"Repo como fuente de verdad"},"ts":"2026-08-15T04:55:39.770Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-159","payload":{"from":null,"to":"Fase 4 — Snapshot derivado"},"ts":"2026-08-15T04:55:39.770Z","type":"milestone_changed"}

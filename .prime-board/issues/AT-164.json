@@ -1,0 +1,21 @@
+{
+  "archivedAt": null,
+  "assignee": null,
+  "comments": [],
+  "createdAt": "2026-08-15T05:02:23.501Z",
+  "creator": "claude",
+  "description": "AT-31 dejó estados editables y reordenables, pero **no borrables**: `issues.state_id` es NOT NULL, así que borrar un estado exige decidir a dónde van sus issues.\n\nPropuesta: `workflowStateDelete(id, moveToStateId)` — obligatorio si el estado tiene issues; validar que el destino sea del mismo team; bloquear el borrado si es el último estado del team o si dejaría al team sin ningún estado de tipo `completed` (el board necesita al menos uno para cerrar trabajo).\n\n*Encontrado implementando AT-31.*",
+  "id": "AT-164",
+  "labels": [
+    "graphql",
+    "web"
+  ],
+  "milestone": null,
+  "parent": null,
+  "priority": 4,
+  "project": null,
+  "state": "Backlog",
+  "team": "AT",
+  "title": "Borrar estados del workflow (con migración de issues)",
+  "updatedAt": "2026-08-15T05:02:23.501Z"
+}

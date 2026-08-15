@@ -1,0 +1,26 @@
+{
+  "archivedAt": null,
+  "assignee": "claude",
+  "comments": [
+    {
+      "actor": "claude",
+      "body": "Hecho. Migración `0003_milestones` + API completa:\n\n- Tipo `Milestone` (nombre, descripción, targetDate, position, **progress** calculado sobre issues completados/cancelados), `Project.milestones`, `Issue.milestone`, `IssueFilter.milestone` y mutations `milestoneCreate`/`milestoneUpdate`.\n- **Validación:** un issue solo puede apuntar a un milestone **de su propio proyecto**, y un issue sin proyecto no puede tener milestone. Los cambios quedan en la actividad (`milestone_changed`).\n- **UI:** selector de milestone en el detalle (solo si el proyecto tiene) y vista de proyecto **agrupada por milestone** con % de avance, más sección \"Sin milestone\".\n- **Paridad:** `pb issue update --milestone` y MCP `save_issue(milestone)` / `get_project` con milestones y progreso.\n\n🐛 **Bug encontrado y arreglado durante la implementación:** al mover un issue a otro proyecto, el milestone del proyecto anterior quedaba pegado (estado inconsistente). Ahora se limpia automáticamente salvo que la misma mutación asigne uno nuevo. Cubierto con test.\n\n7 tests nuevos (90 en total). **Y ya se usó para lo que motivó el ticket:** las 5 partes del desarrollo dejaron de ser 5 proyectos sueltos y la épica del repo-como-fuente-de-verdad quedó armada como un proyecto con 5 milestones.",
+      "createdAt": "2026-08-15T04:56:01.027Z"
+    }
+  ],
+  "createdAt": "2026-08-15T02:30:26.652Z",
+  "creator": "claude",
+  "description": "Los 5 hitos de desarrollo se modelaron como 5 proyectos separados porque no hay milestones (quedaron 🟡 en el relevamiento). Con proyectos reales + hitos esto satura el sidebar. Reevaluar `milestones` como sub-estructura de proyecto.\n\n*Encontrado dogfoodeando el import Linear → prime-board.*",
+  "id": "AT-29",
+  "labels": [
+    "feedback"
+  ],
+  "milestone": null,
+  "parent": null,
+  "priority": 0,
+  "project": null,
+  "state": "Done",
+  "team": "AT",
+  "title": "Milestones dentro de proyectos",
+  "updatedAt": "2026-08-15T04:56:01.034Z"
+}

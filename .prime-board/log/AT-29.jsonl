@@ -1,0 +1,6 @@
+{"actor":"claude","issue":"AT-29","payload":{"title":"Milestones dentro de proyectos"},"ts":"2026-08-15T02:30:26.652Z","type":"created"}
+{"actor":"claude","issue":"AT-29","payload":{"label":"feedback"},"ts":"2026-08-15T02:30:26.662Z","type":"labeled"}
+{"actor":"claude","issue":"AT-29","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T04:52:44.143Z","type":"state_changed"}
+{"actor":"claude","issue":"AT-29","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T04:52:44.144Z","type":"assigned"}
+{"actor":"claude","issue":"AT-29","payload":{"commentId":"01a003c6-e303-7000-9a37-2ea188ba960d"},"ts":"2026-08-15T04:56:01.027Z","type":"commented"}
+{"actor":"claude","issue":"AT-29","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T04:56:01.033Z","type":"state_changed"}

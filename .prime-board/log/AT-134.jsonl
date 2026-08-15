@@ -1,0 +1,4 @@
+{"actor":"claude","issue":"AT-134","payload":{"title":"GraphQL: issues (CRUD, estados, prioridades, sub-issues)"},"ts":"2026-08-14T20:09:06.376Z","type":"created"}
+{"actor":"claude","issue":"AT-134","payload":{"label":"graphql"},"ts":"2026-08-15T02:29:59.035Z","type":"labeled"}
+{"actor":"claude","issue":"AT-134","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.050Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-134","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.050Z","type":"milestone_changed"}

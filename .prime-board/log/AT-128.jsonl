@@ -1,0 +1,4 @@
+{"actor":"claude","issue":"AT-128","payload":{"title":"Escribir la spec del MVP en docs/"},"ts":"2026-08-14T19:50:08.177Z","type":"created"}
+{"actor":"claude","issue":"AT-128","payload":{"label":"docs"},"ts":"2026-08-15T02:29:59.008Z","type":"labeled"}
+{"actor":"claude","issue":"AT-128","payload":{"from":"Parte 1 — Definición del MVP","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:32.972Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-128","payload":{"from":null,"to":"Parte 1 — Definición del MVP"},"ts":"2026-08-15T04:58:32.972Z","type":"milestone_changed"}

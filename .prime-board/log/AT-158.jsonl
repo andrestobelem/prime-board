@@ -1,0 +1,6 @@
+{"actor":"claude","issue":"AT-158","payload":{"title":"Fase 3 — El log como fuente de verdad de las escrituras"},"ts":"2026-08-15T04:36:08.059Z","type":"created"}
+{"actor":"claude","issue":"AT-158","payload":{"label":"db"},"ts":"2026-08-15T04:36:08.060Z","type":"labeled"}
+{"actor":"claude","issue":"AT-158","payload":{"label":"graphql"},"ts":"2026-08-15T04:36:08.060Z","type":"labeled"}
+{"actor":"claude","issue":"AT-158","payload":{"label":"epic:repo-truth"},"ts":"2026-08-15T04:47:09.365Z","type":"labeled"}
+{"actor":"claude","issue":"AT-158","payload":{"from":null,"to":"Repo como fuente de verdad"},"ts":"2026-08-15T04:55:39.767Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-158","payload":{"from":null,"to":"Fase 3 — Log como fuente de verdad"},"ts":"2026-08-15T04:55:39.767Z","type":"milestone_changed"}

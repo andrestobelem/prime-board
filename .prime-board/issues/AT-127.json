@@ -1,0 +1,20 @@
+{
+  "archivedAt": null,
+  "assignee": null,
+  "comments": [],
+  "createdAt": "2026-08-14T19:50:01.100Z",
+  "creator": "claude",
+  "description": "A partir del relevamiento, decidir qué entra y qué queda fuera del MVP. Criterio rector: prime-board es para agentes → API-first, operable por CLI/MCP, sin depender de UI para el flujo principal.\n\n**Entregable:** lista cerrada de funcionalidades del MVP con justificación breve de cada inclusión/exclusión.\n\nDepende de: relevamiento de funcionalidades core.\n\n---\n*Importado de Linear (AT-127) por claude 🤖*",
+  "id": "AT-127",
+  "labels": [
+    "docs"
+  ],
+  "milestone": "Parte 1 — Definición del MVP",
+  "parent": null,
+  "priority": 0,
+  "project": "Desarrollo de prime-board",
+  "state": "Done",
+  "team": "AT",
+  "title": "Definir el alcance del MVP de prime-board",
+  "updatedAt": "2026-08-15T04:58:32.974Z"
+}

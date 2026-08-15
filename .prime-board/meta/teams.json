@@ -1,0 +1,95 @@
+[
+  {
+    "description": null,
+    "key": "AT",
+    "labels": [
+      {
+        "color": "#26b5ce",
+        "name": "cli"
+      },
+      {
+        "color": "#f2c94c",
+        "name": "db"
+      },
+      {
+        "color": "#4cb782",
+        "name": "docs"
+      },
+      {
+        "color": "#bec2c8",
+        "name": "feedback"
+      },
+      {
+        "color": "#e535ab",
+        "name": "graphql"
+      },
+      {
+        "color": "#95a2b3",
+        "name": "infra"
+      },
+      {
+        "color": "#5e6ad2",
+        "name": "mcp"
+      },
+      {
+        "color": "#eb5757",
+        "name": "web"
+      },
+      {
+        "color": "#fc7840",
+        "name": "webhooks"
+      }
+    ],
+    "name": "prime-board dev",
+    "states": [
+      {
+        "color": "#95a2b3",
+        "name": "Backlog",
+        "position": 0,
+        "type": "backlog"
+      },
+      {
+        "color": "#e2e2e2",
+        "name": "Todo",
+        "position": 1,
+        "type": "unstarted"
+      },
+      {
+        "color": "#f2c94c",
+        "name": "In Progress",
+        "position": 2,
+        "type": "started"
+      },
+      {
+        "color": "#5e6ad2",
+        "name": "Done",
+        "position": 3,
+        "type": "completed"
+      },
+      {
+        "color": "#95a2b3",
+        "name": "Canceled",
+        "position": 4,
+        "type": "canceled"
+      },
+      {
+        "color": "#95a2b3",
+        "name": "Ready for Agent",
+        "position": 5,
+        "type": "unstarted"
+      },
+      {
+        "color": "#95a2b3",
+        "name": "Needs Info",
+        "position": 6,
+        "type": "unstarted"
+      },
+      {
+        "color": "#95a2b3",
+        "name": "Duplicate",
+        "position": 7,
+        "type": "canceled"
+      }
+    ]
+  }
+]

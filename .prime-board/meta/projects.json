@@ -1,0 +1,160 @@
+[
+  {
+    "archived": false,
+    "description": "Sample project to explore prime-board",
+    "lead": "demo-agent",
+    "milestones": [],
+    "name": "Demo: agent onboarding",
+    "state": "started",
+    "targetDate": null,
+    "teams": [
+      "PB"
+    ]
+  },
+  {
+    "archived": false,
+    "description": "Historial del desarrollo del MVP (importado de Linear). Las 5 partes son milestones.",
+    "lead": "claude",
+    "milestones": [
+      {
+        "description": null,
+        "name": "Parte 1 — Definición del MVP",
+        "position": 0,
+        "targetDate": null
+      },
+      {
+        "description": null,
+        "name": "Parte 2 — Núcleo del backend",
+        "position": 1,
+        "targetDate": null
+      },
+      {
+        "description": null,
+        "name": "Parte 3 — Interfaces para agentes",
+        "position": 2,
+        "targetDate": null
+      },
+      {
+        "description": null,
+        "name": "Parte 4 — UI web",
+        "position": 3,
+        "targetDate": null
+      },
+      {
+        "description": null,
+        "name": "Parte 5 — Feedback del MVP",
+        "position": 4,
+        "targetDate": null
+      }
+    ],
+    "name": "Desarrollo de prime-board",
+    "state": "completed",
+    "targetDate": null,
+    "teams": [
+      "AT"
+    ]
+  },
+  {
+    "archived": true,
+    "description": null,
+    "lead": "claude",
+    "milestones": [],
+    "name": "Parte 1 — Definición del MVP",
+    "state": "completed",
+    "targetDate": null,
+    "teams": [
+      "AT"
+    ]
+  },
+  {
+    "archived": true,
+    "description": null,
+    "lead": "claude",
+    "milestones": [],
+    "name": "Parte 2 — Núcleo del backend",
+    "state": "completed",
+    "targetDate": null,
+    "teams": [
+      "AT"
+    ]
+  },
+  {
+    "archived": true,
+    "description": null,
+    "lead": "claude",
+    "milestones": [],
+    "name": "Parte 3 — Interfaces para agentes",
+    "state": "completed",
+    "targetDate": null,
+    "teams": [
+      "AT"
+    ]
+  },
+  {
+    "archived": true,
+    "description": null,
+    "lead": "claude",
+    "milestones": [],
+    "name": "Parte 4 — UI web",
+    "state": "completed",
+    "targetDate": null,
+    "teams": [
+      "AT"
+    ]
+  },
+  {
+    "archived": true,
+    "description": null,
+    "lead": "claude",
+    "milestones": [],
+    "name": "Parte 5 — Feedback del MVP",
+    "state": "completed",
+    "targetDate": null,
+    "teams": [
+      "AT"
+    ]
+  },
+  {
+    "archived": false,
+    "description": "Épica: migrar prime-board a event sourcing versionado en git, con el repo como fuente de verdad y SQLite como índice derivado. Diseño en docs/investigacion-tickets-en-repo.md (AT-153).",
+    "lead": "claude",
+    "milestones": [
+      {
+        "description": null,
+        "name": "Fase 0 — Investigación",
+        "position": 0,
+        "targetDate": null
+      },
+      {
+        "description": null,
+        "name": "Fase 1 — Exportador",
+        "position": 1,
+        "targetDate": null
+      },
+      {
+        "description": null,
+        "name": "Fase 2 — Importador",
+        "position": 2,
+        "targetDate": null
+      },
+      {
+        "description": null,
+        "name": "Fase 3 — Log como fuente de verdad",
+        "position": 3,
+        "targetDate": null
+      },
+      {
+        "description": null,
+        "name": "Fase 4 — Snapshot derivado",
+        "position": 4,
+        "targetDate": null
+      }
+    ],
+    "name": "Repo como fuente de verdad",
+    "state": "planned",
+    "targetDate": null,
+    "teams": [
+      "AT"
+    ]
+  }
+]

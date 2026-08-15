@@ -1,0 +1,26 @@
+{
+  "archivedAt": null,
+  "assignee": "claude",
+  "comments": [
+    {
+      "actor": "claude",
+      "body": "Hecho, las dos cosas que pedía el ticket:\n\n- **Archivado:** `projectArchive` / `projectUnarchive` (soft-delete con `archivedAt`) y `projects(includeArchived: true)` para verlos. Un proyecto archivado desaparece del listado pero sigue accesible por id y sus issues se consultan normalmente — no se pierde historia.\n- **Colapso:** el sidebar ahora separa los proyectos cerrados (`completed`/`canceled`) en una sección plegable **\"Completados (N)\"**, así los activos quedan arriba. Botón *Archive* en el header de la vista de proyecto.\n\n4 tests nuevos (94 en total).",
+      "createdAt": "2026-08-15T04:57:53.893Z"
+    }
+  ],
+  "createdAt": "2026-08-15T02:30:26.665Z",
+  "creator": "claude",
+  "description": "Tras el import hay 6 proyectos en el sidebar, 5 de ellos `completed`. No existe `projectArchive` (solo issues archivan) ni colapso visual de completados en el sidebar. Agregar archivado de proyectos y/o sección colapsable.\n\n*Encontrado dogfoodeando el import Linear → prime-board.*",
+  "id": "AT-30",
+  "labels": [
+    "feedback"
+  ],
+  "milestone": null,
+  "parent": null,
+  "priority": 0,
+  "project": null,
+  "state": "Done",
+  "team": "AT",
+  "title": "Archivar/colapsar proyectos completados",
+  "updatedAt": "2026-08-15T04:57:53.898Z"
+}

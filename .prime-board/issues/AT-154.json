@@ -1,0 +1,27 @@
+{
+  "archivedAt": null,
+  "assignee": "claude",
+  "comments": [
+    {
+      "actor": "claude",
+      "body": "Arreglado en `8d3db5b` (fix(web): sanitiza el markdown de issues y comentarios contra XSS).\n\n- Nuevo `apps/web/src/markdown.ts`: `marked` → **DOMPurify** (perfil HTML, más `FORBID_TAGS` para `style/form/input/iframe/object/embed` y `FORBID_ATTR: style`). El `Markdown` del detalle de issue ahora lo usa para descripción y comentarios.\n- Renderer inyectable (`createMarkdownRenderer(purifier)`) para poder testear la configuración.\n\n**Verificado con el payload original en un browser real:** `document.title` quedó en `prime-board` (antes `PWNED`), sin `img[onerror]`, el `href=\"javascript:\"` desapareció y la negrita/markdown legítimo se conserva. 4 tests unitarios nuevos (72 en total).\n\n⚠️ **Hallazgo colateral que vale la pena recordar:** el primer intento de test usaba **happy-dom** y DOMPurify ahí **degrada silenciosamente**: dejaba pasar el `onerror` intacto y encima se comía los `<h1>`. Un test escrito con menos assertions habría quedado verde con el sanitizador roto. Se cambió a **jsdom** (el entorno que DOMPurify soporta oficialmente) y quedó anotado en el comentario del archivo de test.",
+      "createdAt": "2026-08-15T04:17:37.029Z"
+    }
+  ],
+  "createdAt": "2026-08-15T04:13:28.732Z",
+  "creator": "claude",
+  "description": "🔴 **Vulnerabilidad encontrada en QA exploratorio.** El markdown de descripciones y comentarios se renderiza con `marked` + `dangerouslySetInnerHTML` **sin sanitizar**, y `marked` deja pasar HTML crudo por diseño.\n\n**Reproducción (verificada con Playwright en un board de prueba):**\n1. Crear un issue con descripción: `Hola <img src=x onerror=\"document.title='PWNED'\">`\n2. Abrir el detalle en la UI → el `onerror` **se ejecuta** (`document.title` pasó a `PWNED`).\n3. Un comentario con `<a href=\"javascript:alert(1)\">` conserva el href `javascript:`.\n\n*(El `<script>` inline no corre porque el navegador no ejecuta scripts insertados por `innerHTML`, pero los handlers `on*` y los href `javascript:` sí.)*\n\n**Por qué importa acá:** en prime-board el contenido lo escriben **agentes**, que a su vez procesan input externo (issues importados, webhooks, páginas que leen). Es una vía directa de prompt-injection a XSS: el atacante roba la API key del `localStorage` del humano que abre el ticket.\n\n**Arreglo propuesto:** sanitizar el HTML resultante antes de inyectarlo — `DOMPurify` sobre la salida de `marked`, o `marked` con un renderer que escape HTML crudo. Cubrir descripción y comentarios (`Markdown` en `IssueView`). Agregar test que verifique que `onerror` y `javascript:` no sobreviven.\n\n*Encontrado en la sesión de QA exploratorio.*",
+  "id": "AT-154",
+  "labels": [
+    "security",
+    "web"
+  ],
+  "milestone": null,
+  "parent": null,
+  "priority": 1,
+  "project": null,
+  "state": "Done",
+  "team": "AT",
+  "title": "XSS: el markdown de issues y comentarios no se sanitiza",
+  "updatedAt": "2026-08-15T04:17:37.036Z"
+}

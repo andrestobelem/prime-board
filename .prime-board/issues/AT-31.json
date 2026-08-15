@@ -1,0 +1,26 @@
+{
+  "archivedAt": null,
+  "assignee": "claude",
+  "comments": [
+    {
+      "actor": "claude",
+      "body": "Hecho: `#/team-settings/<KEY>` (botón ⚙ Team en el topbar de lista y board).\n\n- **Estados:** renombrar inline, cambiar tipo semántico, color con color-picker, **reordenar** con ↑/↓ (intercambia posiciones) y crear nuevos.\n- **Labels:** renombrar, recolorear, ver el scope (team/workspace), borrar y crear eligiendo scope.\n\nRequirió mutations nuevas que no existían: `workflowStateUpdate`, `labelUpdate` y `labelDelete` (este último devuelve `affectedIssues` y quita la label de los issues que la tenían).\n\n4 tests nuevos (100 en total) + verificación visual con los 8 estados y las 13 labels reales del team AT.\n\n**Fuera de alcance, con motivo:** no implementé **borrar estados**. A diferencia de las labels, un estado tiene issues apuntándolo y `issues.state_id` es NOT NULL: hay que decidir a qué estado se migran (¿elegido por el usuario? ¿el primero del mismo tipo?) y bloquear el borrado del último estado del team. Lo separo en un ticket.",
+      "createdAt": "2026-08-15T05:02:23.488Z"
+    }
+  ],
+  "createdAt": "2026-08-15T02:30:26.670Z",
+  "creator": "claude",
+  "description": "Los estados custom (Ready for Agent, Needs Info, Duplicate) y las labels con color solo se pueden crear por API/CLI. Falta una sección de team settings en la UI (crear/editar/reordenar estados, gestionar labels). La API ya existe (`workflowStateCreate`, `labelCreate`).\n\n*Encontrado dogfoodeando el import Linear → prime-board.*",
+  "id": "AT-31",
+  "labels": [
+    "feedback"
+  ],
+  "milestone": null,
+  "parent": null,
+  "priority": 0,
+  "project": null,
+  "state": "Done",
+  "team": "AT",
+  "title": "UI para administrar estados y labels del team",
+  "updatedAt": "2026-08-15T05:02:23.495Z"
+}

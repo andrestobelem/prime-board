@@ -1,0 +1,22 @@
+{
+  "archivedAt": null,
+  "assignee": null,
+  "comments": [],
+  "createdAt": "2026-08-15T04:36:08.062Z",
+  "creator": "claude",
+  "description": "Cuarto paso de AT-153. Generar `.prime-board/issues/<ID>.md` (front-matter + descripción + comentarios) desde el log, para que los cambios de tickets se lean en el diff de un PR.\n\n- Al ser derivado, da conflictos en merges: resolver con un merge driver que lo regenere desde el log, o mantenerlo fuera de git.\n- Hook `post-merge` que corra `pb rebuild` + regeneración.",
+  "id": "AT-159",
+  "labels": [
+    "db",
+    "docs",
+    "epic:repo-truth"
+  ],
+  "milestone": "Fase 4 — Snapshot derivado",
+  "parent": null,
+  "priority": 3,
+  "project": "Repo como fuente de verdad",
+  "state": "Backlog",
+  "team": "AT",
+  "title": "Fase 4 — Snapshot markdown derivado para leer en el PR",
+  "updatedAt": "2026-08-15T04:55:39.770Z"
+}

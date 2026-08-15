@@ -1,0 +1,33 @@
+{
+  "archivedAt": null,
+  "assignee": "claude",
+  "comments": [
+    {
+      "actor": "claude",
+      "body": "**Cambio de alcance (decisión de Andrés):** el objetivo ya no es evaluar si conviene una réplica, sino **que el repo sea la fuente de verdad de todo**. La DB pasa a ser un índice derivado, reconstruible.\n\nLa investigación se reorienta a *cómo* lograrlo sin perder lo que ya funciona:\n- Queries rápidas y FTS5 (hoy dependen de SQLite).\n- Escrituras concurrentes de varios agentes.\n- Merges de tickets editados en dos branches.\n- Qué NO puede vivir en el repo (hashes de API keys, secrets de webhooks).\n\nDolt pasa a ser candidato secundario: versiona datos, pero lo que guardaría el repo es una base opaca, no archivos revisables en un PR — que es justamente el punto.",
+      "createdAt": "2026-08-15T04:23:13.374Z"
+    },
+    {
+      "actor": "claude",
+      "body": "Investigación entregada en [`docs/investigacion-tickets-en-repo.md`](https://github.com/andrestobelem/prime-board/blob/main/docs/investigacion-tickets-en-repo.md) (commit `4d0d59e`).\n\n**Recomendación: event sourcing versionado en git.** El repo guarda un log append-only de eventos por issue (`.prime-board/log/AT-155.jsonl`) como fuente de verdad; SQLite pasa a índice derivado y descartable (se conservan queries y FTS5 sin tocar la API).\n\n**Evidencia experimental** (35 issues reales del board, merges de git de verdad):\n- Dos agentes editando el mismo ticket en branches distintas: el snapshot markdown da **conflicto falso** (dos comentarios que debían coexistir); el log con `merge=union` mergea **limpio** y conserva ambos eventos.\n- Reproducir el log mergeado da el estado correcto con los dos cambios; sobre el mismo campo resuelve determinísticamente por timestamp.\n- Tamaños: log 11.9 KB < markdown 27.8 KB < SQLite 252 KB.\n\n**Dolt descartado** (con dato verificado a favor: sí tiene FULLTEXT desde 2023). Los motivos son otros: su modo embebido es un driver de Go — desde Bun habría que levantar `dolt sql-server` — y **lo que quedaría versionado es una base opaca, no archivos legibles en un PR**, que era el punto.\n\n**Hallazgo que conviene no pasar por alto:** \"todo en el repo\" no puede ser literal. `api_keys.hash` y `webhooks.secret` (este último en texto plano) son credenciales: versionarlas sería publicarlas en el historial de git. Deben quedar en una DB local no versionada.\n\n**Plan incremental propuesto** (4 fases): exportador → importador → escritura al log → snapshot derivado. Después de la fase 2 ya se puede borrar la DB sin perder nada.",
+      "createdAt": "2026-08-15T04:35:50.244Z"
+    }
+  ],
+  "createdAt": "2026-08-15T04:13:28.724Z",
+  "creator": "claude",
+  "description": "Hoy los tickets viven solo en SQLite (`~/.prime-board/prime-board.db`). La idea a investigar: que el repo tenga una **réplica versionada** de los tickets, para que viajen con el código, se revisen en PRs y un agente pueda leerlos sin el server corriendo.\n\n## Espacio de diseño a evaluar\n\n**1. Dolt** (lo que disparó la idea): MySQL con semántica git (branches, diff, merge de datos).\n- ✅ Versionado real de datos, diff/merge nativo, SQL.\n- ❌ Rompe la premisa local-first de cero config (server aparte), dialecto MySQL (perdemos `bun:sqlite` y **FTS5** — habría que rehacer la búsqueda), y el repo guardaría un directorio Dolt opaco, no diffs legibles en el PR.\n\n**2. Export a archivos en el repo** (markdown con front-matter YAML o JSONL, uno por issue).\n- ✅ Diffs legibles en GitHub, review de cambios de tickets junto al código, agentes leen sin server.\n- ❌ Hay que definir sincronización y resolución de conflictos.\n\n**3. Git como storage primario** (sin DB; SQLite como índice derivado/cache).\n- ✅ El repo es la fuente de verdad, portable y offline.\n- ❌ Performance de queries, reindexado, concurrencia.\n\n**4. Estilo `git-bug`**: issues como objetos/refs de git, sincronizados por push/pull.\n- ✅ Distribuido, sin ensuciar el working tree.\n- ❌ Opaco sin herramienta; no se leen en un PR.\n\n**5. Híbrido (hipótesis a favor):** SQLite sigue siendo el motor (rápido, FTS5) + exportador determinista a `.prime-board/issues/AT-126.md` + importador para reconstruir la DB desde el repo (`pb sync` / `pb restore`). No rompe nada del MVP y da backup, portabilidad y diffs legibles.\n\n## Preguntas a responder\n\n- ¿Fuente de verdad: repo o DB?\n- ¿Sync automático (tras cada mutación / vía webhook interno) o comando explícito?\n- ¿Formato: markdown+front-matter (legible) vs JSONL (compacto, menos conflictos)?\n- ¿Se replican también comentarios y actividad, o solo el estado actual del issue?\n- ¿Cómo se resuelven merges de un mismo ticket editado en dos branches? ¿Y la numeración (`next_issue_number`) al mergear?\n- ¿Dolt aporta lo suficiente para justificar abandonar SQLite+FTS5 y el proceso único?\n\n**Entregable:** `docs/investigacion-tickets-en-repo.md` con la comparativa y una recomendación accionable (spike, no implementación).\n\n*Pedido por Andrés.*",
+  "id": "AT-153",
+  "labels": [
+    "db",
+    "epic:repo-truth",
+    "research"
+  ],
+  "milestone": "Fase 0 — Investigación",
+  "parent": null,
+  "priority": 3,
+  "project": "Repo como fuente de verdad",
+  "state": "Done",
+  "team": "AT",
+  "title": "Investigar réplica de los tickets en el repo (Dolt vs export versionado)",
+  "updatedAt": "2026-08-15T04:55:39.749Z"
+}

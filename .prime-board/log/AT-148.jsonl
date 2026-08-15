@@ -1,0 +1,4 @@
+{"actor":"claude","issue":"AT-148","payload":{"title":"Creación rápida y command palette"},"ts":"2026-08-14T20:09:57.313Z","type":"created"}
+{"actor":"claude","issue":"AT-148","payload":{"label":"web"},"ts":"2026-08-15T02:29:59.090Z","type":"labeled"}
+{"actor":"claude","issue":"AT-148","payload":{"from":"Parte 4 — UI web","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.073Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-148","payload":{"from":null,"to":"Parte 4 — UI web"},"ts":"2026-08-15T04:58:51.073Z","type":"milestone_changed"}

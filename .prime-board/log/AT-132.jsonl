@@ -1,0 +1,4 @@
+{"actor":"claude","issue":"AT-132","payload":{"title":"Servidor GraphQL base con auth por API key"},"ts":"2026-08-14T20:09:00.014Z","type":"created"}
+{"actor":"claude","issue":"AT-132","payload":{"label":"graphql"},"ts":"2026-08-15T02:29:59.024Z","type":"labeled"}
+{"actor":"claude","issue":"AT-132","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.053Z","type":"project_changed"}
+{"actor":"claude","issue":"AT-132","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.053Z","type":"milestone_changed"}

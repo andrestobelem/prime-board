@@ -1,0 +1,17 @@
+[
+  {
+    "email": null,
+    "name": "admin",
+    "type": "human"
+  },
+  {
+    "email": null,
+    "name": "claude",
+    "type": "agent"
+  },
+  {
+    "email": null,
+    "name": "demo-agent",
+    "type": "agent"
+  }
+]
