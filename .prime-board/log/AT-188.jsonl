@@ -2,3 +2,7 @@
 {"actor":"admin","issue":"AT-188","payload":{"label":"graphql"},"ts":"2026-08-15T09:59:17.181Z","type":"labeled"}
 {"actor":"admin","issue":"AT-188","payload":{"type":"blocked_by","issue":"AT-187"},"ts":"2026-08-15T09:59:44.996Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-188","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-15T10:00:01.550Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-188","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-15T10:31:01.155Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-188","payload":{"from":null,"to":"admin"},"ts":"2026-08-15T10:31:01.155Z","type":"assigned"}
+{"actor":"admin","issue":"AT-188","payload":{"body":"Hecho en el commit anterior. resolvePayload delega en translateActivityRefs (AT-187): se borró el diccionario tipo→tabla propio y el caso especial de created escrito a mano.\n\nVerificado con el criterio real de la ticket: bun run export sobre el board de producción da '0 files written' — export byte-a-byte idéntico al de antes del refactor. bun test: 173 pass."},"ts":"2026-08-15T10:31:52.294Z","type":"commented"}
+{"actor":"admin","issue":"AT-188","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T10:31:52.336Z","type":"state_changed"}
