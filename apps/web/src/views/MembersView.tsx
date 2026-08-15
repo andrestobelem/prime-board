@@ -77,7 +77,7 @@ export function MembersView() {
         />
         <select value={type} onChange={(event) => setType(event.target.value)}>
           <option value="HUMAN">Human</option>
-          <option value="AGENT">Agent 🤖</option>
+          <option value="AGENT">Agent</option>
         </select>
         <input
           placeholder="Email (optional)"
@@ -92,7 +92,9 @@ export function MembersView() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Avatar actor={member} />
             <strong>{member.name}</strong>
-            <span className="label-chip">{member.type === "AGENT" ? "agent 🤖" : "human"}</span>
+            <span className="label-chip">
+              {member.type === "AGENT" ? <><Icon name="bot" size={12} /> agent</> : "human"}
+            </span>
             {member.email && <span style={{ color: "var(--text-faint)" }}>{member.email}</span>}
             <span style={{ marginLeft: "auto" }}>
               <button className="btn secondary" onClick={() => createKey(member)}>New API key</button>

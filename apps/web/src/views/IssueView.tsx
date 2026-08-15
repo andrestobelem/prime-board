@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { mutate, useQuery } from "../api.ts";
 import { Avatar, LabelChip, PRIORITY_NAMES, StateIcon } from "../components/bits.tsx";
+import { Icon } from "../components/icons.tsx";
 import { renderMarkdown } from "../markdown.ts";
 import { Link } from "../router.tsx";
 
@@ -184,7 +185,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
         <div className="section-title">Activity</div>
         {issue.activity.map((entry: any) => (
           <div className="activity-item" key={entry.id}>
-            <span className="who">{entry.actor.name}{entry.actor.type === "AGENT" ? " 🤖" : ""}</span>
+            <span className="who">{entry.actor.name}{entry.actor.type === "AGENT" && <Icon name="bot" size={12} />}</span>
             <span>{(ACTIVITY_TEXT[entry.type] ?? (() => entry.type))(entry.payload)}</span>
             <span style={{ marginLeft: "auto" }}>{timeAgo(entry.createdAt)}</span>
           </div>
@@ -223,7 +224,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             <option value="">Unassigned</option>
             {result.data.actors.map((actor: any) => (
               <option key={actor.id} value={actor.id}>
-                {actor.name}{actor.type === "AGENT" ? " 🤖" : ""}
+                {actor.name}{actor.type === "AGENT" ? " (agent)" : ""}
               </option>
             ))}
           </select>

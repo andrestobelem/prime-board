@@ -74,7 +74,7 @@ export function BoardView(
       return [
         ...result.data.actors.map((actor) => ({
           key: actor.id,
-          label: `${actor.name}${actor.type === "AGENT" ? " 🤖" : ""}`,
+          label: `${actor.name}${actor.type === "AGENT" ? " (agent)" : ""}`,
           patch: { assigneeId: actor.id },
         })),
         { key: "none", label: "Sin assignee", patch: { assigneeId: null } },

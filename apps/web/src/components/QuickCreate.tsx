@@ -82,7 +82,7 @@ export function QuickCreate({ teams, defaultTeamKey, onClose }: QuickCreateProps
               <option value="">Unassigned</option>
               {(actors.data?.actors ?? []).map((actor) => (
                 <option key={actor.id} value={actor.id}>
-                  {actor.name}{actor.type === "AGENT" ? " 🤖" : ""}
+                  {actor.name}{actor.type === "AGENT" ? " (agent)" : ""}
                 </option>
               ))}
             </select>

@@ -62,8 +62,8 @@ export function Avatar({ actor }: { actor: { name: string; type: string } | null
   const isAgent = actor.type === "AGENT";
   const initials = actor.name.slice(0, 2).toUpperCase();
   return (
-    <span className={`avatar${isAgent ? " agent" : ""}`} title={`${actor.name}${isAgent ? " 🤖" : ""}`}>
-      {isAgent ? "🤖" : initials}
+    <span className={`avatar${isAgent ? " agent" : ""}`} title={`${actor.name}${isAgent ? " (agent)" : ""}`}>
+      {isAgent ? <Icon name="bot" size={11} /> : initials}
     </span>
   );
 }

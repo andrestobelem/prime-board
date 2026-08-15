@@ -69,7 +69,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
   font-weight: 600; font-size: 13px; padding: 6px 10px 12px;
   display: flex; align-items: center; gap: 8px;
 }
-.sidebar .workspace .logo { color: var(--text-muted); }
+.sidebar .workspace .logo { color: var(--accent); }
 .sidebar .section {
   color: var(--text-faint); font-size: 11px; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.4px; padding: 10px 10px 4px;
