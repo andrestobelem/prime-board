@@ -5,11 +5,23 @@
 //  - Claves naturales, no UUIDs: los ids no sobreviven a un merge entre clones.
 //  - Sin credenciales: hashes de API keys y secrets de webhooks NUNCA salen al repo.
 import type { Database } from "bun:sqlite";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as toYaml } from "yaml";
 
 /** JSON con claves ordenadas: sin esto, el diff cambia por reordenamientos casuales. */
+/**
+ * Escribe solo si el contenido cambió: evita reescribir 100+ archivos (y ensuciar
+ * sus mtimes) en cada mutación cuando la mayoría no cambió (AT-166).
+ */
+function makeWriter(onWrite: () => void) {
+  return (path: string, contents: string): void => {
+    if (existsSync(path) && readFileSync(path, "utf8") === contents) return;
+    Bun.write(path, contents);
+    onWrite();
+  };
+}
+
 function stableStringify(value: unknown): string {
   const seen = (input: unknown): unknown => {
     if (Array.isArray(input)) return input.map(seen);
@@ -94,6 +106,83 @@ function resolvePayload(
   };
 }
 
+
+interface ExportContext {
+  lookups: Lookups;
+  teamKeys: Map<string, string>;
+  identifiers: Map<string, string>;
+  commentBodies: Map<string, string>;
+}
+
+function buildContext(db: Database): ExportContext {
+  return {
+    lookups: buildLookups(db),
+    teamKeys: new Map(db.query("SELECT id, key FROM teams").values().map((r) => [r[0] as string, r[1] as string])),
+    identifiers: new Map(
+      db.query(
+        "SELECT issues.id, teams.key || '-' || issues.number FROM issues JOIN teams ON teams.id = issues.team_id",
+      ).values().map((r) => [r[0] as string, r[1] as string]),
+    ),
+    commentBodies: new Map(
+      db.query("SELECT id, body FROM comments").values().map((r) => [r[0] as string, r[1] as string]),
+    ),
+  };
+}
+
+/** Escribe el snapshot markdown y el log de un issue. Devuelve cuántos eventos escribió. */
+function writeIssue(
+  db: Database,
+  base: string,
+  issue: Record<string, any>,
+  { lookups, teamKeys, identifiers, commentBodies }: ExportContext,
+  write: (path: string, contents: string) => void,
+): number {
+    const identifier = `${issue.team_key}-${issue.number}`;
+    const parent = issue.parent_id
+      ? (db.query(
+          "SELECT teams.key || '-' || issues.number AS ident FROM issues JOIN teams ON teams.id = issues.team_id WHERE issues.id = ?1",
+        ).get(issue.parent_id) as { ident: string } | null)
+      : null;
+
+    // Markdown con front-matter: legible en el diff de un PR (AT-159).
+    // Los comentarios NO se duplican acá: ya viven en el log como eventos
+    // `commented` con autor, fecha y body — el importador los reconstruye de ahí.
+    const frontMatter = {
+      id: identifier,
+      title: issue.title,
+      team: issue.team_key,
+      state: lookups.states.get(issue.state_id) ?? null,
+      priority: issue.priority,
+      assignee: issue.assignee_id ? lookups.actors.get(issue.assignee_id) ?? null : null,
+      creator: lookups.actors.get(issue.creator_id) ?? null,
+      parent: parent?.ident ?? null,
+      project: issue.project_id ? lookups.projects.get(issue.project_id) ?? null : null,
+      milestone: issue.milestone_id ? lookups.milestones.get(issue.milestone_id) ?? null : null,
+      labels: db.query(
+        "SELECT labels.name FROM issue_labels JOIN labels ON labels.id = issue_labels.label_id WHERE issue_id = ?1 ORDER BY labels.name",
+      ).values(issue.id).map((row) => row[0]),
+      createdAt: issue.created_at,
+      updatedAt: issue.updated_at,
+      archivedAt: issue.archived_at,
+    };
+    const yaml = toYaml(frontMatter, { sortMapEntries: true, lineWidth: 0 });
+    const body = issue.description ? `\n${String(issue.description).replace(/\s*$/, "")}\n` : "";
+    write(join(base, "issues", `${identifier}.md`), `---\n${yaml}---\n\n# ${issue.title}\n${body}`);
+
+    const activity = db
+      .query("SELECT actor_id, type, payload, created_at FROM activity WHERE issue_id = ?1 ORDER BY created_at, id")
+      .all(issue.id) as Array<{ actor_id: string; type: string; payload: string; created_at: string }>;
+    const lines = activity.map((event) => JSON.stringify({
+        actor: lookups.actors.get(event.actor_id) ?? null,
+        issue: identifier,
+        payload: resolvePayload(event.type, JSON.parse(event.payload), lookups, teamKeys, identifiers, commentBodies),
+      ts: event.created_at,
+      type: event.type,
+    }));
+    write(join(base, "log", `${identifier}.jsonl`), lines.length > 0 ? `${lines.join("\n")}\n` : "");
+  return lines.length;
+}
+
 export interface ExportOptions {
   /** Exportar solo un team (por key). Sin esto, exporta todo el workspace. */
   teamKey?: string | null;
@@ -107,26 +196,21 @@ export interface ExportResult {
 
 export function exportBoard(db: Database, rootDir: string, options: ExportOptions = {}): ExportResult {
   const base = join(rootDir, ".prime-board");
-  // Se regenera de cero: así los borrados también quedan reflejados en el diff.
-  rmSync(base, { recursive: true, force: true });
+  // No se borra todo de entrada: se escribe lo que cambió y al final se barren
+  // los archivos que ya no corresponden (AT-166). Así un sync completo con datos
+  // sin cambios no toca ningún archivo.
+  const written = new Set<string>();
   mkdirSync(join(base, "meta"), { recursive: true });
   mkdirSync(join(base, "issues"), { recursive: true });
   mkdirSync(join(base, "log"), { recursive: true });
 
-  const lookups = buildLookups(db);
-  const teamKeys = new Map(db.query("SELECT id, key FROM teams").values().map((r) => [r[0] as string, r[1] as string]));
-  const commentBodies = new Map(
-    db.query("SELECT id, body FROM comments").values().map((r) => [r[0] as string, r[1] as string]),
-  );
-  const identifiers = new Map(
-    db.query(
-      "SELECT issues.id, teams.key || '-' || issues.number FROM issues JOIN teams ON teams.id = issues.team_id",
-    ).values().map((r) => [r[0] as string, r[1] as string]),
-  );
+  const context = buildContext(db);
+  const { lookups } = context;
   let files = 0;
+  const baseWrite = makeWriter(() => { files += 1; });
   const write = (path: string, contents: string) => {
-    Bun.write(path, contents);
-    files += 1;
+    written.add(path);
+    baseWrite(path, contents);
   };
 
   const teamFilter = options.teamKey
@@ -198,53 +282,33 @@ export function exportBoard(db: Database, rootDir: string, options: ExportOption
 
   let events = 0;
   for (const issue of issues) {
-    const identifier = `${issue.team_key}-${issue.number}`;
-    const parent = issue.parent_id
-      ? (db.query(
-          "SELECT teams.key || '-' || issues.number AS ident FROM issues JOIN teams ON teams.id = issues.team_id WHERE issues.id = ?1",
-        ).get(issue.parent_id) as { ident: string } | null)
-      : null;
+    events += writeIssue(db, base, issue, context, write);
+  }
 
-    // Markdown con front-matter: legible en el diff de un PR (AT-159).
-    // Los comentarios NO se duplican acá: ya viven en el log como eventos
-    // `commented` con autor, fecha y body — el importador los reconstruye de ahí.
-    const frontMatter = {
-      id: identifier,
-      title: issue.title,
-      team: issue.team_key,
-      state: lookups.states.get(issue.state_id) ?? null,
-      priority: issue.priority,
-      assignee: issue.assignee_id ? lookups.actors.get(issue.assignee_id) ?? null : null,
-      creator: lookups.actors.get(issue.creator_id) ?? null,
-      parent: parent?.ident ?? null,
-      project: issue.project_id ? lookups.projects.get(issue.project_id) ?? null : null,
-      milestone: issue.milestone_id ? lookups.milestones.get(issue.milestone_id) ?? null : null,
-      labels: db.query(
-        "SELECT labels.name FROM issue_labels JOIN labels ON labels.id = issue_labels.label_id WHERE issue_id = ?1 ORDER BY labels.name",
-      ).values(issue.id).map((row) => row[0]),
-      createdAt: issue.created_at,
-      updatedAt: issue.updated_at,
-      archivedAt: issue.archived_at,
-    };
-    const yaml = toYaml(frontMatter, { sortMapEntries: true, lineWidth: 0 });
-    const body = issue.description ? `\n${String(issue.description).replace(/\s*$/, "")}\n` : "";
-    write(join(base, "issues", `${identifier}.md`), `---\n${yaml}---\n\n# ${issue.title}\n${body}`);
-
-    const activity = db
-      .query("SELECT actor_id, type, payload, created_at FROM activity WHERE issue_id = ?1 ORDER BY created_at, id")
-      .all(issue.id) as Array<{ actor_id: string; type: string; payload: string; created_at: string }>;
-    const lines = activity.map((event) => {
-      events += 1;
-      return JSON.stringify({
-        actor: lookups.actors.get(event.actor_id) ?? null,
-        issue: identifier,
-        payload: resolvePayload(event.type, JSON.parse(event.payload), lookups, teamKeys, identifiers, commentBodies),
-        ts: event.created_at,
-        type: event.type,
-      });
-    });
-    write(join(base, "log", `${identifier}.jsonl`), lines.length > 0 ? `${lines.join("\n")}\n` : "");
+  // Barrido: lo que quedó en el repo y ya no se exportó, se elimina.
+  for (const folder of ["meta", "issues", "log"]) {
+    const dir = join(base, folder);
+    if (!existsSync(dir)) continue;
+    for (const file of readdirSync(dir)) {
+      const path = join(dir, file);
+      if (!written.has(path)) unlinkSync(path);
+    }
   }
 
   return { issues: issues.length, events, files };
+}
+
+/** Exporta un solo issue (AT-166): el camino caliente de cada mutación. */
+export function exportIssue(db: Database, rootDir: string, issueId: string): boolean {
+  const base = join(rootDir, ".prime-board");
+  const issue = db
+    .query(
+      "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id WHERE issues.id = ?1",
+    )
+    .get(issueId) as Record<string, any> | null;
+  if (!issue) return false;
+  mkdirSync(join(base, "issues"), { recursive: true });
+  mkdirSync(join(base, "log"), { recursive: true });
+  writeIssue(db, base, issue, buildContext(db), makeWriter(() => {}));
+  return true;
 }

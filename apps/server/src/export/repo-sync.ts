@@ -10,11 +10,13 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { exportBoard } from "./exporter.ts";
+import { exportBoard, exportIssue } from "./exporter.ts";
 
 export interface RepoSync {
-  /** Regenera el repo completo. Barato para boards chicos; simple y correcto. */
+  /** Regenera el repo completo (cambios de metadata, borrados). */
   sync(): void;
+  /** Camino caliente: reescribe solo el issue afectado (AT-166). */
+  syncIssue(issueId: string): void;
   readonly root: string;
 }
 
@@ -32,6 +34,14 @@ export function createRepoSync(db: Database, root: string | null): RepoSync | nu
         exportBoard(db, root);
       } catch (error) {
         // Nunca romper una mutación por un problema de escritura en el repo.
+        console.error(`repo sync failed: ${error}`);
+      }
+    },
+    syncIssue(issueId: string) {
+      try {
+        // Si el issue no existe (o el repo está vacío), cae al export completo.
+        if (!exportIssue(db, root, issueId)) exportBoard(db, root);
+      } catch (error) {
         console.error(`repo sync failed: ${error}`);
       }
     },

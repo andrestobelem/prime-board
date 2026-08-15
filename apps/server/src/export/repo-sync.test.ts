@@ -1,6 +1,6 @@
 // Tests de AT-158: cada escritura queda replicada en el repo al instante.
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
@@ -68,5 +68,36 @@ describe("repo sync en cada escritura", () => {
     } finally {
       plain.stop();
     }
+  });
+
+  it("una mutación toca solo los archivos de su issue (AT-166)", async () => {
+    // Segundo issue para tener con qué comparar.
+    await gql(app, `mutation { issueCreate(input: { teamKey: "PB", title: "Otro issue" }) { success } }`);
+    const base = join(repoDir, ".prime-board");
+    const mtimes = () => Object.fromEntries(
+      readdirSync(join(base, "issues")).map((f) => [f, statSync(join(base, "issues", f)).mtimeMs]),
+    );
+    const logMtime = () => statSync(join(base, "log", "PB-1.jsonl")).mtimeMs;
+    const before = mtimes();
+    const beforeLog = logMtime();
+    await new Promise((resolve) => setTimeout(resolve, 12));
+
+    await gql(app, `mutation { commentCreate(input: { issueId: "PB-1", body: "solo PB-1" }) { success } }`);
+
+    // El evento va al log de PB-1...
+    expect(logMtime()).not.toBe(beforeLog);
+    // ...y ningún snapshot se reescribe: el comentario vive en el log (AT-159),
+    // así que ni siquiera PB-1.md cambia.
+    expect(mtimes()).toEqual(before);
+  });
+
+  it("no reescribe archivos cuyo contenido no cambió", async () => {
+    const base = join(repoDir, ".prime-board");
+    const teamsFile = join(base, "meta", "teams.json");
+    const before = statSync(teamsFile).mtimeMs;
+    await new Promise((resolve) => setTimeout(resolve, 12));
+    // Un sync completo con metadata idéntica no debe tocar el archivo.
+    await gql(app, `mutation { projectCreate(input: { name: "Proyecto nuevo" }) { success } }`);
+    expect(statSync(teamsFile).mtimeMs).toBe(before);
   });
 });

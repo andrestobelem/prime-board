@@ -160,7 +160,7 @@ export const issueResolvers = {
         body: row.body,
         createdAt: row.created_at,
       });
-      context.repo?.sync();
+      context.repo?.syncIssue(row.issue_id);
       return { success: true, comment: mapComment(row) };
     },
   },
