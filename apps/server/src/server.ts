@@ -48,16 +48,24 @@ export function createApp({ db, config, webhookOptions }: AppDeps) {
 
       // UI estática buildeada (si existe). Los clientes de API (sin Accept html
       // o rutas desconocidas no-GET) siguen recibiendo JSON.
+      // Cache (AT-186): el HTML se revalida siempre (si no, un deploy deja al
+      // browser con una UI vieja); los assets hasheados de Vite son inmutables.
+      const cacheHeaders = (path: string): Record<string, string> => ({
+        "cache-control": path.startsWith("/assets/")
+          ? "public, max-age=31536000, immutable"
+          : "no-cache",
+      });
       if (request.method === "GET") {
         const assetPath = url.pathname === "/" ? "/index.html" : url.pathname;
         const asset = Bun.file(join(config.webDist, assetPath.replaceAll("..", "")));
         if (await asset.exists()) {
-          return new Response(asset);
+          return new Response(asset, { headers: cacheHeaders(assetPath) });
         }
         // Fallback SPA: cualquier ruta navegable devuelve index.html.
         if (request.headers.get("accept")?.includes("text/html")) {
           const index = Bun.file(join(config.webDist, "index.html"));
-          if (await index.exists()) return new Response(index);
+          if (await index.exists())
+            return new Response(index, { headers: cacheHeaders("/index.html") });
         }
       }
 
