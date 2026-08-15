@@ -2,10 +2,21 @@
 import { getActor, mapActor } from "../domain/actors.ts";
 import { listIssues, mapIssue } from "../domain/issues.ts";
 import {
-  archiveProject, createProject, getProject, listProjects, listProjectTeamIds, mapProject, updateProject,
+  archiveProject,
+  createProject,
+  getProject,
+  listProjects,
+  listProjectTeamIds,
+  mapProject,
+  updateProject,
 } from "../domain/projects.ts";
 import {
-  createMilestone, deleteMilestone, getMilestone, listMilestones, mapMilestone, updateMilestone,
+  createMilestone,
+  deleteMilestone,
+  getMilestone,
+  listMilestones,
+  mapMilestone,
+  updateMilestone,
 } from "../domain/milestones.ts";
 import { getTeam, mapTeam } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
@@ -47,12 +58,14 @@ export const projectResolvers = {
       };
     },
     progress: (milestone: { id: string }, _args: unknown, context: Context) => {
-      const row = context.db.query(
-        `SELECT count(*) AS total,
+      const row = context.db
+        .query(
+          `SELECT count(*) AS total,
                 sum(CASE WHEN workflow_states.type IN ('completed', 'canceled') THEN 1 ELSE 0 END) AS done
          FROM issues JOIN workflow_states ON workflow_states.id = issues.state_id
          WHERE issues.milestone_id = ?1 AND issues.archived_at IS NULL`,
-      ).get(milestone.id) as { total: number; done: number | null };
+        )
+        .get(milestone.id) as { total: number; done: number | null };
       return row.total === 0 ? 0 : (row.done ?? 0) / row.total;
     },
   },
@@ -82,25 +95,21 @@ export const projectResolvers = {
       const viewer = requireViewer(context);
       const project = mapProject(createProject(context.db, args.input));
       context.events.emit("project.created", viewer, project);
-      context.repo?.sync();
       return { success: true, project };
     },
     milestoneDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
       const orphaned = deleteMilestone(context.db, args.id);
-      context.repo?.sync();
       return { success: true, orphanedIssues: orphaned };
     },
     projectArchive: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
       const archived = mapProject(archiveProject(context.db, args.id, true));
-      context.repo?.sync();
       return { success: true, project: archived };
     },
     projectUnarchive: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
       const restored = mapProject(archiveProject(context.db, args.id, false));
-      context.repo?.sync();
       return { success: true, project: restored };
     },
     milestoneCreate: (
@@ -110,7 +119,6 @@ export const projectResolvers = {
     ) => {
       requireViewer(context);
       const created = mapMilestone(createMilestone(context.db, args.input));
-      context.repo?.sync();
       return { success: true, milestone: created };
     },
     milestoneUpdate: (
@@ -120,7 +128,6 @@ export const projectResolvers = {
     ) => {
       requireViewer(context);
       const updated = mapMilestone(updateMilestone(context.db, args.id, args.input));
-      context.repo?.sync();
       return { success: true, milestone: updated };
     },
     projectUpdate: (
@@ -131,7 +138,6 @@ export const projectResolvers = {
       const viewer = requireViewer(context);
       const project = mapProject(updateProject(context.db, args.id, args.input));
       context.events.emit("project.updated", viewer, project);
-      context.repo?.sync();
       return { success: true, project };
     },
   },
