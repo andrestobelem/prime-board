@@ -1,15 +1,32 @@
 // Resolvers raíz del esquema. Se ensamblan por dominio a medida que crece la API.
 import { GraphQLScalarType, Kind } from "graphql";
 import {
-  createActor, createApiKey, deleteApiKey, getActor, listActors, listApiKeys, mapActor, mapApiKey,
+  createActor,
+  createApiKey,
+  deleteApiKey,
+  getActor,
+  listActors,
+  listApiKeys,
+  mapActor,
+  mapApiKey,
 } from "../domain/actors.ts";
 import {
-  createTeam, createWorkflowState, getDefaultState, getTeam, listTeamStates, mapTeam,
-  mapWorkflowState, deleteWorkflowState, updateTeam, updateWorkflowState,
-  type TeamRow, type TeamUpdateInput,
+  createTeam,
+  createWorkflowState,
+  getDefaultState,
+  getTeam,
+  listTeamStates,
+  mapTeam,
+  mapWorkflowState,
+  deleteWorkflowState,
+  updateTeam,
+  updateWorkflowState,
+  type TeamRow,
+  type TeamUpdateInput,
 } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { apiError, requireViewer } from "./errors.ts";
+import { withRepoSyncDispatch } from "./repo-sync-dispatch.ts";
 import { issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
 import { createLabel, deleteLabel, listLabels, mapLabel, updateLabel } from "../domain/labels.ts";
@@ -35,16 +52,27 @@ export const resolvers = {
   JSON: JSONScalar,
   ActorType: { HUMAN: "human", AGENT: "agent" },
   StateType: {
-    TRIAGE: "triage", BACKLOG: "backlog", UNSTARTED: "unstarted",
-    STARTED: "started", COMPLETED: "completed", CANCELED: "canceled",
+    TRIAGE: "triage",
+    BACKLOG: "backlog",
+    UNSTARTED: "unstarted",
+    STARTED: "started",
+    COMPLETED: "completed",
+    CANCELED: "canceled",
   },
   IssueRelationType: {
-    BLOCKS: "blocks", BLOCKED_BY: "blocked_by", RELATED: "related",
-    DUPLICATE_OF: "duplicate_of", DUPLICATED_BY: "duplicated_by",
+    BLOCKS: "blocks",
+    BLOCKED_BY: "blocked_by",
+    RELATED: "related",
+    DUPLICATE_OF: "duplicate_of",
+    DUPLICATED_BY: "duplicated_by",
   },
   ProjectState: {
-    BACKLOG: "backlog", PLANNED: "planned", STARTED: "started",
-    PAUSED: "paused", COMPLETED: "completed", CANCELED: "canceled",
+    BACKLOG: "backlog",
+    PLANNED: "planned",
+    STARTED: "started",
+    PAUSED: "paused",
+    COMPLETED: "completed",
+    CANCELED: "canceled",
   },
 
   Team: {
@@ -112,7 +140,10 @@ export const resolvers = {
     },
   },
 
-  Mutation: {
+  // El resolver map entero pasa por el despacho de sync (AT-191): cualquier
+  // mutation nueva que no llame a mano a repo?.sync()/syncIssue() igual queda
+  // sincronizada, salvo que esté en SYNC_EXCLUDED_MUTATIONS.
+  Mutation: withRepoSyncDispatch({
     ...issueResolvers.Mutation,
     ...projectResolvers.Mutation,
     teamCreate: (
@@ -219,7 +250,15 @@ export const resolvers = {
     },
     workflowStateCreate: (
       _parent: unknown,
-      args: { input: { teamId: string; name: string; type: string; color?: string | null; position?: number | null } },
+      args: {
+        input: {
+          teamId: string;
+          name: string;
+          type: string;
+          color?: string | null;
+          position?: number | null;
+        };
+      },
       context: Context,
     ) => {
       requireViewer(context);
@@ -227,5 +266,5 @@ export const resolvers = {
       context.repo?.sync();
       return { success: true, workflowState };
     },
-  },
+  }),
 };

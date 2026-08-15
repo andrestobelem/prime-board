@@ -8,6 +8,7 @@ import type { Config } from "./config.ts";
 import type { Context } from "./graphql/context.ts";
 import { resolvers } from "./graphql/resolvers.ts";
 import { createRepoSync } from "./export/repo-sync.ts";
+import { trackedRepoSync } from "./graphql/repo-sync-dispatch.ts";
 import { WebhookDispatcher, type DispatcherOptions } from "./webhooks/dispatcher.ts";
 
 export interface AppDeps {
@@ -26,12 +27,15 @@ export function createApp({ db, config, webhookOptions }: AppDeps) {
     landingPage: false,
     // En dev exponemos el error original; en prod se enmascara como corresponde.
     maskedErrors: !config.dev,
+    // Un TrackedRepoSync fresco por request (AT-191): dos requests concurrentes
+    // no se pisan el rastreo de "¿ya sincronizó?" — delega en el mismo `repo`
+    // singleton, así que la escritura en sí sigue siendo una sola por mutation.
     context: ({ request }): Context => ({
       db,
       config,
       viewer: resolveViewer(db, request.headers.get("authorization")),
       events,
-      repo,
+      repo: repo ? trackedRepoSync(repo) : null,
     }),
   });
 

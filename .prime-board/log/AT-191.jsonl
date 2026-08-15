@@ -5,3 +5,5 @@
 {"actor":"admin","issue":"AT-191","payload":{"type":"blocks","issue":"AT-193"},"ts":"2026-08-15T09:59:45.169Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-191","payload":{"type":"blocks","issue":"AT-194"},"ts":"2026-08-15T09:59:45.211Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-191","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-15T09:59:49.888Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-191","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-15T10:38:52.358Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-191","payload":{"from":null,"to":"admin"},"ts":"2026-08-15T10:38:52.358Z","type":"assigned"}
