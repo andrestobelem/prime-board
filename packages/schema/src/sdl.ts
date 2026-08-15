@@ -48,6 +48,8 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     description: String
     states: [WorkflowState!]!
+    """Donde caen los issues creados sin estado explícito. Editable vía teamUpdate."""
+    defaultState: WorkflowState!
     labels: [Label!]!
     projects: [Project!]!
     createdAt: DateTime!
@@ -199,6 +201,13 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     key: String!
     description: String
+  }
+
+  input TeamUpdateInput {
+    name: String
+    description: String
+    """Debe ser un estado del team."""
+    defaultStateId: ID
   }
 
   input ActorCreateInput {
@@ -492,6 +501,7 @@ export const typeDefs = /* GraphQL */ `
 
   type Mutation {
     teamCreate(input: TeamCreateInput!): TeamPayload!
+    teamUpdate(id: ID!, input: TeamUpdateInput!): TeamPayload!
     actorCreate(input: ActorCreateInput!): ActorPayload!
     apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyPayload!
     apiKeyDelete(id: ID!): DeletePayload!

@@ -4,8 +4,9 @@ import {
   createActor, createApiKey, deleteApiKey, getActor, listActors, listApiKeys, mapActor, mapApiKey,
 } from "../domain/actors.ts";
 import {
-  createTeam, createWorkflowState, getTeam, listTeamStates, mapTeam, mapWorkflowState,
-  deleteWorkflowState, updateWorkflowState, type TeamRow,
+  createTeam, createWorkflowState, getDefaultState, getTeam, listTeamStates, mapTeam,
+  mapWorkflowState, deleteWorkflowState, updateTeam, updateWorkflowState,
+  type TeamRow, type TeamUpdateInput,
 } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { apiError, requireViewer } from "./errors.ts";
@@ -49,6 +50,8 @@ export const resolvers = {
   Team: {
     states: (team: { id: string }, _args: unknown, context: Context) =>
       listTeamStates(context.db, team.id).map(mapWorkflowState),
+    defaultState: (team: { _row: TeamRow }, _args: unknown, context: Context) =>
+      mapWorkflowState(getDefaultState(context.db, team._row)),
     labels: (team: { id: string }, _args: unknown, context: Context) =>
       listLabels(context.db, team.id).map(mapLabel),
     projects: (team: { id: string }, _args: unknown, context: Context) =>
@@ -119,6 +122,16 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       const team = mapTeam(createTeam(context.db, args.input));
+      context.repo?.sync();
+      return { success: true, team };
+    },
+    teamUpdate: (
+      _parent: unknown,
+      args: { id: string; input: TeamUpdateInput },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      const team = mapTeam(updateTeam(context.db, args.id, args.input));
       context.repo?.sync();
       return { success: true, team };
     },

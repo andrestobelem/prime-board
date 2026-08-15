@@ -6,6 +6,7 @@ import migration0001 from "./migrations/0001_init.sql" with { type: "text" };
 import migration0002 from "./migrations/0002_project_teams.sql" with { type: "text" };
 import migration0003 from "./migrations/0003_milestones.sql" with { type: "text" };
 import migration0004 from "./migrations/0004_issue_relations.sql" with { type: "text" };
+import migration0005 from "./migrations/0005_team_default_state.sql" with { type: "text" };
 import { now } from "./util.ts";
 
 interface Migration {
@@ -19,6 +20,7 @@ const MIGRATIONS: Migration[] = [
   { version: 2, name: "project_teams", sql: migration0002 },
   { version: 3, name: "milestones", sql: migration0003 },
   { version: 4, name: "issue_relations", sql: migration0004 },
+  { version: 5, name: "team_default_state", sql: migration0005 },
 ];
 
 export function openDatabase(path: string): Database {

@@ -11,6 +11,7 @@ export interface TeamRow {
   key: string;
   description: string | null;
   next_issue_number: number;
+  default_state_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +86,59 @@ export function createTeam(
   return db.query("SELECT * FROM teams WHERE id = ?1").get(id) as TeamRow;
 }
 
+/**
+ * El estado default explícito del team (AT-180); si nunca se fijó (datos previos
+ * a la migración 0005), cae al de menor posición, que era la regla implícita.
+ */
+export function getDefaultState(db: Database, team: TeamRow): WorkflowStateRow {
+  if (team.default_state_id) {
+    const state = db
+      .query("SELECT * FROM workflow_states WHERE id = ?1 AND team_id = ?2")
+      .get(team.default_state_id, team.id) as WorkflowStateRow | null;
+    if (state) return state;
+  }
+  return db
+    .query("SELECT * FROM workflow_states WHERE team_id = ?1 ORDER BY position LIMIT 1")
+    .get(team.id) as WorkflowStateRow;
+}
+
+export interface TeamUpdateInput {
+  name?: string | null;
+  description?: string | null;
+  defaultStateId?: string | null;
+}
+
+export function updateTeam(db: Database, id: string, input: TeamUpdateInput): TeamRow {
+  const team = getTeam(db, { id });
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  const push = (column: string, value: unknown) => {
+    sets.push(`${column} = ?${params.length + 1}`);
+    params.push(value);
+  };
+  if (input.name != null) {
+    const name = input.name.trim();
+    if (!name) throw apiError("VALIDATION_FAILED", "Team name cannot be empty");
+    push("name", name);
+  }
+  if (input.description !== undefined) push("description", input.description);
+  if (input.defaultStateId != null) {
+    const state = db
+      .query("SELECT id FROM workflow_states WHERE id = ?1 AND team_id = ?2")
+      .get(input.defaultStateId, team.id);
+    if (!state) throw apiError("VALIDATION_FAILED", "Default state must belong to the team");
+    push("default_state_id", input.defaultStateId);
+  }
+  if (sets.length > 0) {
+    push("updated_at", now());
+    params.push(team.id);
+    db.query(`UPDATE teams SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(...(params as never[]));
+  }
+  return getTeam(db, { id })!;
+}
+
 const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"];
 
 /**
@@ -139,6 +193,15 @@ export function deleteWorkflowState(
       for (const issueId of issues) {
         recordActivity(db, issueId, actorId, "state_changed", { from: id, to: target.id, reason: "state_deleted" });
       }
+    }
+    // Si se borra el estado default, se reasigna: al destino de la migración o
+    // al de menor posición restante (AT-180).
+    const team = db.query("SELECT default_state_id FROM teams WHERE id = ?1").get(state.team_id) as
+      | { default_state_id: string | null }
+      | null;
+    if (team?.default_state_id === id) {
+      const fallback = target ?? [...siblings].sort((a, b) => a.position - b.position)[0]!;
+      db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(fallback.id, state.team_id);
     }
     db.query("DELETE FROM workflow_states WHERE id = ?1").run(id);
   })();

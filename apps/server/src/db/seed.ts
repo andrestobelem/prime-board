@@ -15,9 +15,15 @@ export function seedTeamWorkflow(db: Database, teamId: string): void {
   const insert = db.query(
     "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
   );
+  let firstId: string | null = null;
   DEFAULT_WORKFLOW.forEach((state, index) => {
-    insert.run(newId(), teamId, state.name, state.type, state.color, index, timestamp, timestamp);
+    const id = newId();
+    firstId ??= id;
+    insert.run(id, teamId, state.name, state.type, state.color, index, timestamp, timestamp);
   });
+  // El default queda explícito desde el arranque (AT-180): Backlog, no "el primero
+  // por posición" — reordenar estados ya no lo cambia en silencio.
+  db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(firstId, teamId);
 }
 
 /** Crea los datos iniciales si la DB está vacía. Idempotente entre reinicios. */

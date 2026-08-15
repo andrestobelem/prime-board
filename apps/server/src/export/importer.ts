@@ -89,6 +89,14 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         db.query("INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
           .run(labelId, label.name, label.color, teamId, timestamp);
       }
+      // Estado default explícito (AT-180); exports viejos sin el campo caen al
+      // primero por posición (los estados vienen ordenados así en el export).
+      const defaultState = team.defaultState
+        ? stateIds.get(`${team.key}/${team.defaultState}`) ?? null
+        : null;
+      const firstState = team.states?.[0] ? stateIds.get(`${team.key}/${team.states[0].name}`) ?? null : null;
+      db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2")
+        .run(defaultState ?? firstState, teamId);
     }
     for (const label of readJson(join(base, "meta", "workspace-labels.json")) as Array<Record<string, string>>) {
       const labelId = newId();

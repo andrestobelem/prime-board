@@ -271,12 +271,13 @@ export function exportBoard(db: Database, rootDir: string, options: ExportOption
   write(join(base, "meta", "actors.json"), stableStringify(actors));
 
   const teams = db
-    .query(`SELECT id, key, name, description FROM teams ${teamFilter ? "WHERE id = ?1" : ""} ORDER BY key`)
-    .all(...(teamFilter ? [teamFilter.id] : []) as never[]) as Array<{ id: string; key: string; name: string; description: string | null }>;
+    .query(`SELECT id, key, name, description, default_state_id FROM teams ${teamFilter ? "WHERE id = ?1" : ""} ORDER BY key`)
+    .all(...(teamFilter ? [teamFilter.id] : []) as never[]) as Array<{ id: string; key: string; name: string; description: string | null; default_state_id: string | null }>;
   write(join(base, "meta", "teams.json"), stableStringify(teams.map((team) => ({
     key: team.key,
     name: team.name,
     description: team.description,
+    defaultState: team.default_state_id ? lookups.states.get(team.default_state_id) ?? null : null,
     states: db
       .query("SELECT name, type, color, position FROM workflow_states WHERE team_id = ?1 ORDER BY position, name")
       .all(team.id),

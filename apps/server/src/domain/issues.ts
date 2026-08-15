@@ -10,7 +10,7 @@ import {
 import { applyLabelOps, type LabelOps } from "./labels.ts";
 import { assertMilestoneMatchesProject } from "./milestones.ts";
 import { projectIncludesTeam } from "./projects.ts";
-import { getTeam } from "./teams.ts";
+import { getDefaultState, getTeam } from "./teams.ts";
 
 export interface IssueRow {
   id: string;
@@ -196,11 +196,8 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
           "UPDATE teams SET next_issue_number = next_issue_number + 1 WHERE id = ?1 RETURNING next_issue_number - 1 AS number",
         ).get(team.id) as { number: number });
 
-    // Estado default: el de menor posición (Backlog en el workflow default).
-    const stateId =
-      input.stateId ??
-      (db.query("SELECT id FROM workflow_states WHERE team_id = ?1 ORDER BY position LIMIT 1")
-        .get(team.id) as { id: string }).id;
+    // Estado default explícito del team (AT-180); posición más baja como fallback.
+    const stateId = input.stateId ?? getDefaultState(db, team).id;
 
     if (input.parentId) validateParent(db, { id, team_id: team.id }, input.parentId);
 
