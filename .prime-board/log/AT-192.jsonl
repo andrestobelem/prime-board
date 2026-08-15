@@ -3,3 +3,7 @@
 {"actor":"admin","issue":"AT-192","payload":{"type":"blocked_by","issue":"AT-191"},"ts":"2026-08-15T09:59:45.127Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-192","payload":{"type":"blocks","issue":"AT-195"},"ts":"2026-08-15T09:59:45.248Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-192","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-15T10:00:01.731Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-192","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-15T10:45:31.323Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-192","payload":{"from":null,"to":"admin"},"ts":"2026-08-15T10:45:31.323Z","type":"assigned"}
+{"actor":"admin","issue":"AT-192","payload":{"body":"Hecho en el commit anterior. Se borraron las 9 llamadas a context.repo?.sync() de resolvers.ts (teamCreate, teamUpdate, actorCreate, workflowStateCreate/Update/Delete, labelCreate/Update/Delete).\n\nVerificado en vivo, no solo con tests: reinicié el server real con PRIME_BOARD_REPO seteado, creé y borré un label de sanity vía GraphQL — sincronizó igual, sin ninguna línea manual, gracias al despacho de AT-191. bun test: 181 pass."},"ts":"2026-08-15T10:46:19.424Z","type":"commented"}
+{"actor":"admin","issue":"AT-192","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T10:46:19.470Z","type":"state_changed"}
