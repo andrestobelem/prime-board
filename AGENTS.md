@@ -46,3 +46,6 @@ npx skills add <paquete> --agent universal --copy
   repo y funcionen en cualquier clon.
 - `skills-lock.json` queda versionado; `npx skills experimental_install` restaura desde ahí.
 - Las skills corren con permisos del agente: revisarlas antes de usarlas.
+- ⚠️ **`npx skills remove` no funciona con `--copy`**: dice "Successfully removed" pero deja
+  los directorios en `.agents/skills/` y no toca el lockfile. Hay que borrar la carpeta y la
+  entrada del lockfile a mano, y verificar con `ls .agents/skills`.
