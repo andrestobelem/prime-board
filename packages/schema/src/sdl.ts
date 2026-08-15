@@ -313,6 +313,8 @@ export const typeDefs = /* GraphQL */ `
     labels: LabelComparator
     """Full-text sobre título y descripción."""
     search: String
+    """true: issues abiertos con todos sus bloqueantes cerrados (frontier); false: con al menos un bloqueante abierto."""
+    unblocked: Boolean
     includeArchived: Boolean
     and: [IssueFilter!]
     or: [IssueFilter!]

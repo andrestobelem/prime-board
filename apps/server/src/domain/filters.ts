@@ -43,6 +43,11 @@ export interface IssueFilter {
   labels?: LabelComparator | null;
   /** Full-text sobre título y descripción (FTS5). */
   search?: string | null;
+  /**
+   * true: issues abiertos cuyos bloqueantes están todos cerrados (el frontier
+   * de /wayfinder); false: issues con al menos un bloqueante abierto.
+   */
+  unblocked?: boolean | null;
   includeArchived?: boolean | null;
   and?: IssueFilter[] | null;
   or?: IssueFilter[] | null;
@@ -136,6 +141,28 @@ export function buildIssueFilter(filter: IssueFilter, params: ParamSink): string
     clauses.push(
       `issues.id IN (SELECT issue_id FROM issue_labels WHERE label_id = ${params.add(labelId)})`,
     );
+  }
+
+  if (filter.unblocked != null) {
+    // Bloqueante abierto: origen de una arista blocks hacia este issue, cuyo
+    // estado no es completed/canceled. Los bloqueantes archivados no cuentan.
+    const openBlocker = `EXISTS (
+      SELECT 1 FROM issue_relations
+      JOIN issues AS blockers ON blockers.id = issue_relations.issue_id
+      JOIN workflow_states AS blocker_states ON blocker_states.id = blockers.state_id
+      WHERE issue_relations.type = 'blocks'
+        AND issue_relations.related_id = issues.id
+        AND blockers.archived_at IS NULL
+        AND blocker_states.type NOT IN ('completed', 'canceled')
+    )`;
+    if (filter.unblocked) {
+      clauses.push(
+        `issues.state_id IN (SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled'))`,
+      );
+      clauses.push(`NOT ${openBlocker}`);
+    } else {
+      clauses.push(openBlocker);
+    }
   }
 
   if (filter.search?.trim()) {
