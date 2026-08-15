@@ -1,0 +1,5 @@
+{"actor":"claude","issue":"AT-167","payload":{"title":"Convención: skills del repo en .agents con el Skills CLI","description":"AGENTS.md menciona el Skills CLI pero no dónde aterrizan las skills ni con qué flags. Definir y documentar la convención:\n\n- Destino: **`.agents/skills/`** (convención genérica, no atada a un agente).\n- **Copias, no symlinks**, para que las skills viajen en el repo.\n- Dejar el comando exacto en AGENTS.md y `skills-lock.json` versionado.","number":167,"priority":3,"team":"AT","state":"Backlog","assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-15T05:34:00.882Z","type":"created"}
+{"actor":"claude","issue":"AT-167","payload":{"label":"docs"},"ts":"2026-08-15T05:34:00.883Z","type":"labeled"}
+{"actor":"claude","issue":"AT-167","payload":{"label":"infra"},"ts":"2026-08-15T05:34:00.883Z","type":"labeled"}
+{"actor":"claude","issue":"AT-167","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T05:34:00.910Z","type":"state_changed"}
+{"actor":"claude","issue":"AT-167","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T05:34:00.911Z","type":"assigned"}
