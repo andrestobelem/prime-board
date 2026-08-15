@@ -69,11 +69,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
   font-weight: 600; font-size: 13px; padding: 6px 10px 12px;
   display: flex; align-items: center; gap: 8px;
 }
-.sidebar .workspace .logo {
-  width: 18px; height: 18px; border-radius: 4px; background: var(--accent);
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; color: white;
-}
+.sidebar .workspace .logo { color: var(--text-muted); }
 .sidebar .section {
   color: var(--text-faint); font-size: 11px; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.4px; padding: 10px 10px 4px;
@@ -84,6 +80,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
   color: var(--text-muted); font-size: 13px; width: 100%; text-align: left;
 }
 .sidebar a:hover, .sidebar button.nav:hover { background: var(--surface-hover); color: var(--text); }
+/* Anidado del árbol de proyectos: antes era paddingLeft en el glifo. */
+.sidebar .icon.nested { margin-left: 10px; }
+.sidebar .icon.nested-deep { margin-left: 20px; }
 .sidebar a.active { background: var(--surface); color: var(--text); }
 .sidebar .spacer { flex: 1; }
 .sidebar .hint { color: var(--text-faint); font-size: 11px; padding: 6px 10px; }
@@ -101,6 +100,7 @@ kbd {
 }
 .topbar .title { font-weight: 600; }
 .topbar .crumb { color: var(--text-muted); }
+.topbar .crumb-sep { color: var(--text-faint); }
 .topbar .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .content { flex: 1; overflow-y: auto; }
 
@@ -111,6 +111,7 @@ kbd {
 .btn {
   background: var(--accent); color: white; border-radius: var(--radius);
   padding: 5px 12px; font-size: 12px; font-weight: 500;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
 }
 .btn:hover { background: var(--accent-hover); }
 .btn.secondary { background: var(--surface); border: 1px solid var(--border); color: var(--text); }
@@ -152,16 +153,13 @@ kbd {
 }
 .avatar.agent { border-color: var(--accent); color: var(--accent); }
 
-.priority-icon { display: inline-flex; align-items: flex-end; gap: 1px; width: 14px; height: 12px; flex-shrink: 0; }
-.priority-icon span { width: 3px; background: var(--text-faint); border-radius: 1px; }
-.priority-icon.active span { background: var(--text-muted); }
-.priority-icon .b1 { height: 4px; } .priority-icon .b2 { height: 7px; } .priority-icon .b3 { height: 10px; }
-.priority-icon.urgent {
-  background: #fc7840; border-radius: 3px; align-items: center; justify-content: center;
-  color: #0f1011; font-size: 9px; font-weight: 800; height: 14px;
-}
-
-.state-dot { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid; flex-shrink: 0; }
+/* ---- íconos (AT-172) ---- */
+/* Todos heredan el color con currentColor; nada de colores hardcodeados acá. */
+.icon { flex-shrink: 0; display: block; }
+.priority-icon { color: var(--text-muted); }
+.priority-icon.urgent { color: #fc7840; }
+/* El color del estado lo pone StateIcon según el tipo del workflow. */
+.state-icon { display: inline-flex; align-items: center; flex-shrink: 0; }
 
 /* ---- board ---- */
 .board { display: flex; gap: 12px; padding: 16px; overflow-x: auto; height: 100%; align-items: flex-start; }
@@ -239,6 +237,11 @@ kbd {
 .palette-item.selected { background: var(--surface-hover); color: var(--text); }
 .palette-item .kind { margin-left: auto; font-size: 11px; color: var(--text-faint); }
 
+.copied-hint {
+  display: inline-flex; align-items: center; gap: 4px;
+  align-self: center; color: var(--text-muted);
+}
+
 .settings { max-width: 480px; padding: 32px; display: flex; flex-direction: column; gap: 14px; }
 .settings label { display: flex; flex-direction: column; gap: 6px; color: var(--text-muted); font-size: 12px; }
 .error-banner {
@@ -254,7 +257,7 @@ kbd {
   padding: 4px 8px; margin-left: -8px; border-radius: var(--radius); color: var(--text);
 }
 .switcher-trigger:hover { background: var(--surface-hover); }
-.switcher-trigger .caret { color: var(--text-faint); font-size: 10px; }
+.switcher-trigger .caret { color: var(--text-faint); }
 .switcher-menu {
   position: absolute; top: calc(100% + 6px); left: -8px; z-index: 40;
   width: 300px; background: var(--bg-sidebar); border: 1px solid var(--border);

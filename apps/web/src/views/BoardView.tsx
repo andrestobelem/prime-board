@@ -1,7 +1,7 @@
 // Board por estado con drag & drop nativo y update optimista (AT-146).
 import { useEffect, useState } from "react";
 import { mutate, useQuery } from "../api.ts";
-import { Avatar, LabelChip, PriorityIcon, StateDot } from "../components/bits.tsx";
+import { Avatar, LabelChip, PriorityIcon, StateIcon } from "../components/bits.tsx";
 import type { GroupBy, IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import { navigate } from "../router.tsx";
@@ -155,7 +155,7 @@ export function BoardView(
             onDrop={() => drop(column)}
           >
             <div className="col-header">
-              {column.state && <StateDot state={column.state} />}
+              {column.state && <StateIcon state={column.state} />}
               {column.label}
               <span className="count" style={{ color: "var(--text-faint)", fontWeight: 400 }}>
                 {cards.length}

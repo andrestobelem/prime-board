@@ -2,7 +2,7 @@
 // Reutilizada por la vista de team y la de proyecto.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router.tsx";
-import { Avatar, LabelChip, PriorityIcon, StateDot } from "./bits.tsx";
+import { Avatar, LabelChip, PriorityIcon, StateIcon } from "./bits.tsx";
 
 export interface IssueListItem {
   id: string;
@@ -126,7 +126,7 @@ useEffect(() => {
       {groups.map((group) => (
         <div key={group.key}>
           <div className="state-group-header">
-            {group.state && <StateDot state={group.state} />}
+            {group.state && <StateIcon state={group.state} />}
             {group.label}
             <span className="count">{group.items.length}</span>
           </div>

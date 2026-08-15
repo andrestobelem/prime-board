@@ -3,6 +3,7 @@
 // un mismo proyecto puede aparecer bajo más de un team.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router.tsx";
+import { Icon } from "./icons.tsx";
 
 export interface SwitcherTeam {
   id: string;
@@ -108,7 +109,7 @@ export function Switcher({ teams, current, view }: SwitcherProps) {
         onClick={() => setOpen((value) => !value)}
       >
         <span className="title">{label}</span>
-        <span className="caret">▾</span>
+        <Icon name="chevron-down" size={14} className="caret" />
       </button>
       {open && (
         <div className="switcher-menu" role="menu">
@@ -143,7 +144,7 @@ export function Switcher({ teams, current, view }: SwitcherProps) {
                 onMouseEnter={() => setSelected(index)}
                 onClick={() => choose(entry)}
               >
-                <span className="glyph">{entry.kind === "team" ? "#" : "▦"}</span>
+                <Icon name={entry.kind === "team" ? "team-key" : "project"} className="glyph" />
                 <span className="switcher-label">{entry.label}</span>
                 {entry.kind === "project" && <span className="team-key">{entry.teamKey}</span>}
               </button>

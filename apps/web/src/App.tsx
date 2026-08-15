@@ -5,6 +5,7 @@ import { getApiKey, useQuery } from "./api.ts";
 import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueList.tsx";
 import { Palette } from "./components/Palette.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
+import { Icon } from "./components/icons.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { Switcher } from "./components/Switcher.tsx";
 import { Link, useRoute } from "./router.tsx";
@@ -89,7 +90,7 @@ export function App() {
     topbar = (
       <>
         <Link to={`/team/${param}`}><span className="crumb">{param}</span></Link>
-        <span className="crumb">›</span>
+        <Icon name="chevron-right" size={14} className="crumb-sep" />
         <span className="title">Estados y labels</span>
       </>
     );
@@ -102,7 +103,7 @@ export function App() {
     topbar = (
       <>
         <Link to={`/team/${teamKey}`}><span className="crumb">{teamKey}</span></Link>
-        <span className="crumb">›</span>
+        <Icon name="chevron-right" size={14} className="crumb-sep" />
         <span className="title">{param}</span>
       </>
     );
@@ -130,7 +131,7 @@ export function App() {
         <span className="right">
           {(section === "team" || section === "board") && (
             <Link to={`/team-settings/${param}`}>
-              <button className="btn secondary">⚙ Team</button>
+              <button className="btn secondary"><Icon name="settings" size={14} /> Team</button>
             </Link>
           )}
           {(section === "team" || section === "board") && (

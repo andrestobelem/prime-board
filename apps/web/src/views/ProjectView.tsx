@@ -2,6 +2,7 @@
 import { mutate, useQuery } from "../api.ts";
 import { navigate } from "../router.tsx";
 import { Avatar } from "../components/bits.tsx";
+import { Icon } from "../components/icons.tsx";
 import { IssueList, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
@@ -94,7 +95,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
               {groups.map(({ milestone, items }: any) => (
                 <div key={milestone.id}>
                   <div className="state-group-header" style={{ background: "var(--bg-sidebar)" }}>
-                    ◈ {milestone.name}
+                    <Icon name="milestone" title="Milestone" /> {milestone.name}
                     <span className="count">{Math.round(milestone.progress * 100)}%</span>
                     {milestone.targetDate && (
                       <span className="count" style={{ marginLeft: "auto" }}>{milestone.targetDate}</span>

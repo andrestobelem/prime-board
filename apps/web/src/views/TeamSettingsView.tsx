@@ -1,7 +1,8 @@
 // Administración de estados y labels del team (AT-31).
 import { useState } from "react";
 import { mutate, useQuery } from "../api.ts";
-import { LabelChip, StateDot } from "../components/bits.tsx";
+import { LabelChip, StateIcon } from "../components/bits.tsx";
+import { Icon } from "../components/icons.tsx";
 
 const QUERY = `query($key: String) {
   team(key: $key) {
@@ -55,7 +56,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
         <h3 style={{ margin: "0 0 10px" }}>Workflow states</h3>
         {team.states.map((state: any, index: number) => (
           <div key={state.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "5px 0" }}>
-            <StateDot state={state} />
+            <StateIcon state={state} />
             <input
               defaultValue={state.name}
               onBlur={(event) =>
@@ -91,12 +92,16 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
               >
                 Delete
               </button>
-              <button className="btn secondary" disabled={index === 0} onClick={() => move(index, -1)}>↑</button>
+              <button className="btn secondary" disabled={index === 0} onClick={() => move(index, -1)}>
+                <Icon name="arrow-up" size={14} title="Move up" />
+              </button>
               <button
                 className="btn secondary"
                 disabled={index === team.states.length - 1}
                 onClick={() => move(index, 1)}
-              >↓</button>
+              >
+                <Icon name="arrow-down" size={14} title="Move down" />
+              </button>
             </span>
           </div>
         ))}

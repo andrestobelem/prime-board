@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { mutate, useQuery } from "../api.ts";
 import { Avatar } from "../components/bits.tsx";
+import { Icon } from "../components/icons.tsx";
 
 interface KeyInfo {
   id: string;
@@ -137,7 +138,11 @@ export function MembersView() {
                 <button className="btn secondary" onClick={() => copy(onboardingLink(freshKey.key))}>
                   Copy onboarding link
                 </button>
-                {copied && <span style={{ color: "var(--text-muted)", alignSelf: "center" }}>Copied ✓</span>}
+                {copied && (
+                  <span className="copied-hint">
+                    <Icon name="check" size={14} /> Copied
+                  </span>
+                )}
               </div>
             </div>
             <div className="modal-footer">

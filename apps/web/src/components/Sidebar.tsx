@@ -1,6 +1,7 @@
 // Sidebar Linear-like: workspace y teams con sus proyectos anidados (AT-152).
 import { useState } from "react";
 import { Link, useRoute } from "../router.tsx";
+import { Icon } from "./icons.tsx";
 
 interface SidebarProps {
   workspace: { name: string } | null;
@@ -22,14 +23,14 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
   return (
     <nav className="sidebar">
       <div className="workspace">
-        <span className="logo">pb</span>
+        <Icon name="workspace" size={18} className="logo" />
         {workspace?.name ?? "prime-board"}
       </div>
       {teams.map((team) => (
         <div key={team.id}>
           <div className="section">{team.name}</div>
           <Link to={`/team/${team.key}`} className={active(`/team/${team.key}`)}>
-            <span style={{ color: "var(--text-faint)" }}>#</span> Issues
+            <Icon name="issues" /> Issues
           </Link>
           {team.projects.filter((p) => !CLOSED_STATES.includes(p.state)).map((project) => (
             <Link
@@ -37,7 +38,7 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
               to={`/project/${project.id}`}
               className={active(`/project/${project.id}`)}
             >
-              <span style={{ color: "var(--text-faint)", paddingLeft: 10 }}>▦</span> {project.name}
+              <Icon name="project" className="nested" /> {project.name}
             </Link>
           ))}
           {team.projects.some((p) => CLOSED_STATES.includes(p.state)) && (
@@ -46,9 +47,10 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
                 className="nav"
                 onClick={() => setShowClosed((s) => ({ ...s, [team.id]: !s[team.id] }))}
               >
-                <span style={{ color: "var(--text-faint)", paddingLeft: 10 }}>
-                  {showClosed[team.id] ? "▾" : "▸"}
-                </span>
+                <Icon
+                  name={showClosed[team.id] ? "chevron-down" : "chevron-right"}
+                  className="nested"
+                />
                 Completados ({team.projects.filter((p) => CLOSED_STATES.includes(p.state)).length})
               </button>
               {showClosed[team.id] &&
@@ -58,7 +60,7 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
                     to={`/project/${project.id}`}
                     className={active(`/project/${project.id}`)}
                   >
-                    <span style={{ color: "var(--text-faint)", paddingLeft: 20 }}>▦</span>
+                    <Icon name="project" className="nested-deep" />
                     <span style={{ opacity: 0.7 }}>{project.name}</span>
                   </Link>
                 ))}
@@ -68,8 +70,8 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
       ))}
       <div className="spacer" />
       <div className="hint"><kbd>C</kbd> new issue · <kbd>⌘K</kbd> commands</div>
-      <Link to="/members" className={active("/members")}>◉ Members</Link>
-      <Link to="/settings" className={active("/settings")}>⚙ Settings</Link>
+      <Link to="/members" className={active("/members")}><Icon name="members" /> Members</Link>
+      <Link to="/settings" className={active("/settings")}><Icon name="settings" /> Settings</Link>
     </nav>
   );
 }

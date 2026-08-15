@@ -2,7 +2,7 @@
 // panel de propiedades, sub-issues, comentarios e historial de actividad.
 import { useEffect, useState } from "react";
 import { mutate, useQuery } from "../api.ts";
-import { Avatar, LabelChip, PRIORITY_NAMES, StateDot } from "../components/bits.tsx";
+import { Avatar, LabelChip, PRIORITY_NAMES, StateIcon } from "../components/bits.tsx";
 import { renderMarkdown } from "../markdown.ts";
 import { Link } from "../router.tsx";
 
@@ -146,7 +146,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             <div className="section-title">Sub-issues</div>
             {issue.children.map((child: any) => (
               <div className="sub-issue" key={child.identifier}>
-                <StateDot state={child.state} />
+                <StateIcon state={child.state} />
                 <Link to={`/issue/${child.identifier}`}>
                   <span style={{ color: "var(--text-faint)", marginRight: 6 }}>{child.identifier}</span>
                   {child.title}
