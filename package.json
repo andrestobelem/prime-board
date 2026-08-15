@@ -12,10 +12,14 @@
     "seed": "bun run --cwd apps/server seed",
     "build": "bun run --cwd apps/web build",
     "export": "bun run --cwd apps/server export",
-    "rebuild": "bun run --cwd apps/server rebuild"
+    "rebuild": "bun run --cwd apps/server rebuild",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.3.0",
+    "prettier": "^3.9.6",
     "typescript": "^7.0.2"
   }
 }

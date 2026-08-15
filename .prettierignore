@@ -1,0 +1,5 @@
+# Derivados y vendorizados: no formatear.
+.prime-board/
+.agents/
+apps/web/dist/
+bun.lock
