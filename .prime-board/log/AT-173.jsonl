@@ -1,0 +1,5 @@
+{"actor":"claude","issue":"AT-173","payload":{"title":"Correr setup-matt-pocock-skills apuntando a prime-board","description":"Ejecutar el setup de las skills de Pocock configurando prime-board como tracker (opción 'Other'), mapear los roles de triage y definir el layout de domain docs.","number":173,"priority":3,"team":"AT","state":"Needs Triage","assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-15T06:17:43.604Z","type":"created"}
+{"actor":"claude","issue":"AT-173","payload":{"label":"docs"},"ts":"2026-08-15T06:17:43.605Z","type":"labeled"}
+{"actor":"claude","issue":"AT-173","payload":{"label":"infra"},"ts":"2026-08-15T06:17:43.605Z","type":"labeled"}
+{"actor":"claude","issue":"AT-173","payload":{"from":"Needs Triage","to":"In Progress"},"ts":"2026-08-15T06:17:43.636Z","type":"state_changed"}
+{"actor":"claude","issue":"AT-173","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T06:17:43.636Z","type":"assigned"}

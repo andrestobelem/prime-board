@@ -43,6 +43,12 @@
     "name": "prime-board dev",
     "states": [
       {
+        "color": "#fc7840",
+        "name": "Needs Triage",
+        "position": -1,
+        "type": "triage"
+      },
+      {
         "color": "#95a2b3",
         "name": "Backlog",
         "position": 0,
@@ -76,6 +82,12 @@
         "color": "#95a2b3",
         "name": "Ready for Agent",
         "position": 5,
+        "type": "unstarted"
+      },
+      {
+        "color": "#8a8f98",
+        "name": "Ready for Human",
+        "position": 5.5,
         "type": "unstarted"
       },
       {
