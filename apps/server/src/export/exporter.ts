@@ -53,12 +53,15 @@ function resolvePayload(
   lookups: Lookups,
   teamKeys: Map<string, string>,
   identifiers: Map<string, string>,
+  comments: Map<string, string>,
 ): Record<string, unknown> {
   if (type === "commented") {
-    // El id del comentario es un UUID que se regenera en cada rebuild: fuera del repo.
-    const { commentId, ...rest } = payload as Record<string, unknown>;
-    void commentId;
-    return rest;
+    // El id del comentario es un UUID que se regenera en cada rebuild: fuera del
+    // repo. Los eventos previos a AT-165 no traen `body`, así que se completa
+    // desde la tabla de comentarios — si no, el rebuild perdería esos comentarios.
+    const { commentId, body, ...rest } = payload as Record<string, unknown>;
+    const resolved = body ?? (typeof commentId === "string" ? comments.get(commentId) ?? null : null);
+    return { ...rest, ...(resolved != null ? { body: resolved } : {}) };
   }
   if (type === "created") {
     // El evento `created` trae el estado inicial completo: se traduce entero.
@@ -112,6 +115,9 @@ export function exportBoard(db: Database, rootDir: string, options: ExportOption
 
   const lookups = buildLookups(db);
   const teamKeys = new Map(db.query("SELECT id, key FROM teams").values().map((r) => [r[0] as string, r[1] as string]));
+  const commentBodies = new Map(
+    db.query("SELECT id, body FROM comments").values().map((r) => [r[0] as string, r[1] as string]),
+  );
   const identifiers = new Map(
     db.query(
       "SELECT issues.id, teams.key || '-' || issues.number FROM issues JOIN teams ON teams.id = issues.team_id",
@@ -232,7 +238,7 @@ export function exportBoard(db: Database, rootDir: string, options: ExportOption
       return JSON.stringify({
         actor: lookups.actors.get(event.actor_id) ?? null,
         issue: identifier,
-        payload: resolvePayload(event.type, JSON.parse(event.payload), lookups, teamKeys, identifiers),
+        payload: resolvePayload(event.type, JSON.parse(event.payload), lookups, teamKeys, identifiers, commentBodies),
         ts: event.created_at,
         type: event.type,
       });

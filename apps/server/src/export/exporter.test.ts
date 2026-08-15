@@ -147,4 +147,17 @@ describe("exportBoard", () => {
     // El comentario conserva el body, que es lo que importa para reconstruirlo.
     expect(lines).toContain('"body":"un comentario"');
   });
+
+  it("recupera el body de comentarios de eventos viejos (sin body en el payload)", () => {
+    // Simula un evento anterior a AT-165: solo commentId, sin body.
+    const comment = app.db.query("SELECT id FROM comments LIMIT 1").get() as { id: string };
+    app.db.query("UPDATE activity SET payload = ?1 WHERE type = 'commented'")
+      .run(JSON.stringify({ commentId: comment.id }));
+
+    exportBoard(app.db, dir);
+    const log = readFileSync(join(dir, ".prime-board", "log", "PB-1.jsonl"), "utf8");
+    // El body se completa desde la tabla: sin esto el rebuild perdería el comentario.
+    expect(log).toContain('"body":"un comentario"');
+    expect(log).not.toContain(comment.id);
+  });
 });

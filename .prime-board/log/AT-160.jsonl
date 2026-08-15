@@ -2,5 +2,5 @@
 {"actor":"claude","issue":"AT-160","payload":{"label":"graphql"},"ts":"2026-08-15T04:56:01.041Z","type":"labeled"}
 {"actor":"claude","issue":"AT-160","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T04:57:53.902Z","type":"state_changed"}
 {"actor":"claude","issue":"AT-160","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T04:57:53.902Z","type":"assigned"}
-{"actor":"claude","issue":"AT-160","payload":{},"ts":"2026-08-15T04:58:15.453Z","type":"commented"}
+{"actor":"claude","issue":"AT-160","payload":{"body":"Hecho. `milestoneDelete` con la política que proponía el ticket: **los issues asignados quedan sin milestone**, no se borran ni se bloquea la operación (un milestone es una agrupación, no una dependencia).\n\nEl payload devuelve `orphanedIssues` con cuántos quedaron sueltos, así el cliente puede avisar antes/después. Todo en una transacción.\n\n2 tests nuevos: borrado con issue huérfano verificado (el issue sobrevive, el milestone desaparece del proyecto) y NOT_FOUND."},"ts":"2026-08-15T04:58:15.453Z","type":"commented"}
 {"actor":"claude","issue":"AT-160","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T04:58:15.457Z","type":"state_changed"}

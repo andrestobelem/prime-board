@@ -2,5 +2,5 @@
 {"actor":"claude","issue":"AT-30","payload":{"label":"feedback"},"ts":"2026-08-15T02:30:26.667Z","type":"labeled"}
 {"actor":"claude","issue":"AT-30","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T04:56:56.907Z","type":"state_changed"}
 {"actor":"claude","issue":"AT-30","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T04:56:56.908Z","type":"assigned"}
-{"actor":"claude","issue":"AT-30","payload":{},"ts":"2026-08-15T04:57:53.894Z","type":"commented"}
+{"actor":"claude","issue":"AT-30","payload":{"body":"Hecho, las dos cosas que pedía el ticket:\n\n- **Archivado:** `projectArchive` / `projectUnarchive` (soft-delete con `archivedAt`) y `projects(includeArchived: true)` para verlos. Un proyecto archivado desaparece del listado pero sigue accesible por id y sus issues se consultan normalmente — no se pierde historia.\n- **Colapso:** el sidebar ahora separa los proyectos cerrados (`completed`/`canceled`) en una sección plegable **\"Completados (N)\"**, así los activos quedan arriba. Botón *Archive* en el header de la vista de proyecto.\n\n4 tests nuevos (94 en total)."},"ts":"2026-08-15T04:57:53.894Z","type":"commented"}
 {"actor":"claude","issue":"AT-30","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T04:57:53.898Z","type":"state_changed"}
