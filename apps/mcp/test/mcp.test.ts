@@ -58,14 +58,14 @@ afterAll(async () => {
 });
 
 describe("mcp tools", () => {
-  it("expone las 14 tools espejo de Linear", async () => {
+  it("expone las 16 tools (14 espejo de Linear + link/unlink)", async () => {
     const tools = await client.listTools();
     const names = tools.tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
       "get_issue", "get_project", "get_team", "get_workspace",
-      "list_comments", "list_issue_labels", "list_issue_statuses", "list_issues",
-      "list_projects", "list_teams", "list_users",
-      "save_comment", "save_issue", "save_project",
+      "link_issues", "list_comments", "list_issue_labels", "list_issue_statuses",
+      "list_issues", "list_projects", "list_teams", "list_users",
+      "save_comment", "save_issue", "save_project", "unlink_issues",
     ]);
   });
 
@@ -126,5 +126,55 @@ describe("mcp tools", () => {
   it("los errores de la API viajan como errores MCP", async () => {
     const result = await client.callTool({ name: "get_issue", arguments: { id: "PB-99" } });
     expect(result.isError).toBe(true);
+  });
+});
+
+describe("mcp issue relations (AT-179)", () => {
+  it("link_issues crea la relación y get_issue la muestra desde ambos extremos", async () => {
+    await client.callTool({ name: "save_issue", arguments: { team: "PB", title: "Blocker" } });
+    const linked = parseResult(await client.callTool({
+      name: "link_issues",
+      arguments: { issue: "PB-1", relatedIssue: "PB-2", type: "blocked_by" },
+    }));
+    expect(linked).toMatchObject({ type: "BLOCKED_BY", relatedIssue: { identifier: "PB-2" } });
+
+    const other = parseResult(await client.callTool({ name: "get_issue", arguments: { id: "PB-2" } }));
+    expect(other.relations).toMatchObject([
+      { type: "BLOCKS", relatedIssue: { identifier: "PB-1" } },
+    ]);
+  });
+
+  it("list_issues con unblocked deja fuera al bloqueado", async () => {
+    const frontier = parseResult(await client.callTool({
+      name: "list_issues",
+      arguments: { team: "PB", unblocked: true },
+    }));
+    const identifiers = frontier.nodes.map((n: any) => n.identifier);
+    expect(identifiers).toContain("PB-2");
+    expect(identifiers).not.toContain("PB-1");
+  });
+
+  it("un ciclo de bloqueo viaja como error MCP", async () => {
+    const result = await client.callTool({
+      name: "link_issues",
+      arguments: { issue: "PB-2", relatedIssue: "PB-1", type: "blocked_by" },
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("unlink_issues borra la relación", async () => {
+    const deleted = parseResult(await client.callTool({
+      name: "unlink_issues",
+      arguments: { issue: "PB-1", relatedIssue: "PB-2" },
+    }));
+    expect(deleted).toEqual({ deleted: 1 });
+    const issue = parseResult(await client.callTool({ name: "get_issue", arguments: { id: "PB-1" } }));
+    expect(issue.relations).toEqual([]);
+
+    const missing = await client.callTool({
+      name: "unlink_issues",
+      arguments: { issue: "PB-1", relatedIssue: "PB-2" },
+    });
+    expect(missing.isError).toBe(true);
   });
 });

@@ -72,6 +72,8 @@ export function createServer(config: McpConfig): McpServer {
       assignee: z.string().optional().describe('Actor ID, name or "me"'),
       project: z.string().optional().describe("Project ID"),
       query: z.string().optional().describe("Full-text search on title/description"),
+      unblocked: z.boolean().optional()
+        .describe("true: open issues whose blockers are all closed (the frontier); false: issues with an open blocker"),
       limit: z.number().optional(),
     },
   }, async (args) => {
@@ -86,6 +88,7 @@ export function createServer(config: McpConfig): McpServer {
     if (args.assignee) filter.assignee = { eq: await resolveActor(config, args.assignee) };
     if (args.project) filter.project = { eq: args.project };
     if (args.query) filter.search = args.query;
+    if (args.unblocked !== undefined) filter.unblocked = args.unblocked;
     const data = await gqlRequest(config, `query($filter: IssueFilter, $first: Int) {
       issues(filter: $filter, first: $first) {
         nodes { ${ISSUE_FIELDS} }
@@ -103,6 +106,7 @@ export function createServer(config: McpConfig): McpServer {
       issue(id: $id) {
         ${ISSUE_FIELDS}
         children { identifier title state { name } }
+        relations { id type relatedIssue { identifier title state { name } } }
         comments { id body actor { name type } createdAt }
         activity { type actor { name type } payload createdAt }
       }
@@ -182,6 +186,60 @@ export function createServer(config: McpConfig): McpServer {
       issueCreate(input: $input) { issue { id ${ISSUE_FIELDS} } }
     }`, { input });
     return json(data.issueCreate.issue);
+  });
+
+  const RELATION_TYPES = ["blocked_by", "blocks", "related", "duplicate_of"] as const;
+
+  server.registerTool("link_issues", {
+    description:
+      "Create a relation between two issues, from the perspective of `issue` " +
+      "(e.g. type blocked_by means `issue` is blocked by `relatedIssue`).",
+    inputSchema: {
+      issue: z.string().describe("Issue ID or identifier (e.g. PB-1)"),
+      relatedIssue: z.string().describe("The other issue ID or identifier"),
+      type: z.enum(RELATION_TYPES),
+    },
+  }, async ({ issue, relatedIssue, type }) => {
+    const data = await gqlRequest(config, `mutation($input: IssueRelationCreateInput!) {
+      issueRelationCreate(input: $input) {
+        relation { id type relatedIssue { identifier title } }
+      }
+    }`, { input: { issueId: issue, relatedIssueId: relatedIssue, type: type.toUpperCase() } });
+    return json(data.issueRelationCreate.relation);
+  });
+
+  server.registerTool("unlink_issues", {
+    description:
+      "Delete relations between two issues. Without `type`, removes every relation between them.",
+    inputSchema: {
+      issue: z.string().describe("Issue ID or identifier"),
+      relatedIssue: z.string().describe("The other issue ID or identifier"),
+      type: z.enum(RELATION_TYPES).optional(),
+    },
+  }, async ({ issue, relatedIssue, type }) => {
+    const [source, other] = await Promise.all([
+      gqlRequest(config, `query($id: ID!) {
+        issue(id: $id) { identifier relations { id type relatedIssue { identifier } } }
+      }`, { id: issue }),
+      gqlRequest(config, `query($id: ID!) { issue(id: $id) { identifier } }`, { id: relatedIssue }),
+    ]);
+    if (!source.issue) throw new Error(`NOT_FOUND: Issue not found: ${issue}`);
+    if (!other.issue) throw new Error(`NOT_FOUND: Issue not found: ${relatedIssue}`);
+    const matches = source.issue.relations.filter(
+      (relation: any) =>
+        relation.relatedIssue.identifier === other.issue.identifier &&
+        (!type || relation.type === type.toUpperCase()),
+    );
+    if (matches.length === 0) {
+      throw new Error(
+        `NOT_FOUND: No${type ? ` ${type}` : ""} relation between ${source.issue.identifier} and ${other.issue.identifier}`,
+      );
+    }
+    for (const relation of matches) {
+      await gqlRequest(config, `mutation($id: ID!) { issueRelationDelete(id: $id) { success } }`,
+        { id: relation.id });
+    }
+    return json({ deleted: matches.length });
   });
 
   server.registerTool("list_comments", {
