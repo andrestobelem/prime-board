@@ -11,6 +11,7 @@ export type ActivityType =
   | "assigned"
   | "parent_changed"
   | "project_changed"
+  | "milestone_changed"
   | "labeled"
   | "unlabeled"
   | "commented"

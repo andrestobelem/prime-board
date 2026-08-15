@@ -16,7 +16,8 @@ const ISSUE_QUERY = `query($id: ID!) {
     parent { identifier title }
     children { identifier title state { id name type } }
     labels { id name color }
-    project { id name }
+    project { id name milestones { id name } }
+    milestone { id name }
     comments { id body actor { name type } createdAt }
     activity { id type actor { name type } payload createdAt }
   }
@@ -239,6 +240,20 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             ))}
           </select>
         </div>
+        {issue.project && issue.project.milestones.length > 0 && (
+          <div className="prop">
+            <span>Milestone</span>
+            <select
+              value={issue.milestone?.id ?? ""}
+              onChange={(event) => update({ milestoneId: event.target.value || null })}
+            >
+              <option value="">No milestone</option>
+              {issue.project.milestones.map((milestone: any) => (
+                <option key={milestone.id} value={milestone.id}>{milestone.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="prop">
           <span>Labels</span>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>

@@ -9,6 +9,7 @@ import {
 import { listActivity, mapActivity } from "../domain/activity.ts";
 import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
+import { getMilestone, mapMilestone } from "../domain/milestones.ts";
 import { getProject, mapProject } from "../domain/projects.ts";
 import { getTeam, listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
@@ -58,6 +59,8 @@ export const issueResolvers = {
       listIssueLabels(context.db, issue.id).map(mapLabel),
     project: (issue: MappedIssue, _args: unknown, context: Context) =>
       issue._row.project_id ? mapProject(getProject(context.db, issue._row.project_id)!) : null,
+    milestone: (issue: MappedIssue, _args: unknown, context: Context) =>
+      issue._row.milestone_id ? mapMilestone(getMilestone(context.db, issue._row.milestone_id)!) : null,
     comments: (issue: MappedIssue, _args: unknown, context: Context) =>
       listComments(context.db, issue.id).map(mapComment),
     activity: (issue: MappedIssue, _args: unknown, context: Context) =>

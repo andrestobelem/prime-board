@@ -4,6 +4,9 @@ import { listIssues, mapIssue } from "../domain/issues.ts";
 import {
   createProject, getProject, listProjects, listProjectTeamIds, mapProject, updateProject,
 } from "../domain/projects.ts";
+import {
+  createMilestone, getMilestone, listMilestones, mapMilestone, updateMilestone,
+} from "../domain/milestones.ts";
 import { getTeam, mapTeam } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { requireViewer } from "./errors.ts";
@@ -14,6 +17,8 @@ export const projectResolvers = {
   Project: {
     lead: (project: MappedProject, _args: unknown, context: Context) =>
       project.leadId ? mapActor(getActor(context.db, project.leadId)!) : null,
+    milestones: (project: MappedProject, _args: unknown, context: Context) =>
+      listMilestones(context.db, project.id).map(mapMilestone),
     teams: (project: MappedProject, _args: unknown, context: Context) =>
       listProjectTeamIds(context.db, project.id).map((teamId) =>
         mapTeam(getTeam(context.db, { id: teamId })!),
@@ -25,6 +30,30 @@ export const projectResolvers = {
         nodes: page.rows.map(mapIssue),
         pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
       };
+    },
+  },
+
+  Milestone: {
+    project: (milestone: { projectId: string }, _args: unknown, context: Context) =>
+      mapProject(getProject(context.db, milestone.projectId)!),
+    issues: (milestone: { id: string }, args: { first?: number }, context: Context) => {
+      const page = listIssues(context.db, {
+        filter: { milestone: { eq: milestone.id } },
+        first: Math.min(Math.max(args.first ?? 100, 1), 250),
+      });
+      return {
+        nodes: page.rows.map(mapIssue),
+        pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+      };
+    },
+    progress: (milestone: { id: string }, _args: unknown, context: Context) => {
+      const row = context.db.query(
+        `SELECT count(*) AS total,
+                sum(CASE WHEN workflow_states.type IN ('completed', 'canceled') THEN 1 ELSE 0 END) AS done
+         FROM issues JOIN workflow_states ON workflow_states.id = issues.state_id
+         WHERE issues.milestone_id = ?1 AND issues.archived_at IS NULL`,
+      ).get(milestone.id) as { total: number; done: number | null };
+      return row.total === 0 ? 0 : (row.done ?? 0) / row.total;
     },
   },
 
@@ -50,6 +79,22 @@ export const projectResolvers = {
       const project = mapProject(createProject(context.db, args.input));
       context.events.emit("project.created", viewer, project);
       return { success: true, project };
+    },
+    milestoneCreate: (
+      _parent: unknown,
+      args: { input: Parameters<typeof createMilestone>[1] },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      return { success: true, milestone: mapMilestone(createMilestone(context.db, args.input)) };
+    },
+    milestoneUpdate: (
+      _parent: unknown,
+      args: { id: string; input: Parameters<typeof updateMilestone>[2] },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      return { success: true, milestone: mapMilestone(updateMilestone(context.db, args.id, args.input)) };
     },
     projectUpdate: (
       _parent: unknown,

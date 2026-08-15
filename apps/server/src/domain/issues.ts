@@ -8,6 +8,7 @@ import {
   type IssueFilter, type IssueOrder,
 } from "./filters.ts";
 import { applyLabelOps, type LabelOps } from "./labels.ts";
+import { assertMilestoneMatchesProject } from "./milestones.ts";
 import { projectIncludesTeam } from "./projects.ts";
 import { getTeam } from "./teams.ts";
 
@@ -22,6 +23,7 @@ export interface IssueRow {
   assignee_id: string | null;
   parent_id: string | null;
   project_id: string | null;
+  milestone_id: string | null;
   creator_id: string;
   sort_order: number;
   created_at: string;
@@ -134,6 +136,7 @@ export interface IssueCreateInput {
   projectId?: string | null;
   /** Labels a aplicar en la creación (evita un issueUpdate extra en imports). */
   labelIds?: string[] | null;
+  milestoneId?: string | null;
   /** Fecha de creación original (imports); default: ahora. */
   createdAt?: string | null;
   /** Autor original (imports); default: el actor de la API key. */
@@ -168,6 +171,9 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
     }
   }
 
+  if (input.milestoneId) {
+    assertMilestoneMatchesProject(db, input.milestoneId, input.projectId ?? null);
+  }
   if (input.createdAt != null && Number.isNaN(Date.parse(input.createdAt))) {
     throw apiError("VALIDATION_FAILED", "createdAt must be a valid ISO-8601 date");
   }
@@ -201,12 +207,12 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
     const timestamp = createdAt ?? now();
     db.query(
       `INSERT INTO issues (id, team_id, number, title, description, state_id, priority,
-         assignee_id, parent_id, project_id, creator_id, sort_order, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)`,
+         assignee_id, parent_id, project_id, milestone_id, creator_id, sort_order, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)`,
     ).run(
       id, team.id, numbered.number, title, input.description ?? null, stateId,
       input.priority ?? 0, input.assigneeId ?? null, input.parentId ?? null,
-      input.projectId ?? null, creatorId, 0, timestamp,
+      input.projectId ?? null, input.milestoneId ?? null, creatorId, 0, timestamp,
     );
     recordActivity(db, id, creatorId, "created", { title }, createdAt ?? undefined);
     if (input.labelIds?.length) {
@@ -224,6 +230,7 @@ export interface IssueUpdateInput extends LabelOps {
   assigneeId?: string | null;
   parentId?: string | null;
   projectId?: string | null;
+  milestoneId?: string | null;
   sortOrder?: number | null;
 }
 
@@ -299,6 +306,24 @@ export function updateIssue(
       push("project_id", input.projectId);
       changes.push({ field: "project", from: issue.project_id, to: input.projectId });
       recordActivity(db, issue.id, actorId, "project_changed", { from: issue.project_id, to: input.projectId });
+
+      // Al cambiar de proyecto, un milestone del proyecto anterior queda huérfano:
+      // se limpia salvo que la misma mutación esté seteando uno nuevo.
+      if (issue.milestone_id && input.milestoneId === undefined) {
+        push("milestone_id", null);
+        changes.push({ field: "milestone", from: issue.milestone_id, to: null });
+        recordActivity(db, issue.id, actorId, "milestone_changed", { from: issue.milestone_id, to: null });
+      }
+    }
+    if (input.milestoneId !== undefined && input.milestoneId !== issue.milestone_id) {
+      if (input.milestoneId !== null) {
+        // El proyecto efectivo: el que se está seteando en esta misma mutación, o el actual.
+        const projectId = input.projectId !== undefined ? input.projectId : issue.project_id;
+        assertMilestoneMatchesProject(db, input.milestoneId, projectId);
+      }
+      push("milestone_id", input.milestoneId);
+      changes.push({ field: "milestone", from: issue.milestone_id, to: input.milestoneId });
+      recordActivity(db, issue.id, actorId, "milestone_changed", { from: issue.milestone_id, to: input.milestoneId });
     }
     if (input.sortOrder != null && input.sortOrder !== issue.sort_order) {
       push("sort_order", input.sortOrder);

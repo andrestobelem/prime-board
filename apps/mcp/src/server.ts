@@ -124,6 +124,7 @@ export function createServer(config: McpConfig): McpServer {
       assignee: z.string().optional().describe('Actor ID, name or "me"'),
       parent: z.string().optional().describe("Parent issue ID or identifier"),
       project: z.string().optional().describe("Project ID"),
+      milestone: z.string().optional().describe("Milestone ID (must belong to the issue's project)"),
       labels: z.array(z.string()).optional().describe("Label names to set"),
     },
   }, async (args) => {
@@ -133,6 +134,7 @@ export function createServer(config: McpConfig): McpServer {
     if (args.priority !== undefined) input.priority = resolvePriority(args.priority);
     if (args.assignee !== undefined) input.assigneeId = await resolveActor(config, args.assignee);
     if (args.project !== undefined) input.projectId = args.project;
+    if (args.milestone !== undefined) input.milestoneId = args.milestone;
 
     if (args.id) {
       // Update: resuelve team para estados/labels/parent.
@@ -228,7 +230,8 @@ export function createServer(config: McpConfig): McpServer {
     const data = await gqlRequest(config, `query($id: ID!) {
       project(id: $id) {
         id name description state targetDate lead { id name }
-        issues(first: 100) { nodes { identifier title state { name type } assignee { name } } }
+        milestones { id name targetDate progress }
+        issues(first: 100) { nodes { identifier title state { name type } assignee { name } milestone { name } } }
       }
     }`, { id });
     if (!data.project) throw new Error(`NOT_FOUND: Project not found: ${id}`);

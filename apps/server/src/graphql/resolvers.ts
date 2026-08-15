@@ -53,6 +53,7 @@ export const resolvers = {
 
   Issue: issueResolvers.Issue,
   Project: projectResolvers.Project,
+  Milestone: projectResolvers.Milestone,
   Comment: issueResolvers.Comment,
   Activity: issueResolvers.Activity,
 

@@ -85,6 +85,7 @@ export const typeDefs = /* GraphQL */ `
     children: [Issue!]!
     labels: [Label!]!
     project: Project
+    milestone: Milestone
     comments: [Comment!]!
     """Historial append-only de cambios del issue."""
     activity: [Activity!]!
@@ -141,6 +142,7 @@ export const typeDefs = /* GraphQL */ `
     lead: Actor
     targetDate: DateTime
     teams: [Team!]!
+    milestones: [Milestone!]!
     issues(first: Int = 50): IssueConnection!
     createdAt: DateTime!
     updatedAt: DateTime!
@@ -152,6 +154,19 @@ export const typeDefs = /* GraphQL */ `
     url: String!
     events: [String!]!
     enabled: Boolean!
+    createdAt: DateTime!
+  }
+
+  type Milestone {
+    id: ID!
+    name: String!
+    description: String
+    targetDate: DateTime
+    position: Float!
+    project: Project!
+    issues(first: Int = 100): IssueConnection!
+    """Issues completados sobre el total (0..1)."""
+    progress: Float!
     createdAt: DateTime!
   }
 
@@ -249,6 +264,7 @@ export const typeDefs = /* GraphQL */ `
     assignee: IDComparator
     creator: IDComparator
     project: IDComparator
+    milestone: IDComparator
     parent: IDComparator
     priority: IntComparator
     labels: LabelComparator
@@ -278,6 +294,7 @@ export const typeDefs = /* GraphQL */ `
     assigneeId: ID
     parentId: ID
     projectId: ID
+    milestoneId: ID
     """Labels a aplicar al crear (evita un issueUpdate extra)."""
     labelIds: [ID!]
     """Fecha de creación original (imports); default: ahora."""
@@ -294,6 +311,7 @@ export const typeDefs = /* GraphQL */ `
     assigneeId: ID
     parentId: ID
     projectId: ID
+    milestoneId: ID
     sortOrder: Float
     """Reemplaza el set completo de labels."""
     labelIds: [ID!]
@@ -365,6 +383,26 @@ export const typeDefs = /* GraphQL */ `
     success: Boolean!
   }
 
+  input MilestoneCreateInput {
+    projectId: ID!
+    name: String!
+    description: String
+    targetDate: DateTime
+    position: Float
+  }
+
+  input MilestoneUpdateInput {
+    name: String
+    description: String
+    targetDate: DateTime
+    position: Float
+  }
+
+  type MilestonePayload {
+    success: Boolean!
+    milestone: Milestone!
+  }
+
   type Query {
     """Actor autenticado por la API key del header Authorization."""
     viewer: Actor!
@@ -395,6 +433,8 @@ export const typeDefs = /* GraphQL */ `
     commentCreate(input: CommentCreateInput!): CommentPayload!
     projectCreate(input: ProjectCreateInput!): ProjectPayload!
     projectUpdate(id: ID!, input: ProjectUpdateInput!): ProjectPayload!
+    milestoneCreate(input: MilestoneCreateInput!): MilestonePayload!
+    milestoneUpdate(id: ID!, input: MilestoneUpdateInput!): MilestonePayload!
     webhookCreate(input: WebhookCreateInput!): WebhookPayload!
     webhookDelete(id: ID!): DeletePayload!
   }

@@ -12,6 +12,7 @@ export interface IssueListItem {
   state: { id: string; name: string; type: string; position: number };
   assignee: { id: string; name: string; type: string } | null;
   labels: Array<{ id: string; name: string; color: string }>;
+  milestone?: { id: string; name: string } | null;
 }
 
 export function isTypingTarget(event: KeyboardEvent): boolean {

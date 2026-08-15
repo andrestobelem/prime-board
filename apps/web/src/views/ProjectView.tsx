@@ -8,6 +8,7 @@ const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter) {
   project(id: $id) {
     id name description state targetDate
     lead { id name type }
+    milestones { id name targetDate progress }
   }
   issues(filter: $filter, first: 250) {
     nodes { ${ISSUE_LIST_FIELDS} }
@@ -24,9 +25,18 @@ export function ProjectView({ projectId }: { projectId: string }) {
     project: {
       id: string; name: string; description: string | null; state: string;
       targetDate: string | null; lead: { id: string; name: string; type: string } | null;
+      milestones: Array<{ id: string; name: string; targetDate: string | null; progress: number }>;
     } | null;
     issues: { nodes: IssueListItem[] };
   }>(PROJECT_QUERY, { id: projectId, filter: { project: { eq: projectId } } });
+
+  const milestoneSections = (project: any, issues: IssueListItem[]) => ({
+    groups: project.milestones.map((milestone: any) => ({
+      milestone,
+      items: issues.filter((issue: any) => issue.milestone?.id === milestone.id),
+    })),
+    orphans: issues.filter((issue: any) => !issue.milestone),
+  });
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
   if (result.error) return <div className="error-banner">{result.error.message}</div>;
@@ -63,7 +73,37 @@ export function ProjectView({ projectId }: { projectId: string }) {
           </p>
         )}
       </div>
-      <IssueList issues={result.data!.issues.nodes} />
+      {project.milestones.length === 0 ? (
+        <IssueList issues={result.data!.issues.nodes} />
+      ) : (
+        (() => {
+          const { groups, orphans } = milestoneSections(project, result.data!.issues.nodes);
+          return (
+            <>
+              {groups.map(({ milestone, items }: any) => (
+                <div key={milestone.id}>
+                  <div className="state-group-header" style={{ background: "var(--bg-sidebar)" }}>
+                    ◈ {milestone.name}
+                    <span className="count">{Math.round(milestone.progress * 100)}%</span>
+                    {milestone.targetDate && (
+                      <span className="count" style={{ marginLeft: "auto" }}>{milestone.targetDate}</span>
+                    )}
+                  </div>
+                  <IssueList issues={items} />
+                </div>
+              ))}
+              {orphans.length > 0 && (
+                <div>
+                  <div className="state-group-header" style={{ background: "var(--bg-sidebar)" }}>
+                    Sin milestone <span className="count">{orphans.length}</span>
+                  </div>
+                  <IssueList issues={orphans} />
+                </div>
+              )}
+            </>
+          );
+        })()
+      )}
     </div>
   );
 }

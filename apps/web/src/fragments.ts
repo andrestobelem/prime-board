@@ -5,4 +5,5 @@ export const ISSUE_LIST_FIELDS = `
   assignee { id name type }
   labels { id name color }
   project { id name }
+  milestone { id name }
 `;

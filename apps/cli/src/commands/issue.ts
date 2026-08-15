@@ -143,7 +143,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
       options: {
         title: { type: "string" }, description: { type: "string" }, state: { type: "string" },
         priority: { type: "string" }, assignee: { type: "string" }, parent: { type: "string" },
-        project: { type: "string" },
+        project: { type: "string" }, milestone: { type: "string" },
         "add-label": { type: "string", multiple: true },
         "remove-label": { type: "string", multiple: true },
         json: { type: "boolean" },
@@ -172,6 +172,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
       input.parentId = values.parent === "none" ? null : (await resolveIssue(config, values.parent)).id;
     }
     if (values.project) input.projectId = values.project === "none" ? null : values.project;
+    if (values.milestone) input.milestoneId = values.milestone === "none" ? null : values.milestone;
     if (values["add-label"]?.length) {
       input.addLabelIds = await resolveLabels(config, issue.team.id, values["add-label"]);
     }

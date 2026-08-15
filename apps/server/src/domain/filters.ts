@@ -37,6 +37,7 @@ export interface IssueFilter {
   assignee?: IDComparator | null;
   creator?: IDComparator | null;
   project?: IDComparator | null;
+  milestone?: IDComparator | null;
   parent?: IDComparator | null;
   priority?: IntComparator | null;
   labels?: LabelComparator | null;
@@ -112,6 +113,7 @@ export function buildIssueFilter(filter: IssueFilter, params: ParamSink): string
   if (filter.assignee) clauses.push(...idClauses("issues.assignee_id", filter.assignee, params));
   if (filter.creator) clauses.push(...idClauses("issues.creator_id", filter.creator, params));
   if (filter.project) clauses.push(...idClauses("issues.project_id", filter.project, params));
+  if (filter.milestone) clauses.push(...idClauses("issues.milestone_id", filter.milestone, params));
   if (filter.parent) clauses.push(...idClauses("issues.parent_id", filter.parent, params));
   if (filter.priority) clauses.push(...intClauses("issues.priority", filter.priority, params));
 
