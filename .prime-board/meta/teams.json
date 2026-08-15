@@ -1,5 +1,6 @@
 [
   {
+    "defaultState": "Needs Triage",
     "description": null,
     "key": "AT",
     "labels": [
@@ -105,6 +106,7 @@
     ]
   },
   {
+    "defaultState": "Backlog",
     "description": "Default team",
     "key": "PB",
     "labels": [
