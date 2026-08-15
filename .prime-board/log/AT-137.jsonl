@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-137","payload":{"label":"graphql"},"ts":"2026-08-15T02:29:59.047Z","type":"labeled"}
 {"actor":"claude","issue":"AT-137","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.045Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-137","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.045Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-137","payload":{"to":"Queries `projects`/`project` y mutations `projectCreate`/`projectUpdate` (nombre, descripción, estado backlog→canceled, lead, targetDate) + asociación de issues vía `issueUpdate`.\n\n**Entregable:** proyecto con issues asociados navegable por API. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>)."},"ts":"2026-08-15T05:31:56.490Z","type":"description_changed"}

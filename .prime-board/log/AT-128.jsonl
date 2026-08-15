@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-128","payload":{"label":"docs"},"ts":"2026-08-15T02:29:59.008Z","type":"labeled"}
 {"actor":"claude","issue":"AT-128","payload":{"from":"Parte 1 — Definición del MVP","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:32.972Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-128","payload":{"from":null,"to":"Parte 1 — Definición del MVP"},"ts":"2026-08-15T04:58:32.972Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-128","payload":{"to":"Escribir la especificación del MVP en `docs/specs/mvp.md`: modelo de datos, operaciones expuestas, interfaz (API/CLI/MCP), y criterios de aceptación.\n\n**Entregable:** spec revisable que sirva como base para desglosar los tickets de implementación de la Parte 2.\n\nDepende de: definición del alcance del MVP."},"ts":"2026-08-15T05:31:56.577Z","type":"description_changed"}

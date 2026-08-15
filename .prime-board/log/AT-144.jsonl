@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-144","payload":{"label":"web"},"ts":"2026-08-15T02:29:59.076Z","type":"labeled"}
 {"actor":"claude","issue":"AT-144","payload":{"from":"Parte 4 — UI web","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.078Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-144","payload":{"from":null,"to":"Parte 4 — UI web"},"ts":"2026-08-15T04:58:51.078Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-144","payload":{"to":"App React + Vite servida por el proceso Bun: tema oscuro por defecto con estética Linear (densidad, tipografía, colores), sidebar (workspace, teams, proyectos), routing SPA y settings para pegar la API key (localStorage). La UI consume exclusivamente `/graphql`.\n\n**Entregable:** shell navegable con datos reales. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>)."},"ts":"2026-08-15T05:31:56.388Z","type":"description_changed"}

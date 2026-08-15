@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-147","payload":{"label":"web"},"ts":"2026-08-15T02:29:59.086Z","type":"labeled"}
 {"actor":"claude","issue":"AT-147","payload":{"from":"Parte 4 — UI web","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.074Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-147","payload":{"from":null,"to":"Parte 4 — UI web"},"ts":"2026-08-15T04:58:51.074Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-147","payload":{"to":"Panel de detalle: título/descripción editables inline (markdown render + edit), propiedades a la derecha (estado, prioridad, assignee, labels, proyecto, parent/sub-issues), comentarios e historial.\n\n**Entregable:** criterio de aceptación 6 en su parte de detalle. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>)."},"ts":"2026-08-15T05:31:56.356Z","type":"description_changed"}

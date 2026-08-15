@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-143","payload":{"label":"docs"},"ts":"2026-08-15T02:29:59.072Z","type":"labeled"}
 {"actor":"claude","issue":"AT-143","payload":{"from":"Parte 3 — Interfaces para agentes","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.062Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-143","payload":{"from":null,"to":"Parte 3 — Interfaces para agentes"},"ts":"2026-08-15T04:58:51.062Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-143","payload":{"to":"Escribir `docs/guia-agentes.md` (cómo obtener una key, ejemplos GraphQL/CLI/MCP, cómo suscribirse por webhook) y un comando de seed con datos de demo para probar la UI y los clientes.\n\n**Entregable:** guía reproducible de punta a punta sobre una DB nueva. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>)."},"ts":"2026-08-15T05:31:56.415Z","type":"description_changed"}

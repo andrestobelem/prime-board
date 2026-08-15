@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-140","payload":{"label":"cli"},"ts":"2026-08-15T02:29:59.061Z","type":"labeled"}
 {"actor":"claude","issue":"AT-140","payload":{"from":"Parte 3 — Interfaces para agentes","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.066Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-140","payload":{"from":null,"to":"Parte 3 — Interfaces para agentes"},"ts":"2026-08-15T04:58:51.066Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-140","payload":{"to":"Comandos `pb auth login`, `pb issue list|view|create|update|comment` contra la API GraphQL, con config en `~/.prime-board/cli.json` (override por env), `--json` estable para agentes y exit codes 0/1/2 según la spec §7.\n\n**Entregable:** flujo completo de un issue desde la terminal. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>)."},"ts":"2026-08-15T05:31:56.455Z","type":"description_changed"}

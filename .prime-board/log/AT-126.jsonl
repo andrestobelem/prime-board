@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-126","payload":{"label":"docs"},"ts":"2026-08-15T02:29:58.997Z","type":"labeled"}
 {"actor":"claude","issue":"AT-126","payload":{"from":"Parte 1 — Definición del MVP","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:32.976Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-126","payload":{"from":null,"to":"Parte 1 — Definición del MVP"},"ts":"2026-08-15T04:58:32.976Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-126","payload":{"to":"Hacer un inventario de las funcionalidades de Linear candidatas a clonar: issues (estados, prioridades, labels, asignación), proyectos, hitos, ciclos, comentarios, búsqueda/filtros, API (GraphQL/MCP), webhooks, etc.\n\n**Entregable:** documento `docs/relevamiento-linear.md` con el inventario y una primera clasificación (imprescindible / deseable / fuera de alcance) pensando en agentes como usuarios principales."},"ts":"2026-08-15T05:31:56.602Z","type":"description_changed"}

@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-148","payload":{"label":"web"},"ts":"2026-08-15T02:29:59.090Z","type":"labeled"}
 {"actor":"claude","issue":"AT-148","payload":{"from":"Parte 4 — UI web","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.073Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-148","payload":{"from":null,"to":"Parte 4 — UI web"},"ts":"2026-08-15T04:58:51.073Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-148","payload":{"to":"Modal de nuevo issue con tecla `C` y command palette `Cmd+K` (navegar, crear, cambiar estado/prioridad/assignee), más atajos base (`Esc` cierra).\n\n**Entregable:** operar el board sin tocar el mouse, como en Linear. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>)."},"ts":"2026-08-15T05:31:56.345Z","type":"description_changed"}

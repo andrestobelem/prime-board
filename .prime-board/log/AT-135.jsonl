@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-135","payload":{"label":"graphql"},"ts":"2026-08-15T02:29:59.039Z","type":"labeled"}
 {"actor":"claude","issue":"AT-135","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.049Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-135","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.049Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-135","payload":{"to":"Mutation `labelCreate` (con `teamId` opcional: NULL = workspace), query `labels`, y asociación N:M a issues vía `issueUpdate` (set/add/remove).\n\n**Entregable:** etiquetar y filtrar issues por label. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>)."},"ts":"2026-08-15T05:31:56.513Z","type":"description_changed"}

@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-130","payload":{"label":"infra"},"ts":"2026-08-15T02:29:59.015Z","type":"labeled"}
 {"actor":"claude","issue":"AT-130","payload":{"from":"Parte 2 — Núcleo del backend","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.056Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-130","payload":{"from":null,"to":"Parte 2 — Núcleo del backend"},"ts":"2026-08-15T04:58:51.056Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-130","payload":{"to":"Crear la estructura del monorepo (`apps/server`, `apps/web`, `apps/cli`, `apps/mcp`, `packages/schema`) con Bun workspaces, TypeScript estricto y scripts base (`bun run server`, `bun test`).\n\n**Entregable:** repo que instala y corre un server hello-world con `bun run server`. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>)."},"ts":"2026-08-15T05:31:56.567Z","type":"description_changed"}

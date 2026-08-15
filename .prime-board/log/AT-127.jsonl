@@ -2,3 +2,4 @@
 {"actor":"claude","issue":"AT-127","payload":{"label":"docs"},"ts":"2026-08-15T02:29:59.003Z","type":"labeled"}
 {"actor":"claude","issue":"AT-127","payload":{"from":"Parte 1 — Definición del MVP","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:32.973Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-127","payload":{"from":null,"to":"Parte 1 — Definición del MVP"},"ts":"2026-08-15T04:58:32.974Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-127","payload":{"to":"A partir del relevamiento, decidir qué entra y qué queda fuera del MVP. Criterio rector: prime-board es para agentes → API-first, operable por CLI/MCP, sin depender de UI para el flujo principal.\n\n**Entregable:** lista cerrada de funcionalidades del MVP con justificación breve de cada inclusión/exclusión.\n\nDepende de: relevamiento de funcionalidades core."},"ts":"2026-08-15T05:31:56.588Z","type":"description_changed"}
