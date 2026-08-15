@@ -82,19 +82,26 @@ export const projectResolvers = {
       const viewer = requireViewer(context);
       const project = mapProject(createProject(context.db, args.input));
       context.events.emit("project.created", viewer, project);
+      context.repo?.sync();
       return { success: true, project };
     },
     milestoneDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
-      return { success: true, orphanedIssues: deleteMilestone(context.db, args.id) };
+      const orphaned = deleteMilestone(context.db, args.id);
+      context.repo?.sync();
+      return { success: true, orphanedIssues: orphaned };
     },
     projectArchive: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
-      return { success: true, project: mapProject(archiveProject(context.db, args.id, true)) };
+      const archived = mapProject(archiveProject(context.db, args.id, true));
+      context.repo?.sync();
+      return { success: true, project: archived };
     },
     projectUnarchive: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
-      return { success: true, project: mapProject(archiveProject(context.db, args.id, false)) };
+      const restored = mapProject(archiveProject(context.db, args.id, false));
+      context.repo?.sync();
+      return { success: true, project: restored };
     },
     milestoneCreate: (
       _parent: unknown,
@@ -102,7 +109,9 @@ export const projectResolvers = {
       context: Context,
     ) => {
       requireViewer(context);
-      return { success: true, milestone: mapMilestone(createMilestone(context.db, args.input)) };
+      const created = mapMilestone(createMilestone(context.db, args.input));
+      context.repo?.sync();
+      return { success: true, milestone: created };
     },
     milestoneUpdate: (
       _parent: unknown,
@@ -110,7 +119,9 @@ export const projectResolvers = {
       context: Context,
     ) => {
       requireViewer(context);
-      return { success: true, milestone: mapMilestone(updateMilestone(context.db, args.id, args.input)) };
+      const updated = mapMilestone(updateMilestone(context.db, args.id, args.input));
+      context.repo?.sync();
+      return { success: true, milestone: updated };
     },
     projectUpdate: (
       _parent: unknown,
@@ -120,6 +131,7 @@ export const projectResolvers = {
       const viewer = requireViewer(context);
       const project = mapProject(updateProject(context.db, args.id, args.input));
       context.events.emit("project.updated", viewer, project);
+      context.repo?.sync();
       return { success: true, project };
     },
   },

@@ -8,6 +8,8 @@ export interface Config {
   dev: boolean;
   /** Carpeta con la UI buildeada (apps/web/dist); si no existe, la raíz responde JSON. */
   webDist: string;
+  /** Raíz del repo donde replicar el board en cada escritura (AT-158). */
+  repoRoot: string | null;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -16,5 +18,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     dbPath: env.PRIME_BOARD_DB ?? join(homedir(), ".prime-board", "prime-board.db"),
     dev: env.NODE_ENV !== "production",
     webDist: env.PRIME_BOARD_WEB_DIST ?? join(import.meta.dir, "..", "..", "web", "dist"),
+    repoRoot: env.PRIME_BOARD_REPO ?? null,
   };
 }

@@ -14,12 +14,14 @@ export interface TestApp {
   stop: () => void;
 }
 
-export function createTestApp(): TestApp {
+export function createTestApp(repoRoot?: string): TestApp {
   const db = new Database(":memory:", { strict: true });
   db.exec("PRAGMA foreign_keys = ON;");
   migrate(db);
   const seed = bootstrap(db);
-  const config: Config = { port: 0, dbPath: ":memory:", dev: true, webDist: "/nonexistent" };
+  const config: Config = {
+    port: 0, dbPath: ":memory:", dev: true, webDist: "/nonexistent", repoRoot: repoRoot ?? null,
+  };
   // Reintentos casi inmediatos para que los tests de webhooks sean rápidos.
   const { server, events } = createApp({ db, config, webhookOptions: { retryDelays: [5, 5, 5] } });
   return {

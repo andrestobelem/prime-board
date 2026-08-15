@@ -7,6 +7,7 @@ import { resolveViewer } from "./auth/viewer.ts";
 import type { Config } from "./config.ts";
 import type { Context } from "./graphql/context.ts";
 import { resolvers } from "./graphql/resolvers.ts";
+import { createRepoSync } from "./export/repo-sync.ts";
 import { WebhookDispatcher, type DispatcherOptions } from "./webhooks/dispatcher.ts";
 
 export interface AppDeps {
@@ -17,6 +18,7 @@ export interface AppDeps {
 
 export function createApp({ db, config, webhookOptions }: AppDeps) {
   const events = new WebhookDispatcher(db, webhookOptions ?? { log: console.error });
+  const repo = createRepoSync(db, config.repoRoot);
   const yoga = createYoga({
     schema: createSchema<Context>({ typeDefs, resolvers }),
     graphqlEndpoint: "/graphql",
@@ -29,6 +31,7 @@ export function createApp({ db, config, webhookOptions }: AppDeps) {
       config,
       viewer: resolveViewer(db, request.headers.get("authorization")),
       events,
+      repo,
     }),
   });
 

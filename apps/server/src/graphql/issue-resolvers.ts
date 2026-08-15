@@ -119,6 +119,7 @@ export const issueResolvers = {
       const viewer = requireViewer(context);
       const row = createIssue(context.db, viewer.id, args.input);
       context.events.emit("issue.created", viewer, issueEventData(row));
+      context.repo?.sync();
       return { success: true, issue: mapIssue(row) };
     },
     issueUpdate: (
@@ -134,12 +135,14 @@ export const issueResolvers = {
         );
         context.events.emit("issue.updated", viewer, issueEventData(row), changeMap);
       }
+      context.repo?.sync();
       return { success: true, issue: mapIssue(row) };
     },
     issueArchive: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       const row = archiveIssue(context.db, viewer.id, args.id);
       context.events.emit("issue.archived", viewer, issueEventData(row));
+      context.repo?.sync();
       return { success: true, issue: mapIssue(row) };
     },
     commentCreate: (
@@ -157,6 +160,7 @@ export const issueResolvers = {
         body: row.body,
         createdAt: row.created_at,
       });
+      context.repo?.sync();
       return { success: true, comment: mapComment(row) };
     },
   },

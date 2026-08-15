@@ -1,0 +1,2 @@
+# Los logs de prime-board son append-only: se mergean por unión.
+.prime-board/log/*.jsonl merge=union

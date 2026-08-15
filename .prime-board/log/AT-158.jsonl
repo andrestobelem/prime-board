@@ -4,3 +4,6 @@
 {"actor":"claude","issue":"AT-158","payload":{"label":"epic:repo-truth"},"ts":"2026-08-15T04:47:09.365Z","type":"labeled"}
 {"actor":"claude","issue":"AT-158","payload":{"from":null,"to":"Repo como fuente de verdad"},"ts":"2026-08-15T04:55:39.767Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-158","payload":{"from":null,"to":"Fase 3 — Log como fuente de verdad"},"ts":"2026-08-15T04:55:39.767Z","type":"milestone_changed"}
+{"actor":"claude","issue":"AT-158","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-15T05:12:26.822Z","type":"state_changed"}
+{"actor":"claude","issue":"AT-158","payload":{"from":null,"to":"claude"},"ts":"2026-08-15T05:12:26.823Z","type":"assigned"}
+{"actor":"claude","issue":"AT-158","payload":{"body":"Probando el write-through al repo."},"ts":"2026-08-15T05:13:31.081Z","type":"commented"}
