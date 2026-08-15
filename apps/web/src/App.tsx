@@ -6,6 +6,7 @@ import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueLi
 import { Palette } from "./components/Palette.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
+import { Switcher } from "./components/Switcher.tsx";
 import { Link, useRoute } from "./router.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 import { BoardView } from "./views/BoardView.tsx";
@@ -112,9 +113,8 @@ export function App() {
       .find((candidate) => candidate.id === param);
     topbar = (
       <>
-        <span className="crumb">Projects</span>
-        <span className="crumb">›</span>
-        <span className="title">{project?.name ?? "Project"}</span>
+        <Switcher teams={teams} current={{ kind: "project", id: param }} view="team" />
+        {project?.state && <span className="crumb">{project.state.toLowerCase()}</span>}
       </>
     );
     content = <ProjectView projectId={param} />;
@@ -122,7 +122,11 @@ export function App() {
     const team = teams.find((candidate) => candidate.key === param);
     topbar = (
       <>
-        <span className="title">{team?.name ?? param}</span>
+        <Switcher
+          teams={teams}
+          current={{ kind: "team", key: param }}
+          view={section === "board" ? "board" : "team"}
+        />
         <span className="right">
           {(section === "team" || section === "board") && (
             <Link to={`/team-settings/${param}`}>

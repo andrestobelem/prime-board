@@ -246,3 +246,39 @@ kbd {
   color: #f2a0a0; border-radius: var(--radius); padding: 10px 12px; margin: 16px;
 }
 .loading { color: var(--text-faint); padding: 32px; text-align: center; }
+
+/* Switcher de contexto en el topbar (AT-170) */
+.switcher { position: relative; display: flex; align-items: center; }
+.switcher-trigger {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; margin-left: -8px; border-radius: var(--radius); color: var(--text);
+}
+.switcher-trigger:hover { background: var(--surface-hover); }
+.switcher-trigger .caret { color: var(--text-faint); font-size: 10px; }
+.switcher-menu {
+  position: absolute; top: calc(100% + 6px); left: -8px; z-index: 40;
+  width: 300px; background: var(--bg-sidebar); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 16px 60px rgba(0, 0, 0, 0.5);
+  display: flex; flex-direction: column;
+}
+.switcher-input {
+  width: 100%; background: none; border: none; border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0; padding: 10px 12px; font-size: 13px;
+}
+.switcher-input:focus { outline: none; }
+.switcher-list { max-height: 320px; overflow-y: auto; padding: 6px; }
+.switcher-empty { padding: 10px 12px; color: var(--text-faint); font-size: 12px; }
+.switcher-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 6px 10px; border-radius: var(--radius); color: var(--text-muted); font-size: 13px;
+}
+.switcher-item.project { padding-left: 22px; }
+.switcher-item.closed { opacity: 0.6; }
+.switcher-item.selected { background: var(--surface-hover); color: var(--text); }
+.switcher-item.active { color: var(--text); font-weight: 500; }
+.switcher-item .glyph { color: var(--text-faint); }
+.switcher-item .switcher-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switcher-item .team-key {
+  margin-left: auto; font-size: 10px; color: var(--text-faint);
+  border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0 4px;
+}
