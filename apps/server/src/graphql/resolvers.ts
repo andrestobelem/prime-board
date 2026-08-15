@@ -153,7 +153,6 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       const team = mapTeam(createTeam(context.db, args.input));
-      context.repo?.sync();
       return { success: true, team };
     },
     teamUpdate: (
@@ -163,7 +162,6 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       const team = mapTeam(updateTeam(context.db, args.id, args.input));
-      context.repo?.sync();
       return { success: true, team };
     },
     actorCreate: (
@@ -173,7 +171,6 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       const actor = mapActor(createActor(context.db, args.input));
-      context.repo?.sync();
       return { success: true, actor };
     },
     apiKeyCreate: (
@@ -209,7 +206,6 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       const label = mapLabel(createLabel(context.db, args.input));
-      context.repo?.sync();
       return { success: true, label };
     },
     workflowStateUpdate: (
@@ -219,7 +215,6 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       const state = mapWorkflowState(updateWorkflowState(context.db, args.id, args.input));
-      context.repo?.sync();
       return { success: true, workflowState: state };
     },
     workflowStateDelete: (
@@ -229,7 +224,6 @@ export const resolvers = {
     ) => {
       const viewer = requireViewer(context);
       const moved = deleteWorkflowState(context.db, viewer.id, args.id, args.moveToStateId);
-      context.repo?.sync();
       return { success: true, movedIssues: moved };
     },
     labelUpdate: (
@@ -239,13 +233,11 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       const label = mapLabel(updateLabel(context.db, args.id, args.input));
-      context.repo?.sync();
       return { success: true, label };
     },
     labelDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
       const affected = deleteLabel(context.db, args.id);
-      context.repo?.sync();
       return { success: true, affectedIssues: affected };
     },
     workflowStateCreate: (
@@ -263,7 +255,6 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       const workflowState = mapWorkflowState(createWorkflowState(context.db, args.input));
-      context.repo?.sync();
       return { success: true, workflowState };
     },
   }),
