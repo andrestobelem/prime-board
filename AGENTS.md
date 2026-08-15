@@ -49,3 +49,20 @@ npx skills add <paquete> --agent universal --copy
 - ⚠️ **`npx skills remove` no funciona con `--copy`**: dice "Successfully removed" pero deja
   los directorios en `.agents/skills/` y no toca el lockfile. Hay que borrar la carpeta y la
   entrada del lockfile a mano, y verificar con `ls .agents/skills`.
+
+## Agent skills
+
+### Issue tracker
+
+Los issues viven en **prime-board** (team `AT`), operado por el CLI `pb` o su API
+GraphQL. Ver `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Los cinco roles de triage son **estados del workflow**, no labels
+(`Needs Triage`, `Needs Info`, `Ready for Agent`, `Ready for Human`, `Canceled`).
+Ver `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: un `CONTEXT.md` y `docs/adr/` en la raíz. Ver `docs/agents/domain.md`.
