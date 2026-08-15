@@ -33,6 +33,18 @@ Un issue cuyo `parent` es otro issue. No es una entidad distinta: es la misma co
 relación jerárquica.
 _Avoid_: Subtask, child task
 
+**Relation**:
+Arista tipada entre dos issues: **blocked-by / blocks** (dirigida, sin ciclos), **related**
+(simétrica) y **duplicate-of / duplicated-by** (dirigida). Se guarda una sola vez y cada
+extremo la ve con el tipo que le corresponde. Distinta del `parent`: no es jerarquía.
+_Avoid_: Link, dependency, edge
+
+**Blocked**:
+Un issue con al menos una relación blocked-by cuyo bloqueante sigue abierto. Su complemento
+abierto es el **frontier**: los issues abiertos cuyos bloqueantes están todos cerrados
+(`issues(filter: { unblocked: true })`).
+_Avoid_: Stuck, waiting
+
 **Workflow State**:
 La posición de un issue en el ciclo de vida de su team (`Todo`, `In Progress`, `Ready for
 Agent`). Cada team define los suyos y cada uno declara un **State Type** —`triage`,

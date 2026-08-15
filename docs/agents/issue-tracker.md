@@ -28,8 +28,15 @@ pb issue create --team AT --title "<título>" --description - [--label <label>] 
 ```
 
 Para varios tickets con dependencias (`/to-tickets`), crear uno por unidad y
-declarar las dependencias en el cuerpo: prime-board todavía **no** tiene
-relaciones blocking/blocked-by entre issues (quedó fuera del MVP).
+declarar las dependencias como **relaciones nativas** (AT-174):
+
+```bash
+pb issue link AT-2 --blocked-by AT-1     # AT-2 no arranca hasta cerrar AT-1
+pb issue list --team AT --unblocked      # el frontier: listos para trabajar
+```
+
+Tipos disponibles: `--blocked-by`, `--blocks`, `--related`, `--duplicate-of`.
+Las relaciones de bloqueo rechazan ciclos.
 
 ## Cuando una skill dice "fetch the relevant ticket"
 
@@ -58,8 +65,8 @@ Usado por `/wayfinder`. prime-board no tiene un concepto de "map" separado: el
 - **Map:** un proyecto (`pb project create --name "<effort>" --team AT`); las notas
   y decisiones van en su descripción.
 - **Child ticket:** un issue del proyecto, opcionalmente asignado a un milestone.
-- **Blocking:** se declara en el cuerpo del issue (sin soporte nativo todavía).
-- **Frontier:** `pb issue list --team AT --state backlog --json`, filtrando por proyecto.
+- **Blocking:** `pb issue link <ID> --blocked-by <ID>` (relación nativa, con validación de ciclos).
+- **Frontier:** `pb issue list --team AT --unblocked --json`, filtrando por proyecto.
 - **Claim:** `pb issue update <ID> --state "In Progress" --assignee me`.
 - **Resolve:** `pb issue comment <ID> --body -` con la respuesta y luego
   `pb issue update <ID> --state done`.
