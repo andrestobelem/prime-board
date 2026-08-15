@@ -1,6 +1,18 @@
 {
   "version": 1,
   "skills": {
+    "beads": {
+      "source": "johnlindquist/claude",
+      "sourceType": "github",
+      "skillPath": "skills/beads/SKILL.md",
+      "computedHash": "8d7236babf5dd7d9e3d2e0266cb6a5a49f4d36493363a3e82ab25241e44b4a53"
+    },
+    "linear": {
+      "source": "openai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/.curated/linear/SKILL.md",
+      "computedHash": "702e1b8bb122bb981d276fbdcaa2fde1435b8c548910e1b365f088735b7a5365"
+    },
     "skill-creator": {
       "source": "anthropics/skills",
       "sourceType": "github",
