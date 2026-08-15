@@ -167,3 +167,50 @@ describe("pb project / team / webhook", () => {
     expect(JSON.parse(after.out).length).toBe(0);
   });
 });
+
+describe("pb issue link / unlink (AT-179)", () => {
+  it("linkea con --blocked-by y lo muestra en view", () => {
+    pb(["issue", "create", "--team", "PB", "--title", "Blocker task"]);
+    const linked = pb(["issue", "link", "PB-1", "--blocked-by", "PB-3", "--json"]);
+    expect(linked.code).toBe(0);
+    expect(JSON.parse(linked.out)).toMatchObject([
+      { type: "BLOCKED_BY", relatedIssue: { identifier: "PB-3" } },
+    ]);
+
+    const view = pb(["issue", "view", "PB-1"]);
+    expect(view.out).toContain("Relations:");
+    expect(view.out).toContain("blocked by PB-3");
+
+    // El otro extremo la ve como blocks.
+    const other = pb(["issue", "view", "PB-3", "--json"]);
+    expect(JSON.parse(other.out).relations).toMatchObject([
+      { type: "BLOCKS", relatedIssue: { identifier: "PB-1" } },
+    ]);
+  });
+
+  it("list --unblocked excluye al issue bloqueado", () => {
+    const frontier = pb(["issue", "list", "--team", "PB", "--unblocked", "--json"]);
+    expect(frontier.code).toBe(0);
+    const identifiers = JSON.parse(frontier.out).nodes.map((n: any) => n.identifier);
+    expect(identifiers).not.toContain("PB-1");
+    expect(identifiers).toContain("PB-3");
+  });
+
+  it("devuelve exit code 1 cuando la relación cierra un ciclo", () => {
+    const cycle = pb(["issue", "link", "PB-3", "--blocked-by", "PB-1"]);
+    expect(cycle.code).toBe(1);
+    expect(cycle.err).toContain("cycle");
+  });
+
+  it("unlink borra la relación y sin flags es error de uso", () => {
+    const missing = pb(["issue", "unlink", "PB-1"]);
+    expect(missing.code).toBe(2);
+
+    const unlinked = pb(["issue", "unlink", "PB-1", "--blocked-by", "PB-3", "--json"]);
+    expect(unlinked.code).toBe(0);
+    expect(JSON.parse(unlinked.out)).toEqual([]);
+
+    const again = pb(["issue", "unlink", "PB-1", "--blocked-by", "PB-3"]);
+    expect(again.code).toBe(1); // ya no existe → error de API
+  });
+});
