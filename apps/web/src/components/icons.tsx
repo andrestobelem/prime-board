@@ -33,12 +33,17 @@
  */
 const PATHS = {
   // -- navegación y chrome -------------------------------------------------
-  /** Marca del workspace en el sidebar (lucide: layers). */
+  /**
+   * Marca de prime-board (custom, AT-184): monograma P′ — la P con el símbolo
+   * prime — en un cuadrado redondeado tipo app. Reemplaza al `layers` de Lucide
+   * que hacía de puente desde AT-172. Verificado a 18px en ambos temas
+   * (scratchpad/logo-candidates3.png, candidato F2).
+   */
   workspace: (
     <>
-      <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" />
-      <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" />
-      <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" />
+      <rect x="3" y="3" width="18" height="18" rx="5" />
+      <path d="M8.5 16.5v-9h3a2.75 2.75 0 0 1 0 5.5h-3" />
+      <path d="m16.75 7.5-1.5 4" />
     </>
   ),
   /** Actor de tipo agente (lucide: bot). */

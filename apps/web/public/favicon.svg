@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#5e6ad2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Marca de prime-board: monograma P prima (ver apps/web/src/components/icons.tsx, AT-184). -->
+  <rect x="3" y="3" width="18" height="18" rx="5" />
+  <path d="M8.5 16.5v-9h3a2.75 2.75 0 0 1 0 5.5h-3" />
+  <path d="m16.75 7.5-1.5 4" />
+</svg>
