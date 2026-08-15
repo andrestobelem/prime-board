@@ -201,6 +201,13 @@ const PATHS = {
       <path d="m9 12 2 2 4-4" />
     </>
   ),
+  /** Cerrar / quitar (lucide: x). */
+  x: (
+    <>
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </>
+  ),
   /** Cancelado (lucide: circle-x). */
   "state-canceled": (
     <>

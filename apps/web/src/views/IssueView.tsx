@@ -19,6 +19,7 @@ const ISSUE_QUERY = `query($id: ID!) {
     labels { id name color }
     project { id name milestones { id name } }
     milestone { id name }
+    relations { id type relatedIssue { identifier title state { id name type } } }
     comments { id body actor { name type } createdAt }
     activity { id type actor { name type } payload createdAt }
   }
@@ -44,6 +45,15 @@ const ACTIVITY_TEXT: Record<string, (payload: any) => string> = {
   unlabeled: (payload) => `removed label "${payload.label}"`,
   commented: () => "commented",
   archived: () => "archived the issue",
+  relation_added: (payload) => `added relation ${RELATION_LABELS[payload.type] ?? payload.type} ${payload.issue}`,
+  relation_removed: (payload) => `removed relation ${RELATION_LABELS[payload.type] ?? payload.type} ${payload.issue}`,
+};
+
+const RELATION_LABELS: Record<string, string> = {
+  BLOCKS: "blocks",
+  BLOCKED_BY: "blocked by",
+  blocks: "blocks",
+  blocked_by: "blocked by",
 };
 
 function timeAgo(iso: string): string {
@@ -62,6 +72,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   const [editingDescription, setEditingDescription] = useState(false);
   const [description, setDescription] = useState("");
   const [comment, setComment] = useState("");
+  const [relationType, setRelationType] = useState("BLOCKED_BY");
+  const [relationRef, setRelationRef] = useState("");
+  const [relationError, setRelationError] = useState<string | null>(null);
 
   useEffect(() => {
     if (issue) {
@@ -97,6 +110,23 @@ export function IssueView({ issueRef }: { issueRef: string }) {
       commentCreate(input: $input) { comment { id } }
     }`, { input: { issueId: issue.id, body } });
   }
+
+  async function addRelation() {
+    const ref = relationRef.trim();
+    if (!ref) return;
+    setRelationError(null);
+    try {
+      await mutate(`mutation($input: IssueRelationCreateInput!) {
+        issueRelationCreate(input: $input) { success }
+      }`, { input: { issueId: issue.id, relatedIssueId: ref, type: relationType } });
+      setRelationRef("");
+    } catch (error) {
+      setRelationError((error as Error).message);
+    }
+  }
+
+  const removeRelation = (relationId: string) =>
+    mutate(`mutation($id: ID!) { issueRelationDelete(id: $id) { success } }`, { id: relationId });
 
   const toggleLabel = (labelId: string, active: boolean) =>
     update(active ? { removeLabelIds: [labelId] } : { addLabelIds: [labelId] });
@@ -156,6 +186,45 @@ export function IssueView({ issueRef }: { issueRef: string }) {
             ))}
           </>
         )}
+
+        <div className="section-title">Relations</div>
+        {issue.relations.map((relation: any) => (
+          <div className="sub-issue" key={relation.id}>
+            <StateIcon state={relation.relatedIssue.state} />
+            <span style={{ color: "var(--text-muted)", fontSize: 12, minWidth: 72 }}>
+              {RELATION_LABELS[relation.type] ?? relation.type}
+            </span>
+            <Link to={`/issue/${relation.relatedIssue.identifier}`}>
+              <span style={{ color: "var(--text-faint)", marginRight: 6 }}>
+                {relation.relatedIssue.identifier}
+              </span>
+              {relation.relatedIssue.title}
+            </Link>
+            <button
+              className="btn"
+              title="Remove relation"
+              style={{ marginLeft: "auto", padding: "0 6px" }}
+              onClick={() => removeRelation(relation.id)}
+            >
+              <Icon name="x" size={12} />
+            </button>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+          <select value={relationType} onChange={(event) => setRelationType(event.target.value)}>
+            <option value="BLOCKED_BY">blocked by</option>
+            <option value="BLOCKS">blocks</option>
+          </select>
+          <input
+            placeholder="Issue ID, e.g. PB-12"
+            value={relationRef}
+            onChange={(event) => setRelationRef(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && addRelation()}
+            style={{ width: 140 }}
+          />
+          <button className="btn" onClick={addRelation}>Link</button>
+          {relationError && <span style={{ color: "var(--red, #eb5757)", fontSize: 12 }}>{relationError}</span>}
+        </div>
 
         <div className="section-title">Comments</div>
         {issue.comments.map((entry: any) => (
