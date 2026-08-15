@@ -12,7 +12,7 @@
     ]
   },
   {
-    "archived": false,
+    "archived": true,
     "description": "Historial del desarrollo del MVP (importado de Linear). Las 5 partes son milestones.",
     "lead": "claude",
     "milestones": [
