@@ -171,3 +171,26 @@ Después de la fase 2 ya se puede borrar la DB sin perder nada — que es el 80%
   Lamport (github.com/git-bug/git-bug).
 - Experimento propio: 35 issues del board de prime-board, merges reales con git
   (`scratchpad/exp-repo-truth`, no versionado).
+
+
+---
+
+## Apéndice: lo que cambió al implementarlo (AT-156 → AT-159)
+
+La recomendación se implementó completa. Cuatro cosas resultaron distintas de lo previsto:
+
+1. **El log no era autosuficiente.** La tabla `activity` era un historial para la UI:
+   `created` solo guardaba `{title}` y `description_changed` guardaba `{}`. Hubo que
+   enriquecer los eventos (AT-165) antes de que el log pudiera ser fuente de verdad.
+2. **Nada de UUIDs, ni siquiera escondidos.** El `commentId` del evento `commented` se
+   filtraba al repo y, como se regenera en cada rebuild, **rompía el determinismo**: dos
+   rebuilds producían archivos distintos. Hoy hay un test que falla ante cualquier UUID.
+3. **Los comentarios no se duplican.** El plan original los ponía en el snapshot *y* en el
+   log. Viven solo en el log (que ya trae autor, fecha y body) y el importador los
+   reconstruye desde ahí: una sola fuente, y encima la que mergea sin conflictos.
+4. **Un export parcial es peligroso.** Reconstruir desde un export filtrado por team
+   borraría en silencio el resto del workspace. El export registra su alcance en
+   `meta/export.json` y el importador se niega salvo `--allow-partial`.
+
+Estado final: `bun run export`, `bun run rebuild` y sincronización automática en cada
+escritura con `PRIME_BOARD_REPO`. La DB es descartable y el repo es la fuente de verdad.
