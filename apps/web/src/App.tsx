@@ -129,7 +129,7 @@ export function App() {
               <button className="btn secondary">⚙ Team</button>
             </Link>
           )}
-          {section === "team" && (
+          {(section === "team" || section === "board") && (
             <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
               {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
                 <option key={key} value={key}>Agrupar por {GROUP_LABELS[key].toLowerCase()}</option>
@@ -148,7 +148,7 @@ export function App() {
       </>
     );
     content = section === "board"
-      ? <BoardView teamKey={param} teamId={team?.id ?? null} />
+      ? <BoardView teamKey={param} teamId={team?.id ?? null} groupBy={groupBy} />
       : <TeamView teamKey={param} teamId={team?.id ?? null} groupBy={groupBy} />;
   } else if (shell.data) {
     if (defaultTeam) {

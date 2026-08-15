@@ -2,12 +2,17 @@
 import { useEffect, useState } from "react";
 import { mutate, useQuery } from "../api.ts";
 import { Avatar, LabelChip, PriorityIcon, StateDot } from "../components/bits.tsx";
-import type { IssueListItem } from "../components/IssueList.tsx";
+import type { GroupBy, IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import { navigate } from "../router.tsx";
 
 const BOARD_QUERY = `query($key: String, $filter: IssueFilter) {
-  team(key: $key) { id key name states { id name type color position } }
+  team(key: $key) {
+    id key name
+    states { id name type color position }
+    projects { id name milestones { id name } }
+  }
+  actors { id name type }
   issues(filter: $filter, first: 250) {
     nodes { ${ISSUE_LIST_FIELDS} }
   }
@@ -17,11 +22,24 @@ interface BoardData {
   team: {
     id: string;
     states: Array<{ id: string; name: string; type: string; color: string; position: number }>;
+    projects: Array<{ id: string; name: string; milestones: Array<{ id: string; name: string }> }>;
   } | null;
+  actors: Array<{ id: string; name: string; type: string }>;
   issues: { nodes: IssueListItem[] };
 }
 
-export function BoardView({ teamKey, teamId }: { teamKey: string; teamId: string | null }) {
+/** Columna del board: qué representa y qué campo escribe el drop. */
+interface Column {
+  key: string;
+  label: string;
+  state?: { id: string; name: string; type: string; color: string };
+  /** Input de issueUpdate que aplica soltar una card acá. */
+  patch: Record<string, string | null>;
+}
+
+export function BoardView(
+  { teamKey, teamId, groupBy = "state" }: { teamKey: string; teamId: string | null; groupBy?: GroupBy },
+) {
   const result = useQuery<BoardData>(BOARD_QUERY, {
     key: teamKey,
     filter: teamId ? { team: { eq: teamId } } : {},
@@ -40,42 +58,105 @@ export function BoardView({ teamKey, teamId }: { teamKey: string; teamId: string
   const issues = local ?? result.data.issues.nodes;
   const states = [...result.data.team.states].sort((a, b) => a.position - b.position);
 
-  function drop(stateId: string) {
+  // Las columnas dependen del criterio; cada una sabe qué campo escribe el drop.
+  const columns: Column[] = (() => {
+    if (groupBy === "milestone") {
+      const milestones = result.data.team.projects.flatMap((project) =>
+        project.milestones.map((milestone) => ({
+          key: milestone.id,
+          label: `${milestone.name}`,
+          patch: { milestoneId: milestone.id },
+        })),
+      );
+      return [...milestones, { key: "none", label: "Sin milestone", patch: { milestoneId: null } }];
+    }
+    if (groupBy === "assignee") {
+      return [
+        ...result.data.actors.map((actor) => ({
+          key: actor.id,
+          label: `${actor.name}${actor.type === "AGENT" ? " 🤖" : ""}`,
+          patch: { assigneeId: actor.id },
+        })),
+        { key: "none", label: "Sin assignee", patch: { assigneeId: null } },
+      ];
+    }
+    if (groupBy === "priority") {
+      return ["Sin prioridad", "Urgent", "High", "Medium", "Low"].map((label, index) => ({
+        key: String(index),
+        label,
+        patch: { priority: String(index) },
+      }));
+    }
+    return states.map((state) => ({
+      key: state.id,
+      label: state.name,
+      state,
+      patch: { stateId: state.id },
+    }));
+  })();
+
+  /** A qué columna pertenece hoy un issue. */
+  function columnOf(issue: IssueListItem): string {
+    if (groupBy === "milestone") return issue.milestone?.id ?? "none";
+    if (groupBy === "assignee") return issue.assignee?.id ?? "none";
+    if (groupBy === "priority") return String(issue.priority);
+    return issue.state.id;
+  }
+
+  function drop(column: Column) {
     setOverState(null);
     if (!dragId) return;
     const issue = issues.find((candidate) => candidate.id === dragId);
-    const target = states.find((candidate) => candidate.id === stateId);
-    if (!issue || !target || issue.state.id === stateId) return;
+    if (!issue || columnOf(issue) === column.key) return;
+
     // Optimista: mueve la card ya; la mutación refetchea al confirmar.
-    setLocal(issues.map((candidate) =>
-      candidate.id === dragId ? { ...candidate, state: { ...target } } : candidate,
-    ));
-    mutate(`mutation($id: ID!, $stateId: ID!) {
-      issueUpdate(id: $id, input: { stateId: $stateId }) { success }
-    }`, { id: dragId, stateId }).catch(() => setLocal(null));
+    setLocal(issues.map((candidate): IssueListItem => {
+      if (candidate.id !== dragId) return candidate;
+      if (groupBy === "state") {
+        // La columna trae color; la card solo necesita id/name/type/position.
+        return column.state
+          ? { ...candidate, state: { ...candidate.state, ...column.state } }
+          : candidate;
+      }
+      if (groupBy === "milestone") {
+        return { ...candidate, milestone: column.key === "none" ? null : { id: column.key, name: column.label } };
+      }
+      if (groupBy === "assignee") {
+        const actor = result.data!.actors.find((a) => a.id === column.key);
+        return { ...candidate, assignee: actor ? { ...actor } : null };
+      }
+      return { ...candidate, priority: Number(column.key) };
+    }));
+
+    const input = groupBy === "priority"
+      ? { priority: Number(column.key) }
+      : column.patch;
+    mutate(`mutation($id: ID!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) { success }
+    }`, { id: dragId, input }).catch(() => setLocal(null));
     setDragId(null);
   }
 
   return (
     <div className="board">
-      {states.map((state) => {
+      {columns.map((column) => {
         const cards = issues
-          .filter((issue) => issue.state.id === state.id)
+          .filter((issue) => columnOf(issue) === column.key)
           .sort((a, b) => (a.priority === 0 ? 5 : a.priority) - (b.priority === 0 ? 5 : b.priority));
         return (
           <div
-            key={state.id}
-            className={`board-column${overState === state.id ? " drag-over" : ""}`}
+            key={column.key}
+            className={`board-column${overState === column.key ? " drag-over" : ""}`}
             onDragOver={(event) => {
               event.preventDefault();
-              setOverState(state.id);
+              setOverState(column.key);
             }}
-            onDragLeave={() => setOverState((current) => (current === state.id ? null : current))}
-            onDrop={() => drop(state.id)}
+            onDragLeave={() => setOverState((current) => (current === column.key ? null : current))}
+            onDrop={() => drop(column)}
           >
             <div className="col-header">
-              <StateDot state={state} />
-              {state.name}
+              {column.state && <StateDot state={column.state} />}
+              {column.label}
               <span className="count" style={{ color: "var(--text-faint)", fontWeight: 400 }}>
                 {cards.length}
               </span>
