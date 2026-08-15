@@ -107,6 +107,23 @@ function resolvePayload(
 }
 
 
+/**
+ * Campos de relaciones del front-matter: listas de identificadores, ordenadas
+ * y omitidas cuando están vacías (evita churn en issues sin relaciones).
+ */
+function relationFields(db: Database, issueId: string): Record<string, string[]> {
+  const idents = (sql: string) =>
+    db.query(sql).values(issueId).map((row) => row[0] as string);
+  const blockedBy = idents(
+    `SELECT teams.key || '-' || issues.number FROM issue_relations
+     JOIN issues ON issues.id = issue_relations.issue_id
+     JOIN teams ON teams.id = issues.team_id
+     WHERE issue_relations.related_id = ?1 AND issue_relations.type = 'blocks'
+     ORDER BY teams.key, issues.number`,
+  );
+  return { ...(blockedBy.length > 0 ? { blockedBy } : {}) };
+}
+
 interface ExportContext {
   lookups: Lookups;
   teamKeys: Map<string, string>;
@@ -161,6 +178,9 @@ function writeIssue(
       labels: db.query(
         "SELECT labels.name FROM issue_labels JOIN labels ON labels.id = issue_labels.label_id WHERE issue_id = ?1 ORDER BY labels.name",
       ).values(issue.id).map((row) => row[0]),
+      // Relaciones (AT-175): se guardan una sola vez, en el extremo destino
+      // (blockedBy en el bloqueado); el importador reconstruye la dirección canónica.
+      ...relationFields(db, issue.id),
       createdAt: issue.created_at,
       updatedAt: issue.updated_at,
       archivedAt: issue.archived_at,

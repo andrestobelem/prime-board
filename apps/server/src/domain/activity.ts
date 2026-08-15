@@ -14,6 +14,8 @@ export type ActivityType =
   | "milestone_changed"
   | "labeled"
   | "unlabeled"
+  | "relation_added"
+  | "relation_removed"
   | "commented"
   | "archived";
 

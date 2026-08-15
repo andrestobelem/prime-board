@@ -46,7 +46,7 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
   db.transaction(() => {
     // 2. Vaciar el índice (orden inverso a las FKs).
     for (const table of [
-      "issue_labels", "activity", "comments", "api_keys", "webhooks", "issues",
+      "issue_relations", "issue_labels", "activity", "comments", "api_keys", "webhooks", "issues",
       "milestones", "project_teams", "projects", "labels", "workflow_states", "teams",
       "actors", "workspace",
     ]) {
@@ -162,13 +162,24 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       result.issues += 1;
     }
 
-    // 7. Segunda pasada: parents.
+    // 7. Segunda pasada: parents y relaciones (necesitan todos los issues creados).
     for (const issue of snapshots) {
       if (!issue.parent) continue;
       const child = issueIds.get(issue.id);
       const parent = issueIds.get(issue.parent);
       if (child && parent) {
         db.query("UPDATE issues SET parent_id = ?1 WHERE id = ?2").run(parent, child);
+      }
+    }
+    for (const issue of snapshots) {
+      const target = issueIds.get(issue.id)!;
+      for (const blockerRef of issue.blockedBy ?? []) {
+        const blocker = issueIds.get(blockerRef);
+        if (!blocker) continue;
+        // blockedBy en el snapshot === fila canónica blocks(bloqueante → bloqueado).
+        db.query(
+          "INSERT INTO issue_relations (id, issue_id, related_id, type, created_at) VALUES (?1, ?2, ?3, 'blocks', ?4)",
+        ).run(newId(), blocker, target, timestamp);
       }
     }
 

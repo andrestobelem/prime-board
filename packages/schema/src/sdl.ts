@@ -87,6 +87,8 @@ export const typeDefs = /* GraphQL */ `
     project: Project
     milestone: Milestone
     comments: [Comment!]!
+    """Relaciones con otros issues (blocked-by y blocks), desde ambos extremos."""
+    relations: [IssueRelation!]!
     """Historial append-only de cambios del issue."""
     activity: [Activity!]!
     """Deep-link a la UI."""
@@ -96,6 +98,23 @@ export const typeDefs = /* GraphQL */ `
     createdAt: DateTime!
     updatedAt: DateTime!
     archivedAt: DateTime
+  }
+
+  enum IssueRelationType {
+    """Este issue bloquea al relacionado."""
+    BLOCKS
+    """Este issue está bloqueado por el relacionado."""
+    BLOCKED_BY
+  }
+
+  """Relación entre dos issues, vista desde el issue consultado."""
+  type IssueRelation {
+    id: ID!
+    """Tipo desde la perspectiva del issue consultado (el otro extremo ve la inversa)."""
+    type: IssueRelationType!
+    """El issue del otro extremo."""
+    relatedIssue: Issue!
+    createdAt: DateTime!
   }
 
   type PageInfo {
@@ -348,6 +367,19 @@ export const typeDefs = /* GraphQL */ `
     issue: Issue!
   }
 
+  input IssueRelationCreateInput {
+    """Acepta UUID o identificador legible (AT-126)."""
+    issueId: ID!
+    relatedIssueId: ID!
+    """El tipo desde la perspectiva de issueId; se normaliza al guardar."""
+    type: IssueRelationType!
+  }
+
+  type IssueRelationPayload {
+    success: Boolean!
+    relation: IssueRelation!
+  }
+
   input CommentCreateInput {
     """Acepta UUID o identificador legible (AT-126)."""
     issueId: ID!
@@ -466,6 +498,8 @@ export const typeDefs = /* GraphQL */ `
     labelUpdate(id: ID!, input: LabelUpdateInput!): LabelPayload!
     labelDelete(id: ID!): LabelDeletePayload!
     commentCreate(input: CommentCreateInput!): CommentPayload!
+    issueRelationCreate(input: IssueRelationCreateInput!): IssueRelationPayload!
+    issueRelationDelete(id: ID!): DeletePayload!
     projectCreate(input: ProjectCreateInput!): ProjectPayload!
     projectUpdate(id: ID!, input: ProjectUpdateInput!): ProjectPayload!
     projectArchive(id: ID!): ProjectPayload!

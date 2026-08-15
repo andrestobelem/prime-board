@@ -11,6 +11,9 @@ import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getMilestone, mapMilestone } from "../domain/milestones.ts";
 import { getProject, mapProject } from "../domain/projects.ts";
+import {
+  createRelation, deleteRelation, listRelations, mapRelation, type RelationType,
+} from "../domain/relations.ts";
 import { getTeam, listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { requireViewer } from "./errors.ts";
@@ -63,6 +66,8 @@ export const issueResolvers = {
       issue._row.milestone_id ? mapMilestone(getMilestone(context.db, issue._row.milestone_id)!) : null,
     comments: (issue: MappedIssue, _args: unknown, context: Context) =>
       listComments(context.db, issue.id).map(mapComment),
+    relations: (issue: MappedIssue, _args: unknown, context: Context) =>
+      listRelations(context.db, issue.id).map(mapRelation),
     activity: (issue: MappedIssue, _args: unknown, context: Context) =>
       listActivity(context.db, issue.id).map(mapActivity),
     url: (issue: MappedIssue, _args: unknown, context: Context) =>
@@ -74,6 +79,11 @@ export const issueResolvers = {
       const slug = slugify(row.title);
       return `${prefix}/${identifierOf(row).toLowerCase()}${slug ? `-${slug}` : ""}`;
     },
+  },
+
+  IssueRelation: {
+    relatedIssue: (relation: { _relatedId: string }, _args: unknown, context: Context) =>
+      mapIssue(getIssue(context.db, relation._relatedId)!),
   },
 
   Comment: {
@@ -144,6 +154,27 @@ export const issueResolvers = {
       context.events.emit("issue.archived", viewer, issueEventData(row));
       context.repo?.sync();
       return { success: true, issue: mapIssue(row) };
+    },
+    issueRelationCreate: (
+      _parent: unknown,
+      args: { input: { issueId: string; relatedIssueId: string; type: RelationType } },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      const created = createRelation(context.db, viewer.id, args.input);
+      context.events.emit("issue.updated", viewer, issueEventData(created.issue), {
+        relations: { from: null, to: { type: created.view.type, issue: identifierOf(created.relatedIssue) } },
+      });
+      context.repo?.syncIssue(created.issue.id);
+      context.repo?.syncIssue(created.relatedIssue.id);
+      return { success: true, relation: mapRelation(created.view) };
+    },
+    issueRelationDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      const removed = deleteRelation(context.db, viewer.id, args.id);
+      context.repo?.syncIssue(removed.issueId);
+      context.repo?.syncIssue(removed.relatedId);
+      return { success: true };
     },
     commentCreate: (
       _parent: unknown,

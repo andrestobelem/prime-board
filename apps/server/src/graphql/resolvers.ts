@@ -37,6 +37,7 @@ export const resolvers = {
     TRIAGE: "triage", BACKLOG: "backlog", UNSTARTED: "unstarted",
     STARTED: "started", COMPLETED: "completed", CANCELED: "canceled",
   },
+  IssueRelationType: { BLOCKS: "blocks", BLOCKED_BY: "blocked_by" },
   ProjectState: {
     BACKLOG: "backlog", PLANNED: "planned", STARTED: "started",
     PAUSED: "paused", COMPLETED: "completed", CANCELED: "canceled",
@@ -52,6 +53,7 @@ export const resolvers = {
   },
 
   Issue: issueResolvers.Issue,
+  IssueRelation: issueResolvers.IssueRelation,
   Project: projectResolvers.Project,
   Milestone: projectResolvers.Milestone,
   Comment: issueResolvers.Comment,
