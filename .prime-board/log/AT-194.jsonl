@@ -3,3 +3,7 @@
 {"actor":"admin","issue":"AT-194","payload":{"type":"blocked_by","issue":"AT-191"},"ts":"2026-08-15T09:59:45.211Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-194","payload":{"type":"blocks","issue":"AT-195"},"ts":"2026-08-15T09:59:45.319Z","type":"relation_added"}
 {"actor":"admin","issue":"AT-194","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-15T10:00:01.839Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-194","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-15T10:48:30.882Z","type":"state_changed"}
+{"actor":"admin","issue":"AT-194","payload":{"from":null,"to":"admin"},"ts":"2026-08-15T10:48:30.882Z","type":"assigned"}
+{"actor":"admin","issue":"AT-194","payload":{"body":"Hecho en el commit anterior. Se borraron las 7 llamadas a context.repo?.sync() de project-resolvers.ts (projectCreate/Update/Archive/Unarchive, milestoneCreate/Update/Delete). Ninguna de estas usaba syncIssue, así que no hay trade-off de rendimiento como en AT-193.\n\nVerificado en vivo: projectCreate real sin línea manual apareció en .prime-board/meta/projects.json, lo archivé después de confirmar. bun test: 181 pass."},"ts":"2026-08-15T10:49:20.882Z","type":"commented"}
+{"actor":"admin","issue":"AT-194","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T10:49:20.937Z","type":"state_changed"}
