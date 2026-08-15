@@ -34,19 +34,28 @@ export function listComments(db: Database, issueId: string): CommentRow[] {
 export function createComment(
   db: Database,
   actorId: string,
-  input: { issueId: string; body: string },
+  input: { issueId: string; body: string; createdAt?: string | null; authorId?: string | null },
 ): CommentRow {
   const issue = getIssueByRef(db, input.issueId);
   if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${input.issueId}`);
   const body = input.body.trim();
   if (!body) throw apiError("VALIDATION_FAILED", "Comment body cannot be empty");
 
+  if (input.createdAt != null && Number.isNaN(Date.parse(input.createdAt))) {
+    throw apiError("VALIDATION_FAILED", "createdAt must be a valid ISO-8601 date");
+  }
+  if (input.authorId != null && !db.query("SELECT id FROM actors WHERE id = ?1").get(input.authorId)) {
+    throw apiError("NOT_FOUND", "Comment author not found");
+  }
+  const author = input.authorId ?? actorId;
+  const timestamp = input.createdAt ?? now();
+
   const id = newId();
   db.transaction(() => {
     db.query(
       "INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-    ).run(id, issue.id, actorId, body, now());
-    recordActivity(db, issue.id, actorId, "commented", { commentId: id });
+    ).run(id, issue.id, author, body, timestamp);
+    recordActivity(db, issue.id, author, "commented", { commentId: id }, input.createdAt ?? undefined);
   })();
   return db.query("SELECT * FROM comments WHERE id = ?1").get(id) as CommentRow;
 }

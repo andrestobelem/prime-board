@@ -280,6 +280,10 @@ export const typeDefs = /* GraphQL */ `
     projectId: ID
     """Labels a aplicar al crear (evita un issueUpdate extra)."""
     labelIds: [ID!]
+    """Fecha de creación original (imports); default: ahora."""
+    createdAt: DateTime
+    """Autor original (imports); default: el actor de la API key."""
+    creatorId: ID
   }
 
   input IssueUpdateInput {
@@ -306,6 +310,10 @@ export const typeDefs = /* GraphQL */ `
     """Acepta UUID o identificador legible (AT-126)."""
     issueId: ID!
     body: String!
+    """Fecha original (imports); default: ahora."""
+    createdAt: DateTime
+    """Autor original (imports); default: el actor de la API key."""
+    authorId: ID
   }
 
   type CommentPayload {

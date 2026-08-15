@@ -134,6 +134,10 @@ export interface IssueCreateInput {
   projectId?: string | null;
   /** Labels a aplicar en la creación (evita un issueUpdate extra en imports). */
   labelIds?: string[] | null;
+  /** Fecha de creación original (imports); default: ahora. */
+  createdAt?: string | null;
+  /** Autor original (imports); default: el actor de la API key. */
+  creatorId?: string | null;
 }
 
 export function createIssue(db: Database, actorId: string, input: IssueCreateInput): IssueRow {
@@ -164,6 +168,16 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
     }
   }
 
+  if (input.createdAt != null && Number.isNaN(Date.parse(input.createdAt))) {
+    throw apiError("VALIDATION_FAILED", "createdAt must be a valid ISO-8601 date");
+  }
+  if (input.creatorId != null && !db.query("SELECT id FROM actors WHERE id = ?1").get(input.creatorId)) {
+    throw apiError("NOT_FOUND", "Creator actor not found");
+  }
+  // En imports, autoría y fecha originales; si no, el actor de la key y ahora.
+  const creatorId = input.creatorId ?? actorId;
+  const createdAt = input.createdAt ?? null;
+
   const id = newId();
   db.transaction(() => {
     // Numeración por team, atómica dentro de la transacción. Con número explícito
@@ -184,7 +198,7 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
 
     if (input.parentId) validateParent(db, { id, team_id: team.id }, input.parentId);
 
-    const timestamp = now();
+    const timestamp = createdAt ?? now();
     db.query(
       `INSERT INTO issues (id, team_id, number, title, description, state_id, priority,
          assignee_id, parent_id, project_id, creator_id, sort_order, created_at, updated_at)
@@ -192,9 +206,9 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
     ).run(
       id, team.id, numbered.number, title, input.description ?? null, stateId,
       input.priority ?? 0, input.assigneeId ?? null, input.parentId ?? null,
-      input.projectId ?? null, actorId, 0, timestamp,
+      input.projectId ?? null, creatorId, 0, timestamp,
     );
-    recordActivity(db, id, actorId, "created", { title });
+    recordActivity(db, id, creatorId, "created", { title }, createdAt ?? undefined);
     if (input.labelIds?.length) {
       applyLabelOps(db, actorId, getIssue(db, id)!, { labelIds: input.labelIds });
     }

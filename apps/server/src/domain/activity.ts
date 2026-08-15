@@ -47,8 +47,10 @@ export function recordActivity(
   actorId: string,
   type: ActivityType,
   payload: Record<string, unknown> = {},
+  /** Timestamp explícito (imports); default: ahora. */
+  createdAt?: string,
 ): void {
   db.query(
     "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-  ).run(newId(), issueId, actorId, type, JSON.stringify(payload), now());
+  ).run(newId(), issueId, actorId, type, JSON.stringify(payload), createdAt ?? now());
 }
