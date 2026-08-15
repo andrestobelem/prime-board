@@ -109,12 +109,13 @@ export async function issueCommand(argv: string[]): Promise<void> {
         team: { type: "string" }, title: { type: "string" }, description: { type: "string" },
         priority: { type: "string" }, assignee: { type: "string" }, parent: { type: "string" },
         project: { type: "string" }, label: { type: "string", multiple: true },
-        json: { type: "boolean" },
+        number: { type: "string" }, json: { type: "boolean" },
       },
     });
     if (!values.team || !values.title) throw new UsageError(USAGE);
     const team = await resolveTeam(config, values.team);
     const input: Record<string, unknown> = { teamId: team.id, title: values.title };
+    if (values.number) input.number = Number(values.number);
     if (values.description) input.description = await readBody(values.description);
     if (values.priority) input.priority = priorityFromName(values.priority);
     if (values.assignee) input.assigneeId = await resolveAssignee(config, values.assignee);

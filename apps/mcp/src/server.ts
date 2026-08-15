@@ -116,6 +116,7 @@ export function createServer(config: McpConfig): McpServer {
     inputSchema: {
       id: z.string().optional().describe("Issue ID or identifier to update"),
       team: z.string().optional().describe("Team key or ID (required to create)"),
+      number: z.number().optional().describe("Fix the identifier number (imports only)"),
       title: z.string().optional(),
       description: z.string().optional(),
       state: z.string().optional().describe("State name, semantic type or ID"),
@@ -161,6 +162,7 @@ export function createServer(config: McpConfig): McpServer {
     }
     const team = await resolveTeam(config, args.team);
     input.teamId = team.id;
+    if (args.number !== undefined) input.number = args.number;
     if (args.state) {
       const resolved = resolveStateFilter(team.states, args.state);
       input.stateId = resolved.state?.eq ??

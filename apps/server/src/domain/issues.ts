@@ -123,6 +123,8 @@ function validateParent(db: Database, issue: { id: string; team_id: string }, pa
 export interface IssueCreateInput {
   teamId?: string | null;
   teamKey?: string | null;
+  /** Fija el número del identificador (imports); default: numeración automática. */
+  number?: number | null;
   title: string;
   description?: string | null;
   stateId?: string | null;
@@ -148,12 +150,29 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
     }
   }
 
+  if (input.number != null) {
+    if (!Number.isInteger(input.number) || input.number < 1) {
+      throw apiError("VALIDATION_FAILED", "Issue number must be a positive integer");
+    }
+    const taken = db
+      .query("SELECT id FROM issues WHERE team_id = ?1 AND number = ?2")
+      .get(team.id, input.number);
+    if (taken) {
+      throw apiError("VALIDATION_FAILED", `Issue number ${input.number} is already taken in this team`);
+    }
+  }
+
   const id = newId();
   db.transaction(() => {
-    // Numeración por team, atómica dentro de la transacción.
-    const numbered = db
-      .query("UPDATE teams SET next_issue_number = next_issue_number + 1 WHERE id = ?1 RETURNING next_issue_number - 1 AS number")
-      .get(team.id) as { number: number };
+    // Numeración por team, atómica dentro de la transacción. Con número explícito
+    // (imports), next_issue_number salta más allá para no colisionar después.
+    const numbered = input.number != null
+      ? (db.query(
+          "UPDATE teams SET next_issue_number = max(next_issue_number, ?2 + 1) WHERE id = ?1 RETURNING ?2 AS number",
+        ).get(team.id, input.number) as { number: number })
+      : (db.query(
+          "UPDATE teams SET next_issue_number = next_issue_number + 1 WHERE id = ?1 RETURNING next_issue_number - 1 AS number",
+        ).get(team.id) as { number: number });
 
     // Estado default: el de menor posición (Backlog en el workflow default).
     const stateId =

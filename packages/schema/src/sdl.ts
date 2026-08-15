@@ -269,6 +269,8 @@ export const typeDefs = /* GraphQL */ `
   input IssueCreateInput {
     teamId: ID
     teamKey: String
+    """Fija el número del identificador (para imports); default: numeración automática."""
+    number: Int
     title: String!
     description: String
     stateId: ID
