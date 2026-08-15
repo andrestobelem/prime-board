@@ -9,6 +9,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { newId, now } from "../db/util.ts";
+import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
 
 export interface RebuildResult {
   issues: number;
@@ -35,10 +36,12 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
   if (!existsSync(base)) throw new Error(`No .prime-board directory in ${rootDir}`);
 
   // 1. Credenciales locales: se guardan por NOMBRE de actor porque los ids cambian.
-  const keys = db.query(
-    "SELECT api_keys.name, api_keys.hash, api_keys.last_used_at, api_keys.created_at, actors.name AS actor_name " +
-    "FROM api_keys JOIN actors ON actors.id = api_keys.actor_id",
-  ).all() as Array<Record<string, string | null>>;
+  const keys = db
+    .query(
+      "SELECT api_keys.name, api_keys.hash, api_keys.last_used_at, api_keys.created_at, actors.name AS actor_name " +
+        "FROM api_keys JOIN actors ON actors.id = api_keys.actor_id",
+    )
+    .all() as Array<Record<string, string | null>>;
   const webhooks = db.query("SELECT * FROM webhooks").all() as Array<Record<string, unknown>>;
 
   const result: RebuildResult = { issues: 0, events: 0, comments: 0, preservedKeys: 0 };
@@ -46,9 +49,21 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
   db.transaction(() => {
     // 2. Vaciar el índice (orden inverso a las FKs).
     for (const table of [
-      "issue_relations", "issue_labels", "activity", "comments", "api_keys", "webhooks", "issues",
-      "milestones", "project_teams", "projects", "labels", "workflow_states", "teams",
-      "actors", "workspace",
+      "issue_relations",
+      "issue_labels",
+      "activity",
+      "comments",
+      "api_keys",
+      "webhooks",
+      "issues",
+      "milestones",
+      "project_teams",
+      "projects",
+      "labels",
+      "workflow_states",
+      "teams",
+      "actors",
+      "workspace",
     ]) {
       db.query(`DELETE FROM ${table}`).run();
     }
@@ -56,15 +71,19 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
     const timestamp = now();
     // 3. Workspace y actores.
     const workspace = readJson(join(base, "meta", "workspace.json"));
-    db.query("INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)")
-      .run(newId(), workspace.name ?? "Prime Board", workspace.urlKey ?? "prime-board", timestamp);
+    db.query(
+      "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+    ).run(newId(), workspace.name ?? "Prime Board", workspace.urlKey ?? "prime-board", timestamp);
 
     const actorIds = new Map<string, string>();
-    for (const actor of readJson(join(base, "meta", "actors.json")) as Array<Record<string, string | null>>) {
+    for (const actor of readJson(join(base, "meta", "actors.json")) as Array<
+      Record<string, string | null>
+    >) {
       const id = newId();
       actorIds.set(actor.name!, id);
-      db.query("INSERT INTO actors (id, name, email, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)")
-        .run(id, actor.name as string, actor.email ?? null, actor.type as string, timestamp);
+      db.query(
+        "INSERT INTO actors (id, name, email, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+      ).run(id, actor.name as string, actor.email ?? null, actor.type as string, timestamp);
     }
 
     // 4. Teams, estados y labels (clave: team key + nombre).
@@ -74,8 +93,9 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
     for (const team of readJson(join(base, "meta", "teams.json")) as Array<Record<string, any>>) {
       const teamId = newId();
       teamIds.set(team.key, teamId);
-      db.query("INSERT INTO teams (id, name, key, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)")
-        .run(teamId, team.name, team.key, team.description ?? null, timestamp);
+      db.query(
+        "INSERT INTO teams (id, name, key, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+      ).run(teamId, team.name, team.key, team.description ?? null, timestamp);
       for (const state of team.states ?? []) {
         const stateId = newId();
         stateIds.set(`${team.key}/${state.name}`, stateId);
@@ -86,41 +106,61 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       for (const label of team.labels ?? []) {
         const labelId = newId();
         labelIds.set(label.name, labelId);
-        db.query("INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
-          .run(labelId, label.name, label.color, teamId, timestamp);
+        db.query(
+          "INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        ).run(labelId, label.name, label.color, teamId, timestamp);
       }
       // Estado default explícito (AT-180); exports viejos sin el campo caen al
       // primero por posición (los estados vienen ordenados así en el export).
       const defaultState = team.defaultState
-        ? stateIds.get(`${team.key}/${team.defaultState}`) ?? null
+        ? (stateIds.get(`${team.key}/${team.defaultState}`) ?? null)
         : null;
-      const firstState = team.states?.[0] ? stateIds.get(`${team.key}/${team.states[0].name}`) ?? null : null;
-      db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2")
-        .run(defaultState ?? firstState, teamId);
+      const firstState = team.states?.[0]
+        ? (stateIds.get(`${team.key}/${team.states[0].name}`) ?? null)
+        : null;
+      db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(
+        defaultState ?? firstState,
+        teamId,
+      );
     }
-    for (const label of readJson(join(base, "meta", "workspace-labels.json")) as Array<Record<string, string>>) {
+    for (const label of readJson(join(base, "meta", "workspace-labels.json")) as Array<
+      Record<string, string>
+    >) {
       const labelId = newId();
       labelIds.set(label.name!, labelId);
-      db.query("INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, NULL, ?4)")
-        .run(labelId, label.name as string, label.color as string, timestamp);
+      db.query(
+        "INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, NULL, ?4)",
+      ).run(labelId, label.name as string, label.color as string, timestamp);
     }
 
     // 5. Proyectos y milestones.
     const projectIds = new Map<string, string>();
     const milestoneIds = new Map<string, string>();
-    for (const project of readJson(join(base, "meta", "projects.json")) as Array<Record<string, any>>) {
+    for (const project of readJson(join(base, "meta", "projects.json")) as Array<
+      Record<string, any>
+    >) {
       const projectId = newId();
       projectIds.set(project.name, projectId);
       db.query(
         `INSERT INTO projects (id, name, description, state, lead_id, target_date, created_at, updated_at, archived_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
-      ).run(projectId, project.name, project.description ?? null, project.state,
-            project.lead ? actorIds.get(project.lead) ?? null : null,
-            project.targetDate ?? null, timestamp, project.archived ? timestamp : null);
+      ).run(
+        projectId,
+        project.name,
+        project.description ?? null,
+        project.state,
+        project.lead ? (actorIds.get(project.lead) ?? null) : null,
+        project.targetDate ?? null,
+        timestamp,
+        project.archived ? timestamp : null,
+      );
       for (const teamKey of project.teams ?? []) {
         const teamId = teamIds.get(teamKey);
         if (teamId) {
-          db.query("INSERT INTO project_teams (project_id, team_id) VALUES (?1, ?2)").run(projectId, teamId);
+          db.query("INSERT INTO project_teams (project_id, team_id) VALUES (?1, ?2)").run(
+            projectId,
+            teamId,
+          );
         }
       }
       for (const milestone of project.milestones ?? []) {
@@ -129,8 +169,15 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         db.query(
           `INSERT INTO milestones (id, project_id, name, description, target_date, position, created_at, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
-        ).run(milestoneId, projectId, milestone.name, milestone.description ?? null,
-              milestone.targetDate ?? null, milestone.position ?? 0, timestamp);
+        ).run(
+          milestoneId,
+          projectId,
+          milestone.name,
+          milestone.description ?? null,
+          milestone.targetDate ?? null,
+          milestone.position ?? 0,
+          timestamp,
+        );
       }
     }
 
@@ -154,17 +201,30 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
            parent_id, project_id, milestone_id, creator_id, sort_order, created_at, updated_at, archived_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, 0, ?12, ?13, ?14)`,
       ).run(
-        id, teamId, Number(numberText), issue.title, issue.description ?? null, stateId,
-        issue.priority ?? 0, issue.assignee ? actorIds.get(issue.assignee) ?? null : null,
-        issue.project ? projectIds.get(issue.project) ?? null : null,
-        issue.milestone && issue.project ? milestoneIds.get(`${issue.project}/${issue.milestone}`) ?? null : null,
+        id,
+        teamId,
+        Number(numberText),
+        issue.title,
+        issue.description ?? null,
+        stateId,
+        issue.priority ?? 0,
+        issue.assignee ? (actorIds.get(issue.assignee) ?? null) : null,
+        issue.project ? (projectIds.get(issue.project) ?? null) : null,
+        issue.milestone && issue.project
+          ? (milestoneIds.get(`${issue.project}/${issue.milestone}`) ?? null)
+          : null,
         actorIds.get(issue.creator) ?? [...actorIds.values()][0]!,
-        issue.createdAt, issue.updatedAt ?? issue.createdAt, issue.archivedAt ?? null,
+        issue.createdAt,
+        issue.updatedAt ?? issue.createdAt,
+        issue.archivedAt ?? null,
       );
       for (const labelName of issue.labels ?? []) {
         const labelId = labelIds.get(labelName);
         if (labelId) {
-          db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(id, labelId);
+          db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(
+            id,
+            labelId,
+          );
         }
       }
       result.issues += 1;
@@ -182,9 +242,11 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
     for (const issue of snapshots) {
       const self = issueIds.get(issue.id)!;
       const insertRelation = (sourceId: string, targetId: string, type: string) =>
-        db.query(
-          "INSERT INTO issue_relations (id, issue_id, related_id, type, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        ).run(newId(), sourceId, targetId, type, timestamp);
+        db
+          .query(
+            "INSERT INTO issue_relations (id, issue_id, related_id, type, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+          )
+          .run(newId(), sourceId, targetId, type, timestamp);
       // blockedBy en el snapshot === fila canónica blocks(bloqueante → bloqueado);
       // related y duplicateOf se listan en el extremo origen de la fila.
       for (const ref of issue.blockedBy ?? []) {
@@ -223,36 +285,25 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
     for (const [key, id] of stateIds) byName.states.set(key.split("/")[1]!, id);
     for (const [key, id] of milestoneIds) byName.milestones.set(key.split("/")[1]!, id);
 
-    const denormalize = (type: string, payload: Record<string, unknown>): Record<string, unknown> => {
-      const lookup = (table: Map<string, string>, value: unknown) =>
-        typeof value === "string" ? table.get(value) ?? null : null;
-      if (type === "created") {
-        const { team, state, assignee, parent, project, milestone, ...rest } = payload as Record<string, any>;
-        return {
-          ...rest,
-          teamId: team ? teamIds.get(team) ?? null : null,
-          stateId: lookup(byName.states, state),
-          assigneeId: lookup(byName.actors, assignee),
-          parentId: lookup(byName.issues, parent),
-          projectId: lookup(byName.projects, project),
-          milestoneId: lookup(byName.milestones, milestone),
-        };
-      }
-      const tables: Record<string, Map<string, string>> = {
-        state_changed: byName.states,
-        assigned: byName.actors,
-        project_changed: byName.projects,
-        milestone_changed: byName.milestones,
-        parent_changed: byName.issues,
-      };
-      const table = tables[type];
-      if (!table) return payload;
-      const translate = (value: unknown) => (typeof value === "string" ? table.get(value) ?? value : value);
-      return {
-        ...payload,
-        ...(payload.from !== undefined ? { from: translate(payload.from) } : {}),
-        ...(payload.to !== undefined ? { to: translate(payload.to) } : {}),
-      };
+    // Qué campos son referencia y a qué tabla vive en un solo lugar (AT-187):
+    // acá solo se resuelve clave natural→id con los mapas que este import ya
+    // construyó (byName + teamIds), en la dirección inversa a exporter.ts.
+    const denormalize = (
+      type: string,
+      payload: Record<string, unknown>,
+    ): Record<string, unknown> => {
+      const resolve = (table: RefTable, value: string): string | undefined =>
+        (
+          ({
+            states: byName.states,
+            actors: byName.actors,
+            projects: byName.projects,
+            milestones: byName.milestones,
+            issues: byName.issues,
+            teams: teamIds,
+          }) satisfies Record<RefTable, Map<string, string>>
+        )[table].get(value);
+      return translateActivityRefs(type, payload, resolve, "toIds");
     };
 
     // 9. Historial desde el log.
@@ -268,14 +319,21 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         // Los comentarios se reconstruyen desde el log: el evento `commented` ya
         // trae autor, fecha y body (AT-165), así que no se duplican en el snapshot.
         if (event.type === "commented" && event.payload?.body) {
-          db.query("INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
-            .run(newId(), issueId, actorId, event.payload.body as string, event.ts as string);
+          db.query(
+            "INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+          ).run(newId(), issueId, actorId, event.payload.body as string, event.ts as string);
           result.comments += 1;
         }
         db.query(
           "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        ).run(newId(), issueId, actorId,
-              event.type, JSON.stringify(denormalize(event.type, event.payload ?? {})), event.ts);
+        ).run(
+          newId(),
+          issueId,
+          actorId,
+          event.type,
+          JSON.stringify(denormalize(event.type, event.payload ?? {})),
+          event.ts,
+        );
         result.events += 1;
       }
     }
@@ -284,16 +342,29 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
     for (const key of keys) {
       const actorId = actorIds.get(key.actor_name as string);
       if (!actorId) continue;
-      db.query("INSERT INTO api_keys (id, actor_id, name, hash, last_used_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
-        .run(newId(), actorId, key.name as string, key.hash as string,
-             (key.last_used_at ?? null) as string | null, key.created_at as string);
+      db.query(
+        "INSERT INTO api_keys (id, actor_id, name, hash, last_used_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      ).run(
+        newId(),
+        actorId,
+        key.name as string,
+        key.hash as string,
+        (key.last_used_at ?? null) as string | null,
+        key.created_at as string,
+      );
       result.preservedKeys += 1;
     }
     for (const hook of webhooks) {
       db.query(
         "INSERT INTO webhooks (id, url, secret, events, enabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-      ).run(hook.id as string, hook.url as string, hook.secret as string,
-            hook.events as string, hook.enabled as number, hook.created_at as string);
+      ).run(
+        hook.id as string,
+        hook.url as string,
+        hook.secret as string,
+        hook.events as string,
+        hook.enabled as number,
+        hook.created_at as string,
+      );
     }
   })();
 
