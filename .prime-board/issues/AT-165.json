@@ -1,0 +1,21 @@
+{
+  "archivedAt": null,
+  "assignee": null,
+  "comments": [],
+  "createdAt": "2026-08-15T05:05:01.953Z",
+  "creator": "claude",
+  "description": "Al exportar (AT-156) quedó claro que el log de actividad es un **historial para la UI**, no un event log completo:\n\n- `created` solo guarda `{title}` — faltan descripción, team, número, prioridad, estado inicial, proyecto, parent.\n- `description_changed` guarda `{}` (sin el valor nuevo).\n\nPor eso la Fase 1 exporta **snapshot + log**: el snapshot es hoy la única fuente completa. Para que la Fase 3 (log como fuente de verdad) sea posible, los eventos tienen que ser autosuficientes: `created` con el payload completo y `*_changed` con el valor nuevo.\n\n**Bloquea AT-158.** Conviene hacerlo junto con AT-157 (importador), que es donde se va a notar la diferencia.\n\n*Encontrado implementando AT-156.*",
+  "id": "AT-165",
+  "labels": [
+    "db",
+    "epic:repo-truth"
+  ],
+  "milestone": null,
+  "parent": null,
+  "priority": 2,
+  "project": null,
+  "state": "Backlog",
+  "team": "AT",
+  "title": "Los eventos del log no alcanzan para reconstruir un issue",
+  "updatedAt": "2026-08-15T05:05:01.953Z"
+}

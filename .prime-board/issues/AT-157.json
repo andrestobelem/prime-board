@@ -1,6 +1,6 @@
 {
   "archivedAt": null,
-  "assignee": null,
+  "assignee": "claude",
   "comments": [],
   "createdAt": "2026-08-15T04:36:08.055Z",
   "creator": "claude",
@@ -15,8 +15,8 @@
   "parent": null,
   "priority": 2,
   "project": "Repo como fuente de verdad",
-  "state": "Backlog",
+  "state": "In Progress",
   "team": "AT",
   "title": "Fase 2 — Importador: reconstruir la DB desde el repo",
-  "updatedAt": "2026-08-15T04:55:39.762Z"
+  "updatedAt": "2026-08-15T05:06:03.595Z"
 }

@@ -1,7 +1,13 @@
 {
   "archivedAt": null,
   "assignee": "claude",
-  "comments": [],
+  "comments": [
+    {
+      "actor": "claude",
+      "body": "Entregado (`f65ca9e` el exportador, `cb2450c` la réplica). **El repo ya tiene los tickets**: `.prime-board/` con 93 archivos (44 issues, 218 eventos).\n\n```\n.prime-board/\n  meta/{workspace,actors,teams,projects,workspace-labels}.json\n  issues/AT-156.json     ← snapshot con claves naturales\n  log/AT-156.jsonl       ← eventos append-only\n```\n\nDecisiones de implementación:\n- **Claves naturales, no UUIDs** (team `AT`, estado `In Progress`, assignee `claude`, milestone `Fase 1 — Exportador`): un test verifica que no quede ningún UUID en los snapshots. Los ids no sobreviven a un merge entre clones — era el riesgo 5 del doc de AT-153.\n- **Los payloads del log también se traducen** (`state_changed.to` = \"In Progress\", no un UUID), así el diff es legible.\n- **Determinista:** claves ordenadas y regeneración completa; exportar dos veces no produce diff (test explícito).\n- **Sin credenciales:** test que falla si aparece el secret de un webhook, una API key o las palabras `hash`/`secret` en cualquier archivo exportado.\n\n6 tests nuevos (106 en total). `bun run export [--team AT] [--out dir]`.\n\n🐛 **Bug encontrado dogfoodeando:** el script exportaba a `apps/server/.prime-board/` porque los scripts de workspace corren con `--cwd apps/server`. Ahora resuelve la raíz del repo con `git rev-parse --show-toplevel`.",
+      "createdAt": "2026-08-15T05:05:01.946Z"
+    }
+  ],
   "createdAt": "2026-08-15T04:36:08.048Z",
   "creator": "claude",
   "description": "Primer paso del plan de AT-153. Comando `pb export` (y/o `bun run export`) que escribe el estado del board en el repo:\n\n- `.prime-board/log/<ID>.jsonl` — log append-only de eventos por issue (desde la tabla `activity`).\n- `.prime-board/meta/*.json` — teams, estados, labels y proyectos (clave natural, no UUID).\n- Determinista: exportar dos veces sin cambios no debe producir diff.\n- **Excluir credenciales**: `api_keys.hash` y `webhooks.secret` no se exportan nunca.\n\nLa DB sigue siendo la fuente de verdad en esta fase. Riesgo bajo.",
@@ -15,8 +21,8 @@
   "parent": null,
   "priority": 2,
   "project": "Repo como fuente de verdad",
-  "state": "In Progress",
+  "state": "Done",
   "team": "AT",
   "title": "Fase 1 — Exportador: réplica de los tickets en el repo",
-  "updatedAt": "2026-08-15T05:03:37.335Z"
+  "updatedAt": "2026-08-15T05:05:01.950Z"
 }

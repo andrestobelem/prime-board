@@ -91,5 +91,48 @@
         "type": "canceled"
       }
     ]
+  },
+  {
+    "description": "Default team",
+    "key": "PB",
+    "labels": [
+      {
+        "color": "#eb5757",
+        "name": "bug"
+      }
+    ],
+    "name": "Prime Board",
+    "states": [
+      {
+        "color": "#95a2b3",
+        "name": "Backlog",
+        "position": 0,
+        "type": "backlog"
+      },
+      {
+        "color": "#e2e2e2",
+        "name": "Todo",
+        "position": 1,
+        "type": "unstarted"
+      },
+      {
+        "color": "#f2c94c",
+        "name": "In Progress",
+        "position": 2,
+        "type": "started"
+      },
+      {
+        "color": "#5e6ad2",
+        "name": "Done",
+        "position": 3,
+        "type": "completed"
+      },
+      {
+        "color": "#95a2b3",
+        "name": "Canceled",
+        "position": 4,
+        "type": "canceled"
+      }
+    ]
   }
 ]
