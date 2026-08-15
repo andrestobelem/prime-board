@@ -176,3 +176,81 @@ describe("validación de ciclos en relaciones de bloqueo (AT-176)", () => {
     ]);
   });
 });
+
+describe("relaciones related y duplicate-of (AT-178)", () => {
+  beforeAll(async () => {
+    for (const title of ["Rel A", "Rel B", "Rel C"]) {
+      await gql(app, `mutation($t: String!) {
+        issueCreate(input: { teamKey: "PB", title: $t }) { success }
+      }`, { t: title });
+    }
+  });
+
+  it("related se ve igual desde ambos issues", async () => {
+    const created = await createRelation("PB-7", "PB-8", "RELATED");
+    expect(created.errors).toBeUndefined();
+    expect(await relationsOf("PB-7")).toMatchObject([
+      { type: "RELATED", relatedIssue: { identifier: "PB-8" } },
+    ]);
+    expect(await relationsOf("PB-8")).toMatchObject([
+      { type: "RELATED", relatedIssue: { identifier: "PB-7" } },
+    ]);
+  });
+
+  it("related es simétrica también para el duplicado: la inversa se rechaza", async () => {
+    const result = await createRelation("PB-8", "PB-7", "RELATED");
+    expect(result.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("duplicate of es dirigida y el otro extremo muestra duplicated by", async () => {
+    const created = await createRelation("PB-9", "PB-7", "DUPLICATE_OF");
+    expect(created.errors).toBeUndefined();
+    expect(await relationsOf("PB-9")).toMatchObject([
+      { type: "DUPLICATE_OF", relatedIssue: { identifier: "PB-7" } },
+    ]);
+    const fromCanonical = (await relationsOf("PB-7")).filter((r) => r.type === "DUPLICATED_BY");
+    expect(fromCanonical).toMatchObject([{ relatedIssue: { identifier: "PB-9" } }]);
+  });
+
+  it("DUPLICATED_BY se normaliza a la misma fila que DUPLICATE_OF", async () => {
+    const duplicate = await createRelation("PB-7", "PB-9", "DUPLICATED_BY");
+    expect(duplicate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("no se les aplica validación de ciclos: no son relaciones de bloqueo", async () => {
+    // Cadena circular de duplicados PB-7 → PB-8 → PB-9 → PB-7: permitida.
+    const one = await createRelation("PB-7", "PB-8", "DUPLICATE_OF");
+    const two = await createRelation("PB-8", "PB-9", "DUPLICATE_OF");
+    expect(one.errors).toBeUndefined();
+    expect(two.errors).toBeUndefined();
+  });
+
+  it("round-trip por el repo: related y duplicateOf sobreviven un rebuild", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pb-relations-178-"));
+    const other = mkdtempSync(join(tmpdir(), "pb-relations-178-rt-"));
+    try {
+      exportBoard(app.db, dir);
+      const snapshot = readFileSync(join(dir, ".prime-board", "issues", "PB-9.md"), "utf8");
+      expect(snapshot).toContain("duplicateOf:");
+
+      const fresh = new Database(":memory:", { strict: true });
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      rebuildFromRepo(fresh, dir);
+      const counts = fresh.query(
+        "SELECT type, count(*) AS n FROM issue_relations GROUP BY type ORDER BY type",
+      ).all();
+      const original = app.db.query(
+        "SELECT type, count(*) AS n FROM issue_relations GROUP BY type ORDER BY type",
+      ).all();
+      expect(counts).toEqual(original);
+
+      exportBoard(fresh, other);
+      expect(readFileSync(join(other, ".prime-board", "issues", "PB-9.md"), "utf8")).toBe(snapshot);
+      fresh.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+});

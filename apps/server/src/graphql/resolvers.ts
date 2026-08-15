@@ -37,7 +37,10 @@ export const resolvers = {
     TRIAGE: "triage", BACKLOG: "backlog", UNSTARTED: "unstarted",
     STARTED: "started", COMPLETED: "completed", CANCELED: "canceled",
   },
-  IssueRelationType: { BLOCKS: "blocks", BLOCKED_BY: "blocked_by" },
+  IssueRelationType: {
+    BLOCKS: "blocks", BLOCKED_BY: "blocked_by", RELATED: "related",
+    DUPLICATE_OF: "duplicate_of", DUPLICATED_BY: "duplicated_by",
+  },
   ProjectState: {
     BACKLOG: "backlog", PLANNED: "planned", STARTED: "started",
     PAUSED: "paused", COMPLETED: "completed", CANCELED: "canceled",

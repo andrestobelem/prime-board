@@ -114,14 +114,29 @@ function resolvePayload(
 function relationFields(db: Database, issueId: string): Record<string, string[]> {
   const idents = (sql: string) =>
     db.query(sql).values(issueId).map((row) => row[0] as string);
-  const blockedBy = idents(
+  // El otro extremo de cada fila canónica, según de qué lado esté este issue.
+  const fromSource = (type: string) => idents(
+    `SELECT teams.key || '-' || issues.number FROM issue_relations
+     JOIN issues ON issues.id = issue_relations.related_id
+     JOIN teams ON teams.id = issues.team_id
+     WHERE issue_relations.issue_id = ?1 AND issue_relations.type = '${type}'
+     ORDER BY teams.key, issues.number`,
+  );
+  const fromTarget = (type: string) => idents(
     `SELECT teams.key || '-' || issues.number FROM issue_relations
      JOIN issues ON issues.id = issue_relations.issue_id
      JOIN teams ON teams.id = issues.team_id
-     WHERE issue_relations.related_id = ?1 AND issue_relations.type = 'blocks'
+     WHERE issue_relations.related_id = ?1 AND issue_relations.type = '${type}'
      ORDER BY teams.key, issues.number`,
   );
-  return { ...(blockedBy.length > 0 ? { blockedBy } : {}) };
+  const blockedBy = fromTarget("blocks");
+  const related = fromSource("related");
+  const duplicateOf = fromSource("duplicate_of");
+  return {
+    ...(blockedBy.length > 0 ? { blockedBy } : {}),
+    ...(related.length > 0 ? { related } : {}),
+    ...(duplicateOf.length > 0 ? { duplicateOf } : {}),
+  };
 }
 
 interface ExportContext {
@@ -178,8 +193,8 @@ function writeIssue(
       labels: db.query(
         "SELECT labels.name FROM issue_labels JOIN labels ON labels.id = issue_labels.label_id WHERE issue_id = ?1 ORDER BY labels.name",
       ).values(issue.id).map((row) => row[0]),
-      // Relaciones (AT-175): se guardan una sola vez, en el extremo destino
-      // (blockedBy en el bloqueado); el importador reconstruye la dirección canónica.
+      // Relaciones (AT-175/AT-178): se guardan una sola vez — blockedBy en el
+      // extremo bloqueado; related y duplicateOf en el extremo origen de la fila.
       ...relationFields(db, issue.id),
       createdAt: issue.created_at,
       updatedAt: issue.updated_at,

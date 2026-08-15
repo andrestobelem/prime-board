@@ -172,14 +172,24 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       }
     }
     for (const issue of snapshots) {
-      const target = issueIds.get(issue.id)!;
-      for (const blockerRef of issue.blockedBy ?? []) {
-        const blocker = issueIds.get(blockerRef);
-        if (!blocker) continue;
-        // blockedBy en el snapshot === fila canónica blocks(bloqueante → bloqueado).
+      const self = issueIds.get(issue.id)!;
+      const insertRelation = (sourceId: string, targetId: string, type: string) =>
         db.query(
-          "INSERT INTO issue_relations (id, issue_id, related_id, type, created_at) VALUES (?1, ?2, ?3, 'blocks', ?4)",
-        ).run(newId(), blocker, target, timestamp);
+          "INSERT INTO issue_relations (id, issue_id, related_id, type, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        ).run(newId(), sourceId, targetId, type, timestamp);
+      // blockedBy en el snapshot === fila canónica blocks(bloqueante → bloqueado);
+      // related y duplicateOf se listan en el extremo origen de la fila.
+      for (const ref of issue.blockedBy ?? []) {
+        const blocker = issueIds.get(ref);
+        if (blocker) insertRelation(blocker, self, "blocks");
+      }
+      for (const ref of issue.related ?? []) {
+        const other = issueIds.get(ref);
+        if (other) insertRelation(self, other, "related");
+      }
+      for (const ref of issue.duplicateOf ?? []) {
+        const canonical = issueIds.get(ref);
+        if (canonical) insertRelation(self, canonical, "duplicate_of");
       }
     }
 

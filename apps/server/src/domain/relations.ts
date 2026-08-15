@@ -10,9 +10,9 @@ import { recordActivity } from "./activity.ts";
 import { getIssue, getIssueByRef, identifierOf, type IssueRow } from "./issues.ts";
 
 /** Tipos canónicos: como se guardan en la tabla. */
-export type StoredRelationType = "blocks";
+export type StoredRelationType = "blocks" | "related" | "duplicate_of";
 /** Tipos de la API: incluyen las vistas inversas, que se normalizan al guardar. */
-export type RelationType = StoredRelationType | "blocked_by";
+export type RelationType = StoredRelationType | "blocked_by" | "duplicated_by";
 
 export interface RelationRow {
   id: string;
@@ -22,10 +22,22 @@ export interface RelationRow {
   created_at: string;
 }
 
-/** La inversa con la que el otro extremo ve cada tipo dirigido. */
+/** La inversa con la que el otro extremo ve cada tipo ('related' es simétrica). */
 const INVERSE: Record<RelationType, RelationType> = {
   blocks: "blocked_by",
   blocked_by: "blocks",
+  related: "related",
+  duplicate_of: "duplicated_by",
+  duplicated_by: "duplicate_of",
+};
+
+/** Dirección canónica de cada tipo de la API: las vistas inversas invierten extremos. */
+const NORMALIZE: Record<RelationType, { type: StoredRelationType; invert: boolean }> = {
+  blocks: { type: "blocks", invert: false },
+  blocked_by: { type: "blocks", invert: true },
+  related: { type: "related", invert: false },
+  duplicate_of: { type: "duplicate_of", invert: false },
+  duplicated_by: { type: "duplicate_of", invert: true },
 };
 
 /** Vista de una relación desde uno de sus extremos. */
@@ -122,12 +134,17 @@ export function createRelation(
   }
 
   // Normalización a la dirección canónica: blocked_by(A, B) === blocks(B, A).
-  const [source, target] = input.type === "blocked_by" ? [related, issue] : [issue, related];
-  const type: StoredRelationType = "blocks";
+  const { type, invert } = NORMALIZE[input.type];
+  const [source, target] = invert ? [related, issue] : [issue, related];
 
-  const existing = db
-    .query("SELECT id FROM issue_relations WHERE issue_id = ?1 AND related_id = ?2 AND type = ?3")
-    .get(source.id, target.id, type);
+  // 'related' es simétrica: el duplicado se detecta en cualquiera de las dos direcciones.
+  const existing = type === "related"
+    ? db.query(
+        `SELECT id FROM issue_relations WHERE type = 'related'
+         AND ((issue_id = ?1 AND related_id = ?2) OR (issue_id = ?2 AND related_id = ?1))`,
+      ).get(source.id, target.id)
+    : db.query("SELECT id FROM issue_relations WHERE issue_id = ?1 AND related_id = ?2 AND type = ?3")
+        .get(source.id, target.id, type);
   if (existing) {
     throw apiError(
       "VALIDATION_FAILED",
@@ -135,6 +152,7 @@ export function createRelation(
     );
   }
 
+  // Solo las relaciones de bloqueo forman un grafo con solución que cuidar (AT-178).
   if (type === "blocks") assertNoBlockingCycle(db, source, target);
 
   const id = newId();

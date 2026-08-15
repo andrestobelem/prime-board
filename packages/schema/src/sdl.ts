@@ -87,7 +87,7 @@ export const typeDefs = /* GraphQL */ `
     project: Project
     milestone: Milestone
     comments: [Comment!]!
-    """Relaciones con otros issues (blocked-by y blocks), desde ambos extremos."""
+    """Relaciones con otros issues (bloqueo, related, duplicados), desde ambos extremos."""
     relations: [IssueRelation!]!
     """Historial append-only de cambios del issue."""
     activity: [Activity!]!
@@ -105,6 +105,12 @@ export const typeDefs = /* GraphQL */ `
     BLOCKS
     """Este issue está bloqueado por el relacionado."""
     BLOCKED_BY
+    """Relación simétrica: ambos extremos la ven igual."""
+    RELATED
+    """Este issue duplica al relacionado."""
+    DUPLICATE_OF
+    """El relacionado duplica a este issue."""
+    DUPLICATED_BY
   }
 
   """Relación entre dos issues, vista desde el issue consultado."""
