@@ -29,7 +29,39 @@ function prioritySortKey(issue: IssueListItem): number {
   return issue.priority === 0 ? 5 : issue.priority;
 }
 
-export function IssueList({ issues }: { issues: IssueListItem[] }) {
+export type GroupBy = "state" | "milestone" | "assignee" | "priority";
+
+export const GROUP_LABELS: Record<GroupBy, string> = {
+  state: "Estado",
+  milestone: "Milestone",
+  assignee: "Assignee",
+  priority: "Prioridad",
+};
+
+/** Clave y orden del grupo al que pertenece un issue, según el criterio elegido. */
+function groupOf(issue: IssueListItem, by: GroupBy): { key: string; label: string; order: number } {
+  if (by === "milestone") {
+    return issue.milestone
+      ? { key: issue.milestone.id, label: issue.milestone.name, order: 0 }
+      : { key: "none", label: "Sin milestone", order: 1 };
+  }
+  if (by === "assignee") {
+    return issue.assignee
+      ? { key: issue.assignee.id, label: issue.assignee.name, order: 0 }
+      : { key: "none", label: "Sin assignee", order: 1 };
+  }
+  if (by === "priority") {
+    const names = ["Sin prioridad", "Urgent", "High", "Medium", "Low"];
+    return {
+      key: String(issue.priority),
+      label: names[issue.priority] ?? "?",
+      order: issue.priority === 0 ? 5 : issue.priority,
+    };
+  }
+  return { key: issue.state.id, label: issue.state.name, order: issue.state.position };
+}
+
+export function IssueList({ issues, groupBy = "state" }: { issues: IssueListItem[]; groupBy?: GroupBy }) {
 const [focusIndex, setFocusIndex] = useState(-1);
 const focusRef = useRef(focusIndex);
 useEffect(() => {
@@ -37,18 +69,28 @@ useEffect(() => {
 }, [focusIndex]);
 
 const groups = useMemo(() => {
-  const byState = new Map<string, { state: IssueListItem["state"]; items: IssueListItem[] }>();
+  const map = new Map<string, {
+    label: string; order: number; state?: IssueListItem["state"]; items: IssueListItem[];
+  }>();
   for (const issue of issues) {
-    const group = byState.get(issue.state.id) ?? { state: issue.state, items: [] };
+    const g = groupOf(issue, groupBy);
+    const group = map.get(g.key) ?? {
+      label: g.label,
+      order: g.order,
+      state: groupBy === "state" ? issue.state : undefined,
+      items: [],
+    };
     group.items.push(issue);
-    byState.set(issue.state.id, group);
+    map.set(g.key, group);
   }
-  const sorted = [...byState.values()].sort((a, b) => a.state.position - b.state.position);
+  const sorted = [...map.entries()]
+    .map(([key, value]) => ({ key, ...value }))
+    .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
   for (const group of sorted) {
     group.items.sort((a, b) => prioritySortKey(a) - prioritySortKey(b));
   }
   return sorted;
-}, [issues]);
+}, [issues, groupBy]);
 
 const flat = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 
@@ -82,10 +124,10 @@ useEffect(() => {
   return (
     <div>
       {groups.map((group) => (
-        <div key={group.state.id}>
+        <div key={group.key}>
           <div className="state-group-header">
-            <StateDot state={group.state} />
-            {group.state.name}
+            {group.state && <StateDot state={group.state} />}
+            {group.label}
             <span className="count">{group.items.length}</span>
           </div>
           {group.items.map((issue) => {

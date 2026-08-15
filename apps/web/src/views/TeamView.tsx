@@ -1,6 +1,6 @@
 // Vista de team: lista agrupada por estado (AT-145). El board llega en AT-146.
 import { useQuery } from "../api.ts";
-import { IssueList, type IssueListItem } from "../components/IssueList.tsx";
+import { IssueList, type GroupBy, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
 const TEAM_QUERY = `query($key: String, $filter: IssueFilter) {
@@ -10,7 +10,9 @@ const TEAM_QUERY = `query($key: String, $filter: IssueFilter) {
   }
 }`;
 
-export function TeamView({ teamKey, teamId }: { teamKey: string; teamId: string | null }) {
+export function TeamView(
+  { teamKey, teamId, groupBy = "state" }: { teamKey: string; teamId: string | null; groupBy?: GroupBy },
+) {
   const result = useQuery<{
     team: { id: string; key: string; name: string } | null;
     issues: { nodes: IssueListItem[] };
@@ -20,5 +22,5 @@ export function TeamView({ teamKey, teamId }: { teamKey: string; teamId: string 
   if (result.error) return <div className="error-banner">{result.error.message}</div>;
   if (!result.data?.team) return <div className="empty">Team {teamKey} not found.</div>;
 
-  return <IssueList issues={result.data.issues.nodes} />;
+  return <IssueList issues={result.data.issues.nodes} groupBy={groupBy} />;
 }

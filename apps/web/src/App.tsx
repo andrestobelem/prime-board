@@ -2,7 +2,7 @@
 // Atajos globales: C crea un issue, ⌘K abre el command palette (AT-148).
 import { useEffect, useState } from "react";
 import { getApiKey, useQuery } from "./api.ts";
-import { isTypingTarget } from "./components/IssueList.tsx";
+import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueList.tsx";
 import { Palette } from "./components/Palette.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
@@ -35,6 +35,7 @@ export function App() {
   const shell = useQuery<ShellData>(SHELL_QUERY);
   const [createOpen, setCreateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [groupBy, setGroupBy] = useState<GroupBy>("state");
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -113,6 +114,13 @@ export function App() {
       <>
         <span className="title">{team?.name ?? param}</span>
         <span className="right">
+          {section === "team" && (
+            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
+              {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
+                <option key={key} value={key}>Agrupar por {GROUP_LABELS[key].toLowerCase()}</option>
+              ))}
+            </select>
+          )}
           <span className="tabs">
             <Link to={`/team/${param}`}>
               <button className={section === "team" ? "active" : ""}>List</button>
@@ -126,7 +134,7 @@ export function App() {
     );
     content = section === "board"
       ? <BoardView teamKey={param} teamId={team?.id ?? null} />
-      : <TeamView teamKey={param} teamId={team?.id ?? null} />;
+      : <TeamView teamKey={param} teamId={team?.id ?? null} groupBy={groupBy} />;
   } else if (shell.data) {
     if (defaultTeam) {
       window.location.hash = `#/team/${defaultTeam}`;
