@@ -42,6 +42,12 @@ export interface LinearMilestone {
   targetDate?: string | null;
   position?: number | null;
 }
+export interface LinearLink {
+  id?: string;
+  url: string;
+  title?: string | null;
+  filename?: string | null;
+}
 export interface LinearProject {
   id: string;
   name: string;
@@ -52,6 +58,9 @@ export interface LinearProject {
   archivedAt?: string | null;
   teamIds: string[];
   milestones?: LinearMilestone[];
+  documents?: LinearLink[];
+  statusUpdates?: LinearLink[];
+  initiativeId?: string | null;
 }
 export interface LinearStateHistory {
   stateId: string;
@@ -76,6 +85,11 @@ export interface LinearIssue {
   updatedAt: string;
   archivedAt?: string | null;
   stateHistory?: LinearStateHistory[];
+  attachments?: LinearLink[];
+  documents?: LinearLink[];
+  dueDate?: string | null;
+  estimate?: number | null;
+  cycleId?: string | null;
 }
 export interface LinearComment {
   id: string;
@@ -463,6 +477,50 @@ export function writeLinearExportToRepo(
     for (const labelId of issue.labelIds ?? [])
       if (!labelById.has(labelId))
         add(conflicts, "UNKNOWN_ISSUE_LABEL", `Issue refers to unknown label ${labelId}`, issue.id);
+    if (issue.dueDate != null)
+      add(
+        losses,
+        "UNREPRESENTED_DUE_DATE",
+        "Due date is not part of the prime-board issue model",
+        issue.id,
+      );
+    if (issue.estimate != null)
+      add(
+        losses,
+        "UNREPRESENTED_ESTIMATE",
+        "Estimate is not part of the prime-board issue model",
+        issue.id,
+      );
+    if (issue.cycleId != null)
+      add(
+        losses,
+        "UNREPRESENTED_CYCLE",
+        "Cycle is not part of the prime-board issue model",
+        issue.id,
+      );
+    if (issue.attachments?.length || issue.documents?.length)
+      add(
+        warnings,
+        "LINKED_ISSUE_ARTIFACTS",
+        "Issue attachments/documents are converted to links in the description",
+        issue.id,
+      );
+  }
+  for (const project of source.projects) {
+    if (project.documents?.length)
+      add(
+        warnings,
+        "LINKED_PROJECT_DOCUMENTS",
+        "Project documents are converted to links in the project description",
+        project.id,
+      );
+    if (project.statusUpdates?.length || project.initiativeId)
+      add(
+        losses,
+        "UNREPRESENTED_PROJECT_CONTEXT",
+        "Project status updates/initiatives have no prime-board entity",
+        project.id,
+      );
   }
   for (const comment of comments) {
     if (!issueById.has(comment.issueId))
@@ -621,13 +679,20 @@ export function writeLinearExportToRepo(
         .sort((a, b) => a.key!.localeCompare(b.key!)),
     ),
   );
+  const projectDescription = (project: LinearProject): string | null => {
+    const links = (project.documents ?? []).map(
+      (link) => `- [${link.title ?? link.url}](${link.url})`,
+    );
+    if (links.length === 0) return project.description ?? null;
+    return `${project.description ? `${project.description}\n\n` : ""}## Linear documents\n${links.join("\n")}`;
+  };
   write(
     "meta/projects.json",
     json(
       source.projects
         .map((project) => ({
           name: project.name,
-          description: project.description ?? null,
+          description: projectDescription(project),
           state: project.state,
           lead: project.leadId ? (actorNameById.get(project.leadId) ?? null) : null,
           targetDate: project.targetDate ?? null,
@@ -722,7 +787,14 @@ export function writeLinearExportToRepo(
       updatedAt: issue.updatedAt,
       archivedAt: issue.archivedAt ?? null,
     };
-    const body = issue.description ? `\n${issue.description.replace(/\s*$/, "")}\n` : "";
+    const artifactLinks = [...(issue.attachments ?? []), ...(issue.documents ?? [])].map(
+      (link) => `- [${link.title ?? link.filename ?? link.url}](${link.url})`,
+    );
+    const description =
+      artifactLinks.length > 0
+        ? `${issue.description ? `${issue.description}\n\n` : ""}## Linear artifacts\n${artifactLinks.join("\n")}`
+        : issue.description;
+    const body = description ? `\n${description.replace(/\s*$/, "")}\n` : "";
     write(
       `issues/${identifier}.md`,
       `---\n${toYaml(frontMatter, { sortMapEntries: true, lineWidth: 0 })}---\n\n# ${issue.title}\n${body}`,
@@ -743,7 +815,7 @@ export function writeLinearExportToRepo(
       order: 0,
       payload: {
         title: issue.title,
-        description: issue.description ?? null,
+        description: description ?? null,
         team: teamKeyById.get(team.id),
         number: issue.number,
         priority: issue.priority ?? 0,

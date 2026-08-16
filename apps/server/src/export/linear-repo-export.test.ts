@@ -148,4 +148,39 @@ describe("writeLinearExportToRepo", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("explicita pérdidas y convierte artefactos a enlaces", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-loss-"));
+    const withUnsupported: LinearExport = {
+      ...source,
+      issues: [
+        {
+          ...source.issues[0]!,
+          dueDate: "2026-02-01",
+          attachments: [{ url: "https://example.test/a", title: "artefacto" }],
+        },
+      ],
+      projects: [
+        { ...source.projects[0]!, documents: [{ url: "https://example.test/d", title: "doc" }] },
+      ],
+      relations: [],
+    };
+    try {
+      const dry = writeLinearExportToRepo(withUnsupported, root, { dryRun: true });
+      expect(dry.losses).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "UNREPRESENTED_DUE_DATE" })]),
+      );
+      expect(dry.warnings).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "LINKED_ISSUE_ARTIFACTS" })]),
+      );
+      expect(() => writeLinearExportToRepo(withUnsupported, root)).toThrow(/unapproved loss/);
+      const applied = writeLinearExportToRepo(withUnsupported, root, { allowLosses: true });
+      expect(applied.losses.length).toBeGreaterThan(0);
+      expect(readFileSync(join(root, ".prime-board", "issues", "AT-1.md"), "utf8")).toContain(
+        "https://example.test/a",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -90,6 +90,22 @@ ciclos, due dates, estimaciones, status updates, iniciativas, suscripciones y me
 de proyectos. Una conversión a markdown o enlace es una pérdida explícita, no un éxito
 silencioso.
 
+## Política de funcionalidades sin equivalente
+
+La migración no inventa campos en el modelo de prime-board. La política aprobada es:
+
+| Dato de Linear                              | Tratamiento                                                                                                        | Resultado del plan        |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------- |
+| Adjuntos                                    | Conservar URL, nombre y metadata como enlaces en una sección de la descripción; no copiar bytes automáticamente.   | `warning` por conversión. |
+| Documents                                   | Conservar URL y título como enlaces en la descripción del issue/proyecto.                                          | `warning` por conversión. |
+| Threads y comentarios inline                | Importar el cuerpo, autor y fecha como comentario plano; guardar el anclaje textual en el reporte.                 | `loss` si existe anclaje. |
+| Ciclos, estimaciones y due dates            | No se agregan silenciosamente al esquema; se listan en el reporte y bloquean `apply` hasta una decisión explícita. | `loss`.                   |
+| Status updates, initiatives y suscripciones | Se conservan como referencia en el reporte de migración; no se presentan como entidades de prime-board.            | `loss`.                   |
+| Estado `duplicate`                          | Se crea el mismo nombre con tipo semántico `canceled`, dejando una advertencia.                                    | `warning`.                |
+
+`--allow-losses` es obligatorio para aplicar una captura con `loss`; el corte oficial no debe
+usarlo hasta que el reporte haya sido revisado y aceptado.
+
 ## CLI
 
 La captura se convierte al formato del repo con:
