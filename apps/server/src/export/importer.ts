@@ -47,6 +47,10 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
   const result: RebuildResult = { issues: 0, events: 0, comments: 0, preservedKeys: 0 };
 
   db.transaction(() => {
+    // `teams.default_state_id` apunta a workflow_states; limpiar la referencia
+    // antes de borrar los estados permite reconstruir un índice ya poblado con
+    // foreign keys activadas.
+    db.query("UPDATE teams SET default_state_id = NULL").run();
     // 2. Vaciar el índice (orden inverso a las FKs).
     for (const table of [
       "issue_relations",

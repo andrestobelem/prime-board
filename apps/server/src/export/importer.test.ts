@@ -87,6 +87,16 @@ describe("rebuildFromRepo", () => {
     }
   });
 
+  it("reconstruye también una DB ya poblada con foreign keys activadas", () => {
+    const populated = new Database(":memory:", { strict: true });
+    populated.exec("PRAGMA foreign_keys = ON;");
+    migrate(populated);
+    rebuildFromRepo(populated, dir);
+
+    expect(() => rebuildFromRepo(populated, dir)).not.toThrow();
+    populated.close();
+  });
+
   it("preserva relaciones: parent, milestone, labels, comentarios y assignee", () => {
     const fresh = new Database(":memory:", { strict: true });
     fresh.exec("PRAGMA foreign_keys = ON;");
