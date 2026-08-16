@@ -48,10 +48,12 @@ export function TeamView({
   teamKey,
   teamId,
   groupBy = "state",
+  triage = false,
 }: {
   teamKey: string;
   teamId: string | null;
   groupBy?: GroupBy;
+  triage?: boolean;
 }) {
   const [draft, setDraft] = useState<IssueFilterDraft>(() => loadIssueFilter(teamKey));
   const draftTeamKey = useRef(teamKey);
@@ -69,7 +71,10 @@ export function TeamView({
     if (draftTeamKey.current === teamKey) saveIssueFilter(teamKey, draft);
   }, [draft, teamKey]);
 
-  const filter = useMemo(() => buildIssueFilter(teamId, draft), [teamId, draft]);
+  const filter = useMemo(() => {
+    const base = buildIssueFilter(teamId, draft);
+    return triage ? { ...base, stateType: { eq: "TRIAGE" } } : base;
+  }, [teamId, draft, triage]);
   const result = useQuery<TeamData>(TEAM_QUERY, { key: teamKey, teamId, filter });
   const visibleIds = useMemo(
     () => result.data?.issues.nodes.map((issue) => issue.id) ?? [],

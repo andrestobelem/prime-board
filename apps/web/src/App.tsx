@@ -23,6 +23,7 @@ import { MyIssuesView } from "./views/MyIssuesView.tsx";
 import { InboxView } from "./views/InboxView.tsx";
 import { TeamSettingsView } from "./views/TeamSettingsView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
+import { TeamsView } from "./views/TeamsView.tsx";
 
 const SHELL_QUERY = `{
   workspace { id name }
@@ -123,6 +124,9 @@ export function App() {
 
   if (shell.error) {
     content = <div className="error-banner">{shell.error.message}</div>;
+  } else if (section === "teams") {
+    topbar = <span className="title">Teams</span>;
+    content = <TeamsView teams={teams} />;
   } else if (section === "settings") {
     topbar = <span className="title">Settings</span>;
     content = <SettingsView />;
@@ -201,6 +205,22 @@ export function App() {
       </>
     );
     content = <SavedViewPage viewId={param} />;
+  } else if (section === "triage" && param) {
+    const team = teams.find((candidate) => candidate.key === param);
+    topbar = team ? (
+      <>
+        <Switcher teams={teams} current={{ kind: "team", key: param }} view="team" />
+        <Icon name="chevron-right" size={14} className="crumb-sep" />
+        <span className="title">Triage</span>
+      </>
+    ) : (
+      <span className="title">Triage</span>
+    );
+    content = team ? (
+      <TeamView key={`triage-${param}`} teamKey={param} teamId={team.id} groupBy={groupBy} triage />
+    ) : (
+      <div className="empty">Team {param} not found.</div>
+    );
   } else if (section === "issue" && param) {
     const teamKey = param.split("-")[0];
     topbar = (

@@ -46,6 +46,10 @@ export function Sidebar({
         <Icon name="workspace" size={18} className="logo" />
         {workspace?.name ?? "prime-board"}
       </div>
+      <div className="section">Workspace</div>
+      <Link to="/teams" className={active("/teams")}>
+        <Icon name="members" /> Teams
+      </Link>
       <Link to="/inbox" className={active("/inbox")}>
         <Icon name="comment" /> Inbox
       </Link>
@@ -80,6 +84,9 @@ export function Sidebar({
       {teams.map((team) => (
         <div key={team.id}>
           <div className="section">{team.name}</div>
+          <Link to={`/triage/${team.key}`} className={active(`/triage/${team.key}`)}>
+            <Icon name="filter" /> Triage
+          </Link>
           <Link to={`/team/${team.key}`} className={active(`/team/${team.key}`)}>
             <Icon name="issues" /> Issues
           </Link>

@@ -244,6 +244,51 @@ kbd {
   color: var(--text);
 }
 
+/* ---- teams workspace view ---- */
+.teams-page {
+  max-width: 760px;
+  padding: 32px;
+}
+.teams-page h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.teams-intro {
+  color: var(--text-muted);
+  margin: 8px 0 20px;
+}
+.team-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.team-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.team-card:hover {
+  border-color: var(--border);
+  background: var(--surface-hover);
+}
+.team-card-icon {
+  color: var(--accent);
+}
+.team-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+.team-card-body span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 /* ---- issue list toolbar ---- */
 .issue-toolbar {
   position: relative;
