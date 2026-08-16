@@ -130,6 +130,9 @@ export const issueResolvers = {
         actors: "SELECT name FROM actors WHERE id = ?1",
         projects: "SELECT name FROM projects WHERE id = ?1",
         milestones: "SELECT name FROM milestones WHERE id = ?1",
+        cycles:
+          "SELECT teams.key || '/' || cycles.number AS name FROM cycles " +
+          "JOIN teams ON teams.id = cycles.team_id WHERE cycles.id = ?1",
         teams: "SELECT key AS name FROM teams WHERE id = ?1",
         issues:
           "SELECT teams.key || '-' || issues.number AS name FROM issues " +

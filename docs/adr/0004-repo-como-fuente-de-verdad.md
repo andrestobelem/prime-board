@@ -31,3 +31,7 @@ concurrentes del mismo campo genera conflictos que alguien tiene que resolver a 
   se niega a reconstruir desde uno salvo `--allow-partial`. Ese flag reemplaza explícitamente
   el índice por el alcance parcial; no fusiona ni recupera los teams ausentes.
 - Los secretos (hashes de API keys) **nunca** van al repo.
+- Todo cambio persistente de un issue forma parte del historial append-only: las asignaciones
+  de `cycle_id` se registran como `cycle_changed` y las de `sort_order` como
+  `sort_order_changed`, ambos con `from` y `to`. Los cycles se exportan por la clave estable
+  `TEAM/number` para que esos eventos sobrevivan a un rebuild.

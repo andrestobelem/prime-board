@@ -1,4 +1,4 @@
-// Test del esquema de referencias de Activity (AT-187): cubre los 15
+// Test del esquema de referencias de Activity (AT-187): cubre los 17
 // ActivityType y prueba que translateActivityRefs replica exactamente el
 // comportamiento que antes vivía duplicado en exporter.ts e importer.ts.
 import { describe, expect, it } from "bun:test";
@@ -14,6 +14,7 @@ const idToName = (table: string, value: string) =>
       milestones: { m1: "Fase 1" },
       issues: { i1: "AT-1" },
       teams: { t1: "AT" },
+      cycles: { c1: "PB/1" },
     }) as any
   )[table]?.[value];
 
@@ -26,18 +27,19 @@ const nameToId = (table: string, value: string) =>
       milestones: { "Fase 1": "m1" },
       issues: { "AT-1": "i1" },
       teams: { AT: "t1" },
+      cycles: { "PB/1": "c1" },
     }) as any
   )[table]?.[value];
 
 describe("ACTIVITY_REFS", () => {
-  it("cubre los 15 ActivityType existentes (declarados con refs o sin ellas)", () => {
+  it("cubre los 17 ActivityType existentes (declarados con refs o sin ellas)", () => {
     for (const type of ALL_ACTIVITY_TYPES) {
       // No hace falta que todos tengan entrada (la mayoría no tiene refs) —
       // pero el tipo tiene que existir en el union, y el test lo enumera acá
       // para que agregar un ActivityType nuevo obligue a mirar esta lista.
       expect(ALL_ACTIVITY_TYPES).toContain(type);
     }
-    expect(ALL_ACTIVITY_TYPES.length).toBe(15);
+    expect(ALL_ACTIVITY_TYPES.length).toBe(17);
   });
 
   it("los tipos sin referencias no tienen entrada en ACTIVITY_REFS", () => {
@@ -64,6 +66,15 @@ describe("translateActivityRefs — dirección id→clave natural (export)", () 
       idToName,
     );
     expect(out).toEqual({ from: "Todo", to: "In Progress", reason: "x" });
+  });
+
+  it("cycle_changed traduce la referencia estable del cycle y permite round-trip", () => {
+    const exported = translateActivityRefs("cycle_changed", { from: null, to: "c1" }, idToName);
+    expect(exported).toEqual({ from: null, to: "PB/1" });
+    expect(translateActivityRefs("cycle_changed", exported, nameToId, "toIds")).toEqual({
+      from: null,
+      to: "c1",
+    });
   });
 
   it("modo sparse: si el lookup no encuentra la clave, conserva el valor original", () => {

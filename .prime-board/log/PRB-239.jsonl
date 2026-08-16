@@ -2,3 +2,8 @@
 {"actor":"admin","issue":"PRB-239","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-16T18:56:55.303Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-239","payload":{"type":"related","issue":"PRB-228"},"ts":"2026-08-16T18:57:05.457Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-239","payload":{"type":"blocks","issue":"PRB-243"},"ts":"2026-08-16T18:57:29.369Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-239","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-16T19:45:41.583Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-239","payload":{"from":null,"to":"admin"},"ts":"2026-08-16T19:45:41.583Z","type":"assigned"}
+{"actor":"admin","issue":"PRB-239","payload":{"type":"related","issue":"PRB-245"},"ts":"2026-08-16T19:50:37.019Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-239","payload":{"body":"Implementado PRB-239.\n\n- `issueUpdate` registra `cycle_changed` y `sort_order_changed` con actor y valores `from`/`to`.\n- El esquema de Activity exporta/importa referencias de cycle como `TEAM/number`; GraphQL y la UI muestran ambos cambios.\n- ADR-0004 documenta que estos cambios pertenecen al historial append-only.\n- Tests cubren actor, valores, referencias y round-trip export → rebuild.\n\nValidación: `bun test` (233 pass), `bun run typecheck` y `bun run build` pasan.\n\nDurante la implementación se detectaron mutaciones directas de `cycle_id` en delete/carry-over; quedaron registradas en PRB-245, fuera del alcance de este ticket."},"ts":"2026-08-16T19:51:01.455Z","type":"commented"}
+{"actor":"admin","issue":"PRB-239","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-16T19:51:01.526Z","type":"state_changed"}

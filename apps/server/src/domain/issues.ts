@@ -403,9 +403,17 @@ export function updateIssue(
       if (input.cycleId !== null) validateCycleForTeam(db, input.cycleId, issue.team_id);
       push("cycle_id", input.cycleId);
       changes.push({ field: "cycle", from: issue.cycle_id, to: input.cycleId });
+      recordActivity(db, issue.id, actorId, "cycle_changed", {
+        from: issue.cycle_id,
+        to: input.cycleId,
+      });
     }
     if (input.sortOrder != null && input.sortOrder !== issue.sort_order) {
       push("sort_order", input.sortOrder);
+      recordActivity(db, issue.id, actorId, "sort_order_changed", {
+        from: issue.sort_order,
+        to: input.sortOrder,
+      });
     }
 
     const labelsChanged = applyLabelOps(db, actorId, issue, input);

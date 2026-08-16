@@ -12,6 +12,8 @@ export type ActivityType =
   | "parent_changed"
   | "project_changed"
   | "milestone_changed"
+  | "cycle_changed"
+  | "sort_order_changed"
   | "labeled"
   | "unlabeled"
   | "relation_added"

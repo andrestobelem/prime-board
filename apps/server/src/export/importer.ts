@@ -577,6 +577,7 @@ export function rebuildFromRepo(
       issues: issueIds,
       states: new Map<string, string>(),
       milestones: new Map<string, string>(),
+      cycles: cycleIds,
     };
     for (const [key, id] of stateIds) byName.states.set(key.split("/")[1]!, id);
     for (const [key, id] of milestoneIds) byName.milestones.set(key.split("/")[1]!, id);
@@ -595,6 +596,7 @@ export function rebuildFromRepo(
             actors: byName.actors,
             projects: byName.projects,
             milestones: byName.milestones,
+            cycles: byName.cycles,
             issues: byName.issues,
             teams: teamIds,
           }) satisfies Record<RefTable, Map<string, string>>

@@ -44,6 +44,7 @@ interface Lookups {
   states: Map<string, string>;
   projects: Map<string, string>;
   milestones: Map<string, string>;
+  cycles: Map<string, string>;
   labels: Map<string, string>;
 }
 
@@ -60,6 +61,9 @@ function buildLookups(db: Database): Lookups {
     states: toMap("SELECT id, name FROM workflow_states"),
     projects: toMap("SELECT id, name FROM projects"),
     milestones: toMap("SELECT id, name FROM milestones"),
+    cycles: toMap(
+      "SELECT cycles.id, teams.key || '/' || cycles.number FROM cycles JOIN teams ON teams.id = cycles.team_id",
+    ),
     labels: toMap("SELECT id, name FROM labels"),
   };
 }
@@ -91,6 +95,7 @@ function resolvePayload(
         actors: lookups.actors,
         projects: lookups.projects,
         milestones: lookups.milestones,
+        cycles: lookups.cycles,
         issues: identifiers,
         teams: teamKeys,
       }) satisfies Record<RefTable, Map<string, string>>

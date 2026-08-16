@@ -48,6 +48,29 @@ describe("rebuild fidelity", () => {
       { id: issueId, cycleId },
     );
 
+    const activity = await gql(
+      app,
+      `query($id: ID!) { issue(id: $id) { activity { type actor { name } payload } } }`,
+      { id: issueId },
+    );
+    expect(activity.errors).toBeUndefined();
+    expect(
+      activity.data!.issue.activity.filter((event: any) =>
+        ["cycle_changed", "sort_order_changed"].includes(event.type),
+      ),
+    ).toEqual([
+      {
+        type: "cycle_changed",
+        actor: { name: "admin" },
+        payload: { from: null, to: `PB/${cycleNumber}` },
+      },
+      {
+        type: "sort_order_changed",
+        actor: { name: "admin" },
+        payload: { from: 0, to: 42.5 },
+      },
+    ]);
+
     // Receipt de inbox: asignar a otro actor genera entrada; marcar leída.
     const agent = await gql(
       app,
@@ -114,6 +137,39 @@ describe("rebuild fidelity", () => {
         .get(identifier) as { sort_order: number; cycle_number: number | null };
       expect(row.sort_order).toBe(42.5);
       expect(row.cycle_number).toBe(cycleNumber);
+
+      const restoredActivity = fresh
+        .query(
+          `SELECT a.type, a.payload, actors.name AS actor
+           FROM activity a
+           JOIN actors ON actors.id = a.actor_id
+           JOIN issues i ON i.id = a.issue_id
+           JOIN teams ON teams.id = i.team_id
+           WHERE teams.key || '-' || i.number = ?1
+             AND a.type IN ('cycle_changed', 'sort_order_changed')`,
+        )
+        .all(identifier) as Array<{ type: string; payload: string; actor: string }>;
+      expect(restoredActivity).toHaveLength(2);
+      const restoredByType = Object.fromEntries(
+        restoredActivity.map((event) => [
+          event.type,
+          { actor: event.actor, payload: JSON.parse(event.payload) },
+        ]),
+      ) as Record<string, { actor: string; payload: Record<string, unknown> }>;
+      const restoredCycleEvent = restoredByType["cycle_changed"]!;
+      expect(restoredCycleEvent.actor).toBe("admin");
+      expect(restoredCycleEvent.payload.from).toBeNull();
+      const restoredCycle = fresh
+        .query(
+          `SELECT teams.key || '/' || cycles.number AS ref
+           FROM cycles JOIN teams ON teams.id = cycles.team_id WHERE cycles.id = ?1`,
+        )
+        .get(restoredCycleEvent.payload.to as string) as { ref: string };
+      expect(restoredCycle.ref).toBe(`PB/${cycleNumber}`);
+      expect(restoredByType["sort_order_changed"]).toEqual({
+        actor: "admin",
+        payload: { from: 0, to: 42.5 },
+      });
 
       const restoredReceipts = fresh
         .query(

@@ -31,7 +31,7 @@ function Markdown({ text }: { text: string }) {
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
 }
 
-// AT-190: state_changed/assigned/project_changed/milestone_changed/parent_changed
+// AT-190: state_changed/assigned/project_changed/milestone_changed/parent_changed/cycle_changed
 // llegan con nombres reales (no ids) porque el resolver de Activity.payload ya
 // los tradujo con el esquema compartido (AT-187) — acá solo se arma el texto.
 function fromTo(label: string, payload: { from?: string | null; to?: string | null }): string {
@@ -52,6 +52,8 @@ const ACTIVITY_TEXT: Record<string, (payload: any) => string> = {
   parent_changed: (payload) => fromTo("the parent", payload),
   project_changed: (payload) => fromTo("the project", payload),
   milestone_changed: (payload) => fromTo("the milestone", payload),
+  cycle_changed: (payload) => fromTo("the cycle", payload),
+  sort_order_changed: (payload) => fromTo("the sort order", payload),
   labeled: (payload) => `added label "${payload.label}"`,
   unlabeled: (payload) => `removed label "${payload.label}"`,
   commented: () => "commented",

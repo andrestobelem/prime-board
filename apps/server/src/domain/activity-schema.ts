@@ -10,7 +10,8 @@
 import type { ActivityType } from "./activity.ts";
 
 /** Las tablas a las que un campo de Activity puede referir. */
-export type RefTable = "teams" | "states" | "actors" | "projects" | "milestones" | "issues";
+export type RefTable =
+  "teams" | "states" | "actors" | "projects" | "milestones" | "cycles" | "issues";
 
 export interface RefField {
   /** Campo en el payload interno (con ids). */
@@ -30,8 +31,9 @@ export interface RefField {
 
 /**
  * Por ActivityType, los campos que son referencias a otra tabla. Los tipos
- * que no aparecen acá no tienen referencias (title_changed, priority_changed,
- * labeled, unlabeled, relation_added, relation_removed, archived) — o se
+ * que no aparecen acá no tienen referencias (title_changed, description_changed,
+ * priority_changed, sort_order_changed, labeled, unlabeled, relation_added,
+ * relation_removed, archived) — o se
  * resuelven aparte por tener una regla propia ajena a tablas (`commented`:
  * recupera el body de un comentario histórico, ver exporter.ts/importer.ts).
  */
@@ -52,6 +54,10 @@ export const ACTIVITY_REFS: Partial<Record<ActivityType, RefField[]>> = {
     { field: "from", table: "milestones", mode: "sparse" },
     { field: "to", table: "milestones", mode: "sparse" },
   ],
+  cycle_changed: [
+    { field: "from", table: "cycles", mode: "sparse" },
+    { field: "to", table: "cycles", mode: "sparse" },
+  ],
   parent_changed: [
     { field: "from", table: "issues", mode: "sparse" },
     { field: "to", table: "issues", mode: "sparse" },
@@ -66,7 +72,7 @@ export const ACTIVITY_REFS: Partial<Record<ActivityType, RefField[]>> = {
   ],
 };
 
-/** Los 15 ActivityType existentes — usado por el test que exige cobertura total. */
+/** Los 17 ActivityType existentes — usado por el test que exige cobertura total. */
 export const ALL_ACTIVITY_TYPES: ActivityType[] = [
   "created",
   "title_changed",
@@ -77,6 +83,8 @@ export const ALL_ACTIVITY_TYPES: ActivityType[] = [
   "parent_changed",
   "project_changed",
   "milestone_changed",
+  "cycle_changed",
+  "sort_order_changed",
   "labeled",
   "unlabeled",
   "relation_added",
