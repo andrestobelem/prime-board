@@ -109,6 +109,7 @@ repo/
     log/AT-155.jsonl             # ← FUENTE DE VERDAD (append-only)
     issues/AT-155.md             # ← derivado, legible en el PR (regenerado)
     meta/teams.json              # ← config: teams, estados, labels, proyectos
+    meta/inbox-receipts.json     # ← read/archive del inbox (índice estable al log)
 ~/.prime-board/
   cache.db                       # ← índice SQLite DERIVADO (descartable)
   local.db                       # ← secretos (ver §4), NUNCA en el repo

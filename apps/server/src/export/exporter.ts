@@ -188,6 +188,16 @@ function writeIssue(
   // Markdown con front-matter: legible en el diff de un PR (AT-159).
   // Los comentarios NO se duplican acá: ya viven en el log como eventos
   // `commented` con autor, fecha y body — el importador los reconstruye de ahí.
+  const creatorName = lookups.actors.get(issue.creator_id) ?? null;
+  const cycleRef = issue.cycle_id
+    ? (db
+        .query(
+          `SELECT teams.key || '/' || cycles.number AS ref
+           FROM cycles JOIN teams ON teams.id = cycles.team_id
+           WHERE cycles.id = ?1`,
+        )
+        .get(issue.cycle_id) as { ref: string } | null)
+    : null;
   const frontMatter = {
     id: identifier,
     title: issue.title,
@@ -195,10 +205,12 @@ function writeIssue(
     state: lookups.states.get(issue.state_id) ?? null,
     priority: issue.priority,
     assignee: issue.assignee_id ? (lookups.actors.get(issue.assignee_id) ?? null) : null,
-    creator: lookups.actors.get(issue.creator_id) ?? null,
+    creator: creatorName,
     parent: parent?.ident ?? null,
     project: issue.project_id ? (lookups.projects.get(issue.project_id) ?? null) : null,
     milestone: issue.milestone_id ? (lookups.milestones.get(issue.milestone_id) ?? null) : null,
+    cycle: cycleRef?.ref ?? null,
+    sortOrder: issue.sort_order ?? 0,
     labels: db
       .query(
         "SELECT labels.name FROM issue_labels JOIN labels ON labels.id = issue_labels.label_id WHERE issue_id = ?1 ORDER BY labels.name",
@@ -214,8 +226,12 @@ function writeIssue(
   };
   const yaml = toYaml(frontMatter, { sortMapEntries: true, lineWidth: 0 });
   const body = issue.description ? `\n${String(issue.description).replace(/\s*$/, "")}\n` : "";
-  write(join(base, "issues", `${identifier}.md`), `---\n${yaml}---\n\n# ${issue.title}\n${body}`);
-
+  // PRB-222: autoría visible fuera del YAML; el importador la descarta del body.
+  const byline = creatorName ? `\nCreated by ${creatorName}.\n` : "";
+  write(
+    join(base, "issues", `${identifier}.md`),
+    `---\n${yaml}---\n\n# ${issue.title}\n${byline}${body}`,
+  );
   const activity = db
     .query(
       "SELECT actor_id, type, payload, created_at FROM activity WHERE issue_id = ?1 ORDER BY created_at, id",
@@ -531,6 +547,51 @@ export function exportBoard(
         createdAt: review.created_at,
         updatedAt: review.updated_at,
       })),
+    ),
+  );
+
+  // Inbox receipts (PRB-224): activity_id es UUID regenerado en rebuild; se ancla
+  // al índice del evento en el log del issue (mismo orden que export/import).
+  const inboxReceipts = db
+    .query(
+      `SELECT teams.key AS team_key, issues.number AS issue_number,
+              actors.name AS actor_name, r.read_at, r.archived_at,
+              a.id AS activity_id
+       FROM inbox_receipts r
+       JOIN activity a ON a.id = r.activity_id
+       JOIN issues ON issues.id = a.issue_id
+       JOIN teams ON teams.id = issues.team_id
+       JOIN actors ON actors.id = r.actor_id
+       ORDER BY teams.key, issues.number, actors.name, a.created_at, a.id`,
+    )
+    .all() as Array<Record<string, any>>;
+  const activityIndexByIssue = new Map<string, Map<string, number>>();
+  for (const issue of db
+    .query(
+      `SELECT issues.id, teams.key || '-' || issues.number AS ident FROM issues
+       JOIN teams ON teams.id = issues.team_id`,
+    )
+    .all() as Array<{ id: string; ident: string }>) {
+    const events = db
+      .query("SELECT id FROM activity WHERE issue_id = ?1 ORDER BY created_at, id")
+      .all(issue.id) as Array<{ id: string }>;
+    const index = new Map<string, number>();
+    events.forEach((event, i) => index.set(event.id, i));
+    activityIndexByIssue.set(issue.ident, index);
+  }
+  write(
+    join(base, "meta", "inbox-receipts.json"),
+    stableStringify(
+      inboxReceipts.map((receipt) => {
+        const issue = `${receipt.team_key}-${receipt.issue_number}`;
+        return {
+          issue,
+          actor: receipt.actor_name,
+          activityIndex: activityIndexByIssue.get(issue)?.get(receipt.activity_id) ?? 0,
+          readAt: receipt.read_at,
+          archivedAt: receipt.archived_at,
+        };
+      }),
     ),
   );
 

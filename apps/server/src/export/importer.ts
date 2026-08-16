@@ -27,7 +27,11 @@ function readIssueMarkdown(path: string): Record<string, any> {
   if (!match) throw new Error(`Invalid issue file (missing front matter): ${path}`);
   const meta = parseYaml(match[1]!) as Record<string, any>;
   // El cuerpo arranca con el `# título`; la descripción es lo que sigue.
-  const body = match[2]!.replace(/^\s*#[^\n]*\n?/, "").trim();
+  // PRB-222: la línea "Created by …" es decoración del snapshot, no descripción.
+  const body = match[2]!
+    .replace(/^\s*#[^\n]*\n?/, "")
+    .replace(/^\s*Created by .+\.\n?/, "")
+    .trim();
   return { ...meta, description: body.length > 0 ? body : null };
 }
 
@@ -135,6 +139,7 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         defaultState ?? firstState,
         teamId,
       );
+
       const members = Array.isArray(team.members)
         ? team.members
         : Array.from(actorIds.keys()).map((actor) => ({ actor, role: "owner" }));
@@ -354,14 +359,19 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       const [teamKey, numberText] = String(issue.id).split("-");
       const teamId = teamIds.get(teamKey!);
       if (!teamId) throw new Error(`Issue ${issue.id} references unknown team ${teamKey}`);
+      let cycleId: string | null = null;
+      if (issue.cycle) {
+        cycleId = cycleIds.get(String(issue.cycle)) ?? null;
+        if (!cycleId) throw new Error(`Issue ${issue.id} references unknown cycle ${issue.cycle}`);
+      }
       const stateId = stateIds.get(`${teamKey}/${issue.state}`);
       if (!stateId) throw new Error(`Issue ${issue.id} references unknown state ${issue.state}`);
       const id = newId();
       issueIds.set(issue.id, id);
       db.query(
         `INSERT INTO issues (id, team_id, number, title, description, state_id, priority, assignee_id,
-           parent_id, project_id, milestone_id, creator_id, sort_order, created_at, updated_at, archived_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, 0, ?12, ?13, ?14)`,
+           parent_id, project_id, milestone_id, cycle_id, creator_id, sort_order, created_at, updated_at, archived_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)`,
       ).run(
         id,
         teamId,
@@ -379,7 +389,9 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
                 : `${issue.project}/${issue.milestone}`,
             ) ?? null)
           : null,
+        cycleId,
         actorIds.get(issue.creator) ?? [...actorIds.values()][0]!,
+        typeof issue.sortOrder === "number" ? issue.sortOrder : 0,
         issue.createdAt,
         issue.updatedAt ?? issue.createdAt,
         issue.archivedAt ?? null,
@@ -505,12 +517,15 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         )[table].get(value);
       return translateActivityRefs(type, payload, resolve, "toIds");
     };
+    // activityIdsByIssue: índice estable para rehidratar inbox_receipts (PRB-224).
+    const activityIdsByIssue = new Map<string, string[]>();
 
     // 9. Historial desde el log.
     for (const file of readdirSync(join(base, "log")).filter((f) => f.endsWith(".jsonl"))) {
       const identifier = file.replace(/\.jsonl$/, "");
       const issueId = issueIds.get(identifier);
       if (!issueId) continue;
+      const activityIds: string[] = [];
       const contents = readFileSync(join(base, "log", file), "utf8").trim();
       if (!contents) continue;
       for (const line of contents.split("\n")) {
@@ -524,10 +539,12 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
           ).run(newId(), issueId, actorId, event.payload.body as string, event.ts as string);
           result.comments += 1;
         }
+        const activityId = newId();
+        activityIds.push(activityId);
         db.query(
           "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         ).run(
-          newId(),
+          activityId,
           issueId,
           actorId,
           event.type,
@@ -535,6 +552,28 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
           event.ts,
         );
         result.events += 1;
+      }
+      activityIdsByIssue.set(identifier, activityIds);
+    }
+
+    // 9b. Inbox receipts (PRB-224); ausente en exports viejos.
+    const inboxReceiptsPath = join(base, "meta", "inbox-receipts.json");
+    if (existsSync(inboxReceiptsPath)) {
+      for (const receipt of readJson(inboxReceiptsPath) as Array<Record<string, any>>) {
+        const actorId = actorIds.get(receipt.actor);
+        if (!actorId) {
+          throw new Error(`Inbox receipt references unknown actor ${receipt.actor}`);
+        }
+        const activityId = activityIdsByIssue.get(receipt.issue)?.[receipt.activityIndex];
+        if (!activityId) {
+          throw new Error(
+            `Inbox receipt for ${receipt.issue} references missing activity index ${receipt.activityIndex}`,
+          );
+        }
+        db.query(
+          `INSERT INTO inbox_receipts (activity_id, actor_id, read_at, archived_at)
+           VALUES (?1, ?2, ?3, ?4)`,
+        ).run(activityId, actorId, receipt.readAt ?? null, receipt.archivedAt ?? null);
       }
     }
 
