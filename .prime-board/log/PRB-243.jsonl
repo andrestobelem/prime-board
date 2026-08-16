@@ -10,3 +10,4 @@
 {"actor":"admin","issue":"PRB-243","payload":{"from":"Needs Triage","to":"Backlog"},"ts":"2026-08-16T18:57:29.404Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-243","payload":{"type":"blocked_by","issue":"PRB-244"},"ts":"2026-08-16T19:05:50.704Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-243","payload":{"type":"blocked_by","issue":"PRB-245"},"ts":"2026-08-16T19:50:37.095Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-243","payload":{"type":"blocked_by","issue":"PRB-246"},"ts":"2026-08-16T19:52:38.108Z","type":"relation_added"}

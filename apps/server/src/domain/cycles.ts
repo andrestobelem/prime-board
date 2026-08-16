@@ -2,6 +2,7 @@
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
+import { recordActivity } from "./activity.ts";
 
 export type CycleState = "upcoming" | "active" | "completed";
 
@@ -140,11 +141,29 @@ export function updateCycle(
   return getCycle(db, id)!;
 }
 
-export function deleteCycle(db: Database, id: string): boolean {
+function cycleReference(db: Database, cycle: CycleRow): string {
+  const team = db.query("SELECT key FROM teams WHERE id = ?1").get(cycle.team_id) as {
+    key: string;
+  };
+  return `${team.key}/${cycle.number}`;
+}
+
+export function deleteCycle(db: Database, actorId: string, id: string): boolean {
   const existing = getCycle(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
-  db.query("UPDATE issues SET cycle_id = NULL WHERE cycle_id = ?1").run(id);
-  db.query("DELETE FROM cycles WHERE id = ?1").run(id);
+  const affected = db.query("SELECT id FROM issues WHERE cycle_id = ?1").all(id) as Array<{
+    id: string;
+  }>;
+  const reference = cycleReference(db, existing);
+  db.transaction(() => {
+    db.query("UPDATE issues SET cycle_id = NULL WHERE cycle_id = ?1").run(id);
+    for (const issue of affected) {
+      // El cycle se elimina en esta misma transacción; conservar la clave estable
+      // evita que el exportador dependa de una fila que ya no existirá.
+      recordActivity(db, issue.id, actorId, "cycle_changed", { from: reference, to: null });
+    }
+    db.query("DELETE FROM cycles WHERE id = ?1").run(id);
+  })();
   return true;
 }
 
@@ -171,24 +190,46 @@ export function cycleProgress(
 }
 
 /** Mueve issues abiertos del ciclo origen al destino. */
-export function carryOverCycle(db: Database, fromCycleId: string, toCycleId: string): number {
+export function carryOverCycle(
+  db: Database,
+  actorId: string,
+  fromCycleId: string,
+  toCycleId: string,
+): number {
   const from = getCycle(db, fromCycleId);
   const to = getCycle(db, toCycleId);
   if (!from || !to) throw apiError("NOT_FOUND", "Cycle not found");
   if (from.team_id !== to.team_id) {
     throw apiError("VALIDATION_FAILED", "Carry-over requires cycles of the same team");
   }
-  const result = db
+  const affected = db
     .query(
-      `UPDATE issues SET cycle_id = ?2, updated_at = ?3
+      `SELECT id FROM issues
        WHERE cycle_id = ?1
          AND archived_at IS NULL
          AND state_id IN (
            SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled')
          )`,
     )
-    .run(fromCycleId, toCycleId, now());
-  return Number(result.changes);
+    .all(fromCycleId) as Array<{ id: string }>;
+  const timestamp = now();
+  db.transaction(() => {
+    db.query(
+      `UPDATE issues SET cycle_id = ?2, updated_at = ?3
+       WHERE cycle_id = ?1
+         AND archived_at IS NULL
+         AND state_id IN (
+           SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled')
+         )`,
+    ).run(fromCycleId, toCycleId, timestamp);
+    for (const issue of affected) {
+      recordActivity(db, issue.id, actorId, "cycle_changed", {
+        from: fromCycleId,
+        to: toCycleId,
+      });
+    }
+  })();
+  return affected.length;
 }
 
 export function validateCycleForTeam(db: Database, cycleId: string, teamId: string): void {

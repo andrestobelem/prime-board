@@ -616,16 +616,16 @@ export const resolvers = {
       return { success: true, cycle: mapCycle(updateCycle(context.db, args.id, args.input)) };
     },
     cycleDelete: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
-      return { success: deleteCycle(context.db, args.id) };
+      const viewer = requireViewer(context);
+      return { success: deleteCycle(context.db, viewer.id, args.id) };
     },
     cycleCarryOver: (
       _parent: unknown,
       args: { fromCycleId: string; toCycleId: string },
       context: Context,
     ) => {
-      requireViewer(context);
-      const movedIssues = carryOverCycle(context.db, args.fromCycleId, args.toCycleId);
+      const viewer = requireViewer(context);
+      const movedIssues = carryOverCycle(context.db, viewer.id, args.fromCycleId, args.toCycleId);
       return { success: true, movedIssues };
     },
     reviewCreate: (
