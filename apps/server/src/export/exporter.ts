@@ -213,10 +213,16 @@ function writeIssue(
     sortOrder: issue.sort_order ?? 0,
     labels: db
       .query(
-        "SELECT labels.name FROM issue_labels JOIN labels ON labels.id = issue_labels.label_id WHERE issue_id = ?1 ORDER BY labels.name",
+        `SELECT labels.name, teams.key AS team_key
+         FROM issue_labels
+         JOIN labels ON labels.id = issue_labels.label_id
+         LEFT JOIN teams ON teams.id = labels.team_id
+         WHERE issue_labels.issue_id = ?1
+         ORDER BY team_key, labels.name`,
       )
-      .values(issue.id)
-      .map((row) => row[0]),
+      .all(issue.id)
+      .map((row) => row as { name: string; team_key: string | null })
+      .map((row) => ({ name: row.name, team: row.team_key ?? null })),
     // Relaciones (AT-175/AT-178): se guardan una sola vez — blockedBy en el
     // extremo bloqueado; related y duplicateOf en el extremo origen de la fila.
     ...relationFields(db, issue.id),

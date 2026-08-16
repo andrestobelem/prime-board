@@ -119,6 +119,12 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
     const teamIds = new Map<string, string>();
     const stateIds = new Map<string, string>();
     const labelIds = new Map<string, string>();
+    const legacyLabelIds = new Map<string, Array<{ id: string; team: string | null }>>();
+    const addLegacyLabel = (name: string, id: string, team: string | null) => {
+      const entries = legacyLabelIds.get(name) ?? [];
+      entries.push({ id, team });
+      legacyLabelIds.set(name, entries);
+    };
     for (const team of readJson(join(base, "meta", "teams.json")) as Array<Record<string, any>>) {
       const teamId = newId();
       teamIds.set(team.key, teamId);
@@ -134,7 +140,8 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       }
       for (const label of team.labels ?? []) {
         const labelId = newId();
-        labelIds.set(label.name, labelId);
+        labelIds.set(`${team.key}/${label.name}`, labelId);
+        addLegacyLabel(label.name, labelId, team.key);
         db.query(
           "INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         ).run(labelId, label.name, label.color, teamId, timestamp);
@@ -168,7 +175,8 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       Record<string, string>
     >) {
       const labelId = newId();
-      labelIds.set(label.name!, labelId);
+      labelIds.set(`workspace/${label.name}`, labelId);
+      addLegacyLabel(label.name!, labelId, null);
       db.query(
         "INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, NULL, ?4)",
       ).run(labelId, label.name as string, label.color as string, timestamp);
@@ -360,6 +368,40 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       }
     }
 
+    const resolveLabelId = (reference: unknown, issue: Record<string, any>): string => {
+      if (typeof reference === "object" && reference !== null) {
+        const label = reference as { name?: unknown; team?: unknown };
+        if (typeof label.name !== "string") {
+          throw new Error(`Invalid label reference on ${issue.id}`);
+        }
+        const key = label.team ? `${String(label.team)}/${label.name}` : `workspace/${label.name}`;
+        const id = labelIds.get(key);
+        if (!id) throw new Error(`Issue ${issue.id} references unknown label ${key}`);
+        return id;
+      }
+      if (typeof reference !== "string") {
+        throw new Error(`Invalid label reference on ${issue.id}`);
+      }
+      const qualified = labelIds.get(reference);
+      if (qualified) return qualified;
+
+      // Compatibility with old exports that stored only the label name. It is
+      // safe only when the old name resolves to exactly one applicable scope.
+      const candidates = (legacyLabelIds.get(reference) ?? []).filter(
+        (candidate) => candidate.team === null || candidate.team === issue.team,
+      );
+      if (candidates.length === 1) return candidates[0]!.id;
+      if (candidates.length > 1) {
+        throw new Error(
+          `Ambiguous label "${reference}" on ${issue.id}; export it with its team or workspace scope`,
+        );
+      }
+      if ((legacyLabelIds.get(reference) ?? []).length > 0) {
+        throw new Error(`Label "${reference}" does not belong to issue team ${issue.team}`);
+      }
+      throw new Error(`Issue ${issue.id} references unknown label ${reference}`);
+    };
+
     // 6. Issues: primera pasada sin parent (se resuelve después).
     const issueIds = new Map<string, string>();
     const snapshots = readdirSync(join(base, "issues"))
@@ -408,14 +450,9 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         issue.updatedAt ?? issue.createdAt,
         issue.archivedAt ?? null,
       );
-      for (const labelName of issue.labels ?? []) {
-        const labelId = labelIds.get(labelName);
-        if (labelId) {
-          db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(
-            id,
-            labelId,
-          );
-        }
+      for (const labelReference of issue.labels ?? []) {
+        const labelId = resolveLabelId(labelReference, issue);
+        db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(id, labelId);
       }
       result.issues += 1;
     }

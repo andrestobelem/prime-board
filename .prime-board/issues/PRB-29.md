@@ -6,7 +6,8 @@ creator: claude
 cycle: null
 id: PRB-29
 labels:
-  - feedback
+  - name: feedback
+    team: PRB
 milestone: null
 parent: null
 priority: 0
