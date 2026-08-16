@@ -24,10 +24,10 @@ cp examples/extensions/question.ts ~/.prime/agent/extensions/
 
 - `Enter` selecciona la opción resaltada.
 - `↑` y `↓` navegan por las opciones.
-- `Esc` cancela la pregunta o vuelve desde la respuesta libre a la lista.
-- `Type something.` abre un editor inline; `Enter` confirma el texto.
+- `Esc` cancela el diálogo actual.
+- `Type something.` abre un segundo diálogo de texto; `Enter` confirma la respuesta.
 - En modos sin UI, la herramienta devuelve un error explícito en vez de bloquearse.
+- Usa `ctx.ui.select()` y `ctx.ui.input()`, compatibles también con el modo daemon.
 
-La implementación usa `ctx.ui.custom()` porque el diálogo combina una lista y
-un editor. Para diálogos simples, la API también expone `ctx.ui.select()` e
-`ctx.ui.input()`.
+La UI personalizada (`ctx.ui.custom()`) no está disponible en el binding daemon de
+Prime Agent, por eso la extensión usa dos diálogos estándar encadenados.
