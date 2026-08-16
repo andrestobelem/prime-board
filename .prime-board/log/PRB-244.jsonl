@@ -3,3 +3,7 @@
 {"actor":"admin","issue":"PRB-244","payload":{"type":"related","issue":"PRB-242"},"ts":"2026-08-16T19:04:58.482Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-244","payload":{"type":"related","issue":"PRB-228"},"ts":"2026-08-16T19:04:58.516Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-244","payload":{"type":"blocks","issue":"PRB-243"},"ts":"2026-08-16T19:05:50.704Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-244","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-16T19:58:47.325Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-244","payload":{"from":null,"to":"admin"},"ts":"2026-08-16T19:58:47.325Z","type":"assigned"}
+{"actor":"admin","issue":"PRB-244","payload":{"body":"Implementado PRB-244.\n\n- Los filtros de Saved View se exportan con referencias naturales estables para teams, states, actors, projects, milestones, labels, issues y cycles.\n- La traducción es recursiva y conserva comparadores (`eq`, `in`, `includesAll`, `and`/`or`, etc.); el rebuild los convierte de nuevo a los UUIDs actuales.\n- Los exports legacy con UUIDs que no pueden resolverse ahora fallan con un diagnóstico explícito, antes de completar el rebuild.\n- Se reexportó la réplica operativa: `meta/saved-views.json` ya no contiene UUIDs.\n\nValidación: `bun test` (236 pass), `bun run typecheck` y `bun run build` pasan."},"ts":"2026-08-16T20:06:28.537Z","type":"commented"}
+{"actor":"admin","issue":"PRB-244","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-16T20:06:28.605Z","type":"state_changed"}

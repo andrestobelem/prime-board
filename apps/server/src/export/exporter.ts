@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "no
 import { join } from "node:path";
 import { stringify as toYaml } from "yaml";
 import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
+import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
 
 /** JSON con claves ordenadas: sin esto, el diff cambia por reordenamientos casuales. */
 /**
@@ -46,6 +47,83 @@ interface Lookups {
   milestones: Map<string, string>;
   cycles: Map<string, string>;
   labels: Map<string, string>;
+}
+
+function uniqueNaturalMap(rows: Array<[string, string]>, resource: string): Map<string, string> {
+  const idsByNatural = new Map<string, string>();
+  const result = new Map<string, string>();
+  for (const [id, natural] of rows) {
+    const previous = idsByNatural.get(natural);
+    if (previous && previous !== id) {
+      throw new Error(
+        `Cannot export saved view filters: ambiguous ${resource} reference "${natural}"`,
+      );
+    }
+    idsByNatural.set(natural, id);
+    result.set(id, natural);
+  }
+  return result;
+}
+
+function savedViewsUseField(views: Array<Record<string, any>>, field: string): boolean {
+  const visit = (filter: unknown): boolean => {
+    if (!filter || typeof filter !== "object" || Array.isArray(filter)) return false;
+    const record = filter as Record<string, any>;
+    if (field in record) return true;
+    return ["and", "or"].some(
+      (branch) =>
+        Array.isArray(record[branch]) && record[branch].some((item: unknown) => visit(item)),
+    );
+  };
+  return views.some((view) => visit(view.filter));
+}
+
+function buildSavedViewLookups(
+  db: Database,
+  lookups: Lookups,
+  teamKeys: Map<string, string>,
+  identifiers: Map<string, string>,
+  views: Array<Record<string, any>>,
+): Record<SavedViewRefTable, Map<string, string>> {
+  const values = (sql: string) =>
+    db
+      .query(sql)
+      .values()
+      .map((row) => [row[0] as string, row[1] as string] as [string, string]);
+  const projects = values("SELECT id, name FROM projects");
+  const milestones = values(
+    "SELECT milestones.id, projects.name || '/' || milestones.name " +
+      "FROM milestones JOIN projects ON projects.id = milestones.project_id",
+  );
+  const needsProjects = savedViewsUseField(views, "project");
+  const needsMilestones = savedViewsUseField(views, "milestone");
+  return {
+    teams: teamKeys,
+    states: uniqueNaturalMap(
+      values(
+        "SELECT workflow_states.id, teams.key || '/' || workflow_states.name " +
+          "FROM workflow_states JOIN teams ON teams.id = workflow_states.team_id",
+      ),
+      "workflow state",
+    ),
+    actors: uniqueNaturalMap(
+      [...lookups.actors].map(([id, name]) => [id, name]),
+      "actor",
+    ),
+    projects: needsProjects ? uniqueNaturalMap(projects, "project") : new Map(projects),
+    milestones: needsMilestones ? uniqueNaturalMap(milestones, "milestone") : new Map(milestones),
+    labels: uniqueNaturalMap(
+      values(
+        "SELECT labels.id, " +
+          "CASE WHEN labels.team_id IS NULL THEN 'workspace/' || labels.name " +
+          "ELSE teams.key || '/' || labels.name END " +
+          "FROM labels LEFT JOIN teams ON teams.id = labels.team_id",
+      ),
+      "label",
+    ),
+    issues: identifiers,
+    cycles: lookups.cycles,
+  };
 }
 
 function buildLookups(db: Database): Lookups {
@@ -430,6 +508,11 @@ export function exportBoard(
        ORDER BY sv.created_at, sv.id`,
     )
     .all() as Array<Record<string, any>>;
+  const savedViewLookups = savedViews.length
+    ? buildSavedViewLookups(db, lookups, context.teamKeys, context.identifiers, savedViews)
+    : null;
+  const resolveSavedViewRef = (table: SavedViewRefTable, value: string): string | undefined =>
+    savedViewLookups?.[table].get(value);
   write(
     join(base, "meta", "saved-views.json"),
     stableStringify(
@@ -438,7 +521,12 @@ export function exportBoard(
         scope: view.scope,
         team: view.team_key ?? null,
         owner: view.owner_name,
-        filter: JSON.parse(view.filter_json),
+        filter: translateSavedViewFilter(
+          JSON.parse(view.filter_json),
+          resolveSavedViewRef,
+          "toNaturalKeys",
+          `Saved view "${view.name}"`,
+        ),
         orderBy: view.order_by,
         groupBy: view.group_by,
         columns: JSON.parse(view.columns_json || "[]"),

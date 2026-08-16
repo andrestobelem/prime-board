@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { newId, now } from "../db/util.ts";
 import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
+import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
 
 export interface RebuildResult {
   issues: number;
@@ -265,40 +266,6 @@ export function rebuildFromRepo(
       }
     }
 
-    // 5b. Vistas guardadas (PRB-209); ausente en exports viejos.
-    const savedViewsPath = join(base, "meta", "saved-views.json");
-    if (existsSync(savedViewsPath)) {
-      for (const view of readJson(savedViewsPath) as Array<Record<string, any>>) {
-        const ownerId = actorIds.get(view.owner);
-        if (!ownerId)
-          throw new Error(`Saved view "${view.name}" references unknown owner ${view.owner}`);
-        let teamId: string | null = null;
-        if (view.scope === "team") {
-          if (!view.team) throw new Error(`Team saved view "${view.name}" missing team key`);
-          teamId = teamIds.get(view.team) ?? null;
-          if (!teamId)
-            throw new Error(`Saved view "${view.name}" references unknown team ${view.team}`);
-        }
-        db.query(
-          `INSERT INTO saved_views
-            (id, name, scope, team_id, owner_id, filter_json, order_by, group_by, columns_json, created_at, updated_at, archived_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)`,
-        ).run(
-          newId(),
-          view.name,
-          view.scope,
-          teamId,
-          ownerId,
-          JSON.stringify(view.filter ?? {}),
-          view.orderBy ?? "CREATED_DESC",
-          view.groupBy ?? "state",
-          JSON.stringify(view.columns ?? []),
-          timestamp,
-          view.archived ? timestamp : null,
-        );
-      }
-    }
-
     // 5c. Ciclos (PRB-211); ausente en exports viejos.
     const cyclesPath = join(base, "meta", "cycles.json");
     const cycleIds = new Map<string, string>();
@@ -490,6 +457,59 @@ export function rebuildFromRepo(
         db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(id, labelId);
       }
       result.issues += 1;
+    }
+
+    // 6b. Vistas guardadas (PRB-209/244); se importan después de los issues
+    // porque sus filtros también pueden referirlos por identifier.
+    const savedViewsPath = join(base, "meta", "saved-views.json");
+    if (existsSync(savedViewsPath)) {
+      const savedViewLookups: Record<SavedViewRefTable, Map<string, string>> = {
+        teams: teamIds,
+        states: stateIds,
+        actors: actorIds,
+        projects: projectIds,
+        milestones: milestoneIds,
+        labels: labelIds,
+        issues: issueIds,
+        cycles: cycleIds,
+      };
+      const resolveSavedViewRef = (table: SavedViewRefTable, value: string): string | undefined =>
+        savedViewLookups[table].get(value);
+      for (const view of readJson(savedViewsPath) as Array<Record<string, any>>) {
+        const ownerId = actorIds.get(view.owner);
+        if (!ownerId)
+          throw new Error(`Saved view "${view.name}" references unknown owner ${view.owner}`);
+        let teamId: string | null = null;
+        if (view.scope === "team") {
+          if (!view.team) throw new Error(`Team saved view "${view.name}" missing team key`);
+          teamId = teamIds.get(view.team) ?? null;
+          if (!teamId)
+            throw new Error(`Saved view "${view.name}" references unknown team ${view.team}`);
+        }
+        const filter = translateSavedViewFilter(
+          view.filter ?? {},
+          resolveSavedViewRef,
+          "toIds",
+          `Saved view "${view.name}"`,
+        );
+        db.query(
+          `INSERT INTO saved_views
+            (id, name, scope, team_id, owner_id, filter_json, order_by, group_by, columns_json, created_at, updated_at, archived_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)`,
+        ).run(
+          newId(),
+          view.name,
+          view.scope,
+          teamId,
+          ownerId,
+          JSON.stringify(filter),
+          view.orderBy ?? "CREATED_DESC",
+          view.groupBy ?? "state",
+          JSON.stringify(view.columns ?? []),
+          timestamp,
+          view.archived ? timestamp : null,
+        );
+      }
     }
 
     // 7. Segunda pasada: parents y relaciones (necesitan todos los issues creados).
