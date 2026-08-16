@@ -7,6 +7,7 @@ import { issueCommand } from "./commands/issue.ts";
 import { projectCommand } from "./commands/project.ts";
 import { teamCommand } from "./commands/team.ts";
 import { webhookCommand } from "./commands/webhook.ts";
+import { viewCommand } from "./commands/view.ts";
 import { ApiError, UsageError } from "./errors.ts";
 
 const HELP = `pb ${APP_VERSION} — prime-board CLI
@@ -18,6 +19,7 @@ Commands:
   auth status                              Show current viewer
   issue list|view|create|update|comment    Work with issues
   project list|view|create                 Work with projects
+  view list|create|update|duplicate|delete Saved views
   team list                                List teams
   webhook list|create|delete               Manage webhooks
 
@@ -33,6 +35,8 @@ async function main(): Promise<void> {
       return issueCommand(rest);
     case "project":
       return projectCommand(rest);
+    case "view":
+      return viewCommand(rest);
     case "team":
       return teamCommand(rest);
     case "webhook":
