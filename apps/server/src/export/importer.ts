@@ -215,7 +215,11 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         issue.assignee ? (actorIds.get(issue.assignee) ?? null) : null,
         issue.project ? (projectIds.get(issue.project) ?? null) : null,
         issue.milestone && issue.project
-          ? (milestoneIds.get(`${issue.project}/${issue.milestone}`) ?? null)
+          ? (milestoneIds.get(
+              issue.milestone.startsWith(`${issue.project}/`)
+                ? issue.milestone
+                : `${issue.project}/${issue.milestone}`,
+            ) ?? null)
           : null,
         actorIds.get(issue.creator) ?? [...actorIds.values()][0]!,
         issue.createdAt,
