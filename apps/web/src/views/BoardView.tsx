@@ -134,7 +134,7 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
           label: milestone.name,
           patch: { milestoneId: milestone.id },
         })),
-        { key: "none", label: "Sin milestone", patch: { milestoneId: null } },
+        { key: "none", label: "No milestone", patch: { milestoneId: null } },
       ];
     }
     if (groupBy === "assignee") {
@@ -144,11 +144,11 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
           label: `${actor.name}${actor.type === "AGENT" ? " (agent)" : ""}`,
           patch: { assigneeId: actor.id },
         })),
-        { key: "none", label: "Sin assignee", patch: { assigneeId: null } },
+        { key: "none", label: "No assignee", patch: { assigneeId: null } },
       ];
     }
     if (groupBy === "priority") {
-      return ["Sin prioridad", "Urgent", "High", "Medium", "Low"].map((label, index) => ({
+      return ["No priority", "Urgent", "High", "Medium", "Low"].map((label, index) => ({
         key: String(index),
         label,
         patch: { priority: String(index) },

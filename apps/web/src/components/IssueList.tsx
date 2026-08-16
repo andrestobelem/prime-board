@@ -44,10 +44,10 @@ export function IssueListLimitNotice({ hasNextPage }: { hasNextPage: boolean }) 
 }
 
 export const GROUP_LABELS: Record<GroupBy, string> = {
-  state: "Estado",
+  state: "State",
   milestone: "Milestone",
   assignee: "Assignee",
-  priority: "Prioridad",
+  priority: "Priority",
 };
 
 /** Clave y orden del grupo al que pertenece un issue, según el criterio elegido. */
@@ -55,15 +55,15 @@ function groupOf(issue: IssueListItem, by: GroupBy): { key: string; label: strin
   if (by === "milestone") {
     return issue.milestone
       ? { key: issue.milestone.id, label: issue.milestone.name, order: 0 }
-      : { key: "none", label: "Sin milestone", order: 1 };
+      : { key: "none", label: "No milestone", order: 1 };
   }
   if (by === "assignee") {
     return issue.assignee
       ? { key: issue.assignee.id, label: issue.assignee.name, order: 0 }
-      : { key: "none", label: "Sin assignee", order: 1 };
+      : { key: "none", label: "No assignee", order: 1 };
   }
   if (by === "priority") {
-    const names = ["Sin prioridad", "Urgent", "High", "Medium", "Low"];
+    const names = ["No priority", "Urgent", "High", "Medium", "Low"];
     return {
       key: String(issue.priority),
       label: names[issue.priority] ?? "?",

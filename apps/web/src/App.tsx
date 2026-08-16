@@ -137,7 +137,7 @@ export function App() {
           <span className="crumb">{param}</span>
         </Link>
         <Icon name="chevron-right" size={14} className="crumb-sep" />
-        <span className="title">Estados y labels</span>
+        <span className="title">States & labels</span>
       </>
     );
     content = <TeamSettingsView teamKey={param} />;
@@ -168,7 +168,7 @@ export function App() {
           <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
             {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
               <option key={key} value={key}>
-                Agrupar por {GROUP_LABELS[key].toLowerCase()}
+                Group by {GROUP_LABELS[key].toLowerCase()}
               </option>
             ))}
           </select>
@@ -187,7 +187,7 @@ export function App() {
           <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
             {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
               <option key={key} value={key}>
-                Agrupar por {GROUP_LABELS[key].toLowerCase()}
+                Group by {GROUP_LABELS[key].toLowerCase()}
               </option>
             ))}
           </select>
@@ -251,7 +251,7 @@ export function App() {
             <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
               {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
                 <option key={key} value={key}>
-                  Agrupar por {GROUP_LABELS[key].toLowerCase()}
+                  Group by {GROUP_LABELS[key].toLowerCase()}
                 </option>
               ))}
             </select>
@@ -293,7 +293,7 @@ export function App() {
             <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
               {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
                 <option key={key} value={key}>
-                  Agrupar por {GROUP_LABELS[key].toLowerCase()}
+                  Group by {GROUP_LABELS[key].toLowerCase()}
                 </option>
               ))}
             </select>

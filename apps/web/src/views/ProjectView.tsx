@@ -197,7 +197,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
               {orphans.length > 0 && (
                 <div>
                   <div className="state-group-header" style={{ background: "var(--bg-sidebar)" }}>
-                    Sin milestone <span className="count">{orphans.length}</span>
+                    No milestone <span className="count">{orphans.length}</span>
                   </div>
                   <IssueList issues={orphans} />
                 </div>
