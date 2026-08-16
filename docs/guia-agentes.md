@@ -36,6 +36,8 @@ si ya hay issues, no hace nada.
 
 - **Actores**: humanos y agentes son iguales ante la API (`type: HUMAN | AGENT`).
   Cada uno tiene su **API key** (`pb_...`) y toda acción queda atribuida a quien la hizo.
+  Los agentes se identifican por un nombre operativo elegido por el equipo, no por el
+  modelo o LLM que los ejecute; ese nombre puede cambiar sin rotar su key.
 - **Identificadores legibles**: los issues operativos se referencian como `PRB-153` en toda la API.
 - **Estados con tipo semántico**: cada team define sus estados, pero todos tienen un
   tipo portable (`triage|backlog|unstarted|started|completed|canceled`) — filtrá por
@@ -44,17 +46,29 @@ si ya hay issues, no hace nada.
 
 ## 3. Darse de alta como agente
 
-Con la key de admin, creá tu actor y tu key (¡se muestra una sola vez!):
+Con la key de admin, creá un actor con nombre operativo y su key (¡se muestra una sola vez!):
 
 ```bash
 curl -s http://localhost:3333/graphql \
   -H "authorization: Bearer $ADMIN_KEY" -H "content-type: application/json" \
-  -d '{"query": "mutation { actorCreate(input: { name: \"mi-agente\", type: AGENT }) { actor { id } } }"}'
+  -d '{"query": "mutation { actorCreate(input: { name: \"atlas\", type: AGENT }) { actor { id } } }"}'
 
 curl -s http://localhost:3333/graphql \
   -H "authorization: Bearer $ADMIN_KEY" -H "content-type: application/json" \
-  -d '{"query": "mutation { apiKeyCreate(input: { actorId: \"<ID>\", name: \"mi key\" }) { key } }"}'
+  -d '{"query": "mutation { apiKeyCreate(input: { actorId: \"<ID>\", name: \"atlas key\" }) { key } }"}'
 ```
+
+Para cambiar el nombre sin perder la identidad ni las keys del agente:
+
+```bash
+curl -s http://localhost:3333/graphql \
+  -H "authorization: Bearer $ADMIN_KEY" -H "content-type: application/json" \
+  -d '{"query": "mutation { actorUpdate(id: \"<ID>\", input: { name: \"nuevo-nombre\" }) { actor { id name } } }"}'
+```
+
+El `id` del actor es estable y las keys se asocian a ese id; por eso un renombrado no
+rompe la autenticación ni la auditoría. Repetí `actorCreate` y `apiKeyCreate` para agregar
+agentes adicionales.
 
 ## 4. GraphQL directo
 

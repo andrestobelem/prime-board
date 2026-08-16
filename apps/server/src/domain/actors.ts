@@ -21,7 +21,9 @@ export function getActor(db: Database, id: string): ActorRow | null {
 
 export function listActors(db: Database, type?: string | null): ActorRow[] {
   if (type) {
-    return db.query("SELECT * FROM actors WHERE type = ?1 ORDER BY created_at").all(type) as ActorRow[];
+    return db
+      .query("SELECT * FROM actors WHERE type = ?1 ORDER BY created_at")
+      .all(type) as ActorRow[];
   }
   return db.query("SELECT * FROM actors ORDER BY created_at").all() as ActorRow[];
 }
@@ -35,11 +37,38 @@ export function createActor(
   if (input.type !== "human" && input.type !== "agent") {
     throw apiError("VALIDATION_FAILED", `Invalid actor type: ${input.type}`);
   }
+  const duplicate = db.query("SELECT id FROM actors WHERE lower(name) = lower(?1)").get(name);
+  if (duplicate) throw apiError("VALIDATION_FAILED", "Actor name already exists");
   const id = newId();
   const timestamp = now();
   db.query(
     "INSERT INTO actors (id, name, email, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
   ).run(id, name, input.email ?? null, input.type, timestamp, timestamp);
+  return getActor(db, id)!;
+}
+
+export function updateActor(
+  db: Database,
+  id: string,
+  input: { name?: string | null; email?: string | null },
+): ActorRow {
+  const existing = getActor(db, id);
+  if (!existing) throw apiError("NOT_FOUND", "Actor not found");
+
+  const name = input.name === undefined || input.name === null ? existing.name : input.name.trim();
+  if (!name) throw apiError("VALIDATION_FAILED", "Actor name cannot be empty");
+  const duplicate = db
+    .query("SELECT id FROM actors WHERE lower(name) = lower(?1) AND id <> ?2")
+    .get(name, id);
+  if (duplicate) throw apiError("VALIDATION_FAILED", "Actor name already exists");
+
+  const email = input.email === undefined ? existing.email : input.email?.trim() || null;
+  db.query("UPDATE actors SET name = ?1, email = ?2, updated_at = ?3 WHERE id = ?4").run(
+    name,
+    email,
+    now(),
+    id,
+  );
   return getActor(db, id)!;
 }
 

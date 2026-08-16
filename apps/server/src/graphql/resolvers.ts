@@ -2,6 +2,7 @@
 import { GraphQLScalarType, Kind } from "graphql";
 import {
   createActor,
+  updateActor,
   createApiKey,
   deleteApiKey,
   getActor,
@@ -171,6 +172,15 @@ export const resolvers = {
     ) => {
       requireViewer(context);
       const actor = mapActor(createActor(context.db, args.input));
+      return { success: true, actor };
+    },
+    actorUpdate: (
+      _parent: unknown,
+      args: { id: string; input: { name?: string | null; email?: string | null } },
+      context: Context,
+    ) => {
+      requireViewer(context);
+      const actor = mapActor(updateActor(context.db, args.id, args.input));
       return { success: true, actor };
     },
     apiKeyCreate: (

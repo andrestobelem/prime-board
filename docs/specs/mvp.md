@@ -154,6 +154,7 @@ type Mutation {
   labelCreate(input: LabelCreateInput!): LabelPayload!
   workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
   actorCreate(input: ActorCreateInput!): ActorPayload!            # alta de humanos y agentes
+  actorUpdate(id: ID!, input: ActorUpdateInput!): ActorPayload!  # renombra sin cambiar su identidad
   apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyPayload!         # devuelve la key una sola vez
   webhookCreate(input: WebhookCreateInput!): WebhookPayload!
   webhookDelete(id: ID!): DeletePayload!
@@ -168,7 +169,8 @@ Los `*Payload` devuelven `{ success: Boolean!, <entidad> }` como en Linear.
   actor `admin` (human), e imprime su API key por consola una única vez.
 - Las keys se guardan hasheadas (SHA-256). Sin key ⇒ `UNAUTHORIZED` (excepto la UI
   servida y GraphiQL en dev, configurable).
-- Cada agente se registra como `Actor(type: AGENT)` con su propia key: la autoría en
+- Cada agente se registra como `Actor(type: AGENT)` con un nombre operativo (no el nombre del
+  modelo/LLM) y su propia key. `actorUpdate` permite renombrarlo sin cambiar su identidad: la autoría en
   issues, comentarios y actividad queda siempre atribuida al agente real.
 
 ## 6. Webhooks

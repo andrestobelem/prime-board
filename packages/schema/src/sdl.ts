@@ -48,7 +48,9 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     description: String
     states: [WorkflowState!]!
-    """Donde caen los issues creados sin estado explícito. Editable vía teamUpdate."""
+    """
+    Donde caen los issues creados sin estado explícito. Editable vía teamUpdate.
+    """
     defaultState: WorkflowState!
     labels: [Label!]!
     projects: [Project!]!
@@ -59,7 +61,9 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     name: String!
     color: String!
-    """NULL para labels de workspace."""
+    """
+    NULL para labels de workspace.
+    """
     teamId: ID
   }
 
@@ -73,13 +77,17 @@ export const typeDefs = /* GraphQL */ `
 
   type Issue {
     id: ID!
-    """Identificador legible e inmutable, p. ej. AT-126."""
+    """
+    Identificador legible e inmutable, p. ej. AT-126.
+    """
     identifier: String!
     title: String!
     description: String
     team: Team!
     state: WorkflowState!
-    """0 none, 1 urgent, 2 high, 3 medium, 4 low (como Linear)."""
+    """
+    0 none, 1 urgent, 2 high, 3 medium, 4 low (como Linear).
+    """
     priority: Int!
     assignee: Actor
     creator: Actor!
@@ -89,13 +97,21 @@ export const typeDefs = /* GraphQL */ `
     project: Project
     milestone: Milestone
     comments: [Comment!]!
-    """Relaciones con otros issues (bloqueo, related, duplicados), desde ambos extremos."""
+    """
+    Relaciones con otros issues (bloqueo, related, duplicados), desde ambos extremos.
+    """
     relations: [IssueRelation!]!
-    """Historial append-only de cambios del issue."""
+    """
+    Historial append-only de cambios del issue.
+    """
     activity: [Activity!]!
-    """Deep-link a la UI."""
+    """
+    Deep-link a la UI.
+    """
     url: String!
-    """Nombre de branch sugerido, p. ej. agent/at-126-titulo."""
+    """
+    Nombre de branch sugerido, p. ej. agent/at-126-titulo.
+    """
     branchName: String!
     createdAt: DateTime!
     updatedAt: DateTime!
@@ -103,24 +119,40 @@ export const typeDefs = /* GraphQL */ `
   }
 
   enum IssueRelationType {
-    """Este issue bloquea al relacionado."""
+    """
+    Este issue bloquea al relacionado.
+    """
     BLOCKS
-    """Este issue está bloqueado por el relacionado."""
+    """
+    Este issue está bloqueado por el relacionado.
+    """
     BLOCKED_BY
-    """Relación simétrica: ambos extremos la ven igual."""
+    """
+    Relación simétrica: ambos extremos la ven igual.
+    """
     RELATED
-    """Este issue duplica al relacionado."""
+    """
+    Este issue duplica al relacionado.
+    """
     DUPLICATE_OF
-    """El relacionado duplica a este issue."""
+    """
+    El relacionado duplica a este issue.
+    """
     DUPLICATED_BY
   }
 
-  """Relación entre dos issues, vista desde el issue consultado."""
+  """
+  Relación entre dos issues, vista desde el issue consultado.
+  """
   type IssueRelation {
     id: ID!
-    """Tipo desde la perspectiva del issue consultado (el otro extremo ve la inversa)."""
+    """
+    Tipo desde la perspectiva del issue consultado (el otro extremo ve la inversa).
+    """
     type: IssueRelationType!
-    """El issue del otro extremo."""
+    """
+    El issue del otro extremo.
+    """
     relatedIssue: Issue!
     createdAt: DateTime!
   }
@@ -192,7 +224,9 @@ export const typeDefs = /* GraphQL */ `
     position: Float!
     project: Project!
     issues(first: Int = 100): IssueConnection!
-    """Issues completados sobre el total (0..1)."""
+    """
+    Issues completados sobre el total (0..1).
+    """
     progress: Float!
     createdAt: DateTime!
   }
@@ -206,13 +240,20 @@ export const typeDefs = /* GraphQL */ `
   input TeamUpdateInput {
     name: String
     description: String
-    """Debe ser un estado del team."""
+    """
+    Debe ser un estado del team.
+    """
     defaultStateId: ID
   }
 
   input ActorCreateInput {
     name: String!
     type: ActorType!
+    email: String
+  }
+
+  input ActorUpdateInput {
+    name: String
     email: String
   }
 
@@ -242,7 +283,9 @@ export const typeDefs = /* GraphQL */ `
   type ApiKeyPayload {
     success: Boolean!
     apiKey: ApiKey!
-    """La key en claro. Se devuelve una única vez: solo se persiste su hash."""
+    """
+    La key en claro. Se devuelve una única vez: solo se persiste su hash.
+    """
     key: String!
   }
 
@@ -254,7 +297,9 @@ export const typeDefs = /* GraphQL */ `
   input LabelCreateInput {
     name: String!
     color: String
-    """Omitir para crear una label de workspace."""
+    """
+    Omitir para crear una label de workspace.
+    """
     teamId: ID
   }
 
@@ -277,13 +322,17 @@ export const typeDefs = /* GraphQL */ `
 
   type LabelDeletePayload {
     success: Boolean!
-    """Cantidad de issues de los que se quitó la label."""
+    """
+    Cantidad de issues de los que se quitó la label.
+    """
     affectedIssues: Int!
   }
 
   type WorkflowStateDeletePayload {
     success: Boolean!
-    """Issues migrados al estado destino."""
+    """
+    Issues migrados al estado destino.
+    """
     movedIssues: Int!
   }
 
@@ -292,7 +341,9 @@ export const typeDefs = /* GraphQL */ `
     neq: ID
     in: [ID!]
     nin: [ID!]
-    """true: el campo es NULL; false: no es NULL."""
+    """
+    true: el campo es NULL; false: no es NULL.
+    """
     null: Boolean
   }
 
@@ -314,7 +365,9 @@ export const typeDefs = /* GraphQL */ `
     includesAll: [ID!]
   }
 
-  """Filtro componible: los campos se combinan con AND; and/or anidan sub-filtros."""
+  """
+  Filtro componible: los campos se combinan con AND; and/or anidan sub-filtros.
+  """
   input IssueFilter {
     team: IDComparator
     state: IDComparator
@@ -326,9 +379,13 @@ export const typeDefs = /* GraphQL */ `
     parent: IDComparator
     priority: IntComparator
     labels: LabelComparator
-    """Full-text sobre título y descripción."""
+    """
+    Full-text sobre título y descripción.
+    """
     search: String
-    """true: issues abiertos con todos sus bloqueantes cerrados (frontier); false: con al menos un bloqueante abierto."""
+    """
+    true: issues abiertos con todos sus bloqueantes cerrados (frontier); false: con al menos un bloqueante abierto.
+    """
     unblocked: Boolean
     includeArchived: Boolean
     and: [IssueFilter!]
@@ -345,7 +402,9 @@ export const typeDefs = /* GraphQL */ `
   input IssueCreateInput {
     teamId: ID
     teamKey: String
-    """Fija el número del identificador (para imports); default: numeración automática."""
+    """
+    Fija el número del identificador (para imports); default: numeración automática.
+    """
     number: Int
     title: String!
     description: String
@@ -355,11 +414,17 @@ export const typeDefs = /* GraphQL */ `
     parentId: ID
     projectId: ID
     milestoneId: ID
-    """Labels a aplicar al crear (evita un issueUpdate extra)."""
+    """
+    Labels a aplicar al crear (evita un issueUpdate extra).
+    """
     labelIds: [ID!]
-    """Fecha de creación original (imports); default: ahora."""
+    """
+    Fecha de creación original (imports); default: ahora.
+    """
     createdAt: DateTime
-    """Autor original (imports); default: el actor de la API key."""
+    """
+    Autor original (imports); default: el actor de la API key.
+    """
     creatorId: ID
   }
 
@@ -373,7 +438,9 @@ export const typeDefs = /* GraphQL */ `
     projectId: ID
     milestoneId: ID
     sortOrder: Float
-    """Reemplaza el set completo de labels."""
+    """
+    Reemplaza el set completo de labels.
+    """
     labelIds: [ID!]
     addLabelIds: [ID!]
     removeLabelIds: [ID!]
@@ -385,10 +452,14 @@ export const typeDefs = /* GraphQL */ `
   }
 
   input IssueRelationCreateInput {
-    """Acepta UUID o identificador legible (AT-126)."""
+    """
+    Acepta UUID o identificador legible (AT-126).
+    """
     issueId: ID!
     relatedIssueId: ID!
-    """El tipo desde la perspectiva de issueId; se normaliza al guardar."""
+    """
+    El tipo desde la perspectiva de issueId; se normaliza al guardar.
+    """
     type: IssueRelationType!
   }
 
@@ -398,12 +469,18 @@ export const typeDefs = /* GraphQL */ `
   }
 
   input CommentCreateInput {
-    """Acepta UUID o identificador legible (AT-126)."""
+    """
+    Acepta UUID o identificador legible (AT-126).
+    """
     issueId: ID!
     body: String!
-    """Fecha original (imports); default: ahora."""
+    """
+    Fecha original (imports); default: ahora.
+    """
     createdAt: DateTime
-    """Autor original (imports); default: el actor de la API key."""
+    """
+    Autor original (imports); default: el actor de la API key.
+    """
     authorId: ID
   }
 
@@ -418,7 +495,9 @@ export const typeDefs = /* GraphQL */ `
     state: ProjectState
     leadId: ID
     targetDate: DateTime
-    """Teams del proyecto; omitir = todos los teams actuales (compat)."""
+    """
+    Teams del proyecto; omitir = todos los teams actuales (compat).
+    """
     teamIds: [ID!]
   }
 
@@ -428,7 +507,9 @@ export const typeDefs = /* GraphQL */ `
     state: ProjectState
     leadId: ID
     targetDate: DateTime
-    """Reemplaza el set de teams del proyecto."""
+    """
+    Reemplaza el set de teams del proyecto.
+    """
     teamIds: [ID!]
   }
 
@@ -439,16 +520,22 @@ export const typeDefs = /* GraphQL */ `
 
   input WebhookCreateInput {
     url: String!
-    """Omitir para autogenerar; se devuelve una única vez."""
+    """
+    Omitir para autogenerar; se devuelve una única vez.
+    """
     secret: String
-    """Eventos suscriptos; omitir para todos ("*")."""
+    """
+    Eventos suscriptos; omitir para todos ("*").
+    """
     events: [String!]
   }
 
   type WebhookPayload {
     success: Boolean!
     webhook: Webhook!
-    """El secret con el que se firman las entregas. Guardalo: no se vuelve a mostrar."""
+    """
+    El secret con el que se firman las entregas. Guardalo: no se vuelve a mostrar.
+    """
     secret: String!
   }
 
@@ -478,21 +565,34 @@ export const typeDefs = /* GraphQL */ `
 
   type MilestoneDeletePayload {
     success: Boolean!
-    """Cantidad de issues que quedaron sin milestone."""
+    """
+    Cantidad de issues que quedaron sin milestone.
+    """
     orphanedIssues: Int!
   }
 
   type Query {
-    """Actor autenticado por la API key del header Authorization."""
+    """
+    Actor autenticado por la API key del header Authorization.
+    """
     viewer: Actor!
     workspace: Workspace!
     teams: [Team!]!
     team(id: ID, key: String): Team
     actors(type: ActorType): [Actor!]!
-    """Acepta UUID o identificador legible (AT-126)."""
+    """
+    Acepta UUID o identificador legible (AT-126).
+    """
     issue(id: ID!): Issue
-    issues(filter: IssueFilter, first: Int = 50, after: String, orderBy: IssueOrder = CREATED_DESC): IssueConnection!
-    """Labels visibles para un team (workspace + propias); sin team, todas."""
+    issues(
+      filter: IssueFilter
+      first: Int = 50
+      after: String
+      orderBy: IssueOrder = CREATED_DESC
+    ): IssueConnection!
+    """
+    Labels visibles para un team (workspace + propias); sin team, todas.
+    """
     labels(team: ID): [Label!]!
     projects(state: ProjectState, team: ID, includeArchived: Boolean = false): [Project!]!
     project(id: ID!): Project
@@ -503,11 +603,14 @@ export const typeDefs = /* GraphQL */ `
     teamCreate(input: TeamCreateInput!): TeamPayload!
     teamUpdate(id: ID!, input: TeamUpdateInput!): TeamPayload!
     actorCreate(input: ActorCreateInput!): ActorPayload!
+    actorUpdate(id: ID!, input: ActorUpdateInput!): ActorPayload!
     apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyPayload!
     apiKeyDelete(id: ID!): DeletePayload!
     workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
     workflowStateUpdate(id: ID!, input: WorkflowStateUpdateInput!): WorkflowStatePayload!
-    """Borra el estado; moveToStateId es obligatorio si tiene issues."""
+    """
+    Borra el estado; moveToStateId es obligatorio si tiene issues.
+    """
     workflowStateDelete(id: ID!, moveToStateId: ID): WorkflowStateDeletePayload!
     issueCreate(input: IssueCreateInput!): IssuePayload!
     issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!
@@ -524,7 +627,9 @@ export const typeDefs = /* GraphQL */ `
     projectUnarchive(id: ID!): ProjectPayload!
     milestoneCreate(input: MilestoneCreateInput!): MilestonePayload!
     milestoneUpdate(id: ID!, input: MilestoneUpdateInput!): MilestonePayload!
-    """Borra el milestone; los issues asignados quedan sin milestone."""
+    """
+    Borra el milestone; los issues asignados quedan sin milestone.
+    """
     milestoneDelete(id: ID!): MilestoneDeletePayload!
     webhookCreate(input: WebhookCreateInput!): WebhookPayload!
     webhookDelete(id: ID!): DeletePayload!
