@@ -21,10 +21,16 @@ export interface ReconciliationReport {
   sourceCounts: Record<string, number>;
   targetCounts: Record<string, number> | null;
   countMismatches: string[];
+  contentMismatches: string[];
   reconciled: boolean;
 }
 
-function readTargetIssues(rootDir: string): ExistingIssue[] {
+interface TargetIssue extends ExistingIssue {
+  metadata: Record<string, unknown>;
+  description: string;
+}
+
+function readTargetIssues(rootDir: string): TargetIssue[] {
   const dir = join(rootDir, ".prime-board", "issues");
   try {
     return readdirSync(dir)
@@ -33,15 +39,88 @@ function readTargetIssues(rootDir: string): ExistingIssue[] {
         const raw = readFileSync(join(dir, file), "utf8");
         const match = raw.match(/^---\n([\s\S]*?)\n---/);
         const meta = match ? (parseYaml(match[1]!) as Record<string, unknown>) : {};
+        const body = raw.match(/^---[\s\S]*?---\n\n#[^\n]*\n([\s\S]*)$/)?.[1] ?? "";
         return {
           identifier: String(meta.id ?? file.replace(/\.md$/, "")),
           title: typeof meta.title === "string" ? meta.title : null,
+          metadata: meta,
+          description: body.trim(),
         };
       });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
+}
+
+function comparable(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return JSON.stringify(value.map(comparable).sort());
+  if (value === null || value === undefined) return "null";
+  return String(value);
+}
+
+function expectedIssue(
+  source: LinearExport,
+  issue: LinearExport["issues"][number],
+  options: LinearRepoExportOptions,
+): {
+  identifier: string;
+  fields: Record<string, unknown>;
+  description: string;
+} | null {
+  const team = source.teams.find((candidate) => candidate.id === issue.teamId);
+  if (!team) return null;
+  const identifier = issueIdentifierForExport(issue, team, options);
+  const actorName = (id: string | null | undefined) =>
+    id ? (source.actors.find((actor) => actor.id === id)?.name ?? null) : null;
+  const state = team.states.find((candidate) => candidate.id === issue.stateId);
+  const project = issue.projectId
+    ? source.projects.find((candidate) => candidate.id === issue.projectId)
+    : null;
+  const milestone =
+    issue.milestoneId && project
+      ? project.milestones?.find((candidate) => candidate.id === issue.milestoneId)
+      : null;
+  const targetBySourceId = new Map(
+    source.issues.map((candidate) => {
+      const candidateTeam = source.teams.find((item) => item.id === candidate.teamId);
+      return [
+        candidate.id,
+        candidateTeam
+          ? issueIdentifierForExport(candidate, candidateTeam, options)
+          : candidate.identifier,
+      ];
+    }),
+  );
+  const labels = (issue.labelIds ?? [])
+    .map((id) => source.labels.find((label) => label.id === id)?.name)
+    .filter((name): name is string => Boolean(name))
+    .sort();
+  const fields: Record<string, unknown> = {
+    id: identifier,
+    title: issue.title,
+    team: (options.teamKeyMap?.[team.id] ?? team.key).trim().toUpperCase(),
+    state: state?.name ?? null,
+    priority: issue.priority ?? 0,
+    assignee: actorName(issue.assigneeId),
+    creator: actorName(issue.creatorId),
+    parent: issue.parentId ? (targetBySourceId.get(issue.parentId) ?? issue.parentId) : null,
+    project: project?.name ?? null,
+    milestone: milestone && project ? `${project.name}/${milestone.name}` : null,
+    labels,
+    createdAt: issue.createdAt,
+    updatedAt: issue.updatedAt,
+    archivedAt: issue.archivedAt ?? null,
+  };
+  const links = [...(issue.attachments ?? []), ...(issue.documents ?? [])].map(
+    (link) => `- [${link.title ?? link.filename ?? link.url}](${link.url})`,
+  );
+  const description =
+    links.length > 0
+      ? `${issue.description ? `${issue.description}\n\n` : ""}## Linear artifacts\n${links.join("\n")}`
+      : (issue.description ?? "");
+  return { identifier, fields, description: description.trim() };
 }
 
 /**
@@ -107,6 +186,22 @@ export function reconcileLinearExport(
   const extraTargetIssues = [...targetIds]
     .filter((identifier) => !sourceIdentifiers.has(identifier))
     .sort();
+  const contentMismatches: string[] = [];
+  for (const issue of source.issues) {
+    const targetIdentifier = map.entities.issues?.[issue.id];
+    if (!targetIdentifier) continue;
+    const targetIssue = target.find((candidate) => candidate.identifier === targetIdentifier);
+    const expected = expectedIssue(source, issue, options);
+    if (!targetIssue || !expected) continue;
+    for (const [field, expectedValue] of Object.entries(expected.fields)) {
+      if (comparable(targetIssue.metadata[field]) !== comparable(expectedValue))
+        contentMismatches.push(
+          `${targetIdentifier}.${field}: target=${comparable(targetIssue.metadata[field])}, source=${comparable(expectedValue)}`,
+        );
+    }
+    if (targetIssue.description !== expected.description)
+      contentMismatches.push(`${targetIdentifier}.description differs`);
+  }
   const sourceCounts: Record<string, number> = {
     actors: source.actors.length,
     teams: source.teams.length,
@@ -149,8 +244,12 @@ export function reconcileLinearExport(
     sourceCounts,
     targetCounts,
     countMismatches,
+    contentMismatches,
     reconciled:
-      pendingCreates.length === 0 && conflicts.length === 0 && countMismatches.length === 0,
+      pendingCreates.length === 0 &&
+      conflicts.length === 0 &&
+      countMismatches.length === 0 &&
+      contentMismatches.length === 0,
   };
 }
 

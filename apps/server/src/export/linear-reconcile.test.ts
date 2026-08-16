@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeLinearExportToRepo, type LinearExport } from "./linear-repo-export.ts";
 import { reconcileLinearExport } from "./linear-reconcile.ts";
@@ -67,6 +67,16 @@ describe("reconcileLinearExport", () => {
       });
       expect(report.targetCounts).toMatchObject({ actors: 1, teams: 1, states: 1, issues: 1 });
       expect(report.targetIssues).toBe(1);
+      writeFileSync(
+        join(root, ".prime-board", "issues", "AT-1.md"),
+        readFileSync(join(root, ".prime-board", "issues", "AT-1.md"), "utf8").replace(
+          "title: Issue",
+          "title: Changed",
+        ),
+      );
+      const changed = reconcileLinearExport(valid, root);
+      expect(changed.contentMismatches).toContain("AT-1.title: target=Changed, source=Issue");
+      expect(changed.reconciled).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
