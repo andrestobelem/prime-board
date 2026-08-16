@@ -233,10 +233,10 @@ function stateType(type: string, warnings: MigrationFinding[], sourceId: string)
   if (!VALID_STATE_TYPES.has(normalized)) return null;
   return normalized;
 }
-function issueIdentifier(
+export function issueIdentifierForExport(
   issue: LinearIssue,
   team: LinearTeam,
-  options: LinearRepoExportOptions,
+  options: LinearRepoExportOptions = {},
 ): string {
   return `${targetTeamKey(team, options)}-${issue.number}`;
 }
@@ -415,7 +415,7 @@ export function writeLinearExportToRepo(
       );
       continue;
     }
-    const identifier = issueIdentifier(issue, team, options);
+    const identifier = issueIdentifierForExport(issue, team, options);
     if (identifiers.has(identifier) && identifiers.get(identifier) !== issue.id)
       add(
         conflicts,

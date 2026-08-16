@@ -112,6 +112,9 @@ La captura se convierte al formato del repo con:
 
 ```bash
 bun run import:linear --from linear-export.json --out /tmp/prime-board-migration --dry-run --json
+
+# Validar un staging ya generado
+bun run import:linear --from linear-export.json --check /tmp/prime-board-migration --json
 ```
 
 El comando no escribe durante `--dry-run`. Si el reporte no tiene conflictos ni pérdidas

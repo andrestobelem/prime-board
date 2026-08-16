@@ -7,12 +7,14 @@ import { loadConfig } from "../config.ts";
 import { openDatabase } from "../db/database.ts";
 import { rebuildFromRepo } from "../export/importer.ts";
 import { parseLinearExport, writeLinearExportToRepo } from "../export/linear-repo-export.ts";
+import { reconcileLinearExport } from "../export/linear-reconcile.ts";
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
   options: {
     from: { type: "string" },
     out: { type: "string" },
+    check: { type: "string" },
     "dry-run": { type: "boolean" },
     apply: { type: "boolean" },
     "allow-losses": { type: "boolean" },
@@ -28,7 +30,7 @@ function repoRoot(): string {
 }
 
 const usage =
-  "Usage: bun run import:linear --from <export.json> [--out <repo>] [--dry-run] [--apply] [--allow-losses] [--json]";
+  "Usage: bun run import:linear --from <export.json> [--out <repo>] [--check <repo>] [--dry-run] [--apply] [--allow-losses] [--json]";
 if (values.help) {
   console.log(usage);
   process.exit(0);
@@ -38,6 +40,25 @@ if (values.apply && !values.out)
   throw new Error("--apply requires --out so the target repo is explicit");
 
 const source = parseLinearExport(JSON.parse(readFileSync(values.from, "utf8")));
+if (values.check) {
+  const reconciliation = reconcileLinearExport(source, values.check);
+  if (values.json) console.log(JSON.stringify(reconciliation, null, 2));
+  else {
+    console.log(
+      `${reconciliation.sourceIssues} source issues, ${reconciliation.targetIssues} target issues`,
+    );
+    console.log(
+      `${reconciliation.pendingCreates.length} pending creates, ${reconciliation.pendingUpdates.length} pending updates`,
+    );
+    console.log(
+      `${reconciliation.conflicts.length} conflicts, ${reconciliation.extraTargetIssues.length} extra target issues`,
+    );
+    for (const finding of reconciliation.conflicts)
+      console.log(`CONFLICT ${finding.code}: ${finding.message}`);
+  }
+  if (!reconciliation.reconciled) process.exit(1);
+  process.exit(0);
+}
 const outDir = values.out ?? repoRoot();
 const result = writeLinearExportToRepo(source, outDir, {
   dryRun: values["dry-run"] ?? false,
