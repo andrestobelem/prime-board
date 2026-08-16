@@ -111,6 +111,9 @@ describe("writeLinearExportToRepo", () => {
       const result = writeLinearExportToRepo(source, root);
       expect(result).toMatchObject({ issues: 2, comments: 1, conflicts: [], losses: [] });
       expect(existsSync(join(root, ".prime-board", "meta", "source-map.json"))).toBe(true);
+      expect(
+        readFileSync(join(root, ".prime-board", "meta", "migration-report.json"), "utf8"),
+      ).toContain('"events":');
       expect(readFileSync(join(root, ".prime-board", "issues", "AT-1.md"), "utf8")).toContain(
         "assignee: agent",
       );

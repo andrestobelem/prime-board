@@ -870,6 +870,32 @@ export function writeLinearExportToRepo(
     );
     result.events += events.length;
   }
+  write(
+    "meta/migration-report.json",
+    json({
+      source: "linear",
+      workspaceId: source.workspace.id,
+      issues: result.issues,
+      comments: result.comments,
+      events: result.events,
+      conflicts: result.conflicts,
+      losses: result.losses,
+      warnings: result.warnings,
+    }),
+  );
+  write(
+    "meta/migration-report.json",
+    json({
+      source: "linear",
+      workspaceId: source.workspace.id,
+      issues: result.issues,
+      comments: result.comments,
+      events: result.events,
+      conflicts: result.conflicts,
+      losses: result.losses,
+      warnings: result.warnings,
+    }),
+  );
   writeSourceMap(rootDir, sourceMap);
   return result;
 }

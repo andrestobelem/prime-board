@@ -124,5 +124,6 @@ SQLite indicada por la configuración local. No se debe usar sobre el repo opera
 resolver el rekeying `PRB` y conservar un backup.
 
 El conversor conserva los snapshots y logs en `.prime-board/` y escribe la trazabilidad en
-`.prime-board/meta/source-map.json`. Ese archivo contiene IDs externos de Linear; no debe
-contener API keys, hashes ni secretos de webhooks.
+`.prime-board/meta/source-map.json` y `.prime-board/meta/migration-report.json`. El mapa contiene
+IDs externos de Linear; ninguno de los dos archivos debe contener API keys, hashes ni secretos
+de webhooks.
