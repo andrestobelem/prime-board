@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
-// Exporta el board al repo (AT-156). Uso:
-//   bun run export [--out <dir>] [--team AT]
+// Exporta la DB operativa al repo (AT-156). Uso:
+//   bun run export [--out <dir>] [--team KEY]
+// --team genera un export parcial cuyo alcance queda en meta/export.json.
 import { parseArgs } from "node:util";
 import { loadConfig } from "../config.ts";
 import { openDatabase } from "../db/database.ts";

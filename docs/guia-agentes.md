@@ -182,7 +182,32 @@ Los nombres de los headers HTTP no distinguen mayúsculas de minúsculas. Entreg
 reintentos y backoff (1s/5s/25s). Si tu receptor estuvo caído más que eso, reconstruí el
 estado consultando la API (la actividad por issue es completa).
 
-## 8. Receta completa para un agente nuevo
+## 8. Exportar y reconstruir con seguridad
+
+La DB es la fuente operativa y `.prime-board/` es su réplica versionada. No edites la
+réplica a mano: exportá desde la DB y revisá los cambios antes de commitearlos.
+
+```bash
+bun run export                         # export completo a la raíz del repo
+bun run export --team PRB --out /tmp/pb-export  # export parcial, con alcance registrado
+bun run rebuild --from /ruta/prime-board       # reemplaza desde un export completo
+bun run rebuild --from /tmp/pb-export --allow-partial  # reemplazo parcial explícito
+```
+
+`bun run rebuild` rechaza un export con `meta/export.json` de alcance `team:KEY` si no se
+pasa `--allow-partial`. El flag no fusiona: confirma que se reemplazará el índice por el
+alcance parcial y que los teams ausentes no se recuperan. No ejecutes `rebuild` sobre la
+DB operativa sin revisar antes el export y contar con un backup.
+
+Los exports no contienen API keys ni secretos de webhooks. El rebuild puede volver a
+asociar keys locales por nombre de actor, pero la réplica nunca es un mecanismo para
+transportar credenciales.
+
+La receta anterior fue verificada contra una DB temporal: un export completo se reconstruye
+con `--from`, un export `team:PRB` termina con error sin `--allow-partial` y se reconstruye
+con éxito al pasar ese flag. La prueba no usa ni reemplaza la DB operativa.
+
+## 9. Receta completa para un agente nuevo
 
 ```bash
 bun run server &                 # 1. server corriendo (key de admin impresa)

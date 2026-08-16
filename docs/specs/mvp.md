@@ -4,6 +4,9 @@
 > Insumos: [`relevamiento-linear.md`](../relevamiento-linear.md) (AT-126) y [`alcance-mvp.md`](../alcance-mvp.md) (AT-127).
 > Convención: la prosa de este doc está en español; todo lo que es parte de la aplicación
 > (esquemas, tipos, comandos, nombres de campos) está en inglés.
+> **Alcance:** esta es la especificación histórica del MVP. Para el contrato vigente de
+> exportación, réplica y reconstrucción, prevalecen [`README.md`](../../README.md),
+> [`docs/guia-agentes.md`](../guia-agentes.md) y [ADR-0004](../adr/0004-repo-como-fuente-de-verdad.md).
 
 ## 1. Resumen
 

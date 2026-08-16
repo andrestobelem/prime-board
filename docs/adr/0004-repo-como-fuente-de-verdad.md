@@ -1,38 +1,49 @@
-# El repo git es la fuente de verdad de los tickets; SQLite es un índice derivado
+# Registro git de la réplica operativa de los tickets
 
-La fuente de verdad de un issue es un **log append-only de eventos** versionado en git
-(`.prime-board/log/AT-155.jsonl`), acompañado de un snapshot markdown derivado
-(`.prime-board/issues/AT-155.md`) que es lo que se lee en un PR. SQLite pasa a ser un
-**índice descartable**, reconstruible con `bun run rebuild`.
+> **Estado:** contrato vigente desde la activación de `.prime-board/`.
+> Este documento conserva el razonamiento histórico del MVP, pero las reglas de esta
+> sección son las que deben seguir el código y los agentes.
 
-El motivo es la colaboración entre agentes: es la única opción probada donde dos agentes
-editando el mismo ticket en branches distintas **mergean solos y sin perder información**
-(con `.prime-board/log/*.jsonl merge=union` en `.gitattributes`). De paso, los cambios de
-tickets viajan en el mismo PR que el código y un agente puede leer los tickets sin que el
-server esté corriendo.
+## Decisión vigente
 
-## Considered Options
+La base SQLite es la **fuente operativa** de prime-board. Todas las escrituras pasan por
+la API y el server puede sincronizar una réplica legible en `.prime-board/` cuando está
+configurado `PRIME_BOARD_REPO`. La réplica contiene snapshots, eventos y metadatos para
+revisión, versionado y recuperación; no se edita a mano ni reemplaza automáticamente a
+la DB.
 
-**Dolt** (base MySQL-compatible con semántica git) se descartó no por mala sino por
-incompatible: su modo embebido es un driver de Go, así que desde Bun habría que levantar
-`dolt sql-server` como demonio aparte y muere la premisa de un solo proceso.
+- `bun run export` exporta el workspace completo por defecto. `--team KEY` produce un
+  export parcial y escribe su alcance en `.prime-board/meta/export.json`.
+- `bun run rebuild --from <repo>` reemplaza el índice SQLite leyendo la réplica indicada.
+  Debe ejecutarse de forma explícita, después de revisar el export, y no es un merge.
+- Un export parcial se rechaza por defecto para evitar borrar los teams ausentes. Solo
+  `bun run rebuild --from <repo> --allow-partial` lo acepta; el flag confirma que el
+  índice completo debe reemplazarse por ese alcance parcial.
+- Las API keys y los secretos de webhooks no se exportan. El rebuild conserva las keys
+  locales que puede volver a asociar al mismo actor; si no hay una correspondencia, no
+  inventa credenciales.
+- El formato del repo no depende de UUIDs internos. Los identificadores naturales y los
+  eventos permiten regenerar el índice sin cambiar el contenido versionado.
 
-**Snapshot markdown por issue, sin log** se descartó porque el merge de dos ediciones
-concurrentes del mismo campo genera conflictos que alguien tiene que resolver a mano.
+Todo cambio persistente de un issue forma parte del historial append-only: las
+asignaciones de `cycle_id` se registran como `cycle_changed` y las de `sort_order` como
+`sort_order_changed`, ambos con `from` y `to`. Los cycles se exportan por la clave estable
+`TEAM/number` para que esos eventos sobrevivan a un rebuild. Al eliminar un cycle, los
+payloads históricos que aún lo referencian se canonizan a esa clave antes de borrar la
+fila.
 
-## Consequences
+## Contexto histórico del MVP
 
-- Los eventos tienen que ser **autosuficientes**: la tabla `activity` original era un
-  historial para la UI y no alcanzaba para reconstruir un issue (AT-165).
-- Nada de UUIDs en lo que se escribe al repo: se regeneran en cada rebuild y rompen el
-  determinismo. Hay un test que falla ante cualquier UUID en la salida.
-- Los comentarios viven **solo** en el log, no duplicados en el snapshot.
-- Un export parcial es peligroso: registra su alcance en `meta/export.json` y el importador
-  se niega a reconstruir desde uno salvo `--allow-partial`. Ese flag reemplaza explícitamente
-  el índice por el alcance parcial; no fusiona ni recupera los teams ausentes.
-- Los secretos (hashes de API keys) **nunca** van al repo.
-- Todo cambio persistente de un issue forma parte del historial append-only: las asignaciones
-  de `cycle_id` se registran como `cycle_changed` y las de `sort_order` como
-  `sort_order_changed`, ambos con `from` y `to`. Los cycles se exportan por la clave estable
-  `TEAM/number` para que esos eventos sobrevivan a un rebuild. Al eliminar un cycle, los
-  payloads históricos que aún lo referencian se canonizan a esa clave antes de borrar la fila.
+La propuesta original evaluó tratar el log git como fuente de verdad y a SQLite como un
+índice descartable. La opción buscaba que dos branches pudieran combinar eventos sin
+conflictos y descartó Dolt por exigir un proceso adicional. Esa investigación se conserva
+en [`docs/investigacion-tickets-en-repo.md`](../investigacion-tickets-en-repo.md), pero no
+describe el flujo operativo actual: hoy la DB manda y el repo es su réplica controlada.
+
+El diseño histórico dejó decisiones que sí siguen vigentes:
+
+- Los eventos son autosuficientes: `created` conserva el estado inicial y cada cambio
+  guarda los valores necesarios para reconstruirlo.
+- Los comentarios viven en el log, no duplicados en el snapshot.
+- `.gitattributes` puede usar `merge=union` para logs, pero un merge de ramas no se
+  aplica a la DB sin una revisión y un export completo.

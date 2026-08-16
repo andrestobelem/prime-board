@@ -1,12 +1,14 @@
 # Investigación: el repo como fuente de verdad de los tickets
 
 > Ticket: PRB-153 (antes AT-153) · Investigación pedida por Andrés.
-> **Decisión de partida (no evaluada, dada):** el repo debe ser la fuente de verdad.
-> La pregunta es _cómo_ lograrlo sin perder queries rápidas, FTS ni escritura concurrente.
+> **Decisión de partida (no evaluada, dada):** el repo debía ser la fuente de verdad.
+> La pregunta era _cómo_ lograrlo sin perder queries rápidas, FTS ni escritura concurrente.
+> **Estado:** investigación histórica del MVP. El contrato vigente usa SQLite como fuente
+> operativa y `.prime-board/` como réplica; ver [ADR-0004](adr/0004-repo-como-fuente-de-verdad.md).
 
-## TL;DR
+## TL;DR histórico
 
-Recomendación: **event sourcing versionado en git**. El repo guarda un **log append-only de
+La recomendación de esta investigación fue **event sourcing versionado en git**. El repo guarda un **log append-only de
 eventos por issue** (`.prime-board/log/PRB-155.jsonl`) como fuente de verdad, y SQLite pasa a
 ser un **índice derivado y descartable**, reconstruible con un comando. Es la única opción
 probada que hace que **dos agentes editando el mismo ticket en branches distintas mergeen
@@ -192,5 +194,8 @@ La recomendación se implementó completa. Cuatro cosas resultaron distintas de 
    borraría en silencio el resto del workspace. El export registra su alcance en
    `meta/export.json` y el importador se niega salvo `--allow-partial`.
 
-Estado final: `bun run export`, `bun run rebuild` y sincronización automática en cada
-escritura con `PRIME_BOARD_REPO`. La DB es descartable y el repo es la fuente de verdad.
+Ese fue el estado propuesto al cerrar la investigación. El contrato implementado después
+mantiene `bun run export`, `bun run rebuild` y la sincronización automática con
+`PRIME_BOARD_REPO`, pero define la DB como fuente operativa y `.prime-board/` como réplica.
+`bun run rebuild --from <repo> --allow-partial` es un reemplazo explícito, nunca un merge; el detalle vigente
+está en [ADR-0004](adr/0004-repo-como-fuente-de-verdad.md).

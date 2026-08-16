@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
-// Reconstruye la DB desde el repo (AT-157). Uso:
+// Reemplaza el índice SQLite desde un export del repo (AT-157). Uso:
 //   bun run rebuild [--from <dir>] [--allow-partial]
+// Los exports team-scoped se rechazan salvo --allow-partial; nunca se fusionan.
 import { parseArgs } from "node:util";
 import { loadConfig } from "../config.ts";
 import { openDatabase } from "../db/database.ts";
