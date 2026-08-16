@@ -73,12 +73,19 @@ function groupOf(issue: IssueListItem, by: GroupBy): { key: string; label: strin
   return { key: issue.state.id, label: issue.state.name, order: issue.state.position };
 }
 
+export interface IssueSelection {
+  selectedIds: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+}
+
 export function IssueList({
   issues,
   groupBy = "state",
+  selection,
 }: {
   issues: IssueListItem[];
   groupBy?: GroupBy;
+  selection?: IssueSelection;
 }) {
   const [focusIndex, setFocusIndex] = useState(-1);
   const focusRef = useRef(focusIndex);
@@ -168,6 +175,16 @@ export function IssueList({
                 onClick={() => navigate(`/issue/${issue.identifier}`)}
                 onMouseEnter={() => setFocusIndex(index)}
               >
+                {selection && (
+                  <input
+                    className="issue-select"
+                    type="checkbox"
+                    aria-label={`Select ${issue.identifier}`}
+                    checked={selection.selectedIds.has(issue.id)}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={() => selection.onToggle(issue.id)}
+                  />
+                )}
                 <PriorityIcon priority={issue.priority} />
                 <span className="identifier">{issue.identifier}</span>
                 <span className="title">{issue.title}</span>

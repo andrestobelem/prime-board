@@ -58,6 +58,13 @@ export interface ShellData {
   }>;
 }
 
+function loadGroupBy(): GroupBy {
+  const value = localStorage.getItem("pb.group-by");
+  return value === "state" || value === "milestone" || value === "assignee" || value === "priority"
+    ? value
+    : "state";
+}
+
 export function App() {
   const route = useRoute();
   const hasKey = Boolean(getApiKey());
@@ -65,7 +72,11 @@ export function App() {
   const [createOpen, setCreateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [entityModal, setEntityModal] = useState<CreateModal | null>(null);
-  const [groupBy, setGroupBy] = useState<GroupBy>("state");
+  const [groupBy, setGroupBy] = useState<GroupBy>(loadGroupBy);
+
+  useEffect(() => {
+    localStorage.setItem("pb.group-by", groupBy);
+  }, [groupBy]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
