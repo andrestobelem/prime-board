@@ -1,13 +1,13 @@
 # Investigación: el repo como fuente de verdad de los tickets
 
-> Ticket: AT-153 · Investigación pedida por Andrés.
+> Ticket: PRB-153 (antes AT-153) · Investigación pedida por Andrés.
 > **Decisión de partida (no evaluada, dada):** el repo debe ser la fuente de verdad.
-> La pregunta es *cómo* lograrlo sin perder queries rápidas, FTS ni escritura concurrente.
+> La pregunta es _cómo_ lograrlo sin perder queries rápidas, FTS ni escritura concurrente.
 
 ## TL;DR
 
 Recomendación: **event sourcing versionado en git**. El repo guarda un **log append-only de
-eventos por issue** (`.prime-board/log/AT-155.jsonl`) como fuente de verdad, y SQLite pasa a
+eventos por issue** (`.prime-board/log/PRB-155.jsonl`) como fuente de verdad, y SQLite pasa a
 ser un **índice derivado y descartable**, reconstruible con un comando. Es la única opción
 probada que hace que **dos agentes editando el mismo ticket en branches distintas mergeen
 solos y sin perder información**.
@@ -21,15 +21,15 @@ con "el repo es la fuente de verdad" y con "un proceso, cero configuración".
 
 Base MySQL-compatible con semántica git (branch, diff, merge de datos).
 
-| | |
-|---|---|
-| ✅ | Versionado real de datos, con diffs y merges a nivel de fila. |
-| ✅ | **Sí soporta `FULLTEXT` + `MATCH ... AGAINST`** (desde 2023), así que la búsqueda no se pierde. |
-| ❌ | El modo embebido es un **driver de Go**. Desde Bun/TypeScript hay que levantar `dolt sql-server` (demonio aparte) o shellear `dolt sql` — muere la premisa "un solo proceso, cero config". |
-| ❌ | **Lo que queda versionado en el repo es una base opaca**, no archivos que se lean en un PR. El objetivo era justamente lo contrario. |
-| ❌ | Reescribir la capa de datos: SQL dialecto MySQL, adiós `bun:sqlite` y FTS5. |
+|     |                                                                                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ✅  | Versionado real de datos, con diffs y merges a nivel de fila.                                                                                                                              |
+| ✅  | **Sí soporta `FULLTEXT` + `MATCH ... AGAINST`** (desde 2023), así que la búsqueda no se pierde.                                                                                            |
+| ❌  | El modo embebido es un **driver de Go**. Desde Bun/TypeScript hay que levantar `dolt sql-server` (demonio aparte) o shellear `dolt sql` — muere la premisa "un solo proceso, cero config". |
+| ❌  | **Lo que queda versionado en el repo es una base opaca**, no archivos que se lean en un PR. El objetivo era justamente lo contrario.                                                       |
+| ❌  | Reescribir la capa de datos: SQL dialecto MySQL, adiós `bun:sqlite` y FTS5.                                                                                                                |
 
-**Veredicto:** excelente herramienta para versionar *datos SQL*, mala para "el repo es la
+**Veredicto:** excelente herramienta para versionar _datos SQL_, mala para "el repo es la
 fuente de verdad y quiero leer los tickets en el diff". Si algún día prime-board necesitara
 branches de datos con SQL pesado, se reevalúa.
 
@@ -63,11 +63,11 @@ Hecho con los **35 issues reales** del board (incluye los 26 importados de Linea
 
 ### Tamaño
 
-| Representación | Tamaño |
-|---|---|
-| Snapshot markdown (35 archivos) | 27.8 KB |
+| Representación                           | Tamaño      |
+| ---------------------------------------- | ----------- |
+| Snapshot markdown (35 archivos)          | 27.8 KB     |
 | Log de eventos (35 archivos, 84 eventos) | **11.9 KB** |
-| SQLite actual | 252 KB |
+| SQLite actual                            | 252 KB      |
 
 El log es más chico que los snapshots: guarda transiciones, no texto repetido. Nada de esto
 es problemático para git.
@@ -75,7 +75,7 @@ es problemático para git.
 ### Merge concurrente (la prueba que decide)
 
 Escenario: dos agentes toman el mismo ticket desde la misma base.
-`agent-a` lo pasa a *In Progress* y comenta; `agent-b` le sube la prioridad y comenta.
+`agent-a` lo pasa a _In Progress_ y comenta; `agent-b` le sube la prioridad y comenta.
 
 ```
 # Sin configuración
@@ -155,12 +155,12 @@ a **datos de dominio**, no a credenciales.
 
 ## 6. Plan sugerido (incremental, sin big bang)
 
-| Fase | Qué | Riesgo |
-|---|---|---|
-| **1** | Exportador `pb export`: el repo tiene una réplica legible. La DB sigue mandando. | Bajo |
-| **2** | Importador `pb rebuild`: la DB se reconstruye desde el repo. Ya se invierte la dependencia. | Bajo |
-| **3** | Las mutaciones escriben primero al log; SQLite pasa a índice. `.gitattributes` con `merge=union`. | Medio |
-| **4** | Snapshot `.md` derivado + hooks de commit/merge. Secretos fuera del repo. | Medio |
+| Fase  | Qué                                                                                               | Riesgo |
+| ----- | ------------------------------------------------------------------------------------------------- | ------ |
+| **1** | Exportador `pb export`: el repo tiene una réplica legible. La DB sigue mandando.                  | Bajo   |
+| **2** | Importador `pb rebuild`: la DB se reconstruye desde el repo. Ya se invierte la dependencia.       | Bajo   |
+| **3** | Las mutaciones escriben primero al log; SQLite pasa a índice. `.gitattributes` con `merge=union`. | Medio  |
+| **4** | Snapshot `.md` derivado + hooks de commit/merge. Secretos fuera del repo.                         | Medio  |
 
 Después de la fase 2 ya se puede borrar la DB sin perder nada — que es el 80% del valor.
 
@@ -171,7 +171,6 @@ Después de la fase 2 ya se puede borrar la DB sin perder nada — que es el 80%
   Lamport (github.com/git-bug/git-bug).
 - Experimento propio: 35 issues del board de prime-board, merges reales con git
   (`scratchpad/exp-repo-truth`, no versionado).
-
 
 ---
 
@@ -185,7 +184,7 @@ La recomendación se implementó completa. Cuatro cosas resultaron distintas de 
 2. **Nada de UUIDs, ni siquiera escondidos.** El `commentId` del evento `commented` se
    filtraba al repo y, como se regenera en cada rebuild, **rompía el determinismo**: dos
    rebuilds producían archivos distintos. Hoy hay un test que falla ante cualquier UUID.
-3. **Los comentarios no se duplican.** El plan original los ponía en el snapshot *y* en el
+3. **Los comentarios no se duplican.** El plan original los ponía en el snapshot _y_ en el
    log. Viven solo en el log (que ya trae autor, fecha y body) y el importador los
    reconstruye desde ahí: una sola fuente, y encima la que mergea sin conflictos.
 4. **Un export parcial es peligroso.** Reconstruir desde un export filtrado por team

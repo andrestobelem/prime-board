@@ -4,6 +4,22 @@ Este procedimiento se ejecuta solamente después de que AT-193 haya validado una
 completa de Linear. Hasta entonces, Linear sigue siendo la fuente operativa y no se deben
 actualizar las instrucciones de agentes.
 
+## Resultado ejecutado
+
+El corte se ejecutó el 2026-08-16 con `docs/migrations/linear-export-2026-08-16.json`:
+
+- 36 issues Linear, 17 comentarios, 119 eventos, 0 conflictos y 0 pérdidas no aprobadas.
+- Los 26 issues locales equivalentes conservaron `AT-*`; 50 issues locales colisionados fueron
+  rekeyeados a `PRB-*` y el mapa quedó persistido en `migration-report.json`.
+- El resultado contiene 86 issues, 71 comentarios y 619 eventos al reconstruir SQLite.
+- `--check` devolvió `pendingCreates: []`, `conflicts: []`, `countMismatches: []` y
+  `contentMismatches: []`.
+- El warning de estado `Duplicate` se conserva explícitamente como `canceled` con su nombre.
+
+El commit inmediatamente anterior al corte fue `ab55efd`; el backup de `.prime-board/` se
+conservó antes de reemplazarlo. La base local se creó/reconstruyó desde el resultado y se
+verificó con la suite completa.
+
 ## Precondiciones
 
 1. Guardar la captura original de Linear en almacenamiento inmutable. No modificarla.

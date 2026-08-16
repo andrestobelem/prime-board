@@ -7,9 +7,9 @@ para que lo usen agentes (en principio prime-agent, aunque debería poder usarse
 
 ## Gestión del trabajo
 
-- Los tickets viven en Linear, proyecto **prime-board** del workspace `andrestobelem`:
-  https://linear.app/andrestobelem/project/prime-board-f7456b6a57b3
-- Todo trabajo nuevo se anota como ticket ahí antes de implementarse.
+- Los tickets operativos viven en **prime-board**, team `PRB`, operado por el CLI `pb` o su API.
+- Los issues importados de Linear conservan el namespace `AT-*` y son de consulta histórica; Linear queda como archivo de solo lectura.
+- Todo trabajo nuevo se anota en prime-board antes de implementarse.
 
 ## Idioma
 
@@ -54,7 +54,7 @@ npx skills add <paquete> --agent universal --copy
 
 ### Issue tracker
 
-Los issues viven en **prime-board** (team `AT`), operado por el CLI `pb` o su API
+Los issues operativos viven en **prime-board** (team `PRB`), operado por el CLI `pb` o su API
 GraphQL. Ver `docs/agents/issue-tracker.md`.
 
 ### Triage labels

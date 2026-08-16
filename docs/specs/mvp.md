@@ -48,21 +48,21 @@ Todas las entidades usan `id` UUID v7 (ordenables por tiempo), `createdAt`/`upda
 ISO-8601 UTC, y soft-delete por `archivedAt` donde aplica. Migraciones SQL versionadas
 corren al arrancar el server.
 
-| Tabla | Campos clave | Notas |
-|---|---|---|
-| `workspace` | `id, name, urlKey` | Fila única (single-tenant). |
-| `teams` | `id, name, key, description, nextIssueNumber` | `key` corta única (`AT`). Al crear un team se siembra el workflow default. |
-| `actors` | `id, name, email?, type ('human'\|'agent'), avatarUrl?` | Humanos y agentes en la misma tabla; `type` es informativo y visible en UI/API. |
-| `api_keys` | `id, actorId, name, hash, lastUsedAt` | La key en claro se muestra una sola vez. Formato `pb_<random>`. |
-| `workflow_states` | `id, teamId, name, type, color, position` | `type ∈ {triage, backlog, unstarted, started, completed, canceled}`. Default: Backlog, Todo, In Progress, Done, Canceled. |
-| `issues` | `id, teamId, number, title, description, stateId, priority (0-4), assigneeId?, parentId?, projectId?, creatorId, sortOrder, archivedAt?` | Identificador legible = `team.key + '-' + number`, inmutable. `priority`: 0 none, 1 urgent, 2 high, 3 medium, 4 low (como Linear). |
-| `labels` | `id, name, color, teamId?` | `teamId NULL` = label de workspace. |
-| `issue_labels` | `issueId, labelId` | N:M. |
-| `projects` | `id, name, description, state, leadId?, targetDate?, archivedAt?` | `state ∈ {backlog, planned, started, paused, completed, canceled}`. |
-| `comments` | `id, issueId, actorId, body, createdAt, editedAt?` | Markdown plano. |
-| `activity` | `id, issueId, actorId, type, payload (JSON), createdAt` | Append-only: `created, state_changed, assigned, priority_changed, labeled, commented, ...` |
-| `webhooks` | `id, url, secret, events (JSON), enabled` | `events`: lista de tipos suscriptos o `*`. |
-| `issues_fts` | FTS5: `title, description` | Sincronizada por triggers; los comentarios se agregan post-MVP si hace falta. |
+| Tabla             | Campos clave                                                                                                                             | Notas                                                                                                                              |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace`       | `id, name, urlKey`                                                                                                                       | Fila única (single-tenant).                                                                                                        |
+| `teams`           | `id, name, key, description, nextIssueNumber`                                                                                            | `key` corta única (`AT`). Al crear un team se siembra el workflow default.                                                         |
+| `actors`          | `id, name, email?, type ('human'\|'agent'), avatarUrl?`                                                                                  | Humanos y agentes en la misma tabla; `type` es informativo y visible en UI/API.                                                    |
+| `api_keys`        | `id, actorId, name, hash, lastUsedAt`                                                                                                    | La key en claro se muestra una sola vez. Formato `pb_<random>`.                                                                    |
+| `workflow_states` | `id, teamId, name, type, color, position`                                                                                                | `type ∈ {triage, backlog, unstarted, started, completed, canceled}`. Default: Backlog, Todo, In Progress, Done, Canceled.          |
+| `issues`          | `id, teamId, number, title, description, stateId, priority (0-4), assigneeId?, parentId?, projectId?, creatorId, sortOrder, archivedAt?` | Identificador legible = `team.key + '-' + number`, inmutable. `priority`: 0 none, 1 urgent, 2 high, 3 medium, 4 low (como Linear). |
+| `labels`          | `id, name, color, teamId?`                                                                                                               | `teamId NULL` = label de workspace.                                                                                                |
+| `issue_labels`    | `issueId, labelId`                                                                                                                       | N:M.                                                                                                                               |
+| `projects`        | `id, name, description, state, leadId?, targetDate?, archivedAt?`                                                                        | `state ∈ {backlog, planned, started, paused, completed, canceled}`.                                                                |
+| `comments`        | `id, issueId, actorId, body, createdAt, editedAt?`                                                                                       | Markdown plano.                                                                                                                    |
+| `activity`        | `id, issueId, actorId, type, payload (JSON), createdAt`                                                                                  | Append-only: `created, state_changed, assigned, priority_changed, labeled, commented, ...`                                         |
+| `webhooks`        | `id, url, secret, events (JSON), enabled`                                                                                                | `events`: lista de tipos suscriptos o `*`.                                                                                         |
+| `issues_fts`      | FTS5: `title, description`                                                                                                               | Sincronizada por triggers; los comentarios se agregan post-MVP si hace falta.                                                      |
 
 ## 4. API GraphQL
 
@@ -188,11 +188,11 @@ Cliente de la API GraphQL (no toca la DB). Config en `~/.prime-board/cli.json`
 
 ```
 pb auth login                        # guarda url + api key
-pb issue list [--team AT] [--state started] [--assignee me] [--search "..."] [--json]
-pb issue view AT-126 [--json]        # incluye comentarios y actividad
-pb issue create --team AT --title "..." [--description -] [--priority high] [--label x]
-pb issue update AT-126 --state done [--assignee agent-x] [--priority urgent]
-pb issue comment AT-126 --body "..." # o body por stdin
+pb issue list [--team PRB] [--state started] [--assignee me] [--search "..."] [--json]
+pb issue view <issue-id> [--json]        # incluye comentarios y actividad
+pb issue create --team PRB --title "..." [--description -] [--priority high] [--label x]
+pb issue update <issue-id> --state done [--assignee agent-x] [--priority urgent]
+pb issue comment <issue-id> --body "..." # o body por stdin
 pb project list | view | create
 pb team list
 pb webhook create --url http://... --events issue.created,comment.created

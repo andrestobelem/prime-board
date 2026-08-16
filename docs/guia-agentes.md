@@ -10,7 +10,7 @@ bun install
 bun run server
 ```
 
-En el **primer arranque** el server siembra el workspace (team `PB`, actor `admin`)
+En un **workspace nuevo de desarrollo** el server siembra datos demo (team `PB`, actor `admin`); el workspace migrado opera con team `PRB`.
 e imprime la API key de admin **una única vez**:
 
 ```
@@ -36,7 +36,7 @@ si ya hay issues, no hace nada.
 
 - **Actores**: humanos y agentes son iguales ante la API (`type: HUMAN | AGENT`).
   Cada uno tiene su **API key** (`pb_...`) y toda acción queda atribuida a quien la hizo.
-- **Identificadores legibles**: los issues se referencian como `PB-1` en toda la API.
+- **Identificadores legibles**: los issues operativos se referencian como `PRB-153` en toda la API.
 - **Estados con tipo semántico**: cada team define sus estados, pero todos tienen un
   tipo portable (`triage|backlog|unstarted|started|completed|canceled`) — filtrá por
   tipo y tu código funciona en cualquier team.
@@ -92,10 +92,10 @@ parent/project) → `commentCreate` → `issueArchive`. Todo queda en `Issue.act
 alias pb="bun /ruta/a/prime-board/apps/cli/src/index.ts"
 
 pb auth login --url http://localhost:3333 --key pb_xxx
-pb issue list --team PB --state started --assignee me --json
-pb issue create --team PB --title "Hacer algo" --priority high --label agent:review
-pb issue update PB-1 --state done
-pb issue comment PB-1 --body -   # el body por stdin
+pb issue list --team PRB --state started --assignee me --json
+pb issue create --team PRB --title "Hacer algo" --priority high --label agent:review
+pb issue update PRB-153 --state done
+pb issue comment PRB-153 --body -   # el body por stdin
 pb project view <id> --json
 pb webhook create --url http://localhost:9999/hook --events issue.created
 ```
@@ -174,8 +174,8 @@ estado consultando la API (la actividad por issue es completa).
 bun run server &                 # 1. server corriendo (key de admin impresa)
 bun run seed                     # 2. datos de demo + key de demo-agent
 pb auth login --url http://localhost:3333 --key <key-del-agente>
-pb issue list --team PB --assignee me --json    # 3. mi cola de trabajo
-pb issue update PB-1 --state started            # 4. tomo el issue
-pb issue comment PB-1 --body "On it"            # 5. aviso
-pb issue update PB-1 --state done               # 6. entrego
+pb issue list --team PRB --assignee me --json    # 3. mi cola de trabajo
+pb issue update PRB-153 --state started            # 4. tomo el issue
+pb issue comment PRB-153 --body "On it"            # 5. aviso
+pb issue update PRB-153 --state done               # 6. entrego
 ```
