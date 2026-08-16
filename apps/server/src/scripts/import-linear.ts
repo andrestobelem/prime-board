@@ -6,7 +6,11 @@ import { parseArgs } from "node:util";
 import { loadConfig } from "../config.ts";
 import { openDatabase } from "../db/database.ts";
 import { rebuildFromRepo } from "../export/importer.ts";
-import { parseLinearExport, writeLinearExportToRepo } from "../export/linear-repo-export.ts";
+import {
+  parseLinearExport,
+  validateLinearExportUuidIds,
+  writeLinearExportToRepo,
+} from "../export/linear-repo-export.ts";
 import { reconcileLinearExport } from "../export/linear-reconcile.ts";
 import { mergeLinearExportWithRepo } from "../export/linear-merge.ts";
 
@@ -42,6 +46,18 @@ if (values.apply && !values.out)
   throw new Error("--apply requires --out so the target repo is explicit");
 
 const source = parseLinearExport(JSON.parse(readFileSync(values.from, "utf8")));
+const identityFindings = validateLinearExportUuidIds(source);
+if (identityFindings.length > 0) {
+  if (values.json)
+    console.error(
+      JSON.stringify({ error: "NON_UUID_SOURCE_IDS", findings: identityFindings }, null, 2),
+    );
+  else {
+    console.error(`Linear export has ${identityFindings.length} non-UUID source id(s)`);
+    for (const finding of identityFindings) console.error(`${finding.code}: ${finding.message}`);
+  }
+  process.exit(2);
+}
 if (values.check) {
   const reconciliation = reconcileLinearExport(source, values.check);
   if (values.json) console.log(JSON.stringify(reconciliation, null, 2));

@@ -265,8 +265,61 @@ function addSourceMapping(
     );
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Valida que una captura real no haya sustituido UUIDs por identificadores legibles. */
+export function validateLinearExportUuidIds(source: LinearExport): MigrationFinding[] {
+  const findings: MigrationFinding[] = [];
+  const check = (id: string | null | undefined, kind: string, owner: string) => {
+    if (id && !UUID_RE.test(id))
+      findings.push({
+        code: "NON_UUID_SOURCE_ID",
+        message: `${kind} ${owner} has non-UUID source id ${id}`,
+        sourceId: id,
+      });
+  };
+  check(source.workspace.id, "workspace", source.workspace.name);
+  for (const actor of source.actors) check(actor.id, "actor", actor.name);
+  for (const team of source.teams) {
+    check(team.id, "team", team.key);
+    for (const state of team.states) check(state.id, "state", state.name);
+  }
+  for (const label of source.labels) check(label.id, "label", label.name);
+  for (const project of source.projects) {
+    check(project.id, "project", project.name);
+    for (const milestone of project.milestones ?? [])
+      check(milestone.id, "milestone", milestone.name);
+  }
+  for (const issue of source.issues) {
+    check(issue.id, "issue", issue.identifier);
+    check(issue.teamId, "issue.teamId", issue.identifier);
+    check(issue.stateId, "issue.stateId", issue.identifier);
+    check(issue.creatorId, "issue.creatorId", issue.identifier);
+    check(issue.assigneeId, "issue.assigneeId", issue.identifier);
+    check(issue.parentId, "issue.parentId", issue.identifier);
+    check(issue.projectId, "issue.projectId", issue.identifier);
+    check(issue.milestoneId, "issue.milestoneId", issue.identifier);
+    check(issue.cycleId, "issue.cycleId", issue.identifier);
+    for (const labelId of issue.labelIds ?? []) check(labelId, "issue.labelId", issue.identifier);
+    for (const history of issue.stateHistory ?? [])
+      check(history.stateId, "history.stateId", issue.identifier);
+  }
+  for (const comment of source.comments ?? []) {
+    check(comment.id, "comment", comment.id);
+    check(comment.issueId, "comment.issueId", comment.id);
+    check(comment.authorId, "comment.authorId", comment.id);
+    check(comment.parentId, "comment.parentId", comment.id);
+  }
+  for (const relation of source.relations ?? []) {
+    check(relation.id, "relation", relation.id ?? `${relation.issueId}/${relation.relatedIssueId}`);
+    check(relation.issueId, "relation.issueId", relation.id ?? "relation");
+    check(relation.relatedIssueId, "relation.relatedIssueId", relation.id ?? "relation");
+  }
+  return findings;
+}
+
 /**
- * Convierte una captura de Linear a `.prime-board/`. La función no toca el repo
+ * Convierte una captura de Linear a `.prime-board`. La función no toca el repo
  * cuando `dryRun` está activo; así el reporte es la seam segura del cutover.
  */
 export function writeLinearExportToRepo(

@@ -74,7 +74,7 @@ Cada elemento del plan termina en uno de estos estados:
 - `conflict`: hay colisión de namespace, referencia ambigua o incompatibilidad.
 - `loss`: hay un dato sin representación y no existe una política aprobada.
 
-El proceso solo aplica cuando no quedan `conflict` ni `loss`. El reporte debe ser legible
+El proceso solo aplica cuando no quedan `conflict` ni `loss`. La CLI también rechaza capturas cuyos IDs de origen no sean UUIDs; los identificadores legibles (`AT-42`) se conservan como campo separado. El reporte debe ser legible
 y también serializable como JSON para agentes.
 
 ## Idempotencia
