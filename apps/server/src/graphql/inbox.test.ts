@@ -108,6 +108,85 @@ describe("inbox y my issues", () => {
     expect(items.every((item) => item.actor.id !== agentId)).toBe(true);
   });
 
+  it("incluye comentarios que mencionan al viewer aunque el issue no sea suyo", async () => {
+    const agent = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "mentioned-agent", type: AGENT }) { actor { id } } }`,
+    );
+    const agentId = agent.data!.actorCreate.actor.id;
+    const agentKey = await gql(
+      app,
+      `mutation($actorId: ID!) {
+        apiKeyCreate(input: { actorId: $actorId, name: "mentioned" }) { key }
+      }`,
+      { actorId: agentId },
+    );
+    const key = agentKey.data!.apiKeyCreate.key;
+
+    const issue = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Mention target" }) { issue { id } } }`,
+    );
+    await gql(
+      app,
+      `mutation($issueId: ID!) {
+        commentCreate(input: { issueId: $issueId, body: "Please review @mentioned-agent" }) {
+          comment { id }
+        }
+      }`,
+      { issueId: issue.data!.issueCreate.issue.id },
+    );
+
+    const inbox = await gql(app, `{ inbox { type payload issue { title } } }`, {}, key);
+
+    expect(inbox.errors).toBeUndefined();
+    expect(
+      (inbox.data!.inbox as Array<{ type: string; payload: { body?: string } }>).some(
+        (item) =>
+          item.type === "commented" && item.payload.body === "Please review @mentioned-agent",
+      ),
+    ).toBe(true);
+  });
+
+  it("no confunde una mención con un prefijo de otro actor", async () => {
+    const agent = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "mention-agent", type: AGENT }) { actor { id } } }`,
+    );
+    const agentId = agent.data!.actorCreate.actor.id;
+    const agentKey = await gql(
+      app,
+      `mutation($actorId: ID!) {
+        apiKeyCreate(input: { actorId: $actorId, name: "mention-boundary" }) { key }
+      }`,
+      { actorId: agentId },
+    );
+    const key = agentKey.data!.apiKeyCreate.key;
+
+    const issue = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Mention boundary" }) { issue { id } } }`,
+    );
+    await gql(
+      app,
+      `mutation($issueId: ID!) {
+        commentCreate(input: { issueId: $issueId, body: "Not @mention-agent-extra" }) {
+          comment { id }
+        }
+      }`,
+      { issueId: issue.data!.issueCreate.issue.id },
+    );
+
+    const inbox = await gql(app, `{ inbox { type payload } }`, {}, key);
+
+    expect(inbox.errors).toBeUndefined();
+    expect(
+      (inbox.data!.inbox as Array<{ type: string; payload: { body?: string } }>).some(
+        (item) => item.payload.body === "Not @mention-agent-extra",
+      ),
+    ).toBe(false);
+  });
+
   it("issues filtrados por assignee del viewer cubren My issues", async () => {
     const agent = await gql(
       app,
