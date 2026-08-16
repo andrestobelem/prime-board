@@ -105,7 +105,7 @@ export function Sidebar({
                   name={showClosed[team.id] ? "chevron-down" : "chevron-right"}
                   className="nested"
                 />
-                Completados ({team.projects.filter((p) => CLOSED_STATES.includes(p.state)).length})
+                Completed ({team.projects.filter((p) => CLOSED_STATES.includes(p.state)).length})
               </button>
               {showClosed[team.id] &&
                 team.projects
