@@ -18,6 +18,11 @@ export interface RebuildResult {
   preservedKeys: number;
 }
 
+export interface RebuildOptions {
+  /** Permite reemplazar el índice con un export team-scoped explícito. */
+  allowPartial?: boolean;
+}
+
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 
 /** Lee un issue en markdown: front-matter YAML + `# título` + descripción. */
@@ -35,9 +40,39 @@ function readIssueMarkdown(path: string): Record<string, any> {
   return { ...meta, description: body.length > 0 ? body : null };
 }
 
-export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
+export function rebuildFromRepo(
+  db: Database,
+  rootDir: string,
+  options: RebuildOptions = {},
+): RebuildResult {
   const base = join(rootDir, ".prime-board");
   if (!existsSync(base)) throw new Error(`No .prime-board directory in ${rootDir}`);
+
+  // La metadata del export se valida antes de leer credenciales o abrir la
+  // transacción destructiva (PRB-237). Los repos antiguos sin este archivo se
+  // tratan como exports completos por compatibilidad.
+  const exportPath = join(base, "meta", "export.json");
+  if (existsSync(exportPath)) {
+    let scope: unknown;
+    try {
+      scope = readJson(exportPath).scope;
+    } catch (error) {
+      throw new Error(
+        `Invalid meta/export.json: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    if (scope === "workspace") {
+      // Alcance completo: permitido por defecto.
+    } else if (typeof scope === "string" && /^team:[A-Z][A-Z0-9]{0,7}$/.test(scope)) {
+      if (!options.allowPartial) {
+        throw new Error(
+          `Refusing partial export (${scope}); rerun with --allow-partial to replace the index explicitly`,
+        );
+      }
+    } else {
+      throw new Error(`Invalid export scope: ${String(scope)}`);
+    }
+  }
 
   // 1. Credenciales locales: se guardan por NOMBRE de actor porque los ids cambian.
   const keys = db

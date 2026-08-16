@@ -223,6 +223,43 @@ describe("rebuildFromRepo", () => {
     fresh.close();
   });
 
+  it("rechaza exports parciales antes de borrar y exige un modo explícito", () => {
+    const partial = mkdtempSync(join(tmpdir(), "pb-partial-"));
+    const populated = new Database(":memory:", { strict: true });
+    const allowed = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, partial, { teamKey: "PB" });
+
+      populated.exec("PRAGMA foreign_keys = ON;");
+      migrate(populated);
+      rebuildFromRepo(populated, dir);
+      const before = (
+        populated.query("SELECT count(*) AS count FROM issues").get() as { count: number }
+      ).count;
+      expect(() => rebuildFromRepo(populated, partial)).toThrow(/Refusing partial export/);
+      const after = (
+        populated.query("SELECT count(*) AS count FROM issues").get() as { count: number }
+      ).count;
+      expect(after).toBe(before);
+
+      allowed.exec("PRAGMA foreign_keys = ON;");
+      migrate(allowed);
+      expect(rebuildFromRepo(allowed, partial, { allowPartial: true }).issues).toBe(2);
+
+      writeFileSync(
+        join(partial, ".prime-board", "meta", "export.json"),
+        '{"scope":"team:invalid!"}\n',
+      );
+      expect(() => rebuildFromRepo(allowed, partial, { allowPartial: true })).toThrow(
+        /Invalid export scope/,
+      );
+    } finally {
+      populated.close();
+      allowed.close();
+      rmSync(partial, { recursive: true, force: true });
+    }
+  });
+
   it("falla claramente si no hay .prime-board", () => {
     const empty = mkdtempSync(join(tmpdir(), "pb-empty-"));
     try {

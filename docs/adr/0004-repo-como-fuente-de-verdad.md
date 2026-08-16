@@ -28,5 +28,6 @@ concurrentes del mismo campo genera conflictos que alguien tiene que resolver a 
   determinismo. Hay un test que falla ante cualquier UUID en la salida.
 - Los comentarios viven **solo** en el log, no duplicados en el snapshot.
 - Un export parcial es peligroso: registra su alcance en `meta/export.json` y el importador
-  se niega a reconstruir desde uno salvo `--allow-partial`.
+  se niega a reconstruir desde uno salvo `--allow-partial`. Ese flag reemplaza explícitamente
+  el índice por el alcance parcial; no fusiona ni recupera los teams ausentes.
 - Los secretos (hashes de API keys) **nunca** van al repo.
