@@ -19,13 +19,24 @@ _Avoid_: Squad, group, workspace
 **Actor**:
 Quien opera el board. Es de tipo **Human** o **Agent**; ambos crean issues, comentan y son
 asignables, y se autentican con su propia API key.
-_Avoid_: User, member, account
+_Avoid_: User, account
+
+**Membership**:
+La pertenencia de un **Actor** a un **Team**. Un actor puede tener memberships en varios
+teams; un issue sigue perteneciendo a exactamente un team. La UI puede decir «Members» para
+el roster; el término de dominio de la relación es Membership.
+_Avoid_: User assignment, account link, seat
 
 ## Trabajo
 
+**Identifier**:
+Clave legible e inmutable de un issue (`AT-172`): prefijo del **Team** + número. No se
+renumera ni se reasigna.
+_Avoid_: Issue key, ticket number, slug
+
 **Issue**:
-La unidad de trabajo. Tiene un **Identifier** legible e inmutable (`AT-172`), un workflow
-state, una prioridad de 0 a 4 y, opcionalmente, un padre.
+La unidad de trabajo. Tiene un Identifier, un workflow state, una prioridad de 0 a 4 y,
+opcionalmente, un padre.
 _Avoid_: Ticket, task, card, story
 
 **Sub-issue**:
@@ -40,17 +51,24 @@ extremo la ve con el tipo que le corresponde. Distinta del `parent`: no es jerar
 _Avoid_: Link, dependency, edge
 
 **Blocked**:
-Un issue con al menos una relación blocked-by cuyo bloqueante sigue abierto. Su complemento
-abierto es el **frontier**: los issues abiertos cuyos bloqueantes están todos cerrados
-(`issues(filter: { unblocked: true })`).
+Un issue con al menos una relación blocked-by cuyo bloqueante sigue abierto.
 _Avoid_: Stuck, waiting
+
+**Frontier**:
+Conjunto derivado de issues abiertos cuyos bloqueantes están todos cerrados. Delimita el
+trabajo que puede avanzar sin esperar a que otro issue se desbloquee.
+_Avoid_: Unblocked set, ready queue, next issues
 
 **Workflow State**:
 La posición de un issue en el ciclo de vida de su team (`Todo`, `In Progress`, `Ready for
-Agent`). Cada team define los suyos y cada uno declara un **State Type** —`triage`,
-`backlog`, `unstarted`, `started`, `completed`, `canceled`— que es lo que la UI y las
-integraciones interpretan.
+Agent`). Cada team define los suyos; cada uno declara un **State Type**.
 _Avoid_: Status, column, stage
+
+**State Type**:
+Categoría del ciclo de vida que declara un Workflow State: `triage`, `backlog`,
+`unstarted`, `started`, `completed`, `canceled`. Es lo que la UI y las integraciones
+interpretan (abierto/cerrado, columnas, filtros), no el nombre del estado.
+_Avoid_: Status category, lifecycle type
 
 **Label**:
 Etiqueta transversal y acumulable de un issue (`web`, `graphql`, `epic:repo-truth`). A
@@ -66,12 +84,42 @@ Entero de 0 a 4 con la misma semántica que Linear: 0 sin prioridad, 1 urgent, 2
 **Project**:
 Un esfuerzo con nombre, estado y fecha objetivo, que agrupa issues de **uno o varios teams**.
 Un team puede tener varios projects.
-_Avoid_: Epic, initiative, board
+_Avoid_: Epic, board
 
 **Milestone**:
 Una fase dentro de un project, con su propia fecha objetivo y su progreso. Los milestones
-ordenan el project; los projects agrupan el trabajo.
+ordenan el project; los projects agrupan el trabajo. Distinto de **Cycle**.
 _Avoid_: Phase, sprint, iteration, part
+
+**Initiative**:
+Agrupa projects a nivel **Workspace** bajo un objetivo estratégico. Distinta de Project: el
+project agrupa issues; la initiative agrupa projects.
+_Avoid_: Epic, theme, OKR
+
+**Cycle**:
+Ventana de tiempo de un **Team** (`upcoming` / `active` / `completed`) a la que se asignan
+issues. Distinta de Milestone: el cycle es del team y es time-boxed; el milestone es del
+project.
+_Avoid_: Sprint, iteration
+
+## Colaboración y superficie
+
+**Review**:
+Pedido de revisión entre actors sobre un issue (`requested` → `in_progress` →
+`approved` / `rejected`).
+_Avoid_: PR review, approval request
+
+**Project Update**:
+Nota de salud de un project (`on_track` / `at_risk` / `off_track`) con cuerpo narrativo.
+_Avoid_: Status report, pulse
+
+**Saved View**:
+Preset nombrado de filtros y alcance (`personal`, `team` o `workspace`).
+_Avoid_: Filter, bookmark, custom view
+
+**Inbox**:
+Cola personal de **Activity** relevante para un actor (menciones, asignaciones, comentarios).
+_Avoid_: Notifications, feed, mailbox
 
 ## Registro
 
