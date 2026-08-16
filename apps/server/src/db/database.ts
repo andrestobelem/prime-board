@@ -7,6 +7,14 @@ import migration0002 from "./migrations/0002_project_teams.sql" with { type: "te
 import migration0003 from "./migrations/0003_milestones.sql" with { type: "text" };
 import migration0004 from "./migrations/0004_issue_relations.sql" with { type: "text" };
 import migration0005 from "./migrations/0005_team_default_state.sql" with { type: "text" };
+import migration0006 from "./migrations/0006_saved_views.sql" with { type: "text" };
+import migration0007 from "./migrations/0007_cycles.sql" with { type: "text" };
+import migration0008 from "./migrations/0008_reviews.sql" with { type: "text" };
+import migration0009 from "./migrations/0009_initiatives.sql" with { type: "text" };
+import migration0010 from "./migrations/0010_project_updates.sql" with { type: "text" };
+import migration0011 from "./migrations/0011_saved_view_archive_columns.sql" with { type: "text" };
+import migration0012 from "./migrations/0012_inbox_receipts.sql" with { type: "text" };
+import migration0013 from "./migrations/0013_initiative_owner.sql" with { type: "text" };
 import { now } from "./util.ts";
 
 interface Migration {
@@ -21,8 +29,15 @@ const MIGRATIONS: Migration[] = [
   { version: 3, name: "milestones", sql: migration0003 },
   { version: 4, name: "issue_relations", sql: migration0004 },
   { version: 5, name: "team_default_state", sql: migration0005 },
+  { version: 6, name: "saved_views", sql: migration0006 },
+  { version: 7, name: "cycles", sql: migration0007 },
+  { version: 8, name: "reviews", sql: migration0008 },
+  { version: 9, name: "initiatives", sql: migration0009 },
+  { version: 10, name: "project_updates", sql: migration0010 },
+  { version: 11, name: "saved_view_archive_columns", sql: migration0011 },
+  { version: 12, name: "inbox_receipts", sql: migration0012 },
+  { version: 13, name: "initiative_owner", sql: migration0013 },
 ];
-
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {
     mkdirSync(dirname(path), { recursive: true });
@@ -39,14 +54,20 @@ export function migrate(db: Database): void {
     "CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
   );
   const applied = new Set(
-    db.query("SELECT version FROM _migrations").values().map((row) => row[0] as number),
+    db
+      .query("SELECT version FROM _migrations")
+      .values()
+      .map((row) => row[0] as number),
   );
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue;
     db.transaction(() => {
       db.exec(migration.sql);
-      db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)")
-        .run(migration.version, migration.name, now());
+      db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
+        migration.version,
+        migration.name,
+        now(),
+      );
     })();
   }
 }

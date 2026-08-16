@@ -4,12 +4,18 @@ import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { recordActivity } from "./activity.ts";
 import {
-  buildIssueFilter, decodeCursor, encodeCursor, ORDER_COLUMNS, ParamSink,
-  type IssueFilter, type IssueOrder,
+  buildIssueFilter,
+  decodeCursor,
+  encodeCursor,
+  ORDER_COLUMNS,
+  ParamSink,
+  type IssueFilter,
+  type IssueOrder,
 } from "./filters.ts";
 import { applyLabelOps, type LabelOps } from "./labels.ts";
 import { assertMilestoneMatchesProject } from "./milestones.ts";
 import { projectIncludesTeam } from "./projects.ts";
+import { validateCycleForTeam } from "./cycles.ts";
 import { getDefaultState, getTeam } from "./teams.ts";
 
 export interface IssueRow {
@@ -24,6 +30,7 @@ export interface IssueRow {
   parent_id: string | null;
   project_id: string | null;
   milestone_id: string | null;
+  cycle_id: string | null;
   creator_id: string;
   sort_order: number;
   created_at: string;
@@ -103,7 +110,11 @@ function validateAssignee(db: Database, assigneeId: string): void {
   if (!actor) throw apiError("NOT_FOUND", "Assignee not found");
 }
 
-function validateParent(db: Database, issue: { id: string; team_id: string }, parentId: string): void {
+function validateParent(
+  db: Database,
+  issue: { id: string; team_id: string },
+  parentId: string,
+): void {
   const parent = getIssue(db, parentId);
   if (!parent) throw apiError("NOT_FOUND", "Parent issue not found");
   if (parent.team_id !== issue.team_id) {
@@ -115,9 +126,9 @@ function validateParent(db: Database, issue: { id: string; team_id: string }, pa
     if (cursor === issue.id) {
       throw apiError("VALIDATION_FAILED", "Parent assignment would create a cycle");
     }
-    const next = db.query("SELECT parent_id FROM issues WHERE id = ?1").get(cursor) as
-      | { parent_id: string | null }
-      | null;
+    const next = db.query("SELECT parent_id FROM issues WHERE id = ?1").get(cursor) as {
+      parent_id: string | null;
+    } | null;
     cursor = next?.parent_id ?? null;
   }
 }
@@ -167,7 +178,10 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
       .query("SELECT id FROM issues WHERE team_id = ?1 AND number = ?2")
       .get(team.id, input.number);
     if (taken) {
-      throw apiError("VALIDATION_FAILED", `Issue number ${input.number} is already taken in this team`);
+      throw apiError(
+        "VALIDATION_FAILED",
+        `Issue number ${input.number} is already taken in this team`,
+      );
     }
   }
 
@@ -177,7 +191,10 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
   if (input.createdAt != null && Number.isNaN(Date.parse(input.createdAt))) {
     throw apiError("VALIDATION_FAILED", "createdAt must be a valid ISO-8601 date");
   }
-  if (input.creatorId != null && !db.query("SELECT id FROM actors WHERE id = ?1").get(input.creatorId)) {
+  if (
+    input.creatorId != null &&
+    !db.query("SELECT id FROM actors WHERE id = ?1").get(input.creatorId)
+  ) {
     throw apiError("NOT_FOUND", "Creator actor not found");
   }
   // En imports, autoría y fecha originales; si no, el actor de la key y ahora.
@@ -188,13 +205,18 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
   db.transaction(() => {
     // Numeración por team, atómica dentro de la transacción. Con número explícito
     // (imports), next_issue_number salta más allá para no colisionar después.
-    const numbered = input.number != null
-      ? (db.query(
-          "UPDATE teams SET next_issue_number = max(next_issue_number, ?2 + 1) WHERE id = ?1 RETURNING ?2 AS number",
-        ).get(team.id, input.number) as { number: number })
-      : (db.query(
-          "UPDATE teams SET next_issue_number = next_issue_number + 1 WHERE id = ?1 RETURNING next_issue_number - 1 AS number",
-        ).get(team.id) as { number: number });
+    const numbered =
+      input.number != null
+        ? (db
+            .query(
+              "UPDATE teams SET next_issue_number = max(next_issue_number, ?2 + 1) WHERE id = ?1 RETURNING ?2 AS number",
+            )
+            .get(team.id, input.number) as { number: number })
+        : (db
+            .query(
+              "UPDATE teams SET next_issue_number = next_issue_number + 1 WHERE id = ?1 RETURNING next_issue_number - 1 AS number",
+            )
+            .get(team.id) as { number: number });
 
     // Estado default explícito del team (AT-180); posición más baja como fallback.
     const stateId = input.stateId ?? getDefaultState(db, team).id;
@@ -207,24 +229,42 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
          assignee_id, parent_id, project_id, milestone_id, creator_id, sort_order, created_at, updated_at)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)`,
     ).run(
-      id, team.id, numbered.number, title, input.description ?? null, stateId,
-      input.priority ?? 0, input.assigneeId ?? null, input.parentId ?? null,
-      input.projectId ?? null, input.milestoneId ?? null, creatorId, 0, timestamp,
+      id,
+      team.id,
+      numbered.number,
+      title,
+      input.description ?? null,
+      stateId,
+      input.priority ?? 0,
+      input.assigneeId ?? null,
+      input.parentId ?? null,
+      input.projectId ?? null,
+      input.milestoneId ?? null,
+      creatorId,
+      0,
+      timestamp,
     );
     // Payload completo: el log tiene que alcanzar para reconstruir el issue
     // sin depender del snapshot (AT-165, prerequisito de la Fase 3).
-    recordActivity(db, id, creatorId, "created", {
-      title,
-      description: input.description ?? null,
-      teamId: team.id,
-      number: numbered.number,
-      priority: input.priority ?? 0,
-      stateId,
-      assigneeId: input.assigneeId ?? null,
-      parentId: input.parentId ?? null,
-      projectId: input.projectId ?? null,
-      milestoneId: input.milestoneId ?? null,
-    }, createdAt ?? undefined);
+    recordActivity(
+      db,
+      id,
+      creatorId,
+      "created",
+      {
+        title,
+        description: input.description ?? null,
+        teamId: team.id,
+        number: numbered.number,
+        priority: input.priority ?? 0,
+        stateId,
+        assigneeId: input.assigneeId ?? null,
+        parentId: input.parentId ?? null,
+        projectId: input.projectId ?? null,
+        milestoneId: input.milestoneId ?? null,
+      },
+      createdAt ?? undefined,
+    );
     if (input.labelIds?.length) {
       applyLabelOps(db, actorId, getIssue(db, id)!, { labelIds: input.labelIds });
     }
@@ -241,6 +281,7 @@ export interface IssueUpdateInput extends LabelOps {
   parentId?: string | null;
   projectId?: string | null;
   milestoneId?: string | null;
+  cycleId?: string | null;
   sortOrder?: number | null;
 }
 
@@ -279,31 +320,45 @@ export function updateIssue(
     if (input.description !== undefined && input.description !== issue.description) {
       push("description", input.description);
       changes.push({ field: "description", from: issue.description, to: input.description });
-      recordActivity(db, issue.id, actorId, "description_changed", { to: input.description ?? null });
+      recordActivity(db, issue.id, actorId, "description_changed", {
+        to: input.description ?? null,
+      });
     }
     if (input.stateId != null && input.stateId !== issue.state_id) {
       validateState(db, issue.team_id, input.stateId);
       push("state_id", input.stateId);
       changes.push({ field: "state", from: issue.state_id, to: input.stateId });
-      recordActivity(db, issue.id, actorId, "state_changed", { from: issue.state_id, to: input.stateId });
+      recordActivity(db, issue.id, actorId, "state_changed", {
+        from: issue.state_id,
+        to: input.stateId,
+      });
     }
     if (input.priority != null && input.priority !== issue.priority) {
       validatePriority(input.priority);
       push("priority", input.priority);
       changes.push({ field: "priority", from: issue.priority, to: input.priority });
-      recordActivity(db, issue.id, actorId, "priority_changed", { from: issue.priority, to: input.priority });
+      recordActivity(db, issue.id, actorId, "priority_changed", {
+        from: issue.priority,
+        to: input.priority,
+      });
     }
     if (input.assigneeId !== undefined && input.assigneeId !== issue.assignee_id) {
       if (input.assigneeId !== null) validateAssignee(db, input.assigneeId);
       push("assignee_id", input.assigneeId);
       changes.push({ field: "assignee", from: issue.assignee_id, to: input.assigneeId });
-      recordActivity(db, issue.id, actorId, "assigned", { from: issue.assignee_id, to: input.assigneeId });
+      recordActivity(db, issue.id, actorId, "assigned", {
+        from: issue.assignee_id,
+        to: input.assigneeId,
+      });
     }
     if (input.parentId !== undefined && input.parentId !== issue.parent_id) {
       if (input.parentId !== null) validateParent(db, issue, input.parentId);
       push("parent_id", input.parentId);
       changes.push({ field: "parent", from: issue.parent_id, to: input.parentId });
-      recordActivity(db, issue.id, actorId, "parent_changed", { from: issue.parent_id, to: input.parentId });
+      recordActivity(db, issue.id, actorId, "parent_changed", {
+        from: issue.parent_id,
+        to: input.parentId,
+      });
     }
     if (input.projectId !== undefined && input.projectId !== issue.project_id) {
       if (input.projectId !== null) {
@@ -315,14 +370,20 @@ export function updateIssue(
       }
       push("project_id", input.projectId);
       changes.push({ field: "project", from: issue.project_id, to: input.projectId });
-      recordActivity(db, issue.id, actorId, "project_changed", { from: issue.project_id, to: input.projectId });
+      recordActivity(db, issue.id, actorId, "project_changed", {
+        from: issue.project_id,
+        to: input.projectId,
+      });
 
       // Al cambiar de proyecto, un milestone del proyecto anterior queda huérfano:
       // se limpia salvo que la misma mutación esté seteando uno nuevo.
       if (issue.milestone_id && input.milestoneId === undefined) {
         push("milestone_id", null);
         changes.push({ field: "milestone", from: issue.milestone_id, to: null });
-        recordActivity(db, issue.id, actorId, "milestone_changed", { from: issue.milestone_id, to: null });
+        recordActivity(db, issue.id, actorId, "milestone_changed", {
+          from: issue.milestone_id,
+          to: null,
+        });
       }
     }
     if (input.milestoneId !== undefined && input.milestoneId !== issue.milestone_id) {
@@ -333,7 +394,15 @@ export function updateIssue(
       }
       push("milestone_id", input.milestoneId);
       changes.push({ field: "milestone", from: issue.milestone_id, to: input.milestoneId });
-      recordActivity(db, issue.id, actorId, "milestone_changed", { from: issue.milestone_id, to: input.milestoneId });
+      recordActivity(db, issue.id, actorId, "milestone_changed", {
+        from: issue.milestone_id,
+        to: input.milestoneId,
+      });
+    }
+    if (input.cycleId !== undefined && input.cycleId !== issue.cycle_id) {
+      if (input.cycleId !== null) validateCycleForTeam(db, input.cycleId, issue.team_id);
+      push("cycle_id", input.cycleId);
+      changes.push({ field: "cycle", from: issue.cycle_id, to: input.cycleId });
     }
     if (input.sortOrder != null && input.sortOrder !== issue.sort_order) {
       push("sort_order", input.sortOrder);
@@ -367,7 +436,10 @@ export function updateIssue(
 export function archiveIssue(db: Database, actorId: string, ref: string): IssueRow {
   const issue = requireIssue(db, ref);
   if (!issue.archived_at) {
-    db.query("UPDATE issues SET archived_at = ?1, updated_at = ?1 WHERE id = ?2").run(now(), issue.id);
+    db.query("UPDATE issues SET archived_at = ?1, updated_at = ?1 WHERE id = ?2").run(
+      now(),
+      issue.id,
+    );
     recordActivity(db, issue.id, actorId, "archived", {});
   }
   return getIssue(db, issue.id)!;

@@ -54,6 +54,7 @@ export const typeDefs = /* GraphQL */ `
     defaultState: WorkflowState!
     labels: [Label!]!
     projects: [Project!]!
+    cycles: [Cycle!]!
     createdAt: DateTime!
   }
 
@@ -96,6 +97,7 @@ export const typeDefs = /* GraphQL */ `
     labels: [Label!]!
     project: Project
     milestone: Milestone
+    cycle: Cycle
     comments: [Comment!]!
     """
     Relaciones con otros issues (bloqueo, related, duplicados), desde ambos extremos.
@@ -184,6 +186,165 @@ export const typeDefs = /* GraphQL */ `
     createdAt: DateTime!
   }
 
+  """
+  Entrada del inbox personal del viewer (PRB-202).
+  """
+  type InboxItem {
+    id: ID!
+    type: String!
+    actor: Actor!
+    issue: Issue!
+    payload: JSON!
+    createdAt: DateTime!
+    isRead: Boolean!
+    isArchived: Boolean!
+  }
+
+  type InboxItemPayload {
+    success: Boolean!
+    inboxItem: InboxItem!
+  }
+
+  enum CycleState {
+    UPCOMING
+    ACTIVE
+    COMPLETED
+  }
+
+  """
+  Ciclo time-boxed de un team (PRB-203).
+  """
+  type Cycle {
+    id: ID!
+    team: Team!
+    number: Int!
+    name: String!
+    startsAt: DateTime!
+    endsAt: DateTime!
+    state: CycleState!
+    """
+    Issues completados / total (no archivados).
+    """
+    progress: Float!
+    completedIssues: Int!
+    totalIssues: Int!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    archivedAt: DateTime
+  }
+
+  input CycleCreateInput {
+    teamId: ID!
+    name: String!
+    startsAt: DateTime!
+    endsAt: DateTime!
+    state: CycleState
+  }
+
+  input CycleUpdateInput {
+    name: String
+    startsAt: DateTime
+    endsAt: DateTime
+    state: CycleState
+    archived: Boolean
+  }
+
+  type CyclePayload {
+    success: Boolean!
+    cycle: Cycle!
+  }
+
+  type CycleCarryOverPayload {
+    success: Boolean!
+    movedIssues: Int!
+  }
+
+  enum ReviewStatus {
+    REQUESTED
+    IN_PROGRESS
+    APPROVED
+    REJECTED
+  }
+
+  """
+  Solicitud de revisión sobre un issue (PRB-205).
+  """
+  type Review {
+    id: ID!
+    issue: Issue!
+    requester: Actor!
+    reviewer: Actor!
+    status: ReviewStatus!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
+  input ReviewCreateInput {
+    issueId: ID!
+    reviewerId: ID!
+  }
+
+  input ReviewUpdateInput {
+    status: ReviewStatus
+    reviewerId: ID
+  }
+
+  type ReviewPayload {
+    success: Boolean!
+    review: Review!
+  }
+
+  enum InitiativeState {
+    PLANNED
+    ACTIVE
+    COMPLETED
+    CANCELED
+  }
+
+  """
+  Iniciativa de workspace que agrupa proyectos (PRB-206).
+  """
+  type Initiative {
+    id: ID!
+    name: String!
+    description: String
+    state: InitiativeState!
+    targetDate: DateTime
+    projects: [Project!]!
+    owner: Actor
+    """
+    Issues completados / total en proyectos de la iniciativa.
+    """
+    progress: Float!
+    completedIssues: Int!
+    totalIssues: Int!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    archivedAt: DateTime
+  }
+
+  input InitiativeCreateInput {
+    name: String!
+    description: String
+    state: InitiativeState
+    targetDate: DateTime
+    projectIds: [ID!]
+  }
+
+  input InitiativeUpdateInput {
+    name: String
+    description: String
+    state: InitiativeState
+    targetDate: DateTime
+    projectIds: [ID!]
+    archived: Boolean
+  }
+
+  type InitiativePayload {
+    success: Boolean!
+    initiative: Initiative!
+  }
+
   enum ProjectState {
     BACKLOG
     PLANNED
@@ -203,9 +364,45 @@ export const typeDefs = /* GraphQL */ `
     teams: [Team!]!
     milestones: [Milestone!]!
     issues(first: Int = 50): IssueConnection!
+    """
+    Historial de actualizaciones narrativas (PRB-207).
+    """
+    updates: [ProjectStatusUpdate!]!
     createdAt: DateTime!
     updatedAt: DateTime!
     archivedAt: DateTime
+  }
+
+  enum ProjectUpdateHealth {
+    ON_TRACK
+    AT_RISK
+    OFF_TRACK
+  }
+
+  """
+  Update narrativo de un proyecto (estado/riesgos/próximos pasos).
+  """
+  type ProjectStatusUpdate {
+    id: ID!
+    project: Project!
+    author: Actor!
+    health: ProjectUpdateHealth!
+    body: String!
+    risks: String
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
+  input ProjectUpdateCreateInput {
+    projectId: ID!
+    health: ProjectUpdateHealth!
+    body: String!
+    risks: String
+  }
+
+  type ProjectStatusUpdatePayload {
+    success: Boolean!
+    projectUpdate: ProjectStatusUpdate!
   }
 
   type Webhook {
@@ -376,6 +573,7 @@ export const typeDefs = /* GraphQL */ `
     creator: IDComparator
     project: IDComparator
     milestone: IDComparator
+    cycle: IDComparator
     parent: IDComparator
     priority: IntComparator
     labels: LabelComparator
@@ -437,6 +635,7 @@ export const typeDefs = /* GraphQL */ `
     parentId: ID
     projectId: ID
     milestoneId: ID
+    cycleId: ID
     sortOrder: Float
     """
     Reemplaza el set completo de labels.
@@ -571,6 +770,63 @@ export const typeDefs = /* GraphQL */ `
     orphanedIssues: Int!
   }
 
+  enum SavedViewScope {
+    PERSONAL
+    TEAM
+    WORKSPACE
+  }
+
+  """
+  Vista guardada: filtros/orden/agrupación reutilizables (PRB-201).
+  """
+  type SavedView {
+    id: ID!
+    name: String!
+    scope: SavedViewScope!
+    team: Team
+    owner: Actor!
+    """
+    Filtro IssueFilter serializado (JSON).
+    """
+    filter: JSON!
+    orderBy: IssueOrder!
+    """
+    Criterio de agrupación de la UI: state | milestone | assignee | priority.
+    """
+    groupBy: String!
+    """
+    Columnas visibles de la lista (ids de campo).
+    """
+    columns: [String!]!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    archivedAt: DateTime
+  }
+
+  input SavedViewCreateInput {
+    name: String!
+    scope: SavedViewScope!
+    teamId: ID
+    filter: JSON
+    orderBy: IssueOrder
+    groupBy: String
+    columns: [String!]
+  }
+
+  input SavedViewUpdateInput {
+    name: String
+    filter: JSON
+    orderBy: IssueOrder
+    groupBy: String
+    columns: [String!]
+    archived: Boolean
+  }
+
+  type SavedViewPayload {
+    success: Boolean!
+    savedView: SavedView!
+  }
+
   type Query {
     """
     Actor autenticado por la API key del header Authorization.
@@ -597,6 +853,31 @@ export const typeDefs = /* GraphQL */ `
     projects(state: ProjectState, team: ID, includeArchived: Boolean = false): [Project!]!
     project(id: ID!): Project
     webhooks: [Webhook!]!
+    """
+    Vistas visibles para el viewer. Con teamId: team + workspace + personales.
+    """
+    savedViews(teamId: ID, includeArchived: Boolean = false): [SavedView!]!
+    savedView(id: ID!): SavedView
+    """
+    Eventos relevantes para el actor autenticado (asignaciones, comentarios en sus issues).
+    """
+    inbox(first: Int = 50, includeArchived: Boolean = false): [InboxItem!]!
+    cycles(teamId: ID!, includeArchived: Boolean = false): [Cycle!]!
+    cycle(id: ID!): Cycle
+    """
+    Cola de revisiones del viewer (como reviewer o requester).
+    """
+    reviews(
+      openOnly: Boolean = false
+      first: Int = 50
+      teamId: ID
+      projectId: ID
+      reviewerId: ID
+      olderThanDays: Int
+    ): [Review!]!
+    review(id: ID!): Review
+    initiatives(includeArchived: Boolean = false): [Initiative!]!
+    initiative(id: ID!): Initiative
   }
 
   type Mutation {
@@ -631,6 +912,27 @@ export const typeDefs = /* GraphQL */ `
     Borra el milestone; los issues asignados quedan sin milestone.
     """
     milestoneDelete(id: ID!): MilestoneDeletePayload!
+    savedViewCreate(input: SavedViewCreateInput!): SavedViewPayload!
+    savedViewUpdate(id: ID!, input: SavedViewUpdateInput!): SavedViewPayload!
+    savedViewDuplicate(id: ID!): SavedViewPayload!
+    savedViewDelete(id: ID!): DeletePayload!
+    cycleCreate(input: CycleCreateInput!): CyclePayload!
+    cycleUpdate(id: ID!, input: CycleUpdateInput!): CyclePayload!
+    cycleDelete(id: ID!): DeletePayload!
+    """
+    Mueve issues abiertos del ciclo origen al destino.
+    """
+    cycleCarryOver(fromCycleId: ID!, toCycleId: ID!): CycleCarryOverPayload!
+    reviewCreate(input: ReviewCreateInput!): ReviewPayload!
+    reviewUpdate(id: ID!, input: ReviewUpdateInput!): ReviewPayload!
+    reviewDelete(id: ID!): DeletePayload!
+    initiativeCreate(input: InitiativeCreateInput!): InitiativePayload!
+    initiativeUpdate(id: ID!, input: InitiativeUpdateInput!): InitiativePayload!
+    initiativeDelete(id: ID!): DeletePayload!
+    projectUpdateCreate(input: ProjectUpdateCreateInput!): ProjectStatusUpdatePayload!
+    projectUpdateDelete(id: ID!): DeletePayload!
+    inboxMarkRead(id: ID!): InboxItemPayload!
+    inboxArchive(id: ID!): InboxItemPayload!
     webhookCreate(input: WebhookCreateInput!): WebhookPayload!
     webhookDelete(id: ID!): DeletePayload!
   }

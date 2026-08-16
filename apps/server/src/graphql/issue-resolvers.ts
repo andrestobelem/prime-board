@@ -22,6 +22,7 @@ import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getMilestone, mapMilestone } from "../domain/milestones.ts";
 import { getProject, mapProject } from "../domain/projects.ts";
+import { getCycle, mapCycle } from "../domain/cycles.ts";
 import {
   createRelation,
   deleteRelation,
@@ -81,6 +82,8 @@ export const issueResolvers = {
       issue._row.milestone_id
         ? mapMilestone(getMilestone(context.db, issue._row.milestone_id)!)
         : null,
+    cycle: (issue: MappedIssue, _args: unknown, context: Context) =>
+      issue._row.cycle_id ? mapCycle(getCycle(context.db, issue._row.cycle_id)!) : null,
     comments: (issue: MappedIssue, _args: unknown, context: Context) =>
       listComments(context.db, issue.id).map(mapComment),
     relations: (issue: MappedIssue, _args: unknown, context: Context) =>

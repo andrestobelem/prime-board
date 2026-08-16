@@ -18,6 +18,12 @@ import {
   mapMilestone,
   updateMilestone,
 } from "../domain/milestones.ts";
+import {
+  createProjectUpdate,
+  deleteProjectUpdate,
+  listProjectUpdates,
+  mapProjectUpdate,
+} from "../domain/project-updates.ts";
 import { getTeam, mapTeam } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { requireViewer } from "./errors.ts";
@@ -42,6 +48,21 @@ export const projectResolvers = {
         pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
       };
     },
+    updates: (project: MappedProject, _args: unknown, context: Context) =>
+      listProjectUpdates(context.db, project.id).map(mapProjectUpdate),
+  },
+
+  ProjectStatusUpdate: {
+    project: (update: { projectId: string }, _args: unknown, context: Context) =>
+      mapProject(getProject(context.db, update.projectId)!),
+    author: (update: { authorId: string }, _args: unknown, context: Context) =>
+      mapActor(getActor(context.db, update.authorId)!),
+  },
+
+  ProjectUpdateHealth: {
+    ON_TRACK: "on_track",
+    AT_RISK: "at_risk",
+    OFF_TRACK: "off_track",
   },
 
   Milestone: {
@@ -139,6 +160,34 @@ export const projectResolvers = {
       const project = mapProject(updateProject(context.db, args.id, args.input));
       context.events.emit("project.updated", viewer, project);
       return { success: true, project };
+    },
+    projectUpdateCreate: (
+      _parent: unknown,
+      args: {
+        input: {
+          projectId: string;
+          health: string;
+          body: string;
+          risks?: string | null;
+        };
+      },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      const projectUpdate = mapProjectUpdate(
+        createProjectUpdate(context.db, viewer.id, args.input),
+      );
+      context.events.emit("project.updated", viewer, {
+        id: args.input.projectId,
+        updateId: projectUpdate.id,
+        health: projectUpdate.health,
+        body: projectUpdate.body,
+      });
+      return { success: true, projectUpdate };
+    },
+    projectUpdateDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+      requireViewer(context);
+      return { success: deleteProjectUpdate(context.db, args.id) };
     },
   },
 };

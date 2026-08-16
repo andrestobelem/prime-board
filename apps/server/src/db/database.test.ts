@@ -29,8 +29,26 @@ describe("openDatabase", () => {
       .values()
       .map((row) => row[0] as string);
     for (const table of [
-      "workspace", "actors", "api_keys", "teams", "workflow_states", "projects",
-      "issues", "labels", "issue_labels", "comments", "activity", "webhooks", "issues_fts",
+      "workspace",
+      "actors",
+      "api_keys",
+      "teams",
+      "workflow_states",
+      "projects",
+      "issues",
+      "labels",
+      "issue_labels",
+      "comments",
+      "activity",
+      "webhooks",
+      "issues_fts",
+      "saved_views",
+      "cycles",
+      "reviews",
+      "initiatives",
+      "initiative_projects",
+      "project_updates",
+      "inbox_receipts",
     ]) {
       expect(tables).toContain(table);
     }
@@ -63,7 +81,11 @@ describe("bootstrap", () => {
     expect(team.key).toBe("PB");
     const states = db.query("SELECT type FROM workflow_states ORDER BY position").values();
     expect(states.map((row) => row[0])).toEqual([
-      "backlog", "unstarted", "started", "completed", "canceled",
+      "backlog",
+      "unstarted",
+      "started",
+      "completed",
+      "canceled",
     ]);
     const storedKey = db.query("SELECT hash FROM api_keys").get() as { hash: string };
     expect(storedKey.hash).toBe(hashApiKey(result.adminApiKey!));
@@ -92,7 +114,15 @@ describe("bootstrap", () => {
     const admin = db.query("SELECT id FROM actors").get() as { id: string };
     db.query(
       "INSERT INTO issues (id, team_id, number, title, description, state_id, creator_id, sort_order, created_at, updated_at) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, 0, ?7, ?7)",
-    ).run("issue-1", team.id, "Implement webhooks dispatcher", "Deliver signed events", state.id, admin.id, new Date().toISOString());
+    ).run(
+      "issue-1",
+      team.id,
+      "Implement webhooks dispatcher",
+      "Deliver signed events",
+      state.id,
+      admin.id,
+      new Date().toISOString(),
+    );
 
     const hits = db
       .query("SELECT rowid FROM issues_fts WHERE issues_fts MATCH ?1")
