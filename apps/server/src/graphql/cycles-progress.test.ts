@@ -146,9 +146,10 @@ describe("cycle progress and carry-over", () => {
     const cycleNumber = cycle.data!.cycleCreate.cycle.number;
     const issue = await gql(
       app,
-      `mutation { issueCreate(input: { teamKey: "PB", title: "Deleted cycle issue" }) { issue { id } } }`,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Deleted cycle issue" }) { issue { id identifier } } }`,
     );
     const issueId = issue.data!.issueCreate.issue.id;
+    const identifier = issue.data!.issueCreate.issue.identifier;
     await gql(
       app,
       `mutation($id: ID!, $cycleId: ID!) { issueUpdate(id: $id, input: { cycleId: $cycleId }) { success } }`,
@@ -167,11 +168,59 @@ describe("cycle progress and carry-over", () => {
     const cycleChanges = activity.data!.issue.activity.filter(
       (event: any) => event.type === "cycle_changed",
     );
-    expect(cycleChanges.at(-1)).toEqual({
-      type: "cycle_changed",
-      actor: { name: "admin" },
-      payload: { from: `PB/${cycleNumber}`, to: null },
-    });
+    expect(cycleChanges).toEqual([
+      {
+        type: "cycle_changed",
+        actor: { name: "admin" },
+        payload: { from: null, to: `PB/${cycleNumber}` },
+      },
+      {
+        type: "cycle_changed",
+        actor: { name: "admin" },
+        payload: { from: `PB/${cycleNumber}`, to: null },
+      },
+    ]);
+
+    const dir = mkdtempSync(join(tmpdir(), "pb-deleted-cycle-"));
+    try {
+      exportBoard(app.db, dir);
+      const log = readFileSync(join(dir, ".prime-board", "log", `${identifier}.jsonl`), "utf8");
+      const exported = log
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter((event) => event.type === "cycle_changed");
+      expect(exported.map((event) => event.payload)).toEqual([
+        { from: null, to: `PB/${cycleNumber}` },
+        { from: `PB/${cycleNumber}`, to: null },
+      ]);
+      expect(log).not.toContain(cycleId);
+
+      const fresh = new Database(":memory:", { strict: true });
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      rebuildFromRepo(fresh, dir);
+      const restored = fresh
+        .query(
+          `SELECT a.payload, actors.name AS actor
+           FROM activity a
+           JOIN actors ON actors.id = a.actor_id
+           JOIN issues i ON i.id = a.issue_id
+           JOIN teams ON teams.id = i.team_id
+           WHERE teams.key || '-' || i.number = ?1 AND a.type = 'cycle_changed'
+           ORDER BY a.created_at, a.id`,
+        )
+        .all(identifier) as Array<{ payload: string; actor: string }>;
+      expect(restored.map((event) => JSON.parse(event.payload))).toEqual([
+        { from: null, to: `PB/${cycleNumber}` },
+        { from: `PB/${cycleNumber}`, to: null },
+      ]);
+      expect(restored.every((event) => event.actor === "admin")).toBe(true);
+      expect(fresh.query("SELECT id FROM cycles WHERE id = ?1").get(cycleId)).toBeNull();
+      fresh.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("preserva las actividades de carry-over en export → rebuild", async () => {

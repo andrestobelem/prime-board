@@ -34,4 +34,5 @@ concurrentes del mismo campo genera conflictos que alguien tiene que resolver a 
 - Todo cambio persistente de un issue forma parte del historial append-only: las asignaciones
   de `cycle_id` se registran como `cycle_changed` y las de `sort_order` como
   `sort_order_changed`, ambos con `from` y `to`. Los cycles se exportan por la clave estable
-  `TEAM/number` para que esos eventos sobrevivan a un rebuild.
+  `TEAM/number` para que esos eventos sobrevivan a un rebuild. Al eliminar un cycle, los
+  payloads históricos que aún lo referencian se canonizan a esa clave antes de borrar la fila.

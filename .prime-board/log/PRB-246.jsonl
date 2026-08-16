@@ -2,3 +2,7 @@
 {"actor":"admin","issue":"PRB-246","payload":{"type":"related","issue":"PRB-245"},"ts":"2026-08-16T19:52:38.035Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-246","payload":{"type":"blocks","issue":"PRB-243"},"ts":"2026-08-16T19:52:38.107Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-246","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-16T19:52:38.179Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-246","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-16T19:56:55.221Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-246","payload":{"from":null,"to":"admin"},"ts":"2026-08-16T19:56:55.221Z","type":"assigned"}
+{"actor":"admin","issue":"PRB-246","payload":{"body":"Implementado PRB-246.\n\n- Al eliminar un cycle, los `cycle_changed` históricos que aún contienen su UUID se canonizan a `TEAM/number` dentro de la misma transacción.\n- Los eventos nuevos de desasignación ya conservan esa referencia estable.\n- Export → rebuild mantiene los valores `from`/`to`, no deja el UUID del cycle eliminado en el log y conserva la autoría.\n- ADR-0004 documenta la regla de canonización.\n\nValidación: `bun test` (235 pass), `bun run typecheck` y `bun run build` pasan."},"ts":"2026-08-16T19:58:28.003Z","type":"commented"}
+{"actor":"admin","issue":"PRB-246","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-16T19:58:28.074Z","type":"state_changed"}

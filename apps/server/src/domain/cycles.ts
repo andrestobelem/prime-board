@@ -148,6 +148,28 @@ function cycleReference(db: Database, cycle: CycleRow): string {
   return `${team.key}/${cycle.number}`;
 }
 
+function preserveCycleActivityReferences(db: Database, cycleId: string, reference: string): void {
+  const activities = db
+    .query("SELECT id, payload FROM activity WHERE type = 'cycle_changed'")
+    .all() as Array<{ id: string; payload: string }>;
+  for (const activity of activities) {
+    const payload = JSON.parse(activity.payload) as Record<string, unknown>;
+    let changed = false;
+    for (const field of ["from", "to"]) {
+      if (payload[field] === cycleId) {
+        payload[field] = reference;
+        changed = true;
+      }
+    }
+    if (changed) {
+      db.query("UPDATE activity SET payload = ?1 WHERE id = ?2").run(
+        JSON.stringify(payload),
+        activity.id,
+      );
+    }
+  }
+}
+
 export function deleteCycle(db: Database, actorId: string, id: string): boolean {
   const existing = getCycle(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
@@ -156,6 +178,9 @@ export function deleteCycle(db: Database, actorId: string, id: string): boolean 
   }>;
   const reference = cycleReference(db, existing);
   db.transaction(() => {
+    // También canoniza eventos anteriores: una vez borrado el cycle, su UUID
+    // ya no puede resolverse durante el export.
+    preserveCycleActivityReferences(db, id, reference);
     db.query("UPDATE issues SET cycle_id = NULL WHERE cycle_id = ?1").run(id);
     for (const issue of affected) {
       // El cycle se elimina en esta misma transacción; conservar la clave estable
