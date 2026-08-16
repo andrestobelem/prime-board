@@ -2,3 +2,7 @@
 {"actor":"admin","issue":"PRB-238","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-16T18:56:55.268Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-238","payload":{"type":"related","issue":"PRB-228"},"ts":"2026-08-16T18:57:05.421Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-238","payload":{"type":"blocks","issue":"PRB-243"},"ts":"2026-08-16T18:57:29.369Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-238","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-16T19:42:32.490Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-238","payload":{"from":null,"to":"admin"},"ts":"2026-08-16T19:42:32.490Z","type":"assigned"}
+{"actor":"admin","issue":"PRB-238","payload":{"body":"## Implementación y verificación\n\n- `save_issue` acepta `parent: null` como solicitud explícita para quitar el parent.\n- Una referencia string inexistente ahora devuelve `NOT_FOUND: Parent issue not found` y no ejecuta `issueUpdate`.\n- Se conserva el camino de creación con parent válido.\n- El test MCP cubre parent válido, parent inválido sin mutación y desparentado explícito.\n\nVerificación: **232 tests passing**, typecheck y build OK."},"ts":"2026-08-16T19:43:13.699Z","type":"commented"}
+{"actor":"admin","issue":"PRB-238","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-16T19:43:13.805Z","type":"state_changed"}

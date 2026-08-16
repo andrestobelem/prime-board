@@ -111,6 +111,40 @@ describe("mcp tools", () => {
       }),
     );
     expect(updated.state.type).toBe("STARTED");
+
+    const parent = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { team: "PB", title: "MCP parent" },
+      }),
+    );
+    const parented = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { id: "PB-1", parent: parent.identifier },
+      }),
+    );
+    expect(parented.parent.identifier).toBe(parent.identifier);
+
+    const invalidParent = await client.callTool({
+      name: "save_issue",
+      arguments: { id: "PB-1", parent: "PB-404" },
+    });
+    expect(invalidParent.isError).toBe(true);
+    expect(JSON.stringify(invalidParent)).toContain("NOT_FOUND");
+
+    const unchanged = parseResult(
+      await client.callTool({ name: "get_issue", arguments: { id: "PB-1" } }),
+    );
+    expect(unchanged.parent.identifier).toBe(parent.identifier);
+
+    const detached = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { id: "PB-1", parent: null },
+      }),
+    );
+    expect(detached.parent).toBeNull();
   });
 
   it("save_comment y get_issue con historial", async () => {
@@ -125,6 +159,8 @@ describe("mcp tools", () => {
     expect(issue.activity.map((a: any) => a.type)).toEqual([
       "created",
       "state_changed",
+      "parent_changed",
+      "parent_changed",
       "commented",
     ]);
   });

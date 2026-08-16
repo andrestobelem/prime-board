@@ -192,7 +192,10 @@ export function createServer(config: McpConfig): McpServer {
           .optional()
           .describe("0-4 or none|urgent|high|medium|low"),
         assignee: z.string().optional().describe('Actor ID, name or "me"'),
-        parent: z.string().optional().describe("Parent issue ID or identifier"),
+        parent: z
+          .union([z.string(), z.null()])
+          .optional()
+          .describe("Parent issue ID or identifier; null explicitly clears the parent"),
         project: z.string().optional().describe("Project ID"),
         milestone: z
           .string()
@@ -227,11 +230,16 @@ export function createServer(config: McpConfig): McpServer {
             resolved.state?.eq ??
             team.states.find((s: any) => s.type.toLowerCase() === args.state!.toLowerCase())?.id;
         }
-        if (args.parent) {
-          const parent = await gqlRequest(config, `query($id: ID!) { issue(id: $id) { id } }`, {
-            id: args.parent,
-          });
-          input.parentId = parent.issue?.id ?? null;
+        if (args.parent !== undefined) {
+          if (args.parent === null) {
+            input.parentId = null;
+          } else {
+            const parent = await gqlRequest(config, `query($id: ID!) { issue(id: $id) { id } }`, {
+              id: args.parent,
+            });
+            if (!parent.issue) throw new Error(`NOT_FOUND: Parent issue not found: ${args.parent}`);
+            input.parentId = parent.issue.id;
+          }
         }
         if (args.labels) input.labelIds = await resolveLabelIds(config, team.id, args.labels);
         const data = await gqlRequest(
