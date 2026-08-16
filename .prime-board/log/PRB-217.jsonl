@@ -1,0 +1,5 @@
+{"actor":"admin","issue":"PRB-217","payload":{"title":"UI: filtros en Reviews (team/proyecto/agente/edad)","description":"## Origen\n\nPRB-212 agregó filtros GraphQL; la cola `#/reviews` no los expone.\n\n## Criterios\n\n- Controles en ReviewsView para teamId, projectId, reviewerId, olderThanDays, openOnly\n- La query usa esos filtros","number":217,"priority":0,"team":"PRB","state":"Needs Triage","assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-16T14:11:14.797Z","type":"created"}
+{"actor":"admin","issue":"PRB-217","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-16T14:12:25.667Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-217","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-16T14:12:25.731Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-217","payload":{"body":"Controles en ReviewsView: openOnly, team, project, reviewer, olderThanDays."},"ts":"2026-08-16T14:14:03.002Z","type":"commented"}
+{"actor":"admin","issue":"PRB-217","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-16T14:14:03.059Z","type":"state_changed"}

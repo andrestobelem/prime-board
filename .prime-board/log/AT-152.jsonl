@@ -7,3 +7,16 @@
 {"actor":"claude","issue":"AT-152","payload":{"from":null,"to":"Parte 5 — Feedback del MVP"},"ts":"2026-08-15T04:58:51.083Z","type":"milestone_changed"}
 {"actor":"claude","issue":"AT-152","payload":{"from":"Parte 5 — Feedback del MVP","to":"Desarrollo de prime-board"},"ts":"2026-08-15T04:58:51.083Z","type":"project_changed"}
 {"actor":"claude","issue":"AT-152","payload":{"to":"Hoy los proyectos son globales del workspace: no tienen relación con teams (la tabla `projects` no referencia `teams`). En Linear los proyectos pertenecen a uno o más teams, y esa asociación estructura el sidebar y los filtros.\n\n**Modelo y API:**\n\n* Migración `0002`: tabla N:M `project_teams (project_id, team_id)` — paridad con Linear (un proyecto puede abarcar varios teams). `projectCreate`/`projectUpdate` aceptan `teamIds` (al crear, default: … (truncated, use `get_issue` for full description)"},"ts":"2026-08-15T05:31:56.282Z","type":"description_changed"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"Feature"},"ts":"2026-08-16T11:50:05.643Z","type":"labeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"research"},"ts":"2026-08-16T11:50:08.588Z","type":"labeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"agent:review"},"ts":"2026-08-16T11:50:09.017Z","type":"labeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"Bug"},"ts":"2026-08-16T11:50:09.504Z","type":"labeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"Improvement"},"ts":"2026-08-16T11:50:10.170Z","type":"labeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"epic:repo-truth"},"ts":"2026-08-16T11:50:10.668Z","type":"labeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"security"},"ts":"2026-08-16T11:50:11.567Z","type":"labeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"epic:repo-truth"},"ts":"2026-08-16T11:50:12.171Z","type":"unlabeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"security"},"ts":"2026-08-16T11:50:12.573Z","type":"unlabeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"agent:review"},"ts":"2026-08-16T11:50:12.985Z","type":"unlabeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"research"},"ts":"2026-08-16T11:50:13.885Z","type":"unlabeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"Feature"},"ts":"2026-08-16T11:50:14.368Z","type":"unlabeled"}
+{"actor":"admin","issue":"AT-152","payload":{"label":"Improvement"},"ts":"2026-08-16T11:50:15.035Z","type":"unlabeled"}
