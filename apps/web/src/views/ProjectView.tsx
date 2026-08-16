@@ -11,6 +11,7 @@ const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter) {
     id name description state targetDate
     lead { id name type }
     milestones { id name targetDate progress }
+    updates { id health body risks createdAt author { id name type } }
   }
   issues(filter: $filter, first: 250) {
     nodes { ${ISSUE_LIST_FIELDS} }
@@ -18,19 +19,57 @@ const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter) {
 }`;
 
 const STATE_COLORS: Record<string, string> = {
-  BACKLOG: "#8a8f98", PLANNED: "#8a8f98", STARTED: "#f2c94c",
-  PAUSED: "#fc7840", COMPLETED: "#5e6ad2", CANCELED: "#5c6067",
+  BACKLOG: "#8a8f98",
+  PLANNED: "#8a8f98",
+  STARTED: "#f2c94c",
+  PAUSED: "#fc7840",
+  COMPLETED: "#5e6ad2",
+  CANCELED: "#5c6067",
 };
 
 export function ProjectView({ projectId }: { projectId: string }) {
   const result = useQuery<{
     project: {
-      id: string; name: string; description: string | null; state: string;
-      targetDate: string | null; lead: { id: string; name: string; type: string } | null;
+      id: string;
+      name: string;
+      description: string | null;
+      state: string;
+      targetDate: string | null;
+      lead: { id: string; name: string; type: string } | null;
       milestones: Array<{ id: string; name: string; targetDate: string | null; progress: number }>;
+      updates: Array<{
+        id: string;
+        health: string;
+        body: string;
+        risks: string | null;
+        createdAt: string;
+        author: { id: string; name: string; type: string };
+      }>;
     } | null;
     issues: { nodes: IssueListItem[] };
   }>(PROJECT_QUERY, { id: projectId, filter: { project: { eq: projectId } } });
+
+  async function postUpdate() {
+    const body = window.prompt("Update summary");
+    if (!body?.trim()) return;
+    const healthRaw = window.prompt("Health: on_track | at_risk | off_track", "on_track");
+    if (!healthRaw?.trim()) return;
+    const health = healthRaw.trim().toUpperCase().replace(" ", "_");
+    const risks = window.prompt("Risks (optional)") || null;
+    await mutate(
+      `mutation($input: ProjectUpdateCreateInput!) {
+      projectUpdateCreate(input: $input) { projectUpdate { id } }
+    }`,
+      {
+        input: {
+          projectId,
+          health: health === "AT_RISK" || health === "OFF_TRACK" ? health : "ON_TRACK",
+          body: body.trim(),
+          risks: risks?.trim() || null,
+        },
+      },
+    );
+  }
 
   const milestoneSections = (project: any, issues: IssueListItem[]) => ({
     groups: project.milestones.map((milestone: any) => ({
@@ -59,18 +98,32 @@ export function ProjectView({ projectId }: { projectId: string }) {
           <button
             className="btn secondary"
             style={{ marginLeft: "auto" }}
+            onClick={() => void postUpdate()}
+          >
+            Post update
+          </button>
+          <button
+            className="btn secondary"
             onClick={async () => {
-              await mutate(`mutation($id: ID!) { projectArchive(id: $id) { success } }`, { id: project.id });
+              await mutate(`mutation($id: ID!) { projectArchive(id: $id) { success } }`, {
+                id: project.id,
+              });
               navigate("/");
             }}
           >
             Archive
           </button>
         </div>
-        <div style={{
-          display: "flex", gap: 16, marginTop: 8,
-          color: "var(--text-muted)", fontSize: 12, alignItems: "center",
-        }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 16,
+            marginTop: 8,
+            color: "var(--text-muted)",
+            fontSize: 12,
+            alignItems: "center",
+          }}
+        >
           {project.lead && (
             <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <Avatar actor={project.lead} /> Lead: {project.lead.name}
@@ -85,6 +138,38 @@ export function ProjectView({ projectId }: { projectId: string }) {
           </p>
         )}
       </div>
+      {project.updates.length > 0 && (
+        <div style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+          <div className="section" style={{ padding: "8px 24px" }}>
+            Updates
+          </div>
+          {project.updates.map((update) => (
+            <div
+              key={update.id}
+              style={{
+                padding: "12px 24px",
+                borderTop: "1px solid var(--border-subtle)",
+                fontSize: 13,
+              }}
+            >
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+                <Avatar actor={update.author} />
+                <strong>{update.author.name}</strong>
+                <span className="label-chip">{update.health.toLowerCase().replace(/_/g, " ")}</span>
+                <span style={{ marginLeft: "auto", color: "var(--text-faint)", fontSize: 12 }}>
+                  {update.createdAt.slice(0, 10)}
+                </span>
+              </div>
+              <div>{update.body}</div>
+              {update.risks && (
+                <div style={{ color: "var(--text-muted)", marginTop: 4 }}>
+                  Risks: {update.risks}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       {project.milestones.length === 0 ? (
         <IssueList issues={result.data!.issues.nodes} />
       ) : (
@@ -98,7 +183,9 @@ export function ProjectView({ projectId }: { projectId: string }) {
                     <Icon name="milestone" title="Milestone" /> {milestone.name}
                     <span className="count">{Math.round(milestone.progress * 100)}%</span>
                     {milestone.targetDate && (
-                      <span className="count" style={{ marginLeft: "auto" }}>{milestone.targetDate}</span>
+                      <span className="count" style={{ marginLeft: "auto" }}>
+                        {milestone.targetDate}
+                      </span>
                     )}
                   </div>
                   <IssueList issues={items} />

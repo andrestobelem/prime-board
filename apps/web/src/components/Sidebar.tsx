@@ -1,4 +1,5 @@
 // Sidebar Linear-like: workspace y teams con sus proyectos anidados (AT-152).
+// Views guardadas (PRB-201) aparecen como sección propia.
 import { useState } from "react";
 import { Link, useRoute } from "../router.tsx";
 import { Icon } from "./icons.tsx";
@@ -10,12 +11,31 @@ interface SidebarProps {
     key: string;
     name: string;
     projects: Array<{ id: string; name: string; state: string }>;
+    cycles?: Array<{ id: string; name: string; number: number; state: string }>;
   }>;
+  views?: Array<{
+    id: string;
+    name: string;
+    scope: string;
+    team: { id: string; key: string } | null;
+  }>;
+  initiatives?: Array<{ id: string; name: string; state: string }>;
+  onCreateView?: () => void | Promise<void>;
+  onCreateCycle?: (teamId: string) => void | Promise<void>;
+  onCreateInitiative?: () => void | Promise<void>;
 }
 
 const CLOSED_STATES = ["COMPLETED", "CANCELED"];
 
-export function Sidebar({ workspace, teams }: SidebarProps) {
+export function Sidebar({
+  workspace,
+  teams,
+  views = [],
+  initiatives = [],
+  onCreateView,
+  onCreateCycle,
+  onCreateInitiative,
+}: SidebarProps) {
   const route = useRoute();
   // Los proyectos cerrados se colapsan para no saturar el sidebar (AT-30).
   const [showClosed, setShowClosed] = useState<Record<string, boolean>>({});
@@ -26,6 +46,37 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
         <Icon name="workspace" size={18} className="logo" />
         {workspace?.name ?? "prime-board"}
       </div>
+      <Link to="/inbox" className={active("/inbox")}>
+        <Icon name="comment" /> Inbox
+      </Link>
+      <Link to="/my" className={active("/my")}>
+        <Icon name="assignee" /> My issues
+      </Link>
+      <Link to="/reviews" className={active("/reviews")}>
+        <Icon name="check" /> Reviews
+      </Link>
+      <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ flex: 1 }}>Initiatives</span>
+        {onCreateInitiative && (
+          <button
+            className="nav"
+            style={{ padding: 0, margin: 0, width: "auto" }}
+            title="New initiative"
+            onClick={() => void onCreateInitiative()}
+          >
+            <Icon name="plus" size={12} />
+          </button>
+        )}
+      </div>
+      {initiatives.map((initiative) => (
+        <Link
+          key={initiative.id}
+          to={`/initiative/${initiative.id}`}
+          className={active(`/initiative/${initiative.id}`)}
+        >
+          <Icon name="milestone" className="nested" /> {initiative.name}
+        </Link>
+      ))}
       {teams.map((team) => (
         <div key={team.id}>
           <div className="section">{team.name}</div>
@@ -71,7 +122,48 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
                   ))}
             </>
           )}
+          <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ flex: 1 }}>Cycles</span>
+            {onCreateCycle && (
+              <button
+                className="nav"
+                style={{ padding: 0, margin: 0, width: "auto" }}
+                title="New cycle"
+                onClick={() => void onCreateCycle(team.id)}
+              >
+                <Icon name="plus" size={12} />
+              </button>
+            )}
+          </div>
+          {(team.cycles ?? []).map((cycle) => (
+            <Link key={cycle.id} to={`/cycle/${cycle.id}`} className={active(`/cycle/${cycle.id}`)}>
+              <Icon name="calendar" className="nested" /> {cycle.name}
+            </Link>
+          ))}
         </div>
+      ))}
+      <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ flex: 1 }}>Views</span>
+        {onCreateView && (
+          <button
+            className="nav"
+            style={{ padding: 0, margin: 0, width: "auto" }}
+            title="New view"
+            onClick={() => void onCreateView()}
+          >
+            <Icon name="plus" size={12} />
+          </button>
+        )}
+      </div>
+      {views.length === 0 && (
+        <div className="hint" style={{ padding: "0 12px 8px" }}>
+          No saved views yet
+        </div>
+      )}
+      {views.map((view) => (
+        <Link key={view.id} to={`/view/${view.id}`} className={active(`/view/${view.id}`)}>
+          <Icon name="filter" className="nested" /> {view.name}
+        </Link>
       ))}
       <div className="spacer" />
       <div className="hint">

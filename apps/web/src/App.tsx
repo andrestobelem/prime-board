@@ -1,7 +1,7 @@
 // Shell de la UI: sidebar + topbar + contenido ruteado por hash.
 // Atajos globales: C crea un issue, ⌘K abre el command palette (AT-148).
 import { useEffect, useState } from "react";
-import { getApiKey, useQuery } from "./api.ts";
+import { getApiKey, mutate, useQuery } from "./api.ts";
 import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueList.tsx";
 import { Palette } from "./components/Palette.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
@@ -14,12 +14,24 @@ import { BoardView } from "./views/BoardView.tsx";
 import { IssueView } from "./views/IssueView.tsx";
 import { MembersView } from "./views/MembersView.tsx";
 import { ProjectView } from "./views/ProjectView.tsx";
+import { SavedViewPage } from "./views/SavedViewPage.tsx";
+import { InitiativeView } from "./views/InitiativeView.tsx";
+import { ReviewsView } from "./views/ReviewsView.tsx";
+import { CycleView } from "./views/CycleView.tsx";
+import { MyIssuesView } from "./views/MyIssuesView.tsx";
+import { InboxView } from "./views/InboxView.tsx";
 import { TeamSettingsView } from "./views/TeamSettingsView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
 
 const SHELL_QUERY = `{
   workspace { id name }
-  teams { id key name projects { id name state } }
+  teams {
+    id key name
+    projects { id name state }
+    cycles { id name number state }
+  }
+  initiatives { id name state }
+  savedViews { id name scope team { id key } }
 }`;
 
 export interface ShellData {
@@ -29,6 +41,14 @@ export interface ShellData {
     key: string;
     name: string;
     projects: Array<{ id: string; name: string; state: string }>;
+    cycles: Array<{ id: string; name: string; number: number; state: string }>;
+  }>;
+  initiatives: Array<{ id: string; name: string; state: string }>;
+  savedViews: Array<{
+    id: string;
+    name: string;
+    scope: string;
+    team: { id: string; key: string } | null;
   }>;
 }
 
@@ -61,7 +81,9 @@ export function App() {
     return (
       <div className="app">
         <div className="main">
-          <div className="topbar"><span className="title">Welcome to prime-board</span></div>
+          <div className="topbar">
+            <span className="title">Welcome to prime-board</span>
+          </div>
           <SettingsView />
         </div>
       </div>
@@ -89,7 +111,9 @@ export function App() {
   } else if (section === "team-settings" && param) {
     topbar = (
       <>
-        <Link to={`/team/${param}`}><span className="crumb">{param}</span></Link>
+        <Link to={`/team/${param}`}>
+          <span className="crumb">{param}</span>
+        </Link>
         <Icon name="chevron-right" size={14} className="crumb-sep" />
         <span className="title">Estados y labels</span>
       </>
@@ -98,11 +122,74 @@ export function App() {
   } else if (section === "members") {
     topbar = <span className="title">Members</span>;
     content = <MembersView />;
+  } else if (section === "inbox") {
+    topbar = <span className="title">Inbox</span>;
+    content = <InboxView />;
+  } else if (section === "reviews") {
+    topbar = <span className="title">Reviews</span>;
+    content = <ReviewsView />;
+  } else if (section === "initiative" && param) {
+    const initiative = shell.data?.initiatives.find((item) => item.id === param);
+    topbar = (
+      <>
+        <span className="crumb">Initiatives</span>
+        <Icon name="chevron-right" size={14} className="crumb-sep" />
+        <span className="title">{initiative?.name ?? "Initiative"}</span>
+      </>
+    );
+    content = <InitiativeView initiativeId={param} />;
+  } else if (section === "my") {
+    topbar = (
+      <>
+        <span className="title">My issues</span>
+        <span className="right">
+          <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
+            {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
+              <option key={key} value={key}>
+                Agrupar por {GROUP_LABELS[key].toLowerCase()}
+              </option>
+            ))}
+          </select>
+        </span>
+      </>
+    );
+    content = <MyIssuesView groupBy={groupBy} />;
+  } else if (section === "cycle" && param) {
+    const cycle = teams.flatMap((team) => team.cycles ?? []).find((c) => c.id === param);
+    topbar = (
+      <>
+        <span className="crumb">Cycles</span>
+        <Icon name="chevron-right" size={14} className="crumb-sep" />
+        <span className="title">{cycle?.name ?? "Cycle"}</span>
+        <span className="right">
+          <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
+            {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
+              <option key={key} value={key}>
+                Agrupar por {GROUP_LABELS[key].toLowerCase()}
+              </option>
+            ))}
+          </select>
+        </span>
+      </>
+    );
+    content = <CycleView cycleId={param} groupBy={groupBy} />;
+  } else if (section === "view" && param) {
+    const view = shell.data?.savedViews.find((candidate) => candidate.id === param);
+    topbar = (
+      <>
+        <span className="crumb">Views</span>
+        <Icon name="chevron-right" size={14} className="crumb-sep" />
+        <span className="title">{view?.name ?? "View"}</span>
+      </>
+    );
+    content = <SavedViewPage viewId={param} />;
   } else if (section === "issue" && param) {
     const teamKey = param.split("-")[0];
     topbar = (
       <>
-        <Link to={`/team/${teamKey}`}><span className="crumb">{teamKey}</span></Link>
+        <Link to={`/team/${teamKey}`}>
+          <span className="crumb">{teamKey}</span>
+        </Link>
         <Icon name="chevron-right" size={14} className="crumb-sep" />
         <span className="title">{param}</span>
       </>
@@ -125,7 +212,9 @@ export function App() {
           {boardActive && (
             <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
               {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
-                <option key={key} value={key}>Agrupar por {GROUP_LABELS[key].toLowerCase()}</option>
+                <option key={key} value={key}>
+                  Agrupar por {GROUP_LABELS[key].toLowerCase()}
+                </option>
               ))}
             </select>
           )}
@@ -140,9 +229,11 @@ export function App() {
         </span>
       </>
     );
-    content = boardActive
-      ? <BoardView scope={{ kind: "project", projectId: param }} groupBy={groupBy} />
-      : <ProjectView projectId={param} />;
+    content = boardActive ? (
+      <BoardView scope={{ kind: "project", projectId: param }} groupBy={groupBy} />
+    ) : (
+      <ProjectView projectId={param} />
+    );
   } else if ((section === "team" || section === "board") && param) {
     const team = teams.find((candidate) => candidate.key === param);
     topbar = (
@@ -155,13 +246,17 @@ export function App() {
         <span className="right">
           {(section === "team" || section === "board") && (
             <Link to={`/team-settings/${param}`}>
-              <button className="btn secondary"><Icon name="settings" size={14} /> Team</button>
+              <button className="btn secondary">
+                <Icon name="settings" size={14} /> Team
+              </button>
             </Link>
           )}
           {(section === "team" || section === "board") && (
             <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
               {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
-                <option key={key} value={key}>Agrupar por {GROUP_LABELS[key].toLowerCase()}</option>
+                <option key={key} value={key}>
+                  Agrupar por {GROUP_LABELS[key].toLowerCase()}
+                </option>
               ))}
             </select>
           )}
@@ -176,9 +271,15 @@ export function App() {
         </span>
       </>
     );
-    content = section === "board"
-      ? <BoardView scope={{ kind: "team", teamKey: param, teamId: team?.id ?? null }} groupBy={groupBy} />
-      : <TeamView teamKey={param} teamId={team?.id ?? null} groupBy={groupBy} />;
+    content =
+      section === "board" ? (
+        <BoardView
+          scope={{ kind: "team", teamKey: param, teamId: team?.id ?? null }}
+          groupBy={groupBy}
+        />
+      ) : (
+        <TeamView teamKey={param} teamId={team?.id ?? null} groupBy={groupBy} />
+      );
   } else if (shell.data) {
     if (defaultTeam) {
       window.location.hash = `#/team/${defaultTeam}`;
@@ -190,7 +291,74 @@ export function App() {
 
   return (
     <div className="app">
-      <Sidebar workspace={shell.data?.workspace ?? null} teams={teams} />
+      <Sidebar
+        workspace={shell.data?.workspace ?? null}
+        teams={teams}
+        views={shell.data?.savedViews ?? []}
+        initiatives={shell.data?.initiatives ?? []}
+        onCreateView={async () => {
+          const team = teams.find((candidate) => candidate.key === currentTeamKey) ?? teams[0];
+          if (!team) return;
+          const name = window.prompt("View name");
+          if (!name?.trim()) return;
+          const data = await mutate<{ savedViewCreate: { savedView: { id: string } } }>(
+            `
+            mutation($input: SavedViewCreateInput!) {
+              savedViewCreate(input: $input) { savedView { id } }
+            }
+          `,
+            {
+              input: {
+                name: name.trim(),
+                scope: "TEAM",
+                teamId: team.id,
+                filter: { team: { eq: team.id } },
+                orderBy: "UPDATED_DESC",
+                groupBy,
+              },
+            },
+          );
+          window.location.hash = `#/view/${data.savedViewCreate.savedView.id}`;
+        }}
+        onCreateCycle={async (teamId) => {
+          const name = window.prompt("Cycle name");
+          if (!name?.trim()) return;
+          const startsAt = new Date().toISOString();
+          const ends = new Date();
+          ends.setDate(ends.getDate() + 14);
+          const data = await mutate<{ cycleCreate: { cycle: { id: string } } }>(
+            `
+            mutation($input: CycleCreateInput!) {
+              cycleCreate(input: $input) { cycle { id } }
+            }
+          `,
+            {
+              input: {
+                teamId,
+                name: name.trim(),
+                startsAt,
+                endsAt: ends.toISOString(),
+              },
+            },
+          );
+          window.location.hash = `#/cycle/${data.cycleCreate.cycle.id}`;
+        }}
+        onCreateInitiative={async () => {
+          const name = window.prompt("Initiative name");
+          if (!name?.trim()) return;
+          const data = await mutate<{ initiativeCreate: { initiative: { id: string } } }>(
+            `
+            mutation($input: InitiativeCreateInput!) {
+              initiativeCreate(input: $input) { initiative { id } }
+            }
+          `,
+            {
+              input: { name: name.trim(), state: "ACTIVE" },
+            },
+          );
+          window.location.hash = `#/initiative/${data.initiativeCreate.initiative.id}`;
+        }}
+      />
       <div className="main">
         {topbar && <div className="topbar">{topbar}</div>}
         <div className="content">{content}</div>
