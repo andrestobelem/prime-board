@@ -404,6 +404,9 @@ export function exportBoard(
     const dir = join(base, folder);
     if (!existsSync(dir)) continue;
     for (const file of readdirSync(dir)) {
+      // La trazabilidad de una migración es metadata de origen, no una proyección
+      // de SQLite: el export normal no debe borrarla (AT-187).
+      if (folder === "meta" && file === "source-map.json") continue;
       const path = join(dir, file);
       if (!written.has(path)) unlinkSync(path);
     }

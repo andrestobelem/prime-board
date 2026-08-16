@@ -1,5 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { createSourceMap, mergeSourceMap, parseSourceMap, type SourceMap } from "./source-map.ts";
+import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  createSourceMap,
+  mergeSourceMap,
+  parseSourceMap,
+  readSourceMap,
+  writeSourceMap,
+  type SourceMap,
+} from "./source-map.ts";
 import { buildLinearIssuePlan, type LinearIssue } from "./linear-plan.ts";
 
 describe("source map de Linear", () => {
@@ -29,6 +39,20 @@ describe("source map de Linear", () => {
         entities: { issues: { "": "AT-1" } },
       }),
     ).toThrow(/source id/);
+  });
+
+  it("persiste el mapa como metadata estable del repo", () => {
+    const root = mkdtempSync(join(tmpdir(), "pb-source-map-"));
+    try {
+      const map = mergeSourceMap(createSourceMap("w"), "issues", { b: "AT-2", a: "AT-1" });
+      writeSourceMap(root, map);
+      const path = join(root, ".prime-board", "meta", "source-map.json");
+      expect(existsSync(path)).toBe(true);
+      expect(readFileSync(path, "utf8")).toBe(JSON.stringify(map, null, 2) + "\n");
+      expect(readSourceMap(root)).toEqual(map);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

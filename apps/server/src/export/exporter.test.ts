@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exportBoard } from "./exporter.ts";
+import { createSourceMap, readSourceMap, writeSourceMap } from "./source-map.ts";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 
 let app: TestApp;
@@ -14,30 +15,59 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "pb-export-"));
   const team = await gql(app, `{ team(key: "PB") { id states { id type } } }`);
   const teamId = team.data!.team.id;
-  const project = await gql(app, `
+  const project = await gql(
+    app,
+    `
     mutation($t: [ID!]) { projectCreate(input: { name: "Proyecto", teamIds: $t }) { project { id } } }
-  `, { t: [teamId] });
+  `,
+    { t: [teamId] },
+  );
   const projectId = project.data!.projectCreate.project.id;
-  const milestone = await gql(app, `
+  const milestone = await gql(
+    app,
+    `
     mutation($p: ID!) { milestoneCreate(input: { projectId: $p, name: "Hito 1" }) { milestone { id } } }
-  `, { p: projectId });
-  const label = await gql(app, `
+  `,
+    { p: projectId },
+  );
+  const label = await gql(
+    app,
+    `
     mutation($t: ID!) { labelCreate(input: { name: "bug", teamId: $t }) { label { id } } }
-  `, { t: teamId });
-  const issue = await gql(app, `
+  `,
+    { t: teamId },
+  );
+  const issue = await gql(
+    app,
+    `
     mutation($p: ID!, $m: ID!, $l: [ID!]) {
       issueCreate(input: {
         teamKey: "PB", title: "Exportame", description: "cuerpo", priority: 2,
         projectId: $p, milestoneId: $m, labelIds: $l
       }) { issue { id } }
     }
-  `, { p: projectId, m: milestone.data!.milestoneCreate.milestone.id, l: [label.data!.labelCreate.label.id] });
-  await gql(app, `mutation { commentCreate(input: { issueId: "PB-1", body: "un comentario" }) { success } }`);
+  `,
+    {
+      p: projectId,
+      m: milestone.data!.milestoneCreate.milestone.id,
+      l: [label.data!.labelCreate.label.id],
+    },
+  );
+  await gql(
+    app,
+    `mutation { commentCreate(input: { issueId: "PB-1", body: "un comentario" }) { success } }`,
+  );
   const started = team.data!.team.states.find((s: any) => s.type === "STARTED").id;
-  await gql(app, `mutation($id: ID!, $s: ID!) { issueUpdate(id: $id, input: { stateId: $s }) { success } }`,
-    { id: issue.data!.issueCreate.issue.id, s: started });
+  await gql(
+    app,
+    `mutation($id: ID!, $s: ID!) { issueUpdate(id: $id, input: { stateId: $s }) { success } }`,
+    { id: issue.data!.issueCreate.issue.id, s: started },
+  );
   // Un webhook con secret y una API key: NO deben aparecer en el export.
-  await gql(app, `mutation { webhookCreate(input: { url: "http://localhost:9/h", secret: "SUPERSECRET" }) { success } }`);
+  await gql(
+    app,
+    `mutation { webhookCreate(input: { url: "http://localhost:9/h", secret: "SUPERSECRET" }) { success } }`,
+  );
 });
 
 afterAll(() => {
@@ -53,8 +83,12 @@ describe("exportBoard", () => {
 
     const base = join(dir, ".prime-board");
     expect(readdirSync(join(base, "meta")).sort()).toEqual([
-      "actors.json", "export.json", "projects.json", "teams.json",
-      "workspace-labels.json", "workspace.json",
+      "actors.json",
+      "export.json",
+      "projects.json",
+      "teams.json",
+      "workspace-labels.json",
+      "workspace.json",
     ]);
     expect(readdirSync(join(base, "issues"))).toEqual(["PB-1.md"]);
     expect(readdirSync(join(base, "log"))).toEqual(["PB-1.jsonl"]);
@@ -64,8 +98,13 @@ describe("exportBoard", () => {
     const raw = readFileSync(join(dir, ".prime-board", "issues", "PB-1.md"), "utf8");
     // Front-matter YAML con claves naturales.
     for (const line of [
-      "id: PB-1", "team: PB", "state: In Progress", "priority: 2",
-      "creator: admin", "project: Proyecto", "milestone: Hito 1",
+      "id: PB-1",
+      "team: PB",
+      "state: In Progress",
+      "priority: 2",
+      "creator: admin",
+      "project: Proyecto",
+      "milestone: Hito 1",
     ]) {
       expect(raw).toContain(line);
     }
@@ -77,7 +116,9 @@ describe("exportBoard", () => {
   });
 
   it("traduce los ids del log a nombres legibles", () => {
-    const lines = readFileSync(join(dir, ".prime-board", "log", "PB-1.jsonl"), "utf8").trim().split("\n");
+    const lines = readFileSync(join(dir, ".prime-board", "log", "PB-1.jsonl"), "utf8")
+      .trim()
+      .split("\n");
     const events = lines.map((line) => JSON.parse(line));
     expect(events[0]).toMatchObject({ type: "created", actor: "admin", issue: "PB-1" });
     const stateChange = events.find((e) => e.type === "state_changed");
@@ -125,8 +166,17 @@ describe("exportBoard", () => {
     }
   });
 
+  it("preserva el mapa de origen de una migración", () => {
+    const map = createSourceMap("linear-workspace");
+    writeSourceMap(dir, map);
+    exportBoard(app.db, dir);
+    expect(readSourceMap(dir)).toEqual(map);
+  });
+
   it("el evento created trae el estado inicial completo (AT-165)", () => {
-    const lines = readFileSync(join(dir, ".prime-board", "log", "PB-1.jsonl"), "utf8").trim().split("\n");
+    const lines = readFileSync(join(dir, ".prime-board", "log", "PB-1.jsonl"), "utf8")
+      .trim()
+      .split("\n");
     const created = JSON.parse(lines[0]!);
     expect(created.type).toBe("created");
     // Sin esto el log no alcanza para reconstruir el issue sin el snapshot.
@@ -151,7 +201,8 @@ describe("exportBoard", () => {
   it("recupera el body de comentarios de eventos viejos (sin body en el payload)", () => {
     // Simula un evento anterior a AT-165: solo commentId, sin body.
     const comment = app.db.query("SELECT id FROM comments LIMIT 1").get() as { id: string };
-    app.db.query("UPDATE activity SET payload = ?1 WHERE type = 'commented'")
+    app.db
+      .query("UPDATE activity SET payload = ?1 WHERE type = 'commented'")
       .run(JSON.stringify({ commentId: comment.id }));
 
     exportBoard(app.db, dir);

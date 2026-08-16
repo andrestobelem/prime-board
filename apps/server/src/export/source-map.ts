@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 /** Correspondencia estable entre entidades de Linear y sus claves en prime-board. */
 
 export const SOURCE_MAP_VERSION = 1 as const;
@@ -84,8 +87,30 @@ export function mergeSourceMap(
     }
     existing[sourceId] = target;
   }
+  const ordered = Object.fromEntries(
+    Object.entries(existing).sort(([a], [b]) => a.localeCompare(b)),
+  );
   return {
     ...base,
-    entities: { ...base.entities, [entityType]: existing },
+    entities: { ...base.entities, [entityType]: ordered },
   };
+}
+
+function sourceMapPath(rootDir: string): string {
+  return join(rootDir, ".prime-board", "meta", "source-map.json");
+}
+
+/** Lee la metadata de trazabilidad; un repo sin migración todavía no tiene mapa. */
+export function readSourceMap(rootDir: string): SourceMap | null {
+  const path = sourceMapPath(rootDir);
+  if (!existsSync(path)) return null;
+  return parseSourceMap(JSON.parse(readFileSync(path, "utf8")));
+}
+
+/** Persiste la metadata de trazabilidad sin incluir credenciales. */
+export function writeSourceMap(rootDir: string, map: SourceMap): void {
+  const validated = parseSourceMap(map);
+  const path = sourceMapPath(rootDir);
+  mkdirSync(join(rootDir, ".prime-board", "meta"), { recursive: true });
+  writeFileSync(path, JSON.stringify(validated, null, 2) + "\n", "utf8");
 }
