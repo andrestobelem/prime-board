@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import type { WebhookRow } from "../webhooks/dispatcher.ts";
+import { isWebhookEventName } from "../webhooks/events.ts";
 
 export function mapWebhook(row: WebhookRow) {
   return {
@@ -32,6 +33,12 @@ export function createWebhook(
     throw apiError("VALIDATION_FAILED", "Webhook url must be http or https");
   }
 
+  const events = input.events?.length ? [...new Set(input.events)] : ["*"];
+  const invalidEvent = events.find((event) => event !== "*" && !isWebhookEventName(event));
+  if (invalidEvent) {
+    throw apiError("VALIDATION_FAILED", `Unknown webhook event: ${invalidEvent}`);
+  }
+
   // Si no se provee secret, se genera uno y se devuelve una única vez.
   const secret =
     input.secret?.trim() ||
@@ -40,7 +47,7 @@ export function createWebhook(
   const id = newId();
   db.query(
     "INSERT INTO webhooks (id, url, secret, events, enabled, created_at) VALUES (?1, ?2, ?3, ?4, 1, ?5)",
-  ).run(id, input.url, secret, JSON.stringify(input.events?.length ? input.events : ["*"]), now());
+  ).run(id, input.url, secret, JSON.stringify(events), now());
   const row = db.query("SELECT * FROM webhooks WHERE id = ?1").get(id) as WebhookRow;
   return { row, secret };
 }

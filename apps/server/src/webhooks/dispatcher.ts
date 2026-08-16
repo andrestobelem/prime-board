@@ -2,14 +2,9 @@
 // entrega asíncrona con reintentos y backoff. Cola en memoria (MVP).
 import type { Database } from "bun:sqlite";
 import { now } from "../db/util.ts";
+import type { WebhookEventName } from "./events.ts";
 
-export type WebhookEventName =
-  | "issue.created"
-  | "issue.updated"
-  | "issue.archived"
-  | "comment.created"
-  | "project.created"
-  | "project.updated";
+export type { WebhookEventName } from "./events.ts";
 
 export interface WebhookRow {
   id: string;
@@ -56,9 +51,7 @@ export class WebhookDispatcher {
     data: Record<string, unknown>,
     changes?: Record<string, { from: unknown; to: unknown }>,
   ): void {
-    const hooks = this.db
-      .query("SELECT * FROM webhooks WHERE enabled = 1")
-      .all() as WebhookRow[];
+    const hooks = this.db.query("SELECT * FROM webhooks WHERE enabled = 1").all() as WebhookRow[];
     const subscribed = hooks.filter((hook) => {
       const events = JSON.parse(hook.events) as string[];
       return events.includes("*") || events.includes(event);
