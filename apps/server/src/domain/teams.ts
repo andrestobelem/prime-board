@@ -46,12 +46,17 @@ export function mapWorkflowState(row: WorkflowStateRow) {
   };
 }
 
-export function getTeam(db: Database, ref: { id?: string | null; key?: string | null }): TeamRow | null {
+export function getTeam(
+  db: Database,
+  ref: { id?: string | null; key?: string | null },
+): TeamRow | null {
   if (ref.id) {
     return db.query("SELECT * FROM teams WHERE id = ?1").get(ref.id) as TeamRow | null;
   }
   if (ref.key) {
-    return db.query("SELECT * FROM teams WHERE key = ?1").get(ref.key.toUpperCase()) as TeamRow | null;
+    return db
+      .query("SELECT * FROM teams WHERE key = ?1")
+      .get(ref.key.toUpperCase()) as TeamRow | null;
   }
   return null;
 }
@@ -65,12 +70,16 @@ export function listTeamStates(db: Database, teamId: string): WorkflowStateRow[]
 export function createTeam(
   db: Database,
   input: { name: string; key: string; description?: string | null },
+  ownerId?: string,
 ): TeamRow {
   const name = input.name.trim();
   const key = input.key.trim().toUpperCase();
   if (!name) throw apiError("VALIDATION_FAILED", "Team name cannot be empty");
   if (!/^[A-Z][A-Z0-9]{0,7}$/.test(key)) {
-    throw apiError("VALIDATION_FAILED", "Team key must be 1-8 alphanumeric characters starting with a letter");
+    throw apiError(
+      "VALIDATION_FAILED",
+      "Team key must be 1-8 alphanumeric characters starting with a letter",
+    );
   }
   const duplicate = db.query("SELECT id FROM teams WHERE key = ?1").get(key);
   if (duplicate) throw apiError("VALIDATION_FAILED", `Team key ${key} is already in use`);
@@ -82,6 +91,11 @@ export function createTeam(
       "INSERT INTO teams (id, name, key, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     ).run(id, name, key, input.description ?? null, timestamp, timestamp);
     seedTeamWorkflow(db, id);
+    if (ownerId) {
+      db.query(
+        "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES (?1, ?2, ?3, 'owner', ?4)",
+      ).run(newId(), id, ownerId, timestamp);
+    }
   })();
   return db.query("SELECT * FROM teams WHERE id = ?1").get(id) as TeamRow;
 }
@@ -134,7 +148,9 @@ export function updateTeam(db: Database, id: string, input: TeamUpdateInput): Te
   if (sets.length > 0) {
     push("updated_at", now());
     params.push(team.id);
-    db.query(`UPDATE teams SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(...(params as never[]));
+    db.query(`UPDATE teams SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
+      ...(params as never[]),
+    );
   }
   return getTeam(db, { id })!;
 }
@@ -153,7 +169,9 @@ export function deleteWorkflowState(
   id: string,
   moveToStateId?: string | null,
 ): number {
-  const state = db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow | null;
+  const state = db
+    .query("SELECT * FROM workflow_states WHERE id = ?1")
+    .get(id) as WorkflowStateRow | null;
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
 
   const siblings = db
@@ -166,9 +184,9 @@ export function deleteWorkflowState(
     throw apiError("VALIDATION_FAILED", "A team must keep at least one completed state");
   }
 
-  const affected = db
-    .query("SELECT count(*) AS n FROM issues WHERE state_id = ?1")
-    .get(id) as { n: number };
+  const affected = db.query("SELECT count(*) AS n FROM issues WHERE state_id = ?1").get(id) as {
+    n: number;
+  };
 
   let target: WorkflowStateRow | null = null;
   if (affected.n > 0) {
@@ -186,22 +204,35 @@ export function deleteWorkflowState(
 
   db.transaction(() => {
     if (target) {
-      const issues = db.query("SELECT id FROM issues WHERE state_id = ?1").values(id).map((row) => row[0] as string);
-      db.query("UPDATE issues SET state_id = ?1, updated_at = ?2 WHERE state_id = ?3")
-        .run(target.id, now(), id);
+      const issues = db
+        .query("SELECT id FROM issues WHERE state_id = ?1")
+        .values(id)
+        .map((row) => row[0] as string);
+      db.query("UPDATE issues SET state_id = ?1, updated_at = ?2 WHERE state_id = ?3").run(
+        target.id,
+        now(),
+        id,
+      );
       // Cada migración queda en el historial, como cualquier cambio de estado.
       for (const issueId of issues) {
-        recordActivity(db, issueId, actorId, "state_changed", { from: id, to: target.id, reason: "state_deleted" });
+        recordActivity(db, issueId, actorId, "state_changed", {
+          from: id,
+          to: target.id,
+          reason: "state_deleted",
+        });
       }
     }
     // Si se borra el estado default, se reasigna: al destino de la migración o
     // al de menor posición restante (AT-180).
-    const team = db.query("SELECT default_state_id FROM teams WHERE id = ?1").get(state.team_id) as
-      | { default_state_id: string | null }
-      | null;
+    const team = db
+      .query("SELECT default_state_id FROM teams WHERE id = ?1")
+      .get(state.team_id) as { default_state_id: string | null } | null;
     if (team?.default_state_id === id) {
       const fallback = target ?? [...siblings].sort((a, b) => a.position - b.position)[0]!;
-      db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(fallback.id, state.team_id);
+      db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(
+        fallback.id,
+        state.team_id,
+      );
     }
     db.query("DELETE FROM workflow_states WHERE id = ?1").run(id);
   })();
@@ -212,9 +243,16 @@ export function deleteWorkflowState(
 export function updateWorkflowState(
   db: Database,
   id: string,
-  input: { name?: string | null; type?: string | null; color?: string | null; position?: number | null },
+  input: {
+    name?: string | null;
+    type?: string | null;
+    color?: string | null;
+    position?: number | null;
+  },
 ): WorkflowStateRow {
-  const state = db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow | null;
+  const state = db
+    .query("SELECT * FROM workflow_states WHERE id = ?1")
+    .get(id) as WorkflowStateRow | null;
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
   if (input.type != null && !STATE_TYPES.includes(input.type)) {
     throw apiError("VALIDATION_FAILED", `Invalid state type: ${input.type}`);
@@ -241,14 +279,22 @@ export function updateWorkflowState(
   if (sets.length > 0) {
     push("updated_at", now());
     params.push(id);
-    db.query(`UPDATE workflow_states SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(...(params as never[]));
+    db.query(`UPDATE workflow_states SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
+      ...(params as never[]),
+    );
   }
   return db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow;
 }
 
 export function createWorkflowState(
   db: Database,
-  input: { teamId: string; name: string; type: string; color?: string | null; position?: number | null },
+  input: {
+    teamId: string;
+    name: string;
+    type: string;
+    color?: string | null;
+    position?: number | null;
+  },
 ): WorkflowStateRow {
   const team = getTeam(db, { id: input.teamId });
   if (!team) throw apiError("NOT_FOUND", "Team not found");
@@ -269,9 +315,14 @@ export function createWorkflowState(
   db.query(
     "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
   ).run(
-    id, team.id, input.name.trim(), input.type,
-    input.color ?? "#95a2b3", input.position ?? maxPosition.max + 1,
-    timestamp, timestamp,
+    id,
+    team.id,
+    input.name.trim(),
+    input.type,
+    input.color ?? "#95a2b3",
+    input.position ?? maxPosition.max + 1,
+    timestamp,
+    timestamp,
   );
   return db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow;
 }

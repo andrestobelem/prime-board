@@ -15,7 +15,8 @@ import migration0010 from "./migrations/0010_project_updates.sql" with { type: "
 import migration0011 from "./migrations/0011_saved_view_archive_columns.sql" with { type: "text" };
 import migration0012 from "./migrations/0012_inbox_receipts.sql" with { type: "text" };
 import migration0013 from "./migrations/0013_initiative_owner.sql" with { type: "text" };
-import { now } from "./util.ts";
+import migration0014 from "./migrations/0014_team_memberships.sql" with { type: "text" };
+import { newId, now } from "./util.ts";
 
 interface Migration {
   version: number;
@@ -37,6 +38,7 @@ const MIGRATIONS: Migration[] = [
   { version: 11, name: "saved_view_archive_columns", sql: migration0011 },
   { version: 12, name: "inbox_receipts", sql: migration0012 },
   { version: 13, name: "initiative_owner", sql: migration0013 },
+  { version: 14, name: "team_memberships", sql: migration0014 },
 ];
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {
@@ -69,5 +71,32 @@ export function migrate(db: Database): void {
         now(),
       );
     })();
+  }
+
+  // Las bases existentes no pasan por bootstrap otra vez. Conservamos su
+  // comportamiento anterior haciendo miembros owner a los actores ya creados.
+  const membershipCount = db.query("SELECT count(*) AS count FROM team_memberships").get() as {
+    count: number;
+  };
+  if (membershipCount.count === 0) {
+    const actors = db
+      .query("SELECT id FROM actors")
+      .values()
+      .map((row) => row[0] as string);
+    const teams = db
+      .query("SELECT id FROM teams")
+      .values()
+      .map((row) => row[0] as string);
+    const insert = db.query(
+      "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES (?1, ?2, ?3, 'owner', ?4)",
+    );
+    if (actors.length > 0 && teams.length > 0) {
+      db.transaction(() => {
+        const timestamp = now();
+        for (const teamId of teams) {
+          for (const actorId of actors) insert.run(newId(), teamId, actorId, timestamp);
+        }
+      })();
+    }
   }
 }

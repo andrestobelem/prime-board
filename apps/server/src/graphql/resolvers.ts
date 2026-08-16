@@ -64,15 +64,23 @@ import {
   updateReview,
 } from "../domain/reviews.ts";
 import {
+  canViewInitiative,
   createInitiative,
   deleteInitiative,
   getInitiative,
   initiativeProgress,
   listInitiativeProjectIds,
+  listInitiativeTeamIds,
   listInitiatives,
   mapInitiative,
   updateInitiative,
 } from "../domain/initiatives.ts";
+import {
+  createTeamMembership,
+  deleteTeamMembership,
+  listTeamMemberships,
+  mapTeamMembership,
+} from "../domain/team-memberships.ts";
 
 // Scalars passthrough: los timestamps viajan como strings ISO-8601 UTC.
 const DateTime = new GraphQLScalarType({
@@ -137,6 +145,10 @@ export const resolvers = {
     COMPLETED: "completed",
     CANCELED: "canceled",
   },
+  TeamMembershipRole: {
+    OWNER: "owner",
+    MEMBER: "member",
+  },
 
   Team: {
     states: (team: { id: string }, _args: unknown, context: Context) =>
@@ -149,6 +161,15 @@ export const resolvers = {
       listProjects(context.db, null, team.id).map(mapProject),
     cycles: (team: { id: string }, _args: unknown, context: Context) =>
       listCycles(context.db, team.id).map(mapCycle),
+    memberships: (team: { id: string }, _args: unknown, context: Context) =>
+      listTeamMemberships(context.db, team.id).map(mapTeamMembership),
+  },
+
+  TeamMembership: {
+    team: (membership: { teamId: string }, _args: unknown, context: Context) =>
+      mapTeam(getTeam(context.db, { id: membership.teamId })!),
+    actor: (membership: { actorId: string }, _args: unknown, context: Context) =>
+      mapActor(getActor(context.db, membership.actorId)!),
   },
 
   Issue: issueResolvers.Issue,
@@ -203,6 +224,11 @@ export const resolvers = {
         .map((projectId) => getProject(context.db, projectId))
         .filter(Boolean)
         .map((row) => mapProject(row!)),
+    teams: (initiative: { id: string }, _args: unknown, context: Context) =>
+      listInitiativeTeamIds(context.db, initiative.id)
+        .map((teamId) => getTeam(context.db, { id: teamId }))
+        .filter(Boolean)
+        .map((row) => mapTeam(row!)),
     owner: (initiative: { ownerId: string | null }, _args: unknown, context: Context) =>
       initiative.ownerId ? mapActor(getActor(context.db, initiative.ownerId)!) : null,
     progress: (initiative: { id: string }, _args: unknown, context: Context) =>
@@ -249,6 +275,10 @@ export const resolvers = {
     actors: (_parent: unknown, args: { type?: string }, context: Context) => {
       requireViewer(context);
       return listActors(context.db, args.type).map(mapActor);
+    },
+    teamMemberships: (_parent: unknown, args: { teamId: string }, context: Context) => {
+      requireViewer(context);
+      return listTeamMemberships(context.db, args.teamId).map(mapTeamMembership);
     },
     labels: (_parent: unknown, args: { team?: string }, context: Context) => {
       requireViewer(context);
@@ -338,13 +368,15 @@ export const resolvers = {
       args: { includeArchived?: boolean | null },
       context: Context,
     ) => {
-      requireViewer(context);
-      return listInitiatives(context.db, Boolean(args.includeArchived)).map(mapInitiative);
+      const viewer = requireViewer(context);
+      return listInitiatives(context.db, Boolean(args.includeArchived), viewer.id).map(
+        mapInitiative,
+      );
     },
     initiative: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
       const row = getInitiative(context.db, args.id);
-      return row ? mapInitiative(row) : null;
+      return row && canViewInitiative(context.db, row.id, viewer.id) ? mapInitiative(row) : null;
     },
   },
 
@@ -359,8 +391,8 @@ export const resolvers = {
       args: { input: { name: string; key: string; description?: string | null } },
       context: Context,
     ) => {
-      requireViewer(context);
-      const team = mapTeam(createTeam(context.db, args.input));
+      const viewer = requireViewer(context);
+      const team = mapTeam(createTeam(context.db, args.input, viewer.id));
       return { success: true, team };
     },
     teamUpdate: (
@@ -371,6 +403,21 @@ export const resolvers = {
       requireViewer(context);
       const team = mapTeam(updateTeam(context.db, args.id, args.input));
       return { success: true, team };
+    },
+    teamMembershipCreate: (
+      _parent: unknown,
+      args: { input: { teamId: string; actorId: string; role?: string | null } },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      return {
+        success: true,
+        membership: mapTeamMembership(createTeamMembership(context.db, viewer.id, args.input)),
+      };
+    },
+    teamMembershipDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      return { success: deleteTeamMembership(context.db, viewer.id, args.id) };
     },
     actorCreate: (
       _parent: unknown,
@@ -602,6 +649,7 @@ export const resolvers = {
           state?: string | null;
           targetDate?: string | null;
           projectIds?: string[] | null;
+          teamIds?: string[] | null;
         };
       },
       context: Context,
@@ -622,6 +670,7 @@ export const resolvers = {
           state?: string | null;
           targetDate?: string | null;
           projectIds?: string[] | null;
+          teamIds?: string[] | null;
           archived?: boolean | null;
         };
       },

@@ -36,8 +36,9 @@ export function bootstrap(db: Database): BootstrapResult {
   const apiKey = generateApiKey();
   db.transaction(() => {
     const timestamp = now();
-    db.query("INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)")
-      .run(newId(), "Prime Board", "prime-board", timestamp, timestamp);
+    db.query(
+      "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+    ).run(newId(), "Prime Board", "prime-board", timestamp, timestamp);
 
     const teamId = newId();
     db.query(
@@ -46,11 +47,16 @@ export function bootstrap(db: Database): BootstrapResult {
     seedTeamWorkflow(db, teamId);
 
     const adminId = newId();
-    db.query("INSERT INTO actors (id, name, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)")
-      .run(adminId, "admin", "human", timestamp, timestamp);
+    db.query(
+      "INSERT INTO actors (id, name, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+    ).run(adminId, "admin", "human", timestamp, timestamp);
 
-    db.query("INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
-      .run(newId(), adminId, "admin bootstrap key", hashApiKey(apiKey), timestamp);
+    db.query(
+      "INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+    ).run(newId(), adminId, "admin bootstrap key", hashApiKey(apiKey), timestamp);
+    db.query(
+      "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES (?1, ?2, ?3, 'owner', ?4)",
+    ).run(newId(), teamId, adminId, timestamp);
   })();
 
   return { created: true, adminApiKey: apiKey };

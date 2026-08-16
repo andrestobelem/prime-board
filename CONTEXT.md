@@ -23,8 +23,9 @@ _Avoid_: User, account
 
 **Membership**:
 La pertenencia de un **Actor** a un **Team**. Un actor puede tener memberships en varios
-teams; un issue sigue perteneciendo a exactamente un team. La UI puede decir «Members» para
-el roster; el término de dominio de la relación es Membership.
+teams; un issue sigue perteneciendo a exactamente un team. La membership tiene un rol mínimo
+(`member` u `owner`); el owner administra el roster. La UI puede decir «Members» para el
+roster; el término de dominio de la relación es Membership.
 _Avoid_: User assignment, account link, seat
 
 ## Trabajo
@@ -92,8 +93,9 @@ ordenan el project; los projects agrupan el trabajo. Distinto de **Cycle**.
 _Avoid_: Phase, sprint, iteration, part
 
 **Initiative**:
-Agrupa projects a nivel **Workspace** bajo un objetivo estratégico. Distinta de Project: el
-project agrupa issues; la initiative agrupa projects.
+Agrupa projects bajo un objetivo estratégico. Puede ser workspace-scoped (sin teams, visible
+para todo actor autenticado) o team-scoped (limitada a uno o más teams). Distinta de Project:
+el project agrupa issues; la initiative agrupa projects.
 _Avoid_: Epic, theme, OKR
 
 **Cycle**:

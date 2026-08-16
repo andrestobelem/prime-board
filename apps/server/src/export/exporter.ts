@@ -344,6 +344,15 @@ export function exportBoard(
         labels: db
           .query("SELECT name, color FROM labels WHERE team_id = ?1 ORDER BY name")
           .all(team.id),
+        members: db
+          .query(
+            `SELECT actors.name AS actor, team_memberships.role
+             FROM team_memberships
+             JOIN actors ON actors.id = team_memberships.actor_id
+             WHERE team_memberships.team_id = ?1
+             ORDER BY actors.name, team_memberships.role`,
+          )
+          .all(team.id),
       })),
     ),
   );
@@ -481,6 +490,15 @@ export function exportBoard(
              JOIN projects p ON p.id = ip.project_id
              WHERE ip.initiative_id = ?1
              ORDER BY p.name`,
+          )
+          .values(initiative.id)
+          .map((row) => row[0] as string),
+        teams: db
+          .query(
+            `SELECT t.key FROM initiative_teams it
+             JOIN teams t ON t.id = it.team_id
+             WHERE it.initiative_id = ?1
+             ORDER BY t.key`,
           )
           .values(initiative.id)
           .map((row) => row[0] as string),

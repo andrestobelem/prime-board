@@ -65,6 +65,7 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       "issues",
       "cycles",
       "saved_views",
+      "initiative_teams",
       "initiative_projects",
       "initiatives",
       "milestones",
@@ -72,6 +73,7 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       "projects",
       "labels",
       "workflow_states",
+      "team_memberships",
       "teams",
       "actors",
       "workspace",
@@ -133,6 +135,17 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
         defaultState ?? firstState,
         teamId,
       );
+      const members = Array.isArray(team.members)
+        ? team.members
+        : Array.from(actorIds.keys()).map((actor) => ({ actor, role: "owner" }));
+      for (const member of members as Array<Record<string, any>>) {
+        const actorId = actorIds.get(member.actor);
+        if (!actorId)
+          throw new Error(`Team "${team.key}" references unknown actor ${member.actor}`);
+        db.query(
+          "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        ).run(newId(), teamId, actorId, member.role ?? "member", timestamp);
+      }
     }
     for (const label of readJson(join(base, "meta", "workspace-labels.json")) as Array<
       Record<string, string>
@@ -316,6 +329,16 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
           db.query(
             "INSERT INTO initiative_projects (initiative_id, project_id) VALUES (?1, ?2)",
           ).run(id, projectId);
+        }
+        for (const teamKey of initiative.teams ?? []) {
+          const teamId = teamIds.get(teamKey);
+          if (!teamId) {
+            throw new Error(`Initiative "${initiative.name}" references unknown team ${teamKey}`);
+          }
+          db.query("INSERT INTO initiative_teams (initiative_id, team_id) VALUES (?1, ?2)").run(
+            id,
+            teamId,
+          );
         }
       }
     }

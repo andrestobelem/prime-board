@@ -55,6 +55,7 @@ export const typeDefs = /* GraphQL */ `
     labels: [Label!]!
     projects: [Project!]!
     cycles: [Cycle!]!
+    memberships: [TeamMembership!]!
     createdAt: DateTime!
   }
 
@@ -66,6 +67,32 @@ export const typeDefs = /* GraphQL */ `
     NULL para labels de workspace.
     """
     teamId: ID
+  }
+
+  enum TeamMembershipRole {
+    OWNER
+    MEMBER
+  }
+
+  type TeamMembership {
+    id: ID!
+    teamId: ID!
+    actorId: ID!
+    team: Team!
+    actor: Actor!
+    role: TeamMembershipRole!
+    createdAt: DateTime!
+  }
+
+  input TeamMembershipCreateInput {
+    teamId: ID!
+    actorId: ID!
+    role: TeamMembershipRole
+  }
+
+  type TeamMembershipPayload {
+    success: Boolean!
+    membership: TeamMembership!
   }
 
   type ApiKey {
@@ -311,6 +338,7 @@ export const typeDefs = /* GraphQL */ `
     state: InitiativeState!
     targetDate: DateTime
     projects: [Project!]!
+    teams: [Team!]!
     owner: Actor
     """
     Issues completados / total en proyectos de la iniciativa.
@@ -329,6 +357,7 @@ export const typeDefs = /* GraphQL */ `
     state: InitiativeState
     targetDate: DateTime
     projectIds: [ID!]
+    teamIds: [ID!]
   }
 
   input InitiativeUpdateInput {
@@ -337,6 +366,7 @@ export const typeDefs = /* GraphQL */ `
     state: InitiativeState
     targetDate: DateTime
     projectIds: [ID!]
+    teamIds: [ID!]
     archived: Boolean
   }
 
@@ -836,6 +866,7 @@ export const typeDefs = /* GraphQL */ `
     teams: [Team!]!
     team(id: ID, key: String): Team
     actors(type: ActorType): [Actor!]!
+    teamMemberships(teamId: ID!): [TeamMembership!]!
     """
     Acepta UUID o identificador legible (AT-126).
     """
@@ -883,6 +914,8 @@ export const typeDefs = /* GraphQL */ `
   type Mutation {
     teamCreate(input: TeamCreateInput!): TeamPayload!
     teamUpdate(id: ID!, input: TeamUpdateInput!): TeamPayload!
+    teamMembershipCreate(input: TeamMembershipCreateInput!): TeamMembershipPayload!
+    teamMembershipDelete(id: ID!): DeletePayload!
     actorCreate(input: ActorCreateInput!): ActorPayload!
     actorUpdate(id: ID!, input: ActorUpdateInput!): ActorPayload!
     apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyPayload!
