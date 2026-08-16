@@ -1,2 +1,4 @@
 {"actor":"demo-agent","issue":"PB-3","payload":{"title":"Webhook signature docs are unclear","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-14T21:56:43.843Z","type":"created"}
 {"actor":"demo-agent","issue":"PB-3","payload":{"label":"bug"},"ts":"2026-08-14T21:56:43.844Z","type":"labeled"}
+{"actor":"admin","issue":"PB-3","payload":{"body":"Documentación aclarada: el secret se muestra una vez; la firma es HMAC-SHA256 hexadecimal sobre el body crudo exacto; se verifica antes de JSON.parse y con comparación segura."},"ts":"2026-08-16T09:02:33.095Z","type":"commented"}
+{"actor":"admin","issue":"PB-3","payload":{"from":"Todo","to":"Done"},"ts":"2026-08-16T09:02:33.167Z","type":"state_changed"}

@@ -61,17 +61,24 @@ curl -s http://localhost:3333/graphql \
 Endpoint único: `POST /graphql` con `authorization: Bearer pb_...`.
 GraphiQL disponible en `http://localhost:3333/graphql` (en dev).
 
-La query estrella — *mis issues urgentes sin empezar que mencionen webhooks*:
+La query estrella — _mis issues urgentes sin empezar que mencionen webhooks_:
 
 ```graphql
-query($me: ID!) {
-  issues(filter: {
-    assignee: { eq: $me }
-    priority: { eq: 1 }
-    stateType: { eq: UNSTARTED }
-    search: "webhook"
-  }) {
-    nodes { identifier title url branchName }
+query ($me: ID!) {
+  issues(
+    filter: {
+      assignee: { eq: $me }
+      priority: { eq: 1 }
+      stateType: { eq: UNSTARTED }
+      search: "webhook"
+    }
+  ) {
+    nodes {
+      identifier
+      title
+      url
+      branchName
+    }
   }
 }
 ```
@@ -134,18 +141,32 @@ pb webhook create --url http://localhost:9999/hook --events issue.created,commen
 Payload: `{ event, actor: {id,name,type}, data, changes?, createdAt }` —
 en `issue.updated`, `changes` trae `{ campo: { from, to } }`.
 
-Verificación de la firma (header `X-PrimeBoard-Signature`, HMAC-SHA256 hex del body):
+El `secret` se muestra **una sola vez**, al crear el webhook: guardalo en el receptor.
+Cada request lleva `X-PrimeBoard-Signature`, un HMAC-SHA256 en hexadecimal minúscula
+calculado sobre el **body crudo exacto** (los bytes antes de parsearlo como JSON). No
+reserialices el payload antes de verificar: cambios de espacios, orden de claves o saltos
+de línea producen otra firma.
+
+Ejemplo de verificación en Node:
 
 ```ts
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
-function verify(secret: string, body: string, signature: string): boolean {
-  return createHmac("sha256", secret).update(body).digest("hex") === signature;
+function verify(secret: string, rawBody: string, received: string): boolean {
+  const expected = createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+  const expectedBytes = Buffer.from(expected, "utf8");
+  const receivedBytes = Buffer.from(received, "utf8");
+  return (
+    expectedBytes.length === receivedBytes.length && timingSafeEqual(expectedBytes, receivedBytes)
+  );
 }
+
+// Verificá rawBody antes de hacer: const payload = JSON.parse(rawBody);
 ```
 
-Entrega con 3 reintentos y backoff (1s/5s/25s). Si tu receptor estuvo caído más que
-eso, reconstruí el estado consultando la API (la actividad por issue es completa).
+Los nombres de los headers HTTP no distinguen mayúsculas de minúsculas. Entrega con 3
+reintentos y backoff (1s/5s/25s). Si tu receptor estuvo caído más que eso, reconstruí el
+estado consultando la API (la actividad por issue es completa).
 
 ## 8. Receta completa para un agente nuevo
 

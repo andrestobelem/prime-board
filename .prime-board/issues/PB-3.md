@@ -10,10 +10,10 @@ milestone: null
 parent: null
 priority: 1
 project: null
-state: Todo
+state: Done
 team: PB
 title: Webhook signature docs are unclear
-updatedAt: 2026-08-14T21:56:43.844Z
+updatedAt: 2026-08-16T09:02:33.167Z
 ---
 
 # Webhook signature docs are unclear
