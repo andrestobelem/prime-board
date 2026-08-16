@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { GqlError, mutate, useQuery } from "../api.ts";
 import { Avatar } from "../components/bits.tsx";
+import { EntityModal } from "../components/EntityModal.tsx";
 import { Link } from "../router.tsx";
 
 interface ReviewItem {
@@ -26,6 +27,7 @@ export function ReviewsView() {
   const [projectId, setProjectId] = useState("");
   const [reviewerId, setReviewerId] = useState("");
   const [olderThanDays, setOlderThanDays] = useState("");
+  const [requestOpen, setRequestOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const meta = useQuery<{
@@ -82,29 +84,18 @@ export function ReviewsView() {
     }
   }
 
-  async function requestReview() {
-    const issueRef = window.prompt("Issue identifier (e.g. PRB-1)");
-    if (!issueRef?.trim()) return;
-    const actors = meta.data?.actors ?? [];
-    const names = actors.map((a) => a.name).join(", ");
-    const reviewerName = window.prompt(`Reviewer name (${names})`);
-    if (!reviewerName?.trim()) return;
-    const reviewer = actors.find((a) => a.name.toLowerCase() === reviewerName.trim().toLowerCase());
-    if (!reviewer) {
-      setError(`Unknown reviewer: ${reviewerName}`);
-      return;
-    }
+  async function requestReview(values: Record<string, string>) {
+    const issueRef = values.issueRef?.trim();
+    if (!issueRef) throw new Error("Issue identifier is required");
+    if (!values.reviewerId) throw new Error("Reviewer is required");
     setError(null);
-    try {
-      await mutate(
-        `mutation($input: ReviewCreateInput!) {
-        reviewCreate(input: $input) { review { id } }
-      }`,
-        { input: { issueId: issueRef.trim(), reviewerId: reviewer.id } },
-      );
-    } catch (err) {
-      setError(err instanceof GqlError ? err.message : String(err));
-    }
+    await mutate(
+      `mutation($input: ReviewCreateInput!) {
+      reviewCreate(input: $input) { review { id } }
+    }`,
+      { input: { issueId: issueRef, reviewerId: values.reviewerId } },
+    );
+    setRequestOpen(false);
   }
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
@@ -181,7 +172,7 @@ export function ReviewsView() {
         <span style={{ color: "var(--text-muted)", fontSize: 13, flex: 1 }}>
           Reviews where you are requester or reviewer
         </span>
-        <button className="btn" onClick={() => void requestReview()}>
+        <button className="btn" onClick={() => setRequestOpen(true)}>
           Request review
         </button>
       </div>
@@ -233,6 +224,27 @@ export function ReviewsView() {
             </span>
           </div>
         ))
+      )}
+      {requestOpen && (
+        <EntityModal
+          title="Request review"
+          submitLabel="Request review"
+          fields={[
+            { key: "issueRef", label: "Issue", placeholder: "Issue identifier (e.g. PRB-1)" },
+            {
+              key: "reviewerId",
+              label: "Reviewer",
+              type: "select",
+              value: meta.data?.actors[0]?.id ?? "",
+              options: (meta.data?.actors ?? []).map((actor) => ({
+                value: actor.id,
+                label: `${actor.name}${actor.type === "AGENT" ? " (agent)" : ""}`,
+              })),
+            },
+          ]}
+          onClose={() => setRequestOpen(false)}
+          onSubmit={requestReview}
+        />
       )}
     </div>
   );

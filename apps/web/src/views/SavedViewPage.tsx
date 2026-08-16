@@ -1,6 +1,7 @@
 // Vista guardada (PRB-201): abre el filtro/orden/agrupación persistidos.
 import { useState } from "react";
 import { GqlError, mutate, useQuery } from "../api.ts";
+import { ConfirmModal } from "../components/EntityModal.tsx";
 import { IssueList, type GroupBy, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
@@ -31,6 +32,7 @@ const GROUP_OPTIONS: GroupBy[] = ["state", "milestone", "assignee", "priority"];
 
 export function SavedViewPage({ viewId }: { viewId: string }) {
   const [editing, setEditing] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -66,8 +68,9 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
   }
 
   async function remove() {
-    if (!view || !confirm(`Delete view “${view.name}”?`)) return;
+    if (!view) return;
     await mutate(`mutation($id: ID!) { savedViewDelete(id: $id) { success } }`, { id: view.id });
+    setDeleteOpen(false);
     window.location.hash = "#/";
   }
 
@@ -152,7 +155,11 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
               >
                 Archive
               </button>
-              <button className="btn secondary" style={{ color: "var(--danger)" }} onClick={remove}>
+              <button
+                className="btn secondary"
+                style={{ color: "var(--danger)" }}
+                onClick={() => setDeleteOpen(true)}
+              >
                 Delete
               </button>
             </span>
@@ -166,6 +173,15 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
         <div className="error-banner">{list.error.message}</div>
       ) : (
         <IssueList issues={list.data?.issues.nodes ?? []} groupBy={groupBy} />
+      )}
+      {deleteOpen && (
+        <ConfirmModal
+          title="Delete view"
+          message={`Delete view “${view.name}”?`}
+          confirmLabel="Delete"
+          onClose={() => setDeleteOpen(false)}
+          onConfirm={remove}
+        />
       )}
     </div>
   );

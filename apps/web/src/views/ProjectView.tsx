@@ -1,8 +1,10 @@
 // Vista de proyecto (AT-149): header con estado/lead/fecha y la lista de issues.
+import { useState } from "react";
 import { mutate, useQuery } from "../api.ts";
 import { navigate } from "../router.tsx";
 import { Avatar } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
+import { EntityModal } from "../components/EntityModal.tsx";
 import { IssueList, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
@@ -28,6 +30,8 @@ const STATE_COLORS: Record<string, string> = {
 };
 
 export function ProjectView({ projectId }: { projectId: string }) {
+  const [updateOpen, setUpdateOpen] = useState(false);
+
   const result = useQuery<{
     project: {
       id: string;
@@ -49,13 +53,9 @@ export function ProjectView({ projectId }: { projectId: string }) {
     issues: { nodes: IssueListItem[] };
   }>(PROJECT_QUERY, { id: projectId, filter: { project: { eq: projectId } } });
 
-  async function postUpdate() {
-    const body = window.prompt("Update summary");
-    if (!body?.trim()) return;
-    const healthRaw = window.prompt("Health: on_track | at_risk | off_track", "on_track");
-    if (!healthRaw?.trim()) return;
-    const health = healthRaw.trim().toUpperCase().replace(" ", "_");
-    const risks = window.prompt("Risks (optional)") || null;
+  async function postUpdate(values: Record<string, string>) {
+    const body = values.body?.trim();
+    if (!body) throw new Error("Summary is required");
     await mutate(
       `mutation($input: ProjectUpdateCreateInput!) {
       projectUpdateCreate(input: $input) { projectUpdate { id } }
@@ -63,12 +63,13 @@ export function ProjectView({ projectId }: { projectId: string }) {
       {
         input: {
           projectId,
-          health: health === "AT_RISK" || health === "OFF_TRACK" ? health : "ON_TRACK",
-          body: body.trim(),
-          risks: risks?.trim() || null,
+          health: values.health || "ON_TRACK",
+          body,
+          risks: values.risks?.trim() || null,
         },
       },
     );
+    setUpdateOpen(false);
   }
 
   const milestoneSections = (project: any, issues: IssueListItem[]) => ({
@@ -98,7 +99,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
           <button
             className="btn secondary"
             style={{ marginLeft: "auto" }}
-            onClick={() => void postUpdate()}
+            onClick={() => setUpdateOpen(true)}
           >
             Post update
           </button>
@@ -202,6 +203,29 @@ export function ProjectView({ projectId }: { projectId: string }) {
             </>
           );
         })()
+      )}
+      {updateOpen && (
+        <EntityModal
+          title="Post project update"
+          submitLabel="Post update"
+          fields={[
+            { key: "body", label: "Summary", type: "textarea", placeholder: "What changed?" },
+            {
+              key: "health",
+              label: "Health",
+              type: "select",
+              value: "ON_TRACK",
+              options: [
+                { value: "ON_TRACK", label: "On track" },
+                { value: "AT_RISK", label: "At risk" },
+                { value: "OFF_TRACK", label: "Off track" },
+              ],
+            },
+            { key: "risks", label: "Risks", type: "textarea", placeholder: "Optional" },
+          ]}
+          onClose={() => setUpdateOpen(false)}
+          onSubmit={postUpdate}
+        />
       )}
     </div>
   );

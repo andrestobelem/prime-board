@@ -3,6 +3,7 @@ import { useState } from "react";
 import { GqlError, mutate, useQuery } from "../api.ts";
 import { Link } from "../router.tsx";
 import { Icon } from "../components/icons.tsx";
+import { EntityModal } from "../components/EntityModal.tsx";
 
 const QUERY = `query($id: ID!) {
   initiative(id: $id) {
@@ -28,40 +29,25 @@ export function InitiativeView({ initiativeId }: { initiativeId: string }) {
     projects: Array<{ id: string; name: string; state: string }>;
   }>(QUERY, { id: initiativeId });
   const [error, setError] = useState<string | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
 
-  async function addProject() {
+  async function addProject(values: Record<string, string>) {
     const initiative = result.data?.initiative;
     if (!initiative) return;
-    const available = (result.data?.projects ?? []).filter(
-      (p) => !initiative.projects.some((linked) => linked.id === p.id),
-    );
-    if (available.length === 0) {
-      setError("No projects available to link");
-      return;
-    }
-    const name = window.prompt(`Project name to link (${available.map((p) => p.name).join(", ")})`);
-    if (!name?.trim()) return;
-    const project = available.find((p) => p.name.toLowerCase() === name.trim().toLowerCase());
-    if (!project) {
-      setError(`Unknown project: ${name}`);
-      return;
-    }
+    if (!values.projectId) throw new Error("Project is required");
     setError(null);
-    try {
-      await mutate(
-        `mutation($id: ID!, $projectIds: [ID!]!) {
-        initiativeUpdate(id: $id, input: { projectIds: $projectIds }) {
-          initiative { id }
-        }
-      }`,
-        {
-          id: initiative.id,
-          projectIds: [...initiative.projects.map((p) => p.id), project.id],
-        },
-      );
-    } catch (err) {
-      setError(err instanceof GqlError ? err.message : String(err));
-    }
+    await mutate(
+      `mutation($id: ID!, $projectIds: [ID!]!) {
+      initiativeUpdate(id: $id, input: { projectIds: $projectIds }) {
+        initiative { id }
+      }
+    }`,
+      {
+        id: initiative.id,
+        projectIds: [...initiative.projects.map((p) => p.id), values.projectId],
+      },
+    );
+    setLinkOpen(false);
   }
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
@@ -95,7 +81,13 @@ export function InitiativeView({ initiativeId }: { initiativeId: string }) {
         <button
           className="btn secondary"
           style={{ marginLeft: "auto" }}
-          onClick={() => void addProject()}
+          onClick={() => {
+            const available = (result.data?.projects ?? []).filter(
+              (project) => !initiative.projects.some((linked) => linked.id === project.id),
+            );
+            if (available.length === 0) setError("No projects available to link");
+            else setLinkOpen(true);
+          }}
         >
           Link project
         </button>
@@ -133,6 +125,26 @@ export function InitiativeView({ initiativeId }: { initiativeId: string }) {
             </span>
           </Link>
         ))
+      )}
+      {linkOpen && (
+        <EntityModal
+          title="Link project"
+          submitLabel="Link project"
+          fields={[
+            {
+              key: "projectId",
+              label: "Project",
+              type: "select",
+              options: (result.data?.projects ?? [])
+                .filter(
+                  (project) => !initiative.projects.some((linked) => linked.id === project.id),
+                )
+                .map((project) => ({ value: project.id, label: project.name })),
+            },
+          ]}
+          onClose={() => setLinkOpen(false)}
+          onSubmit={addProject}
+        />
       )}
     </div>
   );

@@ -7,6 +7,7 @@ import { Palette } from "./components/Palette.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
 import { Icon } from "./components/icons.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
+import { EntityModal } from "./components/EntityModal.tsx";
 import { Switcher } from "./components/Switcher.tsx";
 import { Link, useRoute } from "./router.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
@@ -34,6 +35,11 @@ const SHELL_QUERY = `{
   savedViews { id name scope team { id key } }
 }`;
 
+type CreateModal =
+  | { kind: "view"; team: { id: string; key: string; name: string } }
+  | { kind: "cycle"; teamId: string }
+  | { kind: "initiative" };
+
 export interface ShellData {
   workspace: { id: string; name: string };
   teams: Array<{
@@ -58,6 +64,7 @@ export function App() {
   const shell = useQuery<ShellData>(SHELL_QUERY);
   const [createOpen, setCreateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [entityModal, setEntityModal] = useState<CreateModal | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>("state");
 
   useEffect(() => {
@@ -298,65 +305,13 @@ export function App() {
         initiatives={shell.data?.initiatives ?? []}
         onCreateView={async () => {
           const team = teams.find((candidate) => candidate.key === currentTeamKey) ?? teams[0];
-          if (!team) return;
-          const name = window.prompt("View name");
-          if (!name?.trim()) return;
-          const data = await mutate<{ savedViewCreate: { savedView: { id: string } } }>(
-            `
-            mutation($input: SavedViewCreateInput!) {
-              savedViewCreate(input: $input) { savedView { id } }
-            }
-          `,
-            {
-              input: {
-                name: name.trim(),
-                scope: "TEAM",
-                teamId: team.id,
-                filter: { team: { eq: team.id } },
-                orderBy: "UPDATED_DESC",
-                groupBy,
-              },
-            },
-          );
-          window.location.hash = `#/view/${data.savedViewCreate.savedView.id}`;
+          if (team) setEntityModal({ kind: "view", team });
         }}
         onCreateCycle={async (teamId) => {
-          const name = window.prompt("Cycle name");
-          if (!name?.trim()) return;
-          const startsAt = new Date().toISOString();
-          const ends = new Date();
-          ends.setDate(ends.getDate() + 14);
-          const data = await mutate<{ cycleCreate: { cycle: { id: string } } }>(
-            `
-            mutation($input: CycleCreateInput!) {
-              cycleCreate(input: $input) { cycle { id } }
-            }
-          `,
-            {
-              input: {
-                teamId,
-                name: name.trim(),
-                startsAt,
-                endsAt: ends.toISOString(),
-              },
-            },
-          );
-          window.location.hash = `#/cycle/${data.cycleCreate.cycle.id}`;
+          setEntityModal({ kind: "cycle", teamId });
         }}
         onCreateInitiative={async () => {
-          const name = window.prompt("Initiative name");
-          if (!name?.trim()) return;
-          const data = await mutate<{ initiativeCreate: { initiative: { id: string } } }>(
-            `
-            mutation($input: InitiativeCreateInput!) {
-              initiativeCreate(input: $input) { initiative { id } }
-            }
-          `,
-            {
-              input: { name: name.trim(), state: "ACTIVE" },
-            },
-          );
-          window.location.hash = `#/initiative/${data.initiativeCreate.initiative.id}`;
+          setEntityModal({ kind: "initiative" });
         }}
       />
       <div className="main">
@@ -375,6 +330,109 @@ export function App() {
           shell={shell.data}
           onClose={() => setPaletteOpen(false)}
           onNewIssue={() => setCreateOpen(true)}
+        />
+      )}
+      {entityModal?.kind === "view" && (
+        <EntityModal
+          title="Create view"
+          submitLabel="Create view"
+          fields={[{ key: "name", label: "Name", placeholder: "View name" }]}
+          onClose={() => setEntityModal(null)}
+          onSubmit={async (values) => {
+            const name = values.name?.trim();
+            if (!name) throw new Error("Name is required");
+            const data = await mutate<{ savedViewCreate: { savedView: { id: string } } }>(
+              `mutation($input: SavedViewCreateInput!) {
+                savedViewCreate(input: $input) { savedView { id } }
+              }`,
+              {
+                input: {
+                  name,
+                  scope: "TEAM",
+                  teamId: entityModal.team.id,
+                  filter: { team: { eq: entityModal.team.id } },
+                  orderBy: "UPDATED_DESC",
+                  groupBy,
+                },
+              },
+            );
+            setEntityModal(null);
+            window.location.hash = `#/view/${data.savedViewCreate.savedView.id}`;
+          }}
+        />
+      )}
+      {entityModal?.kind === "cycle" && (
+        <EntityModal
+          title="Create cycle"
+          submitLabel="Create cycle"
+          fields={[
+            { key: "name", label: "Name", placeholder: "Cycle name" },
+            {
+              key: "startsAt",
+              label: "Starts",
+              type: "date",
+              value: new Date().toISOString().slice(0, 10),
+            },
+            {
+              key: "endsAt",
+              label: "Ends",
+              type: "date",
+              value: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+            },
+          ]}
+          onClose={() => setEntityModal(null)}
+          onSubmit={async (values) => {
+            const name = values.name?.trim();
+            if (!name) throw new Error("Name is required");
+            if (!values.startsAt || !values.endsAt) throw new Error("Dates are required");
+            const data = await mutate<{ cycleCreate: { cycle: { id: string } } }>(
+              `mutation($input: CycleCreateInput!) {
+                cycleCreate(input: $input) { cycle { id } }
+              }`,
+              {
+                input: {
+                  teamId: entityModal.teamId,
+                  name,
+                  startsAt: `${values.startsAt}T00:00:00.000Z`,
+                  endsAt: `${values.endsAt}T00:00:00.000Z`,
+                },
+              },
+            );
+            setEntityModal(null);
+            window.location.hash = `#/cycle/${data.cycleCreate.cycle.id}`;
+          }}
+        />
+      )}
+      {entityModal?.kind === "initiative" && (
+        <EntityModal
+          title="Create initiative"
+          submitLabel="Create initiative"
+          fields={[
+            { key: "name", label: "Name", placeholder: "Initiative name" },
+            {
+              key: "teamId",
+              label: "Scope",
+              type: "select",
+              value: "",
+              options: [
+                { value: "", label: "Workspace" },
+                ...teams.map((team) => ({ value: team.id, label: `Team: ${team.key}` })),
+              ],
+            },
+          ]}
+          onClose={() => setEntityModal(null)}
+          onSubmit={async (values) => {
+            const name = values.name?.trim();
+            if (!name) throw new Error("Name is required");
+            const data = await mutate<{ initiativeCreate: { initiative: { id: string } } }>(
+              `mutation($input: InitiativeCreateInput!) {
+                initiativeCreate(input: $input) { initiative { id } }
+              }`,
+              { input: { name, state: "ACTIVE", teamIds: values.teamId ? [values.teamId] : [] } },
+            );
+            setEntityModal(null);
+            window.location.hash = `#/initiative/${data.initiativeCreate.initiative.id}`;
+          }}
         />
       )}
     </div>
