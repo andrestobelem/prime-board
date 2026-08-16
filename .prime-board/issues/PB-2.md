@@ -9,10 +9,10 @@ milestone: null
 parent: PB-1
 priority: 3
 project: "Demo: agent onboarding"
-state: Backlog
+state: Done
 team: PB
 title: Try full-text search
-updatedAt: 2026-08-15T03:38:52.819Z
+updatedAt: 2026-08-16T09:02:27.656Z
 ---
 
 # Try full-text search

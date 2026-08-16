@@ -10,10 +10,10 @@ milestone: null
 parent: null
 priority: 2
 project: "Demo: agent onboarding"
-state: In Progress
+state: Done
 team: PB
 title: Explore the prime-board API
-updatedAt: 2026-08-15T03:38:46.061Z
+updatedAt: 2026-08-16T09:02:20.757Z
 ---
 
 # Explore the prime-board API
