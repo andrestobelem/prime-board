@@ -875,19 +875,20 @@ export function writeLinearExportToRepo(
     json({
       source: "linear",
       workspaceId: source.workspace.id,
-      issues: result.issues,
-      comments: result.comments,
-      events: result.events,
-      conflicts: result.conflicts,
-      losses: result.losses,
-      warnings: result.warnings,
-    }),
-  );
-  write(
-    "meta/migration-report.json",
-    json({
-      source: "linear",
-      workspaceId: source.workspace.id,
+      entities: {
+        actors: source.actors.length,
+        teams: source.teams.length,
+        states: source.teams.reduce((count, team) => count + team.states.length, 0),
+        labels: source.labels.length,
+        projects: source.projects.length,
+        milestones: source.projects.reduce(
+          (count, project) => count + (project.milestones?.length ?? 0),
+          0,
+        ),
+        issues: source.issues.length,
+        comments: (source.comments ?? []).length,
+        relations: (source.relations ?? []).length,
+      },
       issues: result.issues,
       comments: result.comments,
       events: result.events,

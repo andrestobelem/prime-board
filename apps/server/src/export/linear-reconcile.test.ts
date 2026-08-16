@@ -59,7 +59,13 @@ describe("reconcileLinearExport", () => {
       };
       writeLinearExportToRepo(valid, root);
       const report = reconcileLinearExport(valid, root);
-      expect(report).toMatchObject({ reconciled: true, pendingCreates: [], conflicts: [] });
+      expect(report).toMatchObject({
+        reconciled: true,
+        pendingCreates: [],
+        conflicts: [],
+        countMismatches: [],
+      });
+      expect(report.targetCounts).toMatchObject({ actors: 1, teams: 1, states: 1, issues: 1 });
       expect(report.targetIssues).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });

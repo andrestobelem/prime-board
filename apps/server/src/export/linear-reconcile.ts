@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { buildLinearIssuePlan, type ExistingIssue } from "./linear-plan.ts";
@@ -18,6 +18,9 @@ export interface ReconciliationReport {
   conflicts: MigrationFinding[];
   extraTargetIssues: string[];
   sourceMap: SourceMap | null;
+  sourceCounts: Record<string, number>;
+  targetCounts: Record<string, number> | null;
+  countMismatches: string[];
   reconciled: boolean;
 }
 
@@ -104,6 +107,37 @@ export function reconcileLinearExport(
   const extraTargetIssues = [...targetIds]
     .filter((identifier) => !sourceIdentifiers.has(identifier))
     .sort();
+  const sourceCounts: Record<string, number> = {
+    actors: source.actors.length,
+    teams: source.teams.length,
+    states: source.teams.reduce((count, team) => count + team.states.length, 0),
+    labels: source.labels.length,
+    projects: source.projects.length,
+    milestones: source.projects.reduce(
+      (count, project) => count + (project.milestones?.length ?? 0),
+      0,
+    ),
+    issues: source.issues.length,
+    comments: (source.comments ?? []).length,
+    relations: (source.relations ?? []).length,
+  };
+  let targetCounts: Record<string, number> | null = null;
+  const countMismatches: string[] = [];
+  const reportPath = join(rootDir, ".prime-board", "meta", "migration-report.json");
+  if (existsSync(reportPath)) {
+    const report = parseYaml(readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+    if (report.entities && typeof report.entities === "object") {
+      targetCounts = Object.fromEntries(
+        Object.entries(report.entities as Record<string, unknown>).map(([key, value]) => [
+          key,
+          Number(value),
+        ]),
+      );
+      for (const [key, value] of Object.entries(sourceCounts))
+        if (targetCounts[key] !== value)
+          countMismatches.push(`${key}: source=${value}, target=${targetCounts[key] ?? "missing"}`);
+    }
+  }
   return {
     sourceIssues: source.issues.length,
     targetIssues: target.length,
@@ -112,7 +146,11 @@ export function reconcileLinearExport(
     conflicts,
     extraTargetIssues,
     sourceMap,
-    reconciled: pendingCreates.length === 0 && conflicts.length === 0,
+    sourceCounts,
+    targetCounts,
+    countMismatches,
+    reconciled:
+      pendingCreates.length === 0 && conflicts.length === 0 && countMismatches.length === 0,
   };
 }
 

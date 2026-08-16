@@ -55,6 +55,8 @@ if (values.check) {
     console.log(
       `${reconciliation.conflicts.length} conflicts, ${reconciliation.extraTargetIssues.length} extra target issues`,
     );
+    console.log(`${reconciliation.countMismatches.length} entity count mismatches`);
+    for (const mismatch of reconciliation.countMismatches) console.log(`MISMATCH ${mismatch}`);
     for (const finding of reconciliation.conflicts)
       console.log(`CONFLICT ${finding.code}: ${finding.message}`);
   }
