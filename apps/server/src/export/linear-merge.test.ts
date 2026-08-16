@@ -141,6 +141,11 @@ describe("mergeLinearExportWithRepo", () => {
       expect(readFileSync(join(output, ".prime-board", "issues", "AT-1.md"), "utf8")).toContain(
         "title: Linear",
       );
+      expect(
+        readFileSync(join(output, ".prime-board", "log", "AT-1.jsonl"), "utf8")
+          .trim()
+          .split("\n"),
+      ).toHaveLength(2);
       expect(readFileSync(join(output, ".prime-board", "issues", "PRB-2.md"), "utf8")).toContain(
         "team: PRB",
       );

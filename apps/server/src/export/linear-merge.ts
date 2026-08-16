@@ -35,6 +35,26 @@ function readJson<T>(path: string): T {
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, JSON.stringify(value, null, 2) + "\n", "utf8");
 }
+function mergeIssueLogs(outputPath: string, localPath: string): void {
+  const events = [outputPath, localPath]
+    .filter((path) => existsSync(path))
+    .flatMap((path) => readFileSync(path, "utf8").split("\n").filter(Boolean))
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const unique = new Map(events.map((event) => [JSON.stringify(event), event]));
+  const merged = [...unique.values()].sort((a, b) => {
+    const ts = String(a.ts ?? "").localeCompare(String(b.ts ?? ""));
+    return (
+      ts ||
+      String(a.type ?? "").localeCompare(String(b.type ?? "")) ||
+      JSON.stringify(a).localeCompare(JSON.stringify(b))
+    );
+  });
+  writeFileSync(
+    outputPath,
+    merged.map((event) => JSON.stringify(event)).join("\n") + (merged.length ? "\n" : ""),
+    "utf8",
+  );
+}
 function copyFiles(from: string, to: string): void {
   mkdirSync(to, { recursive: true });
   for (const file of readdirSync(from))
@@ -158,6 +178,12 @@ export function mergeLinearExportWithRepo(
       );
   }
 
+  for (const identifier of result.matched) {
+    const localLog = join(localBase, "log", `${identifier}.jsonl`);
+    const outputLog = join(outputBase, "log", `${identifier}.jsonl`);
+    mergeIssueLogs(outputLog, localLog);
+  }
+
   const actors = readJson<any[]>(join(outputBase, "meta", "actors.json"));
   if (existsSync(join(localBase, "meta", "actors.json"))) {
     const seen = new Set(actors.map((actor) => actor.name));
@@ -211,10 +237,11 @@ export function mergeLinearExportWithRepo(
         });
         continue;
       }
-      projects.push({
-        ...project,
-        teams: (project.teams ?? []).map((key: string) => (key === localKey ? rekeyKey : key)),
-      });
+      const mappedTeams = (project.teams ?? [])
+        .map((key: string) => (key === localKey ? rekeyKey : key))
+        .filter((key: string) => key !== "PB");
+      if (mappedTeams.length === 0) continue;
+      projects.push({ ...project, teams: mappedTeams });
       projectNames.add(project.name);
     }
   writeJson(
