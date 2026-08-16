@@ -8,12 +8,14 @@ import { openDatabase } from "../db/database.ts";
 import { rebuildFromRepo } from "../export/importer.ts";
 import { parseLinearExport, writeLinearExportToRepo } from "../export/linear-repo-export.ts";
 import { reconcileLinearExport } from "../export/linear-reconcile.ts";
+import { mergeLinearExportWithRepo } from "../export/linear-merge.ts";
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
   options: {
     from: { type: "string" },
     out: { type: "string" },
+    "merge-local": { type: "string" },
     check: { type: "string" },
     "dry-run": { type: "boolean" },
     apply: { type: "boolean" },
@@ -30,7 +32,7 @@ function repoRoot(): string {
 }
 
 const usage =
-  "Usage: bun run import:linear --from <export.json> [--out <repo>] [--check <repo>] [--dry-run] [--apply] [--allow-losses] [--json]";
+  "Usage: bun run import:linear --from <export.json> [--out <repo>] [--check <repo>] [--merge-local <repo>] [--dry-run] [--apply] [--allow-losses] [--json]";
 if (values.help) {
   console.log(usage);
   process.exit(0);
@@ -60,6 +62,44 @@ if (values.check) {
   process.exit(0);
 }
 const outDir = values.out ?? repoRoot();
+if (values["merge-local"]) {
+  if (!values.out) throw new Error("--merge-local requires --out as a fresh output directory");
+  const merged = mergeLinearExportWithRepo(source, values["merge-local"], values.out, {
+    allowLosses: values["allow-losses"] ?? false,
+  });
+  const report = {
+    issues: merged.source.issues,
+    comments: merged.source.comments,
+    events: merged.source.events,
+    rekeyed: merged.rekeyed,
+    matched: merged.matched,
+    skipped: merged.skipped,
+    conflicts: merged.conflicts,
+    sourceConflicts: merged.source.conflicts,
+    losses: merged.source.losses,
+    warnings: merged.source.warnings,
+  };
+  if (values.json) console.log(JSON.stringify(report, null, 2));
+  else {
+    console.log(
+      `${merged.source.issues} Linear issues merged; ${Object.keys(merged.rekeyed).length} local issues rekeyed to ${"PRB"}`,
+    );
+    for (const finding of merged.conflicts)
+      console.log(`CONFLICT ${finding.code}: ${finding.message}`);
+    console.log(`Output: ${values.out}/.prime-board/`);
+  }
+  if (values.apply) {
+    const config = loadConfig();
+    const db = openDatabase(config.dbPath);
+    const rebuilt = rebuildFromRepo(db, values.out);
+    console.log(
+      `Rebuilt ${rebuilt.issues} issues, ${rebuilt.comments} comments and ${rebuilt.events} events`,
+    );
+  }
+  if (merged.conflicts.length > 0 || (merged.source.losses.length > 0 && !values["allow-losses"]))
+    process.exit(1);
+  process.exit(0);
+}
 const result = writeLinearExportToRepo(source, outDir, {
   dryRun: values["dry-run"] ?? false,
   allowLosses: values["allow-losses"] ?? false,

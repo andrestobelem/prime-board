@@ -115,6 +115,9 @@ bun run import:linear --from linear-export.json --out /tmp/prime-board-migration
 
 # Validar un staging ya generado
 bun run import:linear --from linear-export.json --check /tmp/prime-board-migration --json
+
+# Combinar Linear con el repo local y rekeyear colisiones a PRB
+bun run import:linear --from linear-export.json --merge-local /ruta/prime-board --out /tmp/prime-board-merged --json
 ```
 
 El comando no escribe durante `--dry-run`. Si el reporte no tiene conflictos ni pérdidas
@@ -122,6 +125,8 @@ no aprobadas, se puede producir el staging real quitando `--dry-run`. `--apply` 
 segundo consentimiento explícito: después de escribir el staging, reconstruye la base
 SQLite indicada por la configuración local. No se debe usar sobre el repo operativo hasta
 resolver el rekeying `PRB` y conservar un backup.
+
+`--merge-local` conserva los issues locales no equivalentes y los rekeyea a `PRB`; escribe siempre en un output nuevo.
 
 El conversor conserva los snapshots y logs en `.prime-board/` y escribe la trazabilidad en
 `.prime-board/meta/source-map.json` y `.prime-board/meta/migration-report.json`. El mapa contiene
