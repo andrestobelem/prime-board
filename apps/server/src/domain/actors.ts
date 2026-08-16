@@ -5,6 +5,16 @@ import { generateApiKey, hashApiKey } from "../auth/keys.ts";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 
+/** Nombres de agentes históricos (import/demo): no deben reactivarse. */
+const HISTORICAL_AGENT_NAMES = new Set(["claude", "demo-agent", "linear"]);
+
+function assertNotReactivatingHistorical(name: string, existingName?: string): void {
+  const normalized = name.toLowerCase();
+  if (!HISTORICAL_AGENT_NAMES.has(normalized)) return;
+  if (existingName && existingName.toLowerCase() === normalized) return;
+  throw apiError("VALIDATION_FAILED", `Cannot reuse historical agent name "${name}"`);
+}
+
 export function mapActor(row: ActorRow) {
   return {
     id: row.id,
@@ -37,6 +47,7 @@ export function createActor(
   if (input.type !== "human" && input.type !== "agent") {
     throw apiError("VALIDATION_FAILED", `Invalid actor type: ${input.type}`);
   }
+  assertNotReactivatingHistorical(name);
   const duplicate = db.query("SELECT id FROM actors WHERE lower(name) = lower(?1)").get(name);
   if (duplicate) throw apiError("VALIDATION_FAILED", "Actor name already exists");
   const id = newId();
@@ -57,6 +68,7 @@ export function updateActor(
 
   const name = input.name === undefined || input.name === null ? existing.name : input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Actor name cannot be empty");
+  assertNotReactivatingHistorical(name, existing.name);
   const duplicate = db
     .query("SELECT id FROM actors WHERE lower(name) = lower(?1) AND id <> ?2")
     .get(name, id);

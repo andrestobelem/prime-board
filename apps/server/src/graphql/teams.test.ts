@@ -142,6 +142,74 @@ describe("actores y API keys", () => {
     expect(duplicateCreate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
   });
 
+  it("no reactiva nombres históricos de agentes retirados", async () => {
+    const createHistorical = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "claude", type: AGENT }) { success } }`,
+    );
+    expect(createHistorical.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const created = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "fresh-agent", type: AGENT }) { actor { id } } }`,
+    );
+    const renameToHistorical = await gql(
+      app,
+      `
+      mutation($id: ID!) {
+        actorUpdate(id: $id, input: { name: "demo-agent" }) { success }
+      }
+    `,
+      { id: created.data!.actorCreate.actor.id },
+    );
+    expect(renameToHistorical.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("tras renombrar, las API keys existentes siguen autenticando al mismo actor", async () => {
+    const created = await gql(
+      app,
+      `
+      mutation { actorCreate(input: { name: "keyed-agent", type: AGENT }) { actor { id } } }
+    `,
+    );
+    const actorId = created.data!.actorCreate.actor.id;
+    const keyResult = await gql(
+      app,
+      `
+      mutation($actorId: ID!) {
+        apiKeyCreate(input: { actorId: $actorId, name: "stable key" }) { key }
+      }
+    `,
+      { actorId },
+    );
+    const plaintext = keyResult.data!.apiKeyCreate.key;
+
+    await gql(
+      app,
+      `
+      mutation($id: ID!) {
+        actorUpdate(id: $id, input: { name: "keyed-renamed", email: "keyed@example.com" }) {
+          actor { id name }
+        }
+      }
+    `,
+      { id: actorId },
+    );
+
+    const asAgent = await gql(app, "{ viewer { id name email type } }", {}, plaintext);
+    expect(asAgent.errors).toBeUndefined();
+    expect(asAgent.data!.viewer).toEqual({
+      id: actorId,
+      name: "keyed-renamed",
+      email: "keyed@example.com",
+      type: "AGENT",
+    });
+
+    const keys = await gql(app, `{ actors { id apiKeys { id name } } }`);
+    const actor = keys.data!.actors.find((a: { id: string }) => a.id === actorId);
+    expect(actor.apiKeys.map((k: { name: string }) => k.name)).toEqual(["stable key"]);
+  });
+
   it("apiKeyCreate falla con actor inexistente", async () => {
     const result = await gql(
       app,
@@ -157,6 +225,8 @@ describe("actores y API keys", () => {
     expect(result.data!.actors).toEqual([
       { name: "prime-agent", type: "AGENT" },
       { name: "planner", type: "AGENT" },
+      { name: "fresh-agent", type: "AGENT" },
+      { name: "keyed-renamed", type: "AGENT" },
     ]);
   });
 });
