@@ -10,6 +10,7 @@ para que lo usen agentes (en principio prime-agent, aunque debería poder usarse
 - Los tickets operativos viven en **prime-board**, team `PRB`, operado por el CLI `pb` o su API.
 - Los issues importados de Linear conservan el namespace `AT-*` y son de consulta histórica; Linear queda como archivo de solo lectura.
 - Todo trabajo nuevo se anota en prime-board antes de implementarse.
+- Mientras usemos prime-board, buscamos activamente errores y comportamientos inesperados. Cada hallazgo se registra como ticket en `PRB` antes de corregirlo, con evidencia, comportamiento esperado y criterios de aceptación; la corrección debe referenciar ese ticket.
 
 ## Idioma
 
