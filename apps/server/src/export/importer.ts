@@ -98,9 +98,21 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
     >) {
       const id = newId();
       actorIds.set(actor.name!, id);
+      const workspaceRole =
+        actor.workspaceRole ?? (actor.name?.toLowerCase() === "admin" ? "admin" : "member");
+      if (workspaceRole !== "admin" && workspaceRole !== "member") {
+        throw new Error(`Invalid workspace role for actor ${actor.name}: ${workspaceRole}`);
+      }
       db.query(
-        "INSERT INTO actors (id, name, email, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-      ).run(id, actor.name as string, actor.email ?? null, actor.type as string, timestamp);
+        "INSERT INTO actors (id, name, email, type, workspace_role, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+      ).run(
+        id,
+        actor.name as string,
+        actor.email ?? null,
+        actor.type as string,
+        workspaceRole,
+        timestamp,
+      );
     }
 
     // 4. Teams, estados y labels (clave: team key + nombre).

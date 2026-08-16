@@ -9,6 +9,11 @@ export const typeDefs = /* GraphQL */ `
     AGENT
   }
 
+  enum ActorWorkspaceRole {
+    ADMIN
+    MEMBER
+  }
+
   enum StateType {
     TRIAGE
     BACKLOG
@@ -23,6 +28,7 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     email: String
     type: ActorType!
+    workspaceRole: ActorWorkspaceRole!
     apiKeys: [ApiKey!]!
     createdAt: DateTime!
   }

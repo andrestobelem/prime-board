@@ -28,11 +28,17 @@ function isHistoricalAgent(member: Member): boolean {
 }
 
 const MEMBERS_QUERY = `{
+  viewer { id workspaceRole }
   actors { id name email type createdAt apiKeys { id name createdAt lastUsedAt } }
 }`;
 
 export function MembersView() {
-  const result = useQuery<{ actors: Member[] }>(MEMBERS_QUERY);
+  const result = useQuery<{
+    viewer: { id: string; workspaceRole: string };
+    actors: Member[];
+  }>(MEMBERS_QUERY);
+  const viewer = result.data?.viewer;
+  const canManageWorkspace = viewer?.workspaceRole === "ADMIN";
   const [name, setName] = useState("");
   const [type, setType] = useState("HUMAN");
   const [email, setEmail] = useState("");
@@ -126,29 +132,32 @@ export function MembersView() {
 
   return (
     <div style={{ padding: 24, maxWidth: 720 }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <input
-          placeholder="Name"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          onKeyDown={(event) => event.key === "Enter" && createActor()}
-        />
-        <select value={type} onChange={(event) => setType(event.target.value)}>
-          <option value="HUMAN">Human</option>
-          <option value="AGENT">Agent</option>
-        </select>
-        <input
-          placeholder="Email (optional)"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-        />
-        <button className="btn" onClick={createActor}>
-          Add member
-        </button>
-      </div>
+      {canManageWorkspace && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+          <input
+            placeholder="Name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && createActor()}
+          />
+          <select value={type} onChange={(event) => setType(event.target.value)}>
+            <option value="HUMAN">Human</option>
+            <option value="AGENT">Agent</option>
+          </select>
+          <input
+            placeholder="Email (optional)"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+          <button className="btn" onClick={createActor}>
+            Add member
+          </button>
+        </div>
+      )}
 
       {(result.data?.actors ?? []).map((member) => {
         const historical = isHistoricalAgent(member);
+        const canManageMember = canManageWorkspace || member.id === viewer?.id;
         return (
           <div key={member.id} className="comment" style={{ marginBottom: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -169,16 +178,18 @@ export function MembersView() {
                 </span>
               )}
               {member.email && <span style={{ color: "var(--text-faint)" }}>{member.email}</span>}
-              <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                <button className="btn secondary" onClick={() => openEdit(member)}>
-                  Edit
-                </button>
-                {!historical && (
-                  <button className="btn secondary" onClick={() => createKey(member)}>
-                    New API key
+              {canManageMember && (
+                <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                  <button className="btn secondary" onClick={() => openEdit(member)}>
+                    Edit
                   </button>
-                )}
-              </span>
+                  {!historical && (
+                    <button className="btn secondary" onClick={() => createKey(member)}>
+                      New API key
+                    </button>
+                  )}
+                </span>
+              )}
             </div>
             {member.apiKeys.length > 0 && (
               <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -197,12 +208,14 @@ export function MembersView() {
                     <span style={{ color: "var(--text-faint)" }}>
                       {key.lastUsedAt ? `last used ${key.lastUsedAt.slice(0, 10)}` : "never used"}
                     </span>
-                    <button
-                      style={{ color: "var(--danger)", marginLeft: "auto" }}
-                      onClick={() => revokeKey(key.id)}
-                    >
-                      Revoke
-                    </button>
+                    {canManageMember && (
+                      <button
+                        style={{ color: "var(--danger)", marginLeft: "auto" }}
+                        onClick={() => revokeKey(key.id)}
+                      >
+                        Revoke
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

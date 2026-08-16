@@ -27,6 +27,12 @@ import {
 } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { apiError, requireViewer } from "./errors.ts";
+import {
+  assertCanManageActor,
+  assertCanManageApiKey,
+  assertWorkspaceAdmin,
+  isWorkspaceAdmin,
+} from "../auth/permissions.ts";
 import { withRepoSyncDispatch } from "./repo-sync-dispatch.ts";
 import { issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
@@ -100,6 +106,7 @@ export const resolvers = {
   DateTime,
   JSON: JSONScalar,
   ActorType: { HUMAN: "human", AGENT: "agent" },
+  ActorWorkspaceRole: { ADMIN: "admin", MEMBER: "member" },
   StateType: {
     TRIAGE: "triage",
     BACKLOG: "backlog",
@@ -245,8 +252,11 @@ export const resolvers = {
   },
 
   Actor: {
-    apiKeys: (actor: { id: string }, _args: unknown, context: Context) =>
-      listApiKeys(context.db, actor.id).map(mapApiKey),
+    apiKeys: (actor: { id: string }, _args: unknown, context: Context) => {
+      const viewer = requireViewer(context);
+      if (!isWorkspaceAdmin(viewer) && viewer.id !== actor.id) return [];
+      return listApiKeys(context.db, actor.id).map(mapApiKey);
+    },
   },
 
   Query: {
@@ -424,7 +434,8 @@ export const resolvers = {
       args: { input: { name: string; type: string; email?: string | null } },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
       const actor = mapActor(createActor(context.db, args.input));
       return { success: true, actor };
     },
@@ -433,7 +444,8 @@ export const resolvers = {
       args: { id: string; input: { name?: string | null; email?: string | null } },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertCanManageActor(viewer, args.id);
       const actor = mapActor(updateActor(context.db, args.id, args.input));
       return { success: true, actor };
     },
@@ -442,12 +454,14 @@ export const resolvers = {
       args: { input: { actorId: string; name: string } },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertCanManageActor(viewer, args.input.actorId);
       const { row, key } = createApiKey(context.db, args.input);
       return { success: true, apiKey: mapApiKey(row), key };
     },
     apiKeyDelete: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertCanManageApiKey(context.db, viewer, args.id);
       return { success: deleteApiKey(context.db, args.id) };
     },
     webhookCreate: (

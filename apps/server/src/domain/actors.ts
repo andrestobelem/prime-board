@@ -21,6 +21,7 @@ export function mapActor(row: ActorRow) {
     name: row.name,
     email: row.email,
     type: row.type,
+    workspaceRole: row.workspace_role,
     createdAt: row.created_at,
   };
 }
@@ -107,6 +108,10 @@ export function listApiKeys(db: Database, actorId: string): ApiKeyRow[] {
   return db
     .query("SELECT * FROM api_keys WHERE actor_id = ?1 ORDER BY created_at")
     .all(actorId) as ApiKeyRow[];
+}
+
+export function getApiKey(db: Database, id: string): ApiKeyRow | null {
+  return db.query("SELECT * FROM api_keys WHERE id = ?1").get(id) as ApiKeyRow | null;
 }
 
 export function deleteApiKey(db: Database, id: string): boolean {

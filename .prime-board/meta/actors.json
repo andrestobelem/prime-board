@@ -2,46 +2,55 @@
   {
     "email": "andres.tobelem@gmail.com",
     "name": "Andrés Tobelem",
-    "type": "human"
+    "type": "human",
+    "workspaceRole": "member"
   },
   {
     "email": null,
     "name": "Carorila",
-    "type": "agent"
+    "type": "agent",
+    "workspaceRole": "member"
   },
   {
     "email": "linear-82afff80-2cd1-473e-bb13-0a24003e65eb@linear.linear.app",
     "name": "Linear",
-    "type": "agent"
+    "type": "agent",
+    "workspaceRole": "member"
   },
   {
     "email": null,
     "name": "Lucía",
-    "type": "agent"
+    "type": "agent",
+    "workspaceRole": "member"
   },
   {
     "email": null,
     "name": "Micaela",
-    "type": "agent"
+    "type": "agent",
+    "workspaceRole": "member"
   },
   {
     "email": null,
     "name": "Sofía",
-    "type": "agent"
+    "type": "agent",
+    "workspaceRole": "member"
   },
   {
     "email": null,
     "name": "admin",
-    "type": "human"
+    "type": "human",
+    "workspaceRole": "admin"
   },
   {
     "email": null,
     "name": "claude",
-    "type": "agent"
+    "type": "agent",
+    "workspaceRole": "member"
   },
   {
     "email": null,
     "name": "demo-agent",
-    "type": "agent"
+    "type": "agent",
+    "workspaceRole": "member"
   }
 ]

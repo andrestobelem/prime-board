@@ -48,7 +48,7 @@ export function bootstrap(db: Database): BootstrapResult {
 
     const adminId = newId();
     db.query(
-      "INSERT INTO actors (id, name, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+      "INSERT INTO actors (id, name, type, workspace_role, created_at, updated_at) VALUES (?1, ?2, ?3, 'admin', ?4, ?5)",
     ).run(adminId, "admin", "human", timestamp, timestamp);
 
     db.query(

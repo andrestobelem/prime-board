@@ -326,9 +326,9 @@ export function exportBoard(
     stableStringify({ name: workspace?.name, urlKey: workspace?.url_key }),
   );
 
-  const actors = db.query("SELECT name, email, type FROM actors ORDER BY name").all() as Array<
-    Record<string, unknown>
-  >;
+  const actors = db
+    .query("SELECT name, email, type, workspace_role AS workspaceRole FROM actors ORDER BY name")
+    .all() as Array<Record<string, unknown>>;
   write(join(base, "meta", "actors.json"), stableStringify(actors));
 
   const teams = db
