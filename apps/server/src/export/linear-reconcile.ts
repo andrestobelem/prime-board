@@ -146,6 +146,11 @@ export function reconcileLinearExport(
   } catch (error) {
     conflicts.push({ code: "INVALID_SOURCE_MAP", message: (error as Error).message });
   }
+  if (sourceMap && sourceMap.workspaceId !== source.workspace.id)
+    conflicts.push({
+      code: "SOURCE_MAP_WORKSPACE_MISMATCH",
+      message: `Source map workspace ${sourceMap.workspaceId} does not match ${source.workspace.id}`,
+    });
   const map = sourceMap ?? {
     version: 1 as const,
     source: "linear" as const,
