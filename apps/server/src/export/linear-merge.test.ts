@@ -144,6 +144,10 @@ describe("mergeLinearExportWithRepo", () => {
       expect(readFileSync(join(output, ".prime-board", "issues", "PRB-2.md"), "utf8")).toContain(
         "team: PRB",
       );
+      const migrationReport = JSON.parse(
+        readFileSync(join(output, ".prime-board", "meta", "migration-report.json"), "utf8"),
+      );
+      expect(migrationReport.localMerge.rekeyed).toEqual({ "AT-2": "PRB-2", "AT-3": "PRB-3" });
       const teams = JSON.parse(
         readFileSync(join(output, ".prime-board", "meta", "teams.json"), "utf8"),
       );

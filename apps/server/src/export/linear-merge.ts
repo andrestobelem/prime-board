@@ -222,6 +222,17 @@ export function mergeLinearExportWithRepo(
     projects.sort((a, b) => a.name.localeCompare(b.name)),
   );
 
+  const migrationReportPath = join(outputBase, "meta", "migration-report.json");
+  const migrationReport = readJson<Record<string, unknown>>(migrationReportPath);
+  migrationReport.localMerge = {
+    localTeam: localKey,
+    rekeyTeam: rekeyKey,
+    rekeyed: result.rekeyed,
+    matched: result.matched,
+    skipped: result.skipped,
+    conflicts: result.conflicts,
+  };
+  writeJson(migrationReportPath, migrationReport);
   rmSync(stageRoot, { recursive: true, force: true });
   return result;
 }
