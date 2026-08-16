@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "archived": false,
+    "columns": [],
+    "filter": {
+      "team": {
+        "eq": "01a00a56-10a7-700a-b13e-b10cc7e445a9"
+      }
+    },
+    "groupBy": "state",
+    "name": "A View",
+    "orderBy": "UPDATED_DESC",
+    "owner": "admin",
+    "scope": "team",
+    "team": "AT"
+  }
+]

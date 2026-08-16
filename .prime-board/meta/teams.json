@@ -17,6 +17,44 @@
         "name": "Improvement"
       }
     ],
+    "members": [
+      {
+        "actor": "Andrés Tobelem",
+        "role": "owner"
+      },
+      {
+        "actor": "Carorila",
+        "role": "owner"
+      },
+      {
+        "actor": "Linear",
+        "role": "owner"
+      },
+      {
+        "actor": "Lucía",
+        "role": "owner"
+      },
+      {
+        "actor": "Micaela",
+        "role": "owner"
+      },
+      {
+        "actor": "Sofía",
+        "role": "owner"
+      },
+      {
+        "actor": "admin",
+        "role": "owner"
+      },
+      {
+        "actor": "claude",
+        "role": "owner"
+      },
+      {
+        "actor": "demo-agent",
+        "role": "owner"
+      }
+    ],
     "name": "andrestobelem",
     "states": [
       {
@@ -115,6 +153,44 @@
       {
         "color": "#fc7840",
         "name": "webhooks"
+      }
+    ],
+    "members": [
+      {
+        "actor": "Andrés Tobelem",
+        "role": "owner"
+      },
+      {
+        "actor": "Carorila",
+        "role": "owner"
+      },
+      {
+        "actor": "Linear",
+        "role": "owner"
+      },
+      {
+        "actor": "Lucía",
+        "role": "owner"
+      },
+      {
+        "actor": "Micaela",
+        "role": "owner"
+      },
+      {
+        "actor": "Sofía",
+        "role": "owner"
+      },
+      {
+        "actor": "admin",
+        "role": "owner"
+      },
+      {
+        "actor": "claude",
+        "role": "owner"
+      },
+      {
+        "actor": "demo-agent",
+        "role": "owner"
       }
     ],
     "name": "prime-board dev",
