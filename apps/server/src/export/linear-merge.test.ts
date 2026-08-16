@@ -103,6 +103,31 @@ function writeLocalRepo(root: string): void {
       }) + "\n",
     );
   }
+  writeFileSync(
+    join(base, "issues", "AT-3.md"),
+    "---\nid: AT-3\ntitle: Nieto\nteam: AT\nstate: Todo\npriority: 0\nassignee: null\ncreator: claude\nparent: AT-2\nproject: Local\nlabels: []\ncreatedAt: 2026-01-01\nupdatedAt: 2026-01-01\narchivedAt: null\n---\n\n# Nieto\n",
+  );
+  writeFileSync(
+    join(base, "log", "AT-3.jsonl"),
+    JSON.stringify({
+      actor: "claude",
+      issue: "AT-3",
+      type: "created",
+      ts: "2026-01-01",
+      payload: {
+        title: "Nieto",
+        description: null,
+        team: "AT",
+        number: 3,
+        priority: 0,
+        state: "Todo",
+        assignee: null,
+        parent: "AT-2",
+        project: "Local",
+        milestone: null,
+      },
+    }) + "\n",
+  );
 }
 
 describe("mergeLinearExportWithRepo", () => {
@@ -112,7 +137,7 @@ describe("mergeLinearExportWithRepo", () => {
     try {
       writeLocalRepo(local);
       const result = mergeLinearExportWithRepo(source, local, output);
-      expect(result.rekeyed).toEqual({ "AT-2": "PRB-2" });
+      expect(result.rekeyed).toEqual({ "AT-2": "PRB-2", "AT-3": "PRB-3" });
       expect(readFileSync(join(output, ".prime-board", "issues", "AT-1.md"), "utf8")).toContain(
         "title: Linear",
       );
@@ -126,7 +151,7 @@ describe("mergeLinearExportWithRepo", () => {
       const db = new Database(":memory:", { strict: true });
       db.exec("PRAGMA foreign_keys = ON;");
       migrate(db);
-      expect(rebuildFromRepo(db, output).issues).toBe(2);
+      expect(rebuildFromRepo(db, output).issues).toBe(3);
       db.close();
     } finally {
       rmSync(local, { recursive: true, force: true });
