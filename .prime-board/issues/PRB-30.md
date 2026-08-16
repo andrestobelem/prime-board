@@ -1,6 +1,6 @@
 ---
 archivedAt: null
-assignee: claude
+assignee: Micaela
 createdAt: 2026-08-15T02:30:26.665Z
 creator: claude
 id: PRB-30
@@ -13,7 +13,7 @@ project: null
 state: Done
 team: PRB
 title: Archivar/colapsar proyectos completados
-updatedAt: 2026-08-15T04:57:53.898Z
+updatedAt: 2026-08-16T11:47:36.110Z
 ---
 
 # Archivar/colapsar proyectos completados

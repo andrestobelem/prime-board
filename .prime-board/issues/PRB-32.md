@@ -1,6 +1,6 @@
 ---
 archivedAt: null
-assignee: claude
+assignee: Lucía
 createdAt: 2026-08-15T03:39:42.010Z
 creator: claude
 id: PRB-32
@@ -12,7 +12,7 @@ project: null
 state: Done
 team: PRB
 title: "issueCreate: aceptar number para conservar identificadores en imports"
-updatedAt: 2026-08-15T03:41:11.983Z
+updatedAt: 2026-08-16T11:47:35.808Z
 ---
 
 # issueCreate: aceptar number para conservar identificadores en imports

@@ -1,6 +1,6 @@
 ---
 archivedAt: null
-assignee: claude
+assignee: Micaela
 createdAt: 2026-08-15T02:30:26.670Z
 creator: claude
 id: PRB-31
@@ -13,7 +13,7 @@ project: null
 state: Done
 team: PRB
 title: UI para administrar estados y labels del team
-updatedAt: 2026-08-15T05:02:23.495Z
+updatedAt: 2026-08-16T11:47:36.128Z
 ---
 
 # UI para administrar estados y labels del team

@@ -9,3 +9,4 @@
 {"actor":"claude","issue":"PRB-153","payload":{"label":"epic:repo-truth"},"ts":"2026-08-15T04:47:09.357Z","type":"labeled"}
 {"actor":"claude","issue":"PRB-153","payload":{"from":null,"to":"Repo como fuente de verdad"},"ts":"2026-08-15T04:55:39.749Z","type":"project_changed"}
 {"actor":"claude","issue":"PRB-153","payload":{"from":null,"to":"Fase 0 — Investigación"},"ts":"2026-08-15T04:55:39.749Z","type":"milestone_changed"}
+{"actor":"admin","issue":"PRB-153","payload":{"from":"claude","to":"Lucía"},"ts":"2026-08-16T11:47:35.829Z","type":"assigned"}

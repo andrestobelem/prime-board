@@ -6,17 +6,7 @@
   },
   {
     "email": null,
-    "name": "Atlas",
-    "type": "agent"
-  },
-  {
-    "email": null,
-    "name": "Brujula",
-    "type": "agent"
-  },
-  {
-    "email": null,
-    "name": "Forja",
+    "name": "Carorila",
     "type": "agent"
   },
   {
@@ -26,7 +16,17 @@
   },
   {
     "email": null,
-    "name": "Lupa",
+    "name": "Lucía",
+    "type": "agent"
+  },
+  {
+    "email": null,
+    "name": "Micaela",
+    "type": "agent"
+  },
+  {
+    "email": null,
+    "name": "Sofía",
     "type": "agent"
   },
   {

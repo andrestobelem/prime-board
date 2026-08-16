@@ -1,6 +1,6 @@
 ---
 archivedAt: null
-assignee: claude
+assignee: Micaela
 createdAt: 2026-08-15T02:30:26.652Z
 creator: claude
 id: PRB-29
@@ -13,7 +13,7 @@ project: null
 state: Done
 team: PRB
 title: Milestones dentro de proyectos
-updatedAt: 2026-08-15T04:56:01.034Z
+updatedAt: 2026-08-16T11:47:36.092Z
 ---
 
 # Milestones dentro de proyectos

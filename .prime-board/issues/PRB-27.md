@@ -1,6 +1,6 @@
 ---
 archivedAt: null
-assignee: claude
+assignee: Lucía
 createdAt: 2026-08-15T02:30:26.634Z
 creator: claude
 id: PRB-27
@@ -13,7 +13,7 @@ project: null
 state: Done
 team: PRB
 title: "Importer: preservar fechas y autor originales"
-updatedAt: 2026-08-15T04:50:28.886Z
+updatedAt: 2026-08-16T11:47:35.746Z
 ---
 
 # Importer: preservar fechas y autor originales

@@ -1,6 +1,6 @@
 ---
 archivedAt: null
-assignee: claude
+assignee: Carorila
 createdAt: 2026-08-15T02:30:26.645Z
 creator: claude
 id: PRB-28
@@ -13,7 +13,7 @@ project: null
 state: Done
 team: PRB
 title: issueCreate debería aceptar labelIds
-updatedAt: 2026-08-15T04:48:59.490Z
+updatedAt: 2026-08-16T11:47:35.965Z
 ---
 
 # issueCreate debería aceptar labelIds
