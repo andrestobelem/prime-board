@@ -84,8 +84,13 @@ describe("exportBoard", () => {
     const base = join(dir, ".prime-board");
     expect(readdirSync(join(base, "meta")).sort()).toEqual([
       "actors.json",
+      "cycles.json",
       "export.json",
+      "initiatives.json",
+      "project-updates.json",
       "projects.json",
+      "reviews.json",
+      "saved-views.json",
       "teams.json",
       "workspace-labels.json",
       "workspace.json",

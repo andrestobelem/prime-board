@@ -57,9 +57,16 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       "issue_labels",
       "activity",
       "comments",
+      "reviews",
+      "project_updates",
+      "inbox_receipts",
       "api_keys",
       "webhooks",
       "issues",
+      "cycles",
+      "saved_views",
+      "initiative_projects",
+      "initiatives",
       "milestones",
       "project_teams",
       "projects",
@@ -185,6 +192,134 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       }
     }
 
+    // 5b. Vistas guardadas (PRB-209); ausente en exports viejos.
+    const savedViewsPath = join(base, "meta", "saved-views.json");
+    if (existsSync(savedViewsPath)) {
+      for (const view of readJson(savedViewsPath) as Array<Record<string, any>>) {
+        const ownerId = actorIds.get(view.owner);
+        if (!ownerId)
+          throw new Error(`Saved view "${view.name}" references unknown owner ${view.owner}`);
+        let teamId: string | null = null;
+        if (view.scope === "team") {
+          if (!view.team) throw new Error(`Team saved view "${view.name}" missing team key`);
+          teamId = teamIds.get(view.team) ?? null;
+          if (!teamId)
+            throw new Error(`Saved view "${view.name}" references unknown team ${view.team}`);
+        }
+        db.query(
+          `INSERT INTO saved_views
+            (id, name, scope, team_id, owner_id, filter_json, order_by, group_by, columns_json, created_at, updated_at, archived_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)`,
+        ).run(
+          newId(),
+          view.name,
+          view.scope,
+          teamId,
+          ownerId,
+          JSON.stringify(view.filter ?? {}),
+          view.orderBy ?? "CREATED_DESC",
+          view.groupBy ?? "state",
+          JSON.stringify(view.columns ?? []),
+          timestamp,
+          view.archived ? timestamp : null,
+        );
+      }
+    }
+
+    // 5c. Ciclos (PRB-211); ausente en exports viejos.
+    const cyclesPath = join(base, "meta", "cycles.json");
+    const cycleIds = new Map<string, string>();
+    if (existsSync(cyclesPath)) {
+      for (const cycle of readJson(cyclesPath) as Array<Record<string, any>>) {
+        const teamId = teamIds.get(cycle.team);
+        if (!teamId) throw new Error(`Cycle "${cycle.name}" references unknown team ${cycle.team}`);
+        const id = newId();
+        cycleIds.set(`${cycle.team}/${cycle.number}`, id);
+        db.query(
+          `INSERT INTO cycles
+            (id, team_id, number, name, starts_at, ends_at, state, created_at, updated_at, archived_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)`,
+        ).run(
+          id,
+          teamId,
+          cycle.number,
+          cycle.name,
+          cycle.startsAt,
+          cycle.endsAt,
+          cycle.state,
+          timestamp,
+          cycle.archived ? timestamp : null,
+        );
+      }
+    }
+
+    // 5d. Project updates (PRB-214); ausente en exports viejos.
+    const projectUpdatesPath = join(base, "meta", "project-updates.json");
+    if (existsSync(projectUpdatesPath)) {
+      for (const update of readJson(projectUpdatesPath) as Array<Record<string, any>>) {
+        const projectId = projectIds.get(update.project);
+        if (!projectId) {
+          throw new Error(`Project update references unknown project ${update.project}`);
+        }
+        const authorId = actorIds.get(update.author);
+        if (!authorId) {
+          throw new Error(`Project update references unknown author ${update.author}`);
+        }
+        db.query(
+          `INSERT INTO project_updates
+            (id, project_id, author_id, health, body, risks, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
+        ).run(
+          newId(),
+          projectId,
+          authorId,
+          update.health,
+          update.body,
+          update.risks ?? null,
+          update.createdAt ?? timestamp,
+        );
+      }
+    }
+
+    // 5e. Iniciativas (PRB-216); ausente en exports viejos.
+    const initiativesPath = join(base, "meta", "initiatives.json");
+    if (existsSync(initiativesPath)) {
+      for (const initiative of readJson(initiativesPath) as Array<Record<string, any>>) {
+        const ownerId = initiative.owner ? (actorIds.get(initiative.owner) ?? null) : null;
+        if (initiative.owner && !ownerId) {
+          throw new Error(
+            `Initiative "${initiative.name}" references unknown owner ${initiative.owner}`,
+          );
+        }
+        const id = newId();
+        db.query(
+          `INSERT INTO initiatives
+            (id, name, description, state, target_date, owner_id, created_at, updated_at, archived_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
+        ).run(
+          id,
+          initiative.name,
+          initiative.description ?? null,
+          initiative.state,
+          initiative.targetDate ?? null,
+          ownerId,
+          timestamp,
+          initiative.archived ? timestamp : null,
+        );
+        for (const projectName of initiative.projects ?? []) {
+          const projectId = projectIds.get(projectName);
+          if (!projectId) {
+            throw new Error(
+              `Initiative "${initiative.name}" references unknown project ${projectName}`,
+            );
+          }
+          db.query(
+            "INSERT INTO initiative_projects (initiative_id, project_id) VALUES (?1, ?2)",
+          ).run(id, projectId);
+        }
+      }
+    }
+
     // 6. Issues: primera pasada sin parent (se resuelve después).
     const issueIds = new Map<string, string>();
     const snapshots = readdirSync(join(base, "issues"))
@@ -268,6 +403,40 @@ export function rebuildFromRepo(db: Database, rootDir: string): RebuildResult {
       for (const ref of issue.duplicateOf ?? []) {
         const canonical = issueIds.get(ref);
         if (canonical) insertRelation(self, canonical, "duplicate_of");
+      }
+    }
+
+    // 7b. Reviews (PRB-216); requieren issues ya importados.
+    const reviewsPath = join(base, "meta", "reviews.json");
+    if (existsSync(reviewsPath)) {
+      for (const review of readJson(reviewsPath) as Array<Record<string, any>>) {
+        const issueId = issueIds.get(review.issue);
+        if (!issueId) throw new Error(`Review references unknown issue ${review.issue}`);
+        const requesterId = actorIds.get(review.requester);
+        if (!requesterId) {
+          throw new Error(
+            `Review on ${review.issue} references unknown requester ${review.requester}`,
+          );
+        }
+        const reviewerId = actorIds.get(review.reviewer);
+        if (!reviewerId) {
+          throw new Error(
+            `Review on ${review.issue} references unknown reviewer ${review.reviewer}`,
+          );
+        }
+        db.query(
+          `INSERT INTO reviews
+            (id, issue_id, requester_id, reviewer_id, status, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+        ).run(
+          newId(),
+          issueId,
+          requesterId,
+          reviewerId,
+          review.status,
+          review.createdAt ?? timestamp,
+          review.updatedAt ?? review.createdAt ?? timestamp,
+        );
       }
     }
 

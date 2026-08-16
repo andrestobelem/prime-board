@@ -385,6 +385,137 @@ export function exportBoard(
     ),
   );
 
+  const savedViews = db
+    .query(
+      `SELECT sv.*, owners.name AS owner_name, teams.key AS team_key
+       FROM saved_views sv
+       JOIN actors owners ON owners.id = sv.owner_id
+       LEFT JOIN teams ON teams.id = sv.team_id
+       ORDER BY sv.created_at, sv.id`,
+    )
+    .all() as Array<Record<string, any>>;
+  write(
+    join(base, "meta", "saved-views.json"),
+    stableStringify(
+      savedViews.map((view) => ({
+        name: view.name,
+        scope: view.scope,
+        team: view.team_key ?? null,
+        owner: view.owner_name,
+        filter: JSON.parse(view.filter_json),
+        orderBy: view.order_by,
+        groupBy: view.group_by,
+        columns: JSON.parse(view.columns_json || "[]"),
+        archived: Boolean(view.archived_at),
+      })),
+    ),
+  );
+
+  const cycles = db
+    .query(
+      `SELECT c.*, teams.key AS team_key
+       FROM cycles c JOIN teams ON teams.id = c.team_id
+       ORDER BY teams.key, c.number`,
+    )
+    .all() as Array<Record<string, any>>;
+  write(
+    join(base, "meta", "cycles.json"),
+    stableStringify(
+      cycles.map((cycle) => ({
+        team: cycle.team_key,
+        number: cycle.number,
+        name: cycle.name,
+        startsAt: cycle.starts_at,
+        endsAt: cycle.ends_at,
+        state: cycle.state,
+        archived: Boolean(cycle.archived_at),
+      })),
+    ),
+  );
+
+  const projectUpdates = db
+    .query(
+      `SELECT pu.*, p.name AS project_name, a.name AS author_name
+       FROM project_updates pu
+       JOIN projects p ON p.id = pu.project_id
+       JOIN actors a ON a.id = pu.author_id
+       ORDER BY pu.created_at, pu.id`,
+    )
+    .all() as Array<Record<string, any>>;
+  write(
+    join(base, "meta", "project-updates.json"),
+    stableStringify(
+      projectUpdates.map((update) => ({
+        project: update.project_name,
+        author: update.author_name,
+        health: update.health,
+        body: update.body,
+        risks: update.risks,
+        createdAt: update.created_at,
+      })),
+    ),
+  );
+
+  // Iniciativas (PRB-216): por nombre de proyecto + dueño.
+  const initiatives = db
+    .query(
+      `SELECT i.*, owners.name AS owner_name
+       FROM initiatives i
+       LEFT JOIN actors owners ON owners.id = i.owner_id
+       ORDER BY i.created_at, i.id`,
+    )
+    .all() as Array<Record<string, any>>;
+  write(
+    join(base, "meta", "initiatives.json"),
+    stableStringify(
+      initiatives.map((initiative) => ({
+        name: initiative.name,
+        description: initiative.description,
+        state: initiative.state,
+        targetDate: initiative.target_date,
+        owner: initiative.owner_name ?? null,
+        archived: Boolean(initiative.archived_at),
+        projects: db
+          .query(
+            `SELECT p.name FROM initiative_projects ip
+             JOIN projects p ON p.id = ip.project_id
+             WHERE ip.initiative_id = ?1
+             ORDER BY p.name`,
+          )
+          .values(initiative.id)
+          .map((row) => row[0] as string),
+      })),
+    ),
+  );
+
+  // Reviews (PRB-216): referencian issues por identifier legible.
+  const reviews = db
+    .query(
+      `SELECT r.*,
+              teams.key AS team_key, issues.number AS issue_number,
+              req.name AS requester_name, rev.name AS reviewer_name
+       FROM reviews r
+       JOIN issues ON issues.id = r.issue_id
+       JOIN teams ON teams.id = issues.team_id
+       JOIN actors req ON req.id = r.requester_id
+       JOIN actors rev ON rev.id = r.reviewer_id
+       ORDER BY r.created_at, r.id`,
+    )
+    .all() as Array<Record<string, any>>;
+  write(
+    join(base, "meta", "reviews.json"),
+    stableStringify(
+      reviews.map((review) => ({
+        issue: `${review.team_key}-${review.issue_number}`,
+        requester: review.requester_name,
+        reviewer: review.reviewer_name,
+        status: review.status,
+        createdAt: review.created_at,
+        updatedAt: review.updated_at,
+      })),
+    ),
+  );
+
   // ---- issues: snapshot + log ----
   const issues = db
     .query(
