@@ -499,15 +499,20 @@ export function exportBoard(
     ),
   );
 
+  // A team-scoped export cannot safely carry workspace/personal views: their
+  // filters may reference entities from teams that are absent from the export.
+  // Keep only views owned by the selected team so --allow-partial remains a
+  // deliberate, self-contained replacement instead of a late unknown-reference error.
   const savedViews = db
     .query(
       `SELECT sv.*, owners.name AS owner_name, teams.key AS team_key
        FROM saved_views sv
        JOIN actors owners ON owners.id = sv.owner_id
        LEFT JOIN teams ON teams.id = sv.team_id
+       ${teamFilter ? "WHERE sv.team_id = ?1" : ""}
        ORDER BY sv.created_at, sv.id`,
     )
-    .all() as Array<Record<string, any>>;
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
   const savedViewLookups = savedViews.length
     ? buildSavedViewLookups(db, lookups, context.teamKeys, context.identifiers, savedViews)
     : null;

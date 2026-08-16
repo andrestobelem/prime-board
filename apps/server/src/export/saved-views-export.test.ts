@@ -210,6 +210,47 @@ describe("saved views export/import", () => {
     }
   });
 
+  it("acota las saved views al team en un export parcial", async () => {
+    const other = await gql(
+      app,
+      `mutation { teamCreate(input: { name: "Other saved views team", key: "OTH" }) { team { id } } }`,
+    );
+    const otherId = other.data!.teamCreate.team.id as string;
+    await gql(
+      app,
+      `mutation($input: SavedViewCreateInput!) {
+        savedViewCreate(input: $input) { savedView { id } }
+      }`,
+      {
+        input: {
+          name: "Do not export me",
+          scope: "TEAM",
+          teamId: otherId,
+          filter: { team: { eq: otherId } },
+        },
+      },
+    );
+
+    const dir = mkdtempSync(join(tmpdir(), "pb-partial-views-"));
+    try {
+      exportBoard(app.db, dir, { teamKey: "PB" });
+      const raw = JSON.parse(
+        readFileSync(join(dir, ".prime-board", "meta", "saved-views.json"), "utf8"),
+      ) as Array<Record<string, unknown>>;
+      expect(raw.map((view) => view.name)).toEqual(["Export me"]);
+
+      const fresh = new Database(":memory:", { strict: true });
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      expect(() => rebuildFromRepo(fresh, dir, { allowPartial: true })).not.toThrow();
+      expect(fresh.query("SELECT key FROM teams ORDER BY key").all()).toEqual([{ key: "PB" }]);
+      expect(fresh.query("SELECT name FROM saved_views").all()).toEqual([{ name: "Export me" }]);
+      fresh.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rechaza con diagnóstico los exports legacy que contienen UUIDs de filtros", () => {
     const dir = mkdtempSync(join(tmpdir(), "pb-legacy-views-"));
     try {
