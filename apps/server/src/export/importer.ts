@@ -75,13 +75,43 @@ export function rebuildFromRepo(
     }
   }
 
-  // 1. Credenciales locales: se guardan por NOMBRE de actor porque los ids cambian.
+  // 1. Credenciales locales. El id exportado es la identidad estable; el nombre
+  // queda como fallback para repos antiguos que todavía no lo incluían.
   const keys = db
     .query(
-      "SELECT api_keys.name, api_keys.hash, api_keys.last_used_at, api_keys.created_at, actors.name AS actor_name " +
+      "SELECT api_keys.actor_id, api_keys.name, api_keys.hash, api_keys.last_used_at, api_keys.created_at, actors.name AS actor_name " +
         "FROM api_keys JOIN actors ON actors.id = api_keys.actor_id",
     )
     .all() as Array<Record<string, string | null>>;
+  const actors = readJson(join(base, "meta", "actors.json")) as Array<Record<string, any>>;
+  const actorsBySourceId = new Map<string, Record<string, any>>();
+  const actorsByName = new Map<string, Record<string, any>>();
+  for (const actor of actors) {
+    const name = String(actor.name ?? "");
+    if (!name) throw new Error("Actor in repo is missing a name");
+    if (actorsByName.has(name)) {
+      throw new Error(`Ambiguous actor name in repo: ${name}`);
+    }
+    actorsByName.set(name, actor);
+    if (actor.id != null) {
+      const sourceId = String(actor.id);
+      if (actorsBySourceId.has(sourceId)) {
+        throw new Error(`Duplicate actor id in repo: ${sourceId}`);
+      }
+      actorsBySourceId.set(sourceId, actor);
+    }
+  }
+  const keyTargets = keys.map((key) => {
+    const actor =
+      (key.actor_id ? actorsBySourceId.get(key.actor_id) : undefined) ??
+      actorsByName.get(String(key.actor_name ?? ""));
+    if (!actor) {
+      throw new Error(
+        `Cannot preserve API key ${key.name ?? "<unnamed>"} for actor ${key.actor_name ?? "<unknown>"}`,
+      );
+    }
+    return { key, actor };
+  });
   const webhooks = db.query("SELECT * FROM webhooks").all() as Array<Record<string, unknown>>;
 
   const result: RebuildResult = { issues: 0, events: 0, comments: 0, preservedKeys: 0 };
@@ -129,11 +159,11 @@ export function rebuildFromRepo(
     ).run(newId(), workspace.name ?? "Prime Board", workspace.urlKey ?? "prime-board", timestamp);
 
     const actorIds = new Map<string, string>();
-    for (const actor of readJson(join(base, "meta", "actors.json")) as Array<
-      Record<string, string | null>
-    >) {
-      const id = newId();
+    const actorIdsBySourceId = new Map<string, string>();
+    for (const actor of actors) {
+      const id = actor.id != null ? String(actor.id) : newId();
       actorIds.set(actor.name!, id);
+      if (actor.id != null) actorIdsBySourceId.set(String(actor.id), id);
       const workspaceRole =
         actor.workspaceRole ?? (actor.name?.toLowerCase() === "admin" ? "admin" : "member");
       if (workspaceRole !== "admin" && workspaceRole !== "member") {
@@ -683,10 +713,14 @@ export function rebuildFromRepo(
       }
     }
 
-    // 10. Restaurar credenciales locales re-vinculando por nombre.
-    for (const key of keys) {
-      const actorId = actorIds.get(key.actor_name as string);
-      if (!actorId) continue;
+    // 10. Restaurar credenciales locales por identidad estable, con fallback legado.
+    for (const { key, actor } of keyTargets) {
+      const actorId =
+        (actor.id != null ? actorIdsBySourceId.get(String(actor.id)) : undefined) ??
+        actorIds.get(actor.name as string);
+      if (!actorId) {
+        throw new Error(`Cannot restore API key ${key.name ?? "<unnamed>"}: actor disappeared`);
+      }
       db.query(
         "INSERT INTO api_keys (id, actor_id, name, hash, last_used_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
       ).run(

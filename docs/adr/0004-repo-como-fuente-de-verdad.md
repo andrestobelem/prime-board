@@ -22,8 +22,9 @@ la DB.
 - Las API keys y los secretos de webhooks no se exportan. El rebuild conserva las keys
   locales que puede volver a asociar al mismo actor; si no hay una correspondencia, no
   inventa credenciales.
-- El formato del repo no depende de UUIDs internos. Los identificadores naturales y los
-  eventos permiten regenerar el índice sin cambiar el contenido versionado.
+- El formato de entidades del repo usa identificadores naturales y eventos para regenerar
+  el índice. `meta/actors.json` conserva además el id local del actor únicamente para
+  re-vincular API keys tras un rebuild; nunca contiene hashes ni secretos.
 
 Todo cambio persistente de un issue forma parte del historial append-only: las
 asignaciones de `cycle_id` se registran como `cycle_changed` y las de `sort_order` como

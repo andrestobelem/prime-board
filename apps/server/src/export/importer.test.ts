@@ -223,6 +223,63 @@ describe("rebuildFromRepo", () => {
     fresh.close();
   });
 
+  it("preserva API keys por id estable aunque el actor haya cambiado de nombre", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-actor-rename-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      const actors = JSON.parse(
+        readFileSync(join(snapshot, ".prime-board", "meta", "actors.json"), "utf8"),
+      ) as Array<{ id: string; name: string; type: string }>;
+      const source = actors.find((actor) => actor.name === "worker")!;
+      expect(source.id).toBeString();
+
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      fresh
+        .query(
+          "INSERT INTO actors (id, name, type, created_at, updated_at) VALUES (?1, 'renamed-worker', 'agent', 'x', 'x')",
+        )
+        .run(source.id);
+      fresh
+        .query(
+          "INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES ('rename-key', ?1, 'worker key', 'RENAMED_HASH', 'x')",
+        )
+        .run(source.id);
+
+      expect(rebuildFromRepo(fresh, snapshot).preservedKeys).toBe(1);
+      const key = fresh
+        .query(
+          "SELECT api_keys.hash, actors.name FROM api_keys JOIN actors ON actors.id = api_keys.actor_id",
+        )
+        .get() as { hash: string; name: string };
+      expect(key).toEqual({ hash: "RENAMED_HASH", name: "worker" });
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  it("falla antes de borrar si una API key no se puede re-vincular", () => {
+    const fresh = new Database(":memory:", { strict: true });
+    fresh.exec("PRAGMA foreign_keys = ON;");
+    migrate(fresh);
+    fresh
+      .query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) VALUES ('unmatched', 'renamed-worker', 'agent', 'x', 'x')",
+      )
+      .run();
+    fresh
+      .query(
+        "INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES ('unmatched-key', 'unmatched', 'worker key', 'HASH', 'x')",
+      )
+      .run();
+
+    expect(() => rebuildFromRepo(fresh, dir)).toThrow(/Cannot preserve API key/);
+    expect(fresh.query("SELECT count(*) AS count FROM actors").get()).toEqual({ count: 1 });
+    fresh.close();
+  });
+
   it("rechaza exports parciales antes de borrar y exige un modo explícito", () => {
     const partial = mkdtempSync(join(tmpdir(), "pb-partial-"));
     const populated = new Database(":memory:", { strict: true });

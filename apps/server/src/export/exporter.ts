@@ -416,7 +416,9 @@ export function exportBoard(
   );
 
   const actors = db
-    .query("SELECT name, email, type, workspace_role AS workspaceRole FROM actors ORDER BY name")
+    .query(
+      "SELECT id, name, email, type, workspace_role AS workspaceRole FROM actors ORDER BY name",
+    )
     .all() as Array<Record<string, unknown>>;
   write(join(base, "meta", "actors.json"), stableStringify(actors));
 
