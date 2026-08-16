@@ -13,7 +13,8 @@
     "build": "bun run --cwd apps/web build",
     "export": "bun run --cwd apps/server export",
     "rebuild": "bun run --cwd apps/server rebuild",
-    "prepare": "husky"
+    "prepare": "husky",
+    "import:linear": "bun run --cwd apps/server import:linear"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

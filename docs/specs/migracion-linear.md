@@ -89,3 +89,21 @@ Antes del primer apply, AT-189 debe decidir la política de adjuntos, documentos
 ciclos, due dates, estimaciones, status updates, iniciativas, suscripciones y metadatos
 de proyectos. Una conversión a markdown o enlace es una pérdida explícita, no un éxito
 silencioso.
+
+## CLI
+
+La captura se convierte al formato del repo con:
+
+```bash
+bun run import:linear --from linear-export.json --out /tmp/prime-board-migration --dry-run --json
+```
+
+El comando no escribe durante `--dry-run`. Si el reporte no tiene conflictos ni pérdidas
+no aprobadas, se puede producir el staging real quitando `--dry-run`. `--apply` es un
+segundo consentimiento explícito: después de escribir el staging, reconstruye la base
+SQLite indicada por la configuración local. No se debe usar sobre el repo operativo hasta
+resolver el rekeying `PRB` y conservar un backup.
+
+El conversor conserva los snapshots y logs en `.prime-board/` y escribe la trazabilidad en
+`.prime-board/meta/source-map.json`. Ese archivo contiene IDs externos de Linear; no debe
+contener API keys, hashes ni secretos de webhooks.

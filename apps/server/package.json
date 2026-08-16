@@ -6,7 +6,8 @@
     "dev": "bun --watch src/index.ts",
     "seed": "bun src/scripts/demo-seed.ts",
     "export": "bun src/scripts/export.ts",
-    "rebuild": "bun src/scripts/rebuild.ts"
+    "rebuild": "bun src/scripts/rebuild.ts",
+    "import:linear": "bun src/scripts/import-linear.ts"
   },
   "dependencies": {
     "@prime-board/schema": "workspace:*",
