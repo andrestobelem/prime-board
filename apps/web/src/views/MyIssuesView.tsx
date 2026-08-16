@@ -1,13 +1,19 @@
 // My issues (PRB-202/218): issues del viewer con filtros estado/proyecto.
 import { useState } from "react";
 import { useQuery } from "../api.ts";
-import { IssueList, type GroupBy, type IssueListItem } from "../components/IssueList.tsx";
+import {
+  IssueList,
+  IssueListLimitNotice,
+  type GroupBy,
+  type IssueListItem,
+} from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
 const QUERY = `query($filter: IssueFilter) {
   viewer { id name }
   issues(filter: $filter, first: 250, orderBy: UPDATED_DESC) {
     nodes { ${ISSUE_LIST_FIELDS} }
+    pageInfo { hasNextPage }
   }
 }`;
 
@@ -39,7 +45,7 @@ export function MyIssuesView({ groupBy = "state" }: { groupBy?: GroupBy }) {
 
   const result = useQuery<{
     viewer: { id: string; name: string };
-    issues: { nodes: IssueListItem[] };
+    issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean } };
   }>(QUERY, { filter });
 
   if (viewer.loading && !viewer.data) return <div className="loading">Loading…</div>;
@@ -87,6 +93,7 @@ export function MyIssuesView({ groupBy = "state" }: { groupBy?: GroupBy }) {
           ))}
         </select>
       </div>
+      <IssueListLimitNotice hasNextPage={result.data?.issues.pageInfo.hasNextPage ?? false} />
       {nodes.length === 0 ? (
         <div className="empty">No issues assigned to you.</div>
       ) : (

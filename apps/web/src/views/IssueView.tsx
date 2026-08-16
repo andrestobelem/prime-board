@@ -10,10 +10,17 @@ import { Link } from "../router.tsx";
 const ISSUE_QUERY = `query($id: ID!) {
   issue(id: $id) {
     id identifier title description priority url branchName createdAt
-    team { id key name states { id name type color position } labels { id name color } projects { id name } }
+    team {
+      id key name
+      states { id name type color position }
+      labels { id name color }
+      projects { id name }
+      cycles { id name number state }
+    }
     state { id name type }
     assignee { id name type }
     creator { id name type }
+    cycle { id name number state }
     parent { identifier title }
     children { identifier title state { id name type } }
     labels { id name color }
@@ -96,6 +103,11 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   const [relationType, setRelationType] = useState("BLOCKED_BY");
   const [relationRef, setRelationRef] = useState("");
   const [relationError, setRelationError] = useState<string | null>(null);
+  const [cycleSaving, setCycleSaving] = useState(false);
+  const [cycleError, setCycleError] = useState<string | null>(null);
+  const [subIssueTitle, setSubIssueTitle] = useState("");
+  const [subIssueSaving, setSubIssueSaving] = useState(false);
+  const [subIssueError, setSubIssueError] = useState<string | null>(null);
 
   useEffect(() => {
     if (issue) {
@@ -124,6 +136,38 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   function saveDescription() {
     setEditingDescription(false);
     if (description !== (issue.description ?? "")) update({ description });
+  }
+
+  async function saveCycle(cycleId: string) {
+    setCycleSaving(true);
+    setCycleError(null);
+    try {
+      await update({ cycleId: cycleId || null });
+    } catch (error) {
+      setCycleError((error as Error).message);
+    } finally {
+      setCycleSaving(false);
+    }
+  }
+
+  async function createSubIssue() {
+    const trimmed = subIssueTitle.trim();
+    if (!trimmed) return;
+    setSubIssueSaving(true);
+    setSubIssueError(null);
+    try {
+      await mutate(
+        `mutation($input: IssueCreateInput!) {
+        issueCreate(input: $input) { issue { id identifier title } }
+      }`,
+        { input: { teamId: issue.team.id, parentId: issue.id, title: trimmed, description: "" } },
+      );
+      setSubIssueTitle("");
+    } catch (error) {
+      setSubIssueError((error as Error).message);
+    } finally {
+      setSubIssueSaving(false);
+    }
   }
 
   async function submitComment() {
@@ -204,22 +248,37 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           )}
         </div>
 
-        {issue.children.length > 0 && (
-          <>
-            <div className="section-title">Sub-issues</div>
-            {issue.children.map((child: any) => (
-              <div className="sub-issue" key={child.identifier}>
-                <StateIcon state={child.state} />
-                <Link to={`/issue/${child.identifier}`}>
-                  <span style={{ color: "var(--text-faint)", marginRight: 6 }}>
-                    {child.identifier}
-                  </span>
-                  {child.title}
-                </Link>
-              </div>
-            ))}
-          </>
-        )}
+        <div className="section-title">Sub-issues</div>
+        {issue.children.map((child: any) => (
+          <div className="sub-issue" key={child.identifier}>
+            <StateIcon state={child.state} />
+            <Link to={`/issue/${child.identifier}`}>
+              <span style={{ color: "var(--text-faint)", marginRight: 6 }}>{child.identifier}</span>
+              {child.title}
+            </Link>
+          </div>
+        ))}
+        <div className="composer" style={{ marginTop: 8 }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              placeholder="Create a sub-issue…"
+              value={subIssueTitle}
+              disabled={subIssueSaving}
+              onChange={(event) => setSubIssueTitle(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void createSubIssue();
+              }}
+            />
+            <button
+              className="btn"
+              disabled={subIssueSaving || !subIssueTitle.trim()}
+              onClick={() => void createSubIssue()}
+            >
+              {subIssueSaving ? "Creating…" : "Create"}
+            </button>
+          </div>
+          {subIssueError && <div className="error-banner">{subIssueError}</div>}
+        </div>
 
         <div className="section-title">Relations</div>
         {issue.relations.map((relation: any) => (
@@ -347,6 +406,23 @@ export function IssueView({ issueRef }: { issueRef: string }) {
               </option>
             ))}
           </select>
+        </div>
+        <div className="prop">
+          <span>Cycle</span>
+          <select
+            value={issue.cycle?.id ?? ""}
+            disabled={cycleSaving}
+            onChange={(event) => void saveCycle(event.target.value)}
+          >
+            <option value="">No cycle</option>
+            {issue.team.cycles.map((cycle: any) => (
+              <option key={cycle.id} value={cycle.id}>
+                {cycle.name} (#{cycle.number})
+              </option>
+            ))}
+          </select>
+          {cycleSaving && <span className="prop-status">Saving…</span>}
+          {cycleError && <span className="prop-error">{cycleError}</span>}
         </div>
         <div className="prop">
           <span>Project</span>

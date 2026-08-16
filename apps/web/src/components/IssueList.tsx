@@ -19,7 +19,9 @@ export function isTypingTarget(event: KeyboardEvent): boolean {
   const target = event.target as HTMLElement | null;
   return Boolean(
     target &&
-    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" ||
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT" ||
       target.isContentEditable),
   );
 }
@@ -30,6 +32,16 @@ function prioritySortKey(issue: IssueListItem): number {
 }
 
 export type GroupBy = "state" | "milestone" | "assignee" | "priority";
+
+/** Hace explícito el límite de 250 elementos de la API en lugar de ocultarlos. */
+export function IssueListLimitNotice({ hasNextPage }: { hasNextPage: boolean }) {
+  if (!hasNextPage) return null;
+  return (
+    <div className="pagination-notice">
+      Showing the first 250 issues. Narrow the filter to see issues beyond this limit.
+    </div>
+  );
+}
 
 export const GROUP_LABELS: Record<GroupBy, string> = {
   state: "Estado",
@@ -61,63 +73,79 @@ function groupOf(issue: IssueListItem, by: GroupBy): { key: string; label: strin
   return { key: issue.state.id, label: issue.state.name, order: issue.state.position };
 }
 
-export function IssueList({ issues, groupBy = "state" }: { issues: IssueListItem[]; groupBy?: GroupBy }) {
-const [focusIndex, setFocusIndex] = useState(-1);
-const focusRef = useRef(focusIndex);
-useEffect(() => {
-  focusRef.current = focusIndex;
-}, [focusIndex]);
+export function IssueList({
+  issues,
+  groupBy = "state",
+}: {
+  issues: IssueListItem[];
+  groupBy?: GroupBy;
+}) {
+  const [focusIndex, setFocusIndex] = useState(-1);
+  const focusRef = useRef(focusIndex);
+  useEffect(() => {
+    focusRef.current = focusIndex;
+  }, [focusIndex]);
 
-const groups = useMemo(() => {
-  const map = new Map<string, {
-    label: string; order: number; state?: IssueListItem["state"]; items: IssueListItem[];
-  }>();
-  for (const issue of issues) {
-    const g = groupOf(issue, groupBy);
-    const group = map.get(g.key) ?? {
-      label: g.label,
-      order: g.order,
-      state: groupBy === "state" ? issue.state : undefined,
-      items: [],
-    };
-    group.items.push(issue);
-    map.set(g.key, group);
-  }
-  const sorted = [...map.entries()]
-    .map(([key, value]) => ({ key, ...value }))
-    .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
-  for (const group of sorted) {
-    group.items.sort((a, b) => prioritySortKey(a) - prioritySortKey(b));
-  }
-  return sorted;
-}, [issues, groupBy]);
-
-const flat = useMemo(() => groups.flatMap((group) => group.items), [groups]);
-
-useEffect(() => {
-  function onKey(event: KeyboardEvent) {
-    if (isTypingTarget(event) || document.querySelector(".overlay")) return;
-    if (event.key === "j" || event.key === "ArrowDown") {
-      event.preventDefault();
-      setFocusIndex((index) => Math.min(index + 1, flat.length - 1));
-    } else if (event.key === "k" || event.key === "ArrowUp") {
-      event.preventDefault();
-      setFocusIndex((index) => Math.max(index - 1, 0));
-    } else if (event.key === "Enter") {
-      const issue = flat[focusRef.current];
-      if (issue) navigate(`/issue/${issue.identifier}`);
+  const groups = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        label: string;
+        order: number;
+        state?: IssueListItem["state"];
+        items: IssueListItem[];
+      }
+    >();
+    for (const issue of issues) {
+      const g = groupOf(issue, groupBy);
+      const group = map.get(g.key) ?? {
+        label: g.label,
+        order: g.order,
+        state: groupBy === "state" ? issue.state : undefined,
+        items: [],
+      };
+      group.items.push(issue);
+      map.set(g.key, group);
     }
-  }
-  window.addEventListener("keydown", onKey);
-  return () => window.removeEventListener("keydown", onKey);
-}, [flat]);
+    const sorted = [...map.entries()]
+      .map(([key, value]) => ({ key, ...value }))
+      .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    for (const group of sorted) {
+      group.items.sort((a, b) => prioritySortKey(a) - prioritySortKey(b));
+    }
+    return sorted;
+  }, [issues, groupBy]);
+
+  const flat = useMemo(() => groups.flatMap((group) => group.items), [groups]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (isTypingTarget(event) || document.querySelector(".overlay")) return;
+      if (event.key === "j" || event.key === "ArrowDown") {
+        event.preventDefault();
+        setFocusIndex((index) => Math.min(index + 1, flat.length - 1));
+      } else if (event.key === "k" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setFocusIndex((index) => Math.max(index - 1, 0));
+      } else if (event.key === "Enter") {
+        const issue = flat[focusRef.current];
+        if (issue) navigate(`/issue/${issue.identifier}`);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [flat]);
 
   useEffect(() => {
     document.querySelector(".issue-row.focused")?.scrollIntoView({ block: "nearest" });
   }, [focusIndex]);
 
   if (issues.length === 0) {
-    return <div className="empty">No issues here yet. Press <kbd>C</kbd> to create one.</div>;
+    return (
+      <div className="empty">
+        No issues here yet. Press <kbd>C</kbd> to create one.
+      </div>
+    );
   }
 
   let flatIndex = -1;
@@ -144,7 +172,9 @@ useEffect(() => {
                 <span className="identifier">{issue.identifier}</span>
                 <span className="title">{issue.title}</span>
                 <span className="right">
-                  {issue.labels.map((label) => <LabelChip key={label.id} label={label} />)}
+                  {issue.labels.map((label) => (
+                    <LabelChip key={label.id} label={label} />
+                  ))}
                   <Avatar actor={issue.assignee} />
                 </span>
               </div>

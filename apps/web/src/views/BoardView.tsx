@@ -3,7 +3,11 @@
 import { useEffect, useState } from "react";
 import { mutate, useQuery } from "../api.ts";
 import { Avatar, LabelChip, PriorityIcon, StateIcon } from "../components/bits.tsx";
-import type { GroupBy, IssueListItem } from "../components/IssueList.tsx";
+import {
+  IssueListLimitNotice,
+  type GroupBy,
+  type IssueListItem,
+} from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import { navigate } from "../router.tsx";
 
@@ -16,6 +20,7 @@ const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter) {
   actors { id name type }
   issues(filter: $filter, first: 250) {
     nodes { ${ISSUE_LIST_FIELDS} }
+    pageInfo { hasNextPage }
   }
 }`;
 
@@ -30,6 +35,7 @@ const PROJECT_BOARD_QUERY = `query($id: ID!, $filter: IssueFilter) {
   actors { id name type }
   issues(filter: $filter, first: 250) {
     nodes { ${ISSUE_LIST_FIELDS} team { id } }
+    pageInfo { hasNextPage }
   }
 }`;
 
@@ -57,8 +63,7 @@ interface Column {
 }
 
 export type BoardScope =
-  | { kind: "team"; teamKey: string; teamId: string | null }
-  | { kind: "project"; projectId: string };
+  { kind: "team"; teamKey: string; teamId: string | null } | { kind: "project"; projectId: string };
 
 export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; groupBy?: GroupBy }) {
   const isProject = scope.kind === "project";
@@ -81,7 +86,9 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
   if (!container) {
     return (
       <div className="empty">
-        {isProject ? "Project not found." : `Team ${(scope as { teamKey: string }).teamKey} not found.`}
+        {isProject
+          ? "Project not found."
+          : `Team ${(scope as { teamKey: string }).teamKey} not found.`}
       </div>
     );
   }
@@ -95,7 +102,9 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
     const teams = isProject ? container.teams : [container];
     const merged = new Map<string, Column>();
     for (const team of teams) {
-      for (const state of [...team.states].sort((a: StateInfo, b: StateInfo) => a.position - b.position)) {
+      for (const state of [...team.states].sort(
+        (a: StateInfo, b: StateInfo) => a.position - b.position,
+      )) {
         const key = `${state.name}/${state.type}`;
         const column: Column = merged.get(key) ?? {
           key,
@@ -171,83 +180,103 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
     }
 
     // Optimista: mueve la card ya; la mutación refetchea al confirmar.
-    setLocal(issues.map((candidate): BoardCard => {
-      if (candidate.id !== dragId) return candidate;
-      if (groupBy === "state") {
-        // La columna trae color; la card solo necesita id/name/type/position.
-        return column.state
-          ? { ...candidate, state: { ...candidate.state, ...column.state, id: stateId! } }
-          : candidate;
-      }
-      if (groupBy === "milestone") {
-        return { ...candidate, milestone: column.key === "none" ? null : { id: column.key, name: column.label } };
-      }
-      if (groupBy === "assignee") {
-        const actor = actors.find((a) => a.id === column.key);
-        return { ...candidate, assignee: actor ? { ...actor } : null };
-      }
-      return { ...candidate, priority: Number(column.key) };
-    }));
+    setLocal(
+      issues.map((candidate): BoardCard => {
+        if (candidate.id !== dragId) return candidate;
+        if (groupBy === "state") {
+          // La columna trae color; la card solo necesita id/name/type/position.
+          return column.state
+            ? { ...candidate, state: { ...candidate.state, ...column.state, id: stateId! } }
+            : candidate;
+        }
+        if (groupBy === "milestone") {
+          return {
+            ...candidate,
+            milestone: column.key === "none" ? null : { id: column.key, name: column.label },
+          };
+        }
+        if (groupBy === "assignee") {
+          const actor = actors.find((a) => a.id === column.key);
+          return { ...candidate, assignee: actor ? { ...actor } : null };
+        }
+        return { ...candidate, priority: Number(column.key) };
+      }),
+    );
 
-    const input = groupBy === "priority"
-      ? { priority: Number(column.key) }
-      : groupBy === "state"
-        ? { stateId }
-        : column.patch;
-    mutate(`mutation($id: ID!, $input: IssueUpdateInput!) {
+    const input =
+      groupBy === "priority"
+        ? { priority: Number(column.key) }
+        : groupBy === "state"
+          ? { stateId }
+          : column.patch;
+    mutate(
+      `mutation($id: ID!, $input: IssueUpdateInput!) {
       issueUpdate(id: $id, input: $input) { success }
-    }`, { id: dragId, input }).catch(() => setLocal(null));
+    }`,
+      { id: dragId, input },
+    ).catch(() => setLocal(null));
     setDragId(null);
   }
 
   return (
-    <div className="board">
-      {columns.map((column) => {
-        const cards = issues
-          .filter((issue) => columnOf(issue) === column.key)
-          .sort((a, b) => (a.priority === 0 ? 5 : a.priority) - (b.priority === 0 ? 5 : b.priority));
-        return (
-          <div
-            key={column.key}
-            className={`board-column${overState === column.key ? " drag-over" : ""}`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setOverState(column.key);
-            }}
-            onDragLeave={() => setOverState((current) => (current === column.key ? null : current))}
-            onDrop={() => drop(column)}
-          >
-            <div className="col-header">
-              {column.state && <StateIcon state={column.state} />}
-              {column.label}
-              <span className="count" style={{ color: "var(--text-faint)", fontWeight: 400 }}>
-                {cards.length}
-              </span>
-            </div>
-            {cards.map((issue) => (
-              <div
-                key={issue.id}
-                className="board-card"
-                draggable
-                onDragStart={() => setDragId(issue.id)}
-                onDragEnd={() => {
-                  setDragId(null);
-                  setOverState(null);
-                }}
-                onClick={() => navigate(`/issue/${issue.identifier}`)}
-              >
-                <span className="identifier">{issue.identifier}</span>
-                <span className="card-title">{issue.title}</span>
-                <span className="card-footer">
-                  <PriorityIcon priority={issue.priority} />
-                  {issue.labels.map((label) => <LabelChip key={label.id} label={label} />)}
-                  <span style={{ marginLeft: "auto" }}><Avatar actor={issue.assignee} /></span>
+    <>
+      <IssueListLimitNotice hasNextPage={result.data.issues.pageInfo.hasNextPage} />
+      <div className="board">
+        {columns.map((column) => {
+          const cards = issues
+            .filter((issue) => columnOf(issue) === column.key)
+            .sort(
+              (a, b) => (a.priority === 0 ? 5 : a.priority) - (b.priority === 0 ? 5 : b.priority),
+            );
+          return (
+            <div
+              key={column.key}
+              className={`board-column${overState === column.key ? " drag-over" : ""}`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setOverState(column.key);
+              }}
+              onDragLeave={() =>
+                setOverState((current) => (current === column.key ? null : current))
+              }
+              onDrop={() => drop(column)}
+            >
+              <div className="col-header">
+                {column.state && <StateIcon state={column.state} />}
+                {column.label}
+                <span className="count" style={{ color: "var(--text-faint)", fontWeight: 400 }}>
+                  {cards.length}
                 </span>
               </div>
-            ))}
-          </div>
-        );
-      })}
-    </div>
+              {cards.map((issue) => (
+                <div
+                  key={issue.id}
+                  className="board-card"
+                  draggable
+                  onDragStart={() => setDragId(issue.id)}
+                  onDragEnd={() => {
+                    setDragId(null);
+                    setOverState(null);
+                  }}
+                  onClick={() => navigate(`/issue/${issue.identifier}`)}
+                >
+                  <span className="identifier">{issue.identifier}</span>
+                  <span className="card-title">{issue.title}</span>
+                  <span className="card-footer">
+                    <PriorityIcon priority={issue.priority} />
+                    {issue.labels.map((label) => (
+                      <LabelChip key={label.id} label={label} />
+                    ))}
+                    <span style={{ marginLeft: "auto" }}>
+                      <Avatar actor={issue.assignee} />
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }

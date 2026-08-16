@@ -2,3 +2,5 @@
 {"actor":"admin","issue":"PRB-240","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-16T18:56:55.337Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-240","payload":{"type":"related","issue":"PRB-228"},"ts":"2026-08-16T18:57:05.492Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-240","payload":{"type":"blocks","issue":"PRB-243"},"ts":"2026-08-16T18:57:29.369Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-240","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-16T20:06:51.637Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-240","payload":{"from":null,"to":"admin"},"ts":"2026-08-16T20:06:51.637Z","type":"assigned"}

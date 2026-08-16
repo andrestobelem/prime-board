@@ -535,6 +535,14 @@ kbd {
   margin-top: 6px;
 }
 
+.pagination-notice {
+  padding: 8px 16px;
+  color: var(--text-muted);
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+
 .sub-issue {
   display: flex;
   gap: 8px;

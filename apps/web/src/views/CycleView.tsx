@@ -1,7 +1,12 @@
 // Vista de ciclo (PRB-203): issues asignados al ciclo.
 import { useState } from "react";
 import { GqlError, mutate, useQuery } from "../api.ts";
-import { IssueList, type GroupBy, type IssueListItem } from "../components/IssueList.tsx";
+import {
+  IssueList,
+  IssueListLimitNotice,
+  type GroupBy,
+  type IssueListItem,
+} from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
 const META_QUERY = `query($id: ID!) {
@@ -14,6 +19,7 @@ const META_QUERY = `query($id: ID!) {
 const ISSUES_QUERY = `query($filter: IssueFilter) {
   issues(filter: $filter, first: 250, orderBy: UPDATED_DESC) {
     nodes { ${ISSUE_LIST_FIELDS} }
+    pageInfo { hasNextPage }
   }
 }`;
 
@@ -35,7 +41,9 @@ export function CycleView({ cycleId, groupBy = "state" }: { cycleId: string; gro
   }>(META_QUERY, { id: cycleId });
 
   const cycle = meta.data?.cycle ?? null;
-  const list = useQuery<{ issues: { nodes: IssueListItem[] } }>(
+  const list = useQuery<{
+    issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean } };
+  }>(
     ISSUES_QUERY,
     cycle ? { filter: { cycle: { eq: cycle.id } } } : { filter: { search: "__no_cycle__" } },
   );
@@ -92,6 +100,7 @@ export function CycleView({ cycleId, groupBy = "state" }: { cycleId: string; gro
         </span>
       </div>
       {error && <div className="error-banner">{error}</div>}
+      <IssueListLimitNotice hasNextPage={list.data?.issues.pageInfo.hasNextPage ?? false} />
       {list.loading && !list.data ? (
         <div className="loading">Loading…</div>
       ) : list.error ? (

@@ -2,7 +2,12 @@
 import { useState } from "react";
 import { GqlError, mutate, useQuery } from "../api.ts";
 import { ConfirmModal } from "../components/EntityModal.tsx";
-import { IssueList, type GroupBy, type IssueListItem } from "../components/IssueList.tsx";
+import {
+  IssueList,
+  IssueListLimitNotice,
+  type GroupBy,
+  type IssueListItem,
+} from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
 interface SavedViewData {
@@ -25,6 +30,7 @@ const META_QUERY = `query($id: ID!) {
 const ISSUES_QUERY = `query($filter: IssueFilter, $orderBy: IssueOrder) {
   issues(filter: $filter, first: 250, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} }
+    pageInfo { hasNextPage }
   }
 }`;
 
@@ -39,7 +45,9 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
   const meta = useQuery<{ savedView: SavedViewData | null }>(META_QUERY, { id: viewId });
   const view = meta.data?.savedView ?? null;
 
-  const list = useQuery<{ issues: { nodes: IssueListItem[] } }>(
+  const list = useQuery<{
+    issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean } };
+  }>(
     ISSUES_QUERY,
     view
       ? { filter: view.filter ?? {}, orderBy: view.orderBy }
@@ -172,7 +180,10 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
       ) : list.error ? (
         <div className="error-banner">{list.error.message}</div>
       ) : (
-        <IssueList issues={list.data?.issues.nodes ?? []} groupBy={groupBy} />
+        <>
+          <IssueListLimitNotice hasNextPage={list.data?.issues.pageInfo.hasNextPage ?? false} />
+          <IssueList issues={list.data?.issues.nodes ?? []} groupBy={groupBy} />
+        </>
       )}
       {deleteOpen && (
         <ConfirmModal

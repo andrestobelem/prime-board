@@ -5,7 +5,7 @@ import { navigate } from "../router.tsx";
 import { Avatar } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
 import { EntityModal } from "../components/EntityModal.tsx";
-import { IssueList, type IssueListItem } from "../components/IssueList.tsx";
+import { IssueList, IssueListLimitNotice, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
 const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter) {
@@ -17,6 +17,7 @@ const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter) {
   }
   issues(filter: $filter, first: 250) {
     nodes { ${ISSUE_LIST_FIELDS} }
+    pageInfo { hasNextPage }
   }
 }`;
 
@@ -50,7 +51,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
         author: { id: string; name: string; type: string };
       }>;
     } | null;
-    issues: { nodes: IssueListItem[] };
+    issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean } };
   }>(PROJECT_QUERY, { id: projectId, filter: { project: { eq: projectId } } });
 
   async function postUpdate(values: Record<string, string>) {
@@ -171,6 +172,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
           ))}
         </div>
       )}
+      <IssueListLimitNotice hasNextPage={result.data!.issues.pageInfo.hasNextPage} />
       {project.milestones.length === 0 ? (
         <IssueList issues={result.data!.issues.nodes} />
       ) : (
