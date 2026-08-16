@@ -1,17 +1,5 @@
 [
   {
-    "archived": false,
-    "description": "Sample project to explore prime-board",
-    "lead": "demo-agent",
-    "milestones": [],
-    "name": "Demo: agent onboarding",
-    "state": "started",
-    "targetDate": null,
-    "teams": [
-      "PB"
-    ]
-  },
-  {
     "archived": true,
     "description": "Historial del desarrollo del MVP (importado de Linear). Las 5 partes son milestones.",
     "lead": "claude",
@@ -51,7 +39,7 @@
     "state": "completed",
     "targetDate": null,
     "teams": [
-      "AT"
+      "PRB"
     ]
   },
   {
@@ -63,7 +51,7 @@
     "state": "completed",
     "targetDate": null,
     "teams": [
-      "AT"
+      "PRB"
     ]
   },
   {
@@ -75,7 +63,7 @@
     "state": "completed",
     "targetDate": null,
     "teams": [
-      "AT"
+      "PRB"
     ]
   },
   {
@@ -87,7 +75,7 @@
     "state": "completed",
     "targetDate": null,
     "teams": [
-      "AT"
+      "PRB"
     ]
   },
   {
@@ -99,7 +87,7 @@
     "state": "completed",
     "targetDate": null,
     "teams": [
-      "AT"
+      "PRB"
     ]
   },
   {
@@ -109,6 +97,49 @@
     "milestones": [],
     "name": "Parte 5 — Feedback del MVP",
     "state": "completed",
+    "targetDate": null,
+    "teams": [
+      "PRB"
+    ]
+  },
+  {
+    "archived": false,
+    "description": "Clon de Linear para agentes. La misión es construir un gestor de issues/proyectos pensado para que lo usen agentes (en principio prime-agent, pero abierto a otros).\n\nRepo: [https://github.com/andrestobelem/prime-board](<https://github.com/andrestobelem/prime-board>)\n\nConvenciones del proyecto:\n\n* Documentación, comentarios, tickets, specs y skills en español; el código de la aplicación en inglés.\n* Conventional commits con scope, commits atómicos, sin atribuciones Co-authored-by.\n* Carpeta `docs/` para documentación y `scratchpad/` (ignorada) para trabajo temporal.\n* Skills del repo se instalan con el Skills CLI (`npx skills add`) a nivel proyecto.\n\nParte 1: definir el MVP de funcionalidades de Linear que vamos a clonar.",
+    "lead": null,
+    "milestones": [
+      {
+        "description": "Definir qué funcionalidades de Linear vamos a clonar en el MVP de prime-board, con foco en uso por agentes.",
+        "name": "Parte 1 — Definición del MVP",
+        "position": 57,
+        "targetDate": null
+      },
+      {
+        "description": "SQLite + GraphQL + auth por API keys + webhooks, según docs/specs/mvp.md.",
+        "name": "Parte 2 — Núcleo del backend",
+        "position": 1108,
+        "targetDate": null
+      },
+      {
+        "description": "CLI `pb` y MCP server como clientes de la API GraphQL.",
+        "name": "Parte 3 — Interfaces para agentes",
+        "position": 2066,
+        "targetDate": null
+      },
+      {
+        "description": "UI Linear-like: shell, lista, board, detalle, command palette.",
+        "name": "Parte 4 — UI web",
+        "position": 3022,
+        "targetDate": null
+      },
+      {
+        "description": "Ajustes surgidos de probar el MVP: temas, gestión de usuarios y proyectos por team.",
+        "name": "Parte 5 — Feedback del MVP",
+        "position": 3943,
+        "targetDate": null
+      }
+    ],
+    "name": "prime-board",
+    "state": "backlog",
     "targetDate": null,
     "teams": [
       "AT"
@@ -154,7 +185,7 @@
     "state": "completed",
     "targetDate": null,
     "teams": [
-      "AT"
+      "PRB"
     ]
   },
   {
@@ -166,8 +197,7 @@
     "state": "backlog",
     "targetDate": null,
     "teams": [
-      "AT",
-      "PB"
+      "PRB"
     ]
   }
 ]

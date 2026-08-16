@@ -1,4 +1,0 @@
-{"actor":"claude","issue":"PB-100","payload":{"title":"Number smoke","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-15T03:40:57.863Z","type":"created"}
-{"actor":"claude","issue":"PB-100","payload":{},"ts":"2026-08-15T03:40:57.870Z","type":"archived"}
-{"actor":"admin","issue":"PB-100","payload":{"body":"Smoke verificado: la creación con número explícito conserva el identificador PB-100."},"ts":"2026-08-16T09:02:45.049Z","type":"commented"}
-{"actor":"admin","issue":"PB-100","payload":{"from":"Backlog","to":"Done"},"ts":"2026-08-16T09:02:45.105Z","type":"state_changed"}

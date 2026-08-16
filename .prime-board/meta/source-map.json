@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "source": "linear",
+  "workspaceId": "82afff80-2cd1-473e-bb13-0a24003e65eb",
+  "entities": {
+    "actors": {
+      "3a1308f6-3b01-4793-bebf-82024fb14572": "name:Andrés Tobelem",
+      "f5788cc2-31b9-4aad-ac63-a7632a4fd75c": "name:Linear"
+    },
+    "teams": {
+      "2f4a1164-5b4b-470a-b78c-5715a878a19d": "AT"
+    },
+    "states": {
+      "04a5221e-877d-4756-913b-c5faf518cdd2": "AT/Backlog",
+      "15d9af91-b187-45b8-b4e4-c2cb3be244cb": "AT/Todo",
+      "2db3b991-3982-4e4b-8ab5-0695d4102d4b": "AT/In Review",
+      "3265cbf3-18bc-4237-bf49-76f824f3eeae": "AT/Ready for Agent",
+      "3ee3abdb-3359-417f-bc4b-ffda004477b7": "AT/Canceled",
+      "6895cfa9-2edb-459e-a120-db7b72fd18b1": "AT/Needs Info",
+      "cf698471-f427-41cd-accc-831478fe49f5": "AT/Done",
+      "eb6c3c51-1ad9-47b2-bd56-e7f929c0c8d3": "AT/Duplicate",
+      "f45937af-6476-4eff-9c66-a038b534067e": "AT/In Progress"
+    },
+    "labels": {
+      "805754d4-f65d-4a65-ad62-9bd29fccddda": "AT/Improvement",
+      "86366a69-bede-4f15-92ee-5dc6503f7605": "AT/Feature",
+      "da90a1fe-1a15-495a-89c2-d1654e065330": "AT/Bug"
+    },
+    "projects": {
+      "00c10c04-f07f-4743-8e17-ae4c993058b0": "prime-board"
+    },
+    "milestones": {
+      "3a155d9d-7168-48dd-ab6a-6c2bce9cd702": "prime-board/Parte 5 — Feedback del MVP",
+      "538e8481-0106-4759-8bd0-b203862a7698": "prime-board/Parte 2 — Núcleo del backend",
+      "a26525bf-ac37-45ac-a65d-3fd37e143a5d": "prime-board/Parte 3 — Interfaces para agentes",
+      "f038769d-beae-4335-afe8-2b4b9423b544": "prime-board/Parte 4 — UI web",
+      "febdc122-090d-4529-8c68-353978a54bd4": "prime-board/Parte 1 — Definición del MVP"
+    },
+    "issues": {
+      "0003bfbd-6ad2-40fc-97a2-43d967a0b65b": "AT-190",
+      "02d6654d-ca0e-4f7e-b81a-ada3b0bccb92": "AT-146",
+      "05514fbe-3fa6-4e31-9cd6-dc5dee0644f1": "AT-126",
+      "0b9270f2-118d-4865-bdf4-f3bd36709139": "AT-128",
+      "1af39432-8a55-4c35-b9e5-8dd430815122": "AT-186",
+      "1b24ae84-36c7-4939-a6eb-683958e30140": "AT-134",
+      "261579a9-8d09-4586-8a6c-7fb94f8c71e9": "AT-149",
+      "33aebb00-38c0-4cbb-a8a1-504782e6bed7": "AT-147",
+      "3e3a0ef1-eb7e-4e17-96c2-9e09294df4f7": "AT-133",
+      "3f742abe-1911-4003-ba27-7fbce6c14ae8": "AT-143",
+      "44dfdf8e-0911-49a3-9445-aaa25e2ab2f4": "AT-136",
+      "4962eb57-e31a-4fbe-9935-157dd557df3b": "AT-139",
+      "5d90ad02-9253-4617-b90e-79c89e4e445a": "AT-137",
+      "638f0cc5-f2b5-4411-b814-d340dff58b95": "AT-135",
+      "63f08aad-0f51-4fa6-8bcc-58fb4f3d2dfd": "AT-189",
+      "678440fd-5915-4070-8b12-d7ea0003e0b6": "AT-152",
+      "7121e2bb-8a5f-4147-9a2b-3b5358395222": "AT-194",
+      "72adf692-c067-4a76-af8f-83f4cae15102": "AT-148",
+      "874261bf-2925-4a45-a2bf-9069d474ff6f": "AT-138",
+      "8b39064e-cb99-43ae-84fe-87918bbd66da": "AT-150",
+      "9d3cc233-5eae-4fc3-94c6-0d71608d9a46": "AT-142",
+      "9ed7e984-fe22-4b13-badc-e13f67a40788": "AT-141",
+      "9f563d2f-48fc-4f03-9984-b7613840247c": "AT-193",
+      "a96ba454-5c68-4028-ba9b-2ce97d79d0a4": "AT-187",
+      "a9ebd57d-1917-4422-ba88-6802ae4dca4f": "AT-131",
+      "abf849b8-1980-465d-9332-209bed0c1875": "AT-188",
+      "b42d121c-e0c4-4891-886e-3b45494e58b0": "AT-192",
+      "c0decadf-e217-434b-91c0-d0169d352530": "AT-191",
+      "ca92ef9a-0a56-4dfe-8679-e7cf147acc4d": "AT-132",
+      "caaf9a84-edf1-460a-b0aa-25df89381f2d": "AT-145",
+      "cad65117-00a3-4893-96c6-e8235bb8c262": "AT-151",
+      "d15ecced-0951-40de-b520-8120513dd4ab": "AT-144",
+      "ddc2d447-3a80-4b2e-9db3-f56a6d183e91": "AT-195",
+      "ec63f2c8-f862-4792-84c9-cf7b4dfaac8d": "AT-127",
+      "ed876af1-668b-4f5f-889e-90160cbf372d": "AT-140",
+      "fd86a287-6061-4742-acf4-fbdbf1787ea7": "AT-130"
+    },
+    "comments": {
+      "031f16d5-9566-4285-a8d8-5d0899b2fbdb": "AT-186#031f16d5-9566-4285-a8d8-5d0899b2fbdb",
+      "05456df4-6db5-40c0-8674-ca63d023e7d1": "AT-188#05456df4-6db5-40c0-8674-ca63d023e7d1",
+      "067d93e0-74ee-420f-9268-57f5b4d34264": "AT-195#067d93e0-74ee-420f-9268-57f5b4d34264",
+      "29dd968a-f6fb-4564-a390-0f71e441e798": "AT-190#29dd968a-f6fb-4564-a390-0f71e441e798",
+      "439af534-d763-4e97-98dd-8797a9a3951a": "AT-192#439af534-d763-4e97-98dd-8797a9a3951a",
+      "632d1bbc-35d3-4786-9939-c6a942b89505": "AT-190#632d1bbc-35d3-4786-9939-c6a942b89505",
+      "6919a733-8dc0-4f7c-bdfd-9d893296b372": "AT-188#6919a733-8dc0-4f7c-bdfd-9d893296b372",
+      "79325e76-b887-4539-8d76-2252fd3f2903": "AT-188#79325e76-b887-4539-8d76-2252fd3f2903",
+      "8db2b63d-06f0-4fc5-a0e8-2f96969d390b": "AT-187#8db2b63d-06f0-4fc5-a0e8-2f96969d390b",
+      "95dbc96c-863e-448e-a3e2-6093036bdb68": "AT-188#95dbc96c-863e-448e-a3e2-6093036bdb68",
+      "aaa3e1e9-85a9-4799-88f3-59bae94c0bb0": "AT-187#aaa3e1e9-85a9-4799-88f3-59bae94c0bb0",
+      "b7001879-c886-4aa3-a875-78adc3f8d945": "AT-191#b7001879-c886-4aa3-a875-78adc3f8d945",
+      "b81a6c59-aba5-4e2d-b569-e726dea24794": "AT-194#b81a6c59-aba5-4e2d-b569-e726dea24794",
+      "ba21e0ff-c28b-4619-a736-792b610e7a98": "AT-189#ba21e0ff-c28b-4619-a736-792b610e7a98",
+      "c7fe698e-ed06-444e-9c20-74573ac0bd6a": "AT-193#c7fe698e-ed06-444e-9c20-74573ac0bd6a",
+      "d9662f60-b5f1-4955-b138-00bf00941526": "AT-193#d9662f60-b5f1-4955-b138-00bf00941526",
+      "df285751-062b-466d-984a-d83f32e61ab6": "AT-195#df285751-062b-466d-984a-d83f32e61ab6"
+    }
+  }
+}

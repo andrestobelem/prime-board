@@ -1,0 +1,1669 @@
+{
+  "workspace": {
+    "id": "82afff80-2cd1-473e-bb13-0a24003e65eb",
+    "name": "andrestobelem",
+    "urlKey": "andrestobelem"
+  },
+  "actors": [
+    {
+      "id": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "name": "Andrés Tobelem",
+      "email": "andres.tobelem@gmail.com",
+      "type": "human"
+    },
+    {
+      "id": "f5788cc2-31b9-4aad-ac63-a7632a4fd75c",
+      "name": "Linear",
+      "email": "linear-82afff80-2cd1-473e-bb13-0a24003e65eb@linear.linear.app",
+      "type": "agent"
+    }
+  ],
+  "teams": [
+    {
+      "id": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "key": "AT",
+      "name": "andrestobelem",
+      "description": null,
+      "states": [
+        {
+          "id": "2db3b991-3982-4e4b-8ab5-0695d4102d4b",
+          "name": "In Review",
+          "type": "started",
+          "color": null,
+          "position": 0
+        },
+        {
+          "id": "3265cbf3-18bc-4237-bf49-76f824f3eeae",
+          "name": "Ready for Agent",
+          "type": "unstarted",
+          "color": null,
+          "position": 1
+        },
+        {
+          "id": "6895cfa9-2edb-459e-a120-db7b72fd18b1",
+          "name": "Needs Info",
+          "type": "unstarted",
+          "color": null,
+          "position": 2
+        },
+        {
+          "id": "f45937af-6476-4eff-9c66-a038b534067e",
+          "name": "In Progress",
+          "type": "started",
+          "color": null,
+          "position": 3
+        },
+        {
+          "id": "eb6c3c51-1ad9-47b2-bd56-e7f929c0c8d3",
+          "name": "Duplicate",
+          "type": "duplicate",
+          "color": null,
+          "position": 4
+        },
+        {
+          "id": "cf698471-f427-41cd-accc-831478fe49f5",
+          "name": "Done",
+          "type": "completed",
+          "color": null,
+          "position": 5
+        },
+        {
+          "id": "3ee3abdb-3359-417f-bc4b-ffda004477b7",
+          "name": "Canceled",
+          "type": "canceled",
+          "color": null,
+          "position": 6
+        },
+        {
+          "id": "15d9af91-b187-45b8-b4e4-c2cb3be244cb",
+          "name": "Todo",
+          "type": "unstarted",
+          "color": null,
+          "position": 7
+        },
+        {
+          "id": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "name": "Backlog",
+          "type": "backlog",
+          "color": null,
+          "position": 8
+        }
+      ],
+      "defaultStateId": "04a5221e-877d-4756-913b-c5faf518cdd2"
+    }
+  ],
+  "labels": [
+    {
+      "id": "da90a1fe-1a15-495a-89c2-d1654e065330",
+      "name": "Bug",
+      "color": "#EB5757",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d"
+    },
+    {
+      "id": "86366a69-bede-4f15-92ee-5dc6503f7605",
+      "name": "Feature",
+      "color": "#BB87FC",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d"
+    },
+    {
+      "id": "805754d4-f65d-4a65-ad62-9bd29fccddda",
+      "name": "Improvement",
+      "color": "#4EA7FC",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d"
+    }
+  ],
+  "projects": [
+    {
+      "id": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "name": "prime-board",
+      "description": "Clon de Linear para agentes. La misión es construir un gestor de issues/proyectos pensado para que lo usen agentes (en principio prime-agent, pero abierto a otros).\n\nRepo: [https://github.com/andrestobelem/prime-board](<https://github.com/andrestobelem/prime-board>)\n\nConvenciones del proyecto:\n\n* Documentación, comentarios, tickets, specs y skills en español; el código de la aplicación en inglés.\n* Conventional commits con scope, commits atómicos, sin atribuciones Co-authored-by.\n* Carpeta `docs/` para documentación y `scratchpad/` (ignorada) para trabajo temporal.\n* Skills del repo se instalan con el Skills CLI (`npx skills add`) a nivel proyecto.\n\nParte 1: definir el MVP de funcionalidades de Linear que vamos a clonar.",
+      "state": "backlog",
+      "leadId": null,
+      "targetDate": null,
+      "archivedAt": null,
+      "teamIds": ["2f4a1164-5b4b-470a-b78c-5715a878a19d"],
+      "milestones": [
+        {
+          "id": "febdc122-090d-4529-8c68-353978a54bd4",
+          "name": "Parte 1 — Definición del MVP",
+          "description": "Definir qué funcionalidades de Linear vamos a clonar en el MVP de prime-board, con foco en uso por agentes.",
+          "targetDate": null,
+          "position": 57
+        },
+        {
+          "id": "538e8481-0106-4759-8bd0-b203862a7698",
+          "name": "Parte 2 — Núcleo del backend",
+          "description": "SQLite + GraphQL + auth por API keys + webhooks, según docs/specs/mvp.md.",
+          "targetDate": null,
+          "position": 1108
+        },
+        {
+          "id": "a26525bf-ac37-45ac-a65d-3fd37e143a5d",
+          "name": "Parte 3 — Interfaces para agentes",
+          "description": "CLI `pb` y MCP server como clientes de la API GraphQL.",
+          "targetDate": null,
+          "position": 2066
+        },
+        {
+          "id": "f038769d-beae-4335-afe8-2b4b9423b544",
+          "name": "Parte 4 — UI web",
+          "description": "UI Linear-like: shell, lista, board, detalle, command palette.",
+          "targetDate": null,
+          "position": 3022
+        },
+        {
+          "id": "3a155d9d-7168-48dd-ab6a-6c2bce9cd702",
+          "name": "Parte 5 — Feedback del MVP",
+          "description": "Ajustes surgidos de probar el MVP: temas, gestión de usuarios y proyectos por team.",
+          "targetDate": null,
+          "position": 3943
+        }
+      ],
+      "documents": [],
+      "statusUpdates": [],
+      "initiativeId": null
+    }
+  ],
+  "issues": [
+    {
+      "id": "63f08aad-0f51-4fa6-8bcc-58fb4f3d2dfd",
+      "identifier": "AT-189",
+      "number": 189,
+      "title": "Resolver las funcionalidades de Linear sin representación en prime-board",
+      "description": "## Objetivo\n\nDecidir qué hacer con datos de Linear que no tienen equivalente directo antes de ejecutar el corte.\n\n## Casos a relevar\n\nAdjuntos, documentos, comentarios inline/threads, ciclos, due dates, estimaciones, status updates, iniciativas, suscripciones y metadatos de proyectos.\n\n## Aceptación\n\n* Cada campo tiene una política: extender el modelo, convertirlo a markdown/enlace, omitirlo explícitamente o conservarlo en un archivo de migración.\n* La política es visible en el reporte de pérdida.\n* No se declara exitosa una migración que haya descartado datos sin consentimiento.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:36:38.661Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:36:38.661Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-16T09:55:21.356Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "abf849b8-1980-465d-9332-209bed0c1875",
+      "identifier": "AT-188",
+      "number": 188,
+      "title": "Construir dry-run y reconciliación de la migración Linear → prime-board",
+      "description": "## Objetivo\n\nValidar la migración antes de hacer escrituras definitivas y demostrar que el resultado es completo.\n\n## Validaciones mínimas\n\nConteo de issues, proyectos, milestones, actores, labels y comentarios; identificadores; estados; prioridades; asignaciones; padres; relaciones; archivados; y hashes o comparaciones de contenido.\n\n## Aceptación\n\n* El dry-run produce un plan y un reporte legible para humanos y JSON para agentes.\n* Una segunda ejecución no genera cambios.\n* Las discrepancias se clasifican como error, conflicto o pérdida aceptada.\n* La migración se aborta si quedan errores o conflictos no resueltos.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:36:38.465Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:36:38.465Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-16T09:45:17.211Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-16T10:16:55.530Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "0003bfbd-6ad2-40fc-97a2-43d967a0b65b",
+      "identifier": "AT-190",
+      "number": 190,
+      "title": "Implementar el importador de entidades e issues de Linear",
+      "description": "## Objetivo\n\nCrear una importación reproducible de los datos estructurales y del estado actual de Linear a prime-board.\n\n## Debe cubrir\n\nTeams, actores, workflow states, labels, proyectos, milestones, prioridades, asignación, descripción, fechas, archivado, numeración, padres y referencias a proyecto/milestone.\n\nDebe conservar los identificadores acordados en el contrato de migración y funcionar sobre una base nueva y sobre una base ya poblada.\n\n## Aceptación\n\n* Importación idempotente.\n* No modifica datos fuera del alcance declarado.\n* Rechaza entradas ambiguas o inválidas antes de escribir.\n* Tiene tests de round-trip y de reejecución.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:36:38.914Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:36:38.914Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-16T09:45:13.937Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-16T10:06:17.622Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "a96ba454-5c68-4028-ba9b-2ce97d79d0a4",
+      "identifier": "AT-187",
+      "number": 187,
+      "title": "Persistir la trazabilidad de origen de las entidades migradas",
+      "description": "## Objetivo\n\nConservar la correspondencia entre cada entidad importada y su identificador original de Linear para poder auditar, reejecutar y reconciliar la migración sin depender de nombres ambiguos.\n\n## Alcance\n\nDefinir y persistir el mapa de origen para issues, actores, teams, workflow states, labels, proyectos, milestones, comentarios y relaciones. Conservar URL e identificador de Linear cuando corresponda, sin exportar API keys ni secretos de webhooks.\n\n## Aceptación\n\n* El mapa es estable entre exportaciones y rebuilds.\n* Los nombres duplicados no producen asociaciones silenciosas.\n* El importador puede detectar entidades ya migradas y cambios posteriores.\n* La trazabilidad queda disponible para auditoría y no expone credenciales.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:35:40.391Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:35:40.391Z"
+        },
+        {
+          "stateId": "3ee3abdb-3359-417f-bc4b-ffda004477b7",
+          "startedAt": "2026-08-16T09:35:51.006Z"
+        },
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:37:05.489Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-16T09:45:10.414Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-16T09:52:52.588Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "b42d121c-e0c4-4891-886e-3b45494e58b0",
+      "identifier": "AT-192",
+      "number": 192,
+      "title": "Definir el contrato idempotente de migración desde Linear",
+      "description": "## Objetivo\n\nEspecificar cómo se identifica una entidad ya migrada y cómo se repite la migración sin duplicar ni sobrescribir silenciosamente datos.\n\n## Alcance\n\nDefinir el mapa Linear → prime-board para workspace, teams, actores, workflow states, labels, proyectos, milestones e issues; la política para conservar fechas y autores; y el formato del reporte de migración.\n\n## Aceptación\n\n* Cada entidad tiene una clave de correspondencia estable.\n* Se documentan conflictos de nombres, estados y actores.\n* El contrato distingue datos importados, datos locales y datos no representables.\n* Incluye modo `dry-run` y códigos de salida para automatización.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:36:39.310Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:36:39.310Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-16T09:43:07.304Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "7121e2bb-8a5f-4147-9a2b-3b5358395222",
+      "identifier": "AT-194",
+      "number": 194,
+      "title": "Resolver la colisión de identificadores AT entre Linear y prime-board",
+      "description": "## Problema\n\nLinear y el repositorio local de prime-board usan el mismo prefijo `AT`, pero varios identificadores representan tickets distintos. Por ejemplo, `AT-185` existe en ambos sistemas con títulos diferentes.\n\n## Entregable\n\nDecidir y documentar la estrategia de namespace para la migración: conservar los identificadores de Linear y rekeyear los tickets internos de prime-board, o conservar los tickets internos y migrar Linear a otro team/key.\n\nIncluir un mapa estable de identificadores y las referencias que deben actualizarse en logs, snapshots, documentos, commits y relaciones.\n\n## Aceptación\n\n* Se enumeran todas las colisiones actuales.\n* La estrategia permite resolver padres, relaciones y enlaces históricos.\n* La decisión queda registrada en un ADR o documento operativo.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:36:41.563Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:36:41.563Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-16T09:41:55.707Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "identifier": "AT-186",
+      "number": 186,
+      "title": "Migrar el backlog de Linear a prime-board",
+      "description": "## Objetivo\n\nDejar prime-board como sistema de registro operativo para los tickets que hoy viven en Linear, sin perder identificadores, jerarquías, asignaciones, proyectos, comentarios ni relaciones.\n\n## Alcance\n\nMigrar el workspace de Linear de forma reproducible, con un reporte explícito de los datos que no tengan representación equivalente y un corte reversible.\n\n## Plan de trabajo\n\n1. <issue id=\"7121e2bb-8a5f-4147-9a2b-3b5358395222\" href=\"https://linear.app/andrestobelem/issue/AT-194/resolver-la-colision-de-identificadores-at-entre-linear-y-prime-board\">AT-194</issue> — Resolver la colisión de identificadores `AT-*`.\n2. <issue id=\"b42d121c-e0c4-4891-886e-3b45494e58b0\" href=\"https://linear.app/andrestobelem/issue/AT-192/definir-el-contrato-idempotente-de-migracion-desde-linear\">AT-192</issue> y <issue id=\"a96ba454-5c68-4028-ba9b-2ce97d79d0a4\" href=\"https://linear.app/andrestobelem/issue/AT-187/persistir-la-trazabilidad-de-origen-de-las-entidades-migradas\">AT-187</issue> — Definir el contrato idempotente y la trazabilidad de origen.\n3. <issue id=\"63f08aad-0f51-4fa6-8bcc-58fb4f3d2dfd\" href=\"https://linear.app/andrestobelem/issue/AT-189/resolver-las-funcionalidades-de-linear-sin-representacion-en-prime\">AT-189</issue> — Decidir el tratamiento de funcionalidades sin representación.\n4. <issue id=\"0003bfbd-6ad2-40fc-97a2-43d967a0b65b\" href=\"https://linear.app/andrestobelem/issue/AT-190/implementar-el-importador-de-entidades-e-issues-de-linear\">AT-190</issue> y <issue id=\"c0decadf-e217-434b-91c0-d0169d352530\" href=\"https://linear.app/andrestobelem/issue/AT-191/importar-comentarios-actividad-y-relaciones-de-issues\">AT-191</issue> — Implementar la importación estructural y colaborativa.\n5. <issue id=\"abf849b8-1980-465d-9332-209bed0c1875\" href=\"https://linear.app/andrestobelem/issue/AT-188/construir-dry-run-y-reconciliacion-de-la-migracion-linear-prime-board\">AT-188</issue> — Ejecutar dry-run y reconciliación.\n6. <issue id=\"9f563d2f-48fc-4f03-9984-b7613840247c\" href=\"https://linear.app/andrestobelem/issue/AT-193/ejecutar-la-migracion-completa-y-validar-el-backlog-importado\">AT-193</issue> — Ejecutar la migración completa.\n7. <issue id=\"ddc2d447-3a80-4b2e-9db3-f56a6d183e91\" href=\"https://linear.app/andrestobelem/issue/AT-195/cortar-la-operacion-de-linear-y-actualizar-la-documentacion-de-agentes\">AT-195</issue> — Hacer el corte operativo y actualizar la documentación.\n\n## Criterio de terminado\n\n* Existe un importador idempotente con modo dry-run.\n* Se resuelven las colisiones de identificadores `AT-*` entre el historial local de prime-board y Linear.\n* La reconciliación no muestra pérdidas no aceptadas.\n* Los agentes y repositorios operan prime-board sin depender de Linear.\n* Linear queda conservado en modo lectura durante la verificación final.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+      "priority": 2,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:35:22.674Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:35:22.674Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-16T10:08:44.671Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "ddc2d447-3a80-4b2e-9db3-f56a6d183e91",
+      "identifier": "AT-195",
+      "number": 195,
+      "title": "Cortar la operación de Linear y actualizar la documentación de agentes",
+      "description": "## Objetivo\n\nConvertir prime-board en el sistema operativo de tickets y dejar Linear solo como archivo de consulta durante el período de estabilización.\n\n## Alcance\n\nActualizar `AGENTS.md`, `docs/agents/issue-tracker.md`, skills, configuración MCP/CLI, enlaces y procedimientos de triage; definir backup, recuperación y rollback.\n\n## Aceptación\n\n* No quedan instrucciones operativas que creen o actualicen tickets en Linear.\n* Los repositorios y agentes nuevos usan prime-board por defecto.\n* Existe un procedimiento de corte final y rollback.\n* Linear queda en modo lectura hasta cerrar la verificación post-corte.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+      "priority": 0,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:36:41.790Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:36:41.790Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-16T10:18:57.731Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "9f563d2f-48fc-4f03-9984-b7613840247c",
+      "identifier": "AT-193",
+      "number": 193,
+      "title": "Ejecutar la migración completa y validar el backlog importado",
+      "description": "## Objetivo\n\nEjecutar el importador sobre una copia verificable del workspace y completar la reconciliación del backlog actual de Linear.\n\n## Aceptación\n\n* Todos los issues dentro del alcance aparecen en prime-board.\n* Se revisan manualmente los conflictos y el reporte de pérdida.\n* Se verifica que agentes y humanos puedan consultar, asignar, comentar, relacionar y cerrar issues.\n* Se conserva un backup inmutable de la exportación original y del resultado.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+      "priority": 0,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:36:39.572Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:36:39.572Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "c0decadf-e217-434b-91c0-d0169d352530",
+      "identifier": "AT-191",
+      "number": 191,
+      "title": "Importar comentarios, actividad y relaciones de issues",
+      "description": "## Objetivo\n\nMigrar el contexto colaborativo que permite a un agente retomar un issue sin volver a Linear.\n\n## Alcance\n\nComentarios con autor y fecha, historial de estados/cambios disponible, jerarquía de padres, relaciones `blocks`, `blocked-by`, `related` y `duplicate-of`, y enlaces internos entre issues.\n\n## Aceptación\n\n* Los comentarios quedan consultables desde la API y el repo.\n* Se preservan autores y timestamps originales cuando existen.\n* Las relaciones se reconstruyen sin duplicados ni ciclos inválidos.\n* Toda pérdida por threads, comentarios inline o actividad no disponible queda reportada.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": null,
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": null,
+      "labelIds": [],
+      "createdAt": "2026-08-16T09:36:39.059Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-16T09:36:39.059Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-16T10:06:19.971Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "678440fd-5915-4070-8b12-d7ea0003e0b6",
+      "identifier": "AT-152",
+      "number": 152,
+      "title": "Proyectos asociados a teams",
+      "description": "Hoy los proyectos son globales del workspace: no tienen relación con teams (la tabla `projects` no referencia `teams`). En Linear los proyectos pertenecen a uno o más teams, y esa asociación estructura el sidebar y los filtros.\n\n**Modelo y API:**\n\n* Migración `0002`: tabla N:M `project_teams (project_id, team_id)` — paridad con Linear (un proyecto puede abarcar varios teams). `projectCreate`/`projectUpdate` aceptan `teamIds` (al crear, default: el team desde donde se crea).\n* `Project.teams` y `Team.projects` en el schema GraphQL; `ProjectFilter` por team.\n* Regla de consistencia a decidir: ¿un issue solo puede asociarse a un proyecto que incluya a su team? (Linear lo exige; propongo validarlo con `VALIDATION_FAILED`.)\n\n**Clientes:**\n\n* **UI:** proyectos agrupados bajo su team en el sidebar (como Linear), vista de team con sus proyectos, y selector de proyecto en el detalle filtrado por el team del issue.\n* **CLI/MCP:** `pb project list --team PB`, `list_projects` con filtro `team`, `save_project` con `teams`.\n\n**Entregable:** proyecto creado desde un team, visible bajo ese team en el sidebar, con la validación de consistencia issue↔proyecto y tests de API + verificación visual.\n\nOrigen: feedback de Andrés al probar el MVP.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "3a155d9d-7168-48dd-ab6a-6c2bce9cd702",
+      "labelIds": [],
+      "createdAt": "2026-08-14T22:05:42.343Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T22:05:42.343Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T22:15:45.136Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T22:20:38.893Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "cad65117-00a3-4893-96c6-e8235bb8c262",
+      "identifier": "AT-151",
+      "number": 151,
+      "title": "UI: gestión de usuarios y agentes (members)",
+      "description": "Hoy los actores (humanos y agentes) solo se pueden crear por GraphQL/CLI/MCP (`actorCreate` + `apiKeyCreate`). Falta la administración desde la UI:\n\n* **Sección \"Members\"** (en el sidebar o dentro de Settings): listado de actores con nombre, tipo (badge 🤖 para agentes), email y fecha de alta.\n* **Alta de actores** desde la UI: humano o agente, con nombre y email opcional.\n* **API keys por actor**: generar una key desde la UI (mostrada una única vez, con botón de copiar) y listar las existentes con `lastUsedAt`; idealmente poder **revocarlas** (requiere mutation `apiKeyDelete`, hoy inexistente — agregarla al schema).\n* Reutilizar el patrón `/?key=` para generar un **link de onboarding** copiable al crear un actor con su key.\n\n**Entregable:** flujo completo desde la UI: crear un agente → generar su key → copiar el link de onboarding → el agente opera con esa key. Verificación visual con Playwright.\n\nOrigen: feedback de Andrés al probar el MVP.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "3a155d9d-7168-48dd-ab6a-6c2bce9cd702",
+      "labelIds": [],
+      "createdAt": "2026-08-14T22:05:39.048Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T22:05:39.048Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T22:12:28.300Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T22:15:41.562Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "8b39064e-cb99-43ae-84fe-87918bbd66da",
+      "identifier": "AT-150",
+      "number": 150,
+      "title": "UI: selector de tema dark / light / system",
+      "description": "El MVP salió solo con tema oscuro. Agregar soporte de temas en la UI web:\n\n* **Tres modos:** `dark`, `light` y `system` (default `system`, usando `prefers-color-scheme` y reaccionando a cambios del SO en vivo).\n* **Dónde se elige:** en Settings, y como comando en el palette (`⌘K` → \"Toggle theme\").\n* **Persistencia:** en `localStorage` (`pb.theme`), aplicando la clase en `<html>` **antes** del primer render para evitar flash (FOUC).\n* **Paleta light:** definir variables Linear-like claras (la base ya está centralizada en `:root` de `apps/web/src/styles.css`, así que es cambiar el set de variables por clase de tema). Cuidar contraste de labels, pills de estado, prioridades y bordes.\n\n**Entregable:** los tres modos funcionando sin flash, verificados visualmente (screenshots de lista, board y detalle en light y dark).\n\nOrigen: feedback de Andrés al probar el MVP.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "3a155d9d-7168-48dd-ab6a-6c2bce9cd702",
+      "labelIds": [],
+      "createdAt": "2026-08-14T22:05:06.061Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T22:05:06.061Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T22:11:00.307Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T22:12:24.599Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "261579a9-8d09-4586-8a6c-7fb94f8c71e9",
+      "identifier": "AT-149",
+      "number": 149,
+      "title": "Vista de proyecto",
+      "description": "Página de proyecto con header (estado, lead, fecha objetivo, descripción) y lista de issues del proyecto reutilizando la vista lista.\n\n**Entregable:** navegación team ↔ proyecto ↔ issue completa. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "f038769d-beae-4335-afe8-2b4b9423b544",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:10:01.491Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:10:01.491Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:50:38.909Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:52:20.983Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "72adf692-c067-4a76-af8f-83f4cae15102",
+      "identifier": "AT-148",
+      "number": 148,
+      "title": "Creación rápida y command palette",
+      "description": "Modal de nuevo issue con tecla `C` y command palette `Cmd+K` (navegar, crear, cambiar estado/prioridad/assignee), más atajos base (`Esc` cierra).\n\n**Entregable:** operar el board sin tocar el mouse, como en Linear. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "f038769d-beae-4335-afe8-2b4b9423b544",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:57.313Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:57.313Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:48:08.950Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:50:35.999Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "33aebb00-38c0-4cbb-a8a1-504782e6bed7",
+      "identifier": "AT-147",
+      "number": 147,
+      "title": "Detalle de issue con edición inline",
+      "description": "Panel de detalle: título/descripción editables inline (markdown render + edit), propiedades a la derecha (estado, prioridad, assignee, labels, proyecto, parent/sub-issues), comentarios e historial.\n\n**Entregable:** criterio de aceptación 6 en su parte de detalle. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "f038769d-beae-4335-afe8-2b4b9423b544",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:53.515Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:53.515Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:46:37.832Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:48:06.408Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "02d6654d-ca0e-4f7e-b81a-ada3b0bccb92",
+      "identifier": "AT-146",
+      "number": 146,
+      "title": "Board con drag & drop",
+      "description": "Vista board con columnas por estado y drag & drop que ejecuta `issueUpdate` (optimistic update).\n\n**Entregable:** mover un issue de columna actualiza estado, actividad y webhooks. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "f038769d-beae-4335-afe8-2b4b9423b544",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:49.303Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:49.303Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:45:30.313Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:46:35.111Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "caaf9a84-edf1-460a-b0aa-25df89381f2d",
+      "identifier": "AT-145",
+      "number": 145,
+      "title": "Lista de issues agrupada por estado",
+      "description": "Vista lista por team agrupada por estado con identificador, prioridad, título, labels y assignee (badge 🤖 para agentes), ordenamiento y navegación por teclado (`↑↓/J/K`, `Enter`).\n\n**Entregable:** réplica funcional de la lista de Linear. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "f038769d-beae-4335-afe8-2b4b9423b544",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:46.114Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:46.114Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:42:43.257Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:45:27.128Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "d15ecced-0951-40de-b520-8120513dd4ab",
+      "identifier": "AT-144",
+      "number": 144,
+      "title": "Shell de la UI Linear-like",
+      "description": "App React + Vite servida por el proceso Bun: tema oscuro por defecto con estética Linear (densidad, tipografía, colores), sidebar (workspace, teams, proyectos), routing SPA y settings para pegar la API key (localStorage). La UI consume exclusivamente `/graphql`.\n\n**Entregable:** shell navegable con datos reales. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "f038769d-beae-4335-afe8-2b4b9423b544",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:42.515Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:42.515Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:39:41.828Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:42:40.298Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "3f742abe-1911-4003-ba27-7fbce6c14ae8",
+      "identifier": "AT-143",
+      "number": 143,
+      "title": "Guía de uso para agentes y seeds de demo",
+      "description": "Escribir `docs/guia-agentes.md` (cómo obtener una key, ejemplos GraphQL/CLI/MCP, cómo suscribirse por webhook) y un comando de seed con datos de demo para probar la UI y los clientes.\n\n**Entregable:** guía reproducible de punta a punta sobre una DB nueva. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "a26525bf-ac37-45ac-a65d-3fd37e143a5d",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:39.475Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:39.475Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:31:45.152Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:33:42.642Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "9d3cc233-5eae-4fc3-94c6-0d71608d9a46",
+      "identifier": "AT-142",
+      "number": 142,
+      "title": "MCP server con tools espejo de Linear",
+      "description": "Servidor MCP por stdio, cliente de la API GraphQL, con tools nombradas como las del MCP de Linear: `list_issues`, `get_issue`, `save_issue`, `list_comments`, `save_comment`, `list_projects`, `get_project`, `save_project`, `list_teams`, `get_team`, `list_issue_statuses`, `list_issue_labels`, `list_users`, `get_workspace`.\n\n**Entregable:** un agente que sabe usar el MCP de Linear opera prime-board sin cambios. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "a26525bf-ac37-45ac-a65d-3fd37e143a5d",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:36.054Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:36.054Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:28:59.016Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:31:41.926Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "9ed7e984-fe22-4b13-badc-e13f67a40788",
+      "identifier": "AT-141",
+      "number": 141,
+      "title": "CLI pb: proyectos, teams y webhooks",
+      "description": "Comandos `pb project list|view|create`, `pb team list` y `pb webhook create` completando la superficie CLI del MVP.\n\n**Entregable:** paridad CLI con los criterios de aceptación 2–3. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "a26525bf-ac37-45ac-a65d-3fd37e143a5d",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:31.244Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:31.244Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:27:49.966Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:28:56.469Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "ed876af1-668b-4f5f-889e-90160cbf372d",
+      "identifier": "AT-140",
+      "number": 140,
+      "title": "CLI pb: auth e issues",
+      "description": "Comandos `pb auth login`, `pb issue list|view|create|update|comment` contra la API GraphQL, con config en `~/.prime-board/cli.json` (override por env), `--json` estable para agentes y exit codes 0/1/2 según la spec §7.\n\n**Entregable:** flujo completo de un issue desde la terminal. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "a26525bf-ac37-45ac-a65d-3fd37e143a5d",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:27.576Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:27.576Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T21:24:57.277Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:27:47.492Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "4962eb57-e31a-4fbe-9935-157dd557df3b",
+      "identifier": "AT-139",
+      "number": 139,
+      "title": "Webhooks: registro y despacho firmado",
+      "description": "Mutations `webhookCreate`/`webhookDelete`; despacho asíncrono (cola en memoria) de los 6 eventos MVP (`issue.created`, `issue.updated`, `issue.archived`, `comment.created`, `project.created`, `project.updated`) con payload `{event, actor, data, changes?, createdAt}`, firma HMAC-SHA256 en `X-PrimeBoard-Signature` y 3 reintentos con backoff.\n\n**Entregable:** criterio de aceptación 5 verificado con un receptor de prueba. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:23.714Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:23.714Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:58:54.796Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T21:20:20.685Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "874261bf-2925-4a45-a2bf-9069d474ff6f",
+      "identifier": "AT-138",
+      "number": 138,
+      "title": "Filtros componibles, full-text y paginación",
+      "description": "Implementar `IssueFilter` con comparadores y `and`/`or` anidables, orden (`orderBy`), paginación por cursor estilo Relay (`nodes`, `pageInfo`), y búsqueda full-text con SQLite FTS5 (`filter.search`) sincronizada por triggers sobre título y descripción.\n\n**Entregable:** query 'mis issues urgentes sin empezar del team AT que mencionen X' en una sola llamada. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:19.884Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:19.884Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:56:26.904Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:58:51.904Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "5d90ad02-9253-4617-b90e-79c89e4e445a",
+      "identifier": "AT-137",
+      "number": 137,
+      "title": "GraphQL: proyectos",
+      "description": "Queries `projects`/`project` y mutations `projectCreate`/`projectUpdate` (nombre, descripción, estado backlog→canceled, lead, targetDate) + asociación de issues vía `issueUpdate`.\n\n**Entregable:** proyecto con issues asociados navegable por API. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:16.527Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:16.527Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:54:55.665Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:56:24.400Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "44dfdf8e-0911-49a3-9445-aaa25e2ab2f4",
+      "identifier": "AT-136",
+      "number": 136,
+      "title": "GraphQL: comentarios e historial de actividad",
+      "description": "Mutation `commentCreate` y conexiones `comments`/`activity` en `Issue`. Tabla `activity` append-only poblada por todas las mutations de issues (`created`, `state_changed`, `assigned`, `priority_changed`, `labeled`, `commented`, ...) con actor y payload JSON.\n\n**Entregable:** el historial reconstruye la secuencia completa de cambios de un issue (criterio 7). Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:13.525Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:13.525Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:53:40.808Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:54:53.288Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "638f0cc5-f2b5-4411-b814-d340dff58b95",
+      "identifier": "AT-135",
+      "number": 135,
+      "title": "GraphQL: labels de workspace y de team",
+      "description": "Mutation `labelCreate` (con `teamId` opcional: NULL = workspace), query `labels`, y asociación N:M a issues vía `issueUpdate` (set/add/remove).\n\n**Entregable:** etiquetar y filtrar issues por label. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:09.787Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:09.787Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:51:58.399Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:53:38.382Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "1b24ae84-36c7-4939-a6eb-683958e30140",
+      "identifier": "AT-134",
+      "number": 134,
+      "title": "GraphQL: issues (CRUD, estados, prioridades, sub-issues)",
+      "description": "Queries `issue` (por UUID o identificador `AT-126`) e `issues`, mutations `issueCreate`, `issueUpdate` (estado, prioridad, assignee, parent, project, título, descripción) e `issueArchive`. Identificadores legibles inmutables (`team.key + number`), prioridades 0–4 como Linear, `branchName` derivado.\n\n**Entregable:** ciclo de vida completo de un issue con sub-issues vía GraphQL. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:06.376Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:06.376Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:48:46.593Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:51:55.461Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "3e3a0ef1-eb7e-4e17-96c2-9e09294df4f7",
+      "identifier": "AT-133",
+      "number": 133,
+      "title": "GraphQL: teams, actores y API keys",
+      "description": "Queries `teams`, `team`, `actors`, `workspace` y mutations `teamCreate`, `actorCreate` (humanos y agentes), `apiKeyCreate` (devuelve la key una sola vez). Al crear un team se siembra el workflow default (Backlog, Todo, In Progress, Done, Canceled) y `workflowStateCreate` permite personalizarlo.\n\n**Entregable:** alta de un agente con su key vía GraphQL puro. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:02.864Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:02.864Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:46:38.982Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:48:43.896Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "ca92ef9a-0a56-4dfe-8679-e7cf147acc4d",
+      "identifier": "AT-132",
+      "number": 132,
+      "title": "Servidor GraphQL base con auth por API key",
+      "description": "Montar GraphQL Yoga sobre Bun en `/graphql` con schema SDL-first, contexto con `viewer` resuelto por `Authorization: Bearer pb_...` (keys hasheadas SHA-256), errores con `extensions.code` (`NOT_FOUND`, `UNAUTHORIZED`, `VALIDATION_FAILED`) y GraphiQL en dev.\n\n**Entregable:** query `viewer` funcionando con una key válida y rechazada sin key. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:09:00.014Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:09:00.014Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:44:18.574Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:46:35.578Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "a9ebd57d-1917-4422-ba88-6802ae4dca4f",
+      "identifier": "AT-131",
+      "number": 131,
+      "title": "Esquema SQLite, migraciones y seed inicial",
+      "description": "Implementar las 12 tablas de la spec (§3) con migraciones SQL versionadas que corren al arrancar, WAL activado, y bootstrap del primer arranque: workspace, team default, actor `admin` y su API key impresa por consola una única vez. Ubicación de la DB configurable con `PRIME_BOARD_DB`.\n\n**Entregable:** DB creada y sembrada al primer arranque; reinicios no pierden datos. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:08:57.125Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:08:57.125Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:42:18.966Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:44:15.522Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "fd86a287-6061-4742-acf4-fbdbf1787ea7",
+      "identifier": "AT-130",
+      "number": 130,
+      "title": "Bootstrap del monorepo Bun + TypeScript",
+      "description": "Crear la estructura del monorepo (`apps/server`, `apps/web`, `apps/cli`, `apps/mcp`, `packages/schema`) con Bun workspaces, TypeScript estricto y scripts base (`bun run server`, `bun test`).\n\n**Entregable:** repo que instala y corre un server hello-world con `bun run server`. Spec de referencia: [`docs/specs/mvp.md`](<https://github.com/andrestobelem/prime-board/blob/main/docs/specs/mvp.md>).",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "538e8481-0106-4759-8bd0-b203862a7698",
+      "labelIds": [],
+      "createdAt": "2026-08-14T20:08:53.455Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T20:08:53.455Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:26:01.293Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:33:13.580Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "0b9270f2-118d-4865-bdf4-f3bd36709139",
+      "identifier": "AT-128",
+      "number": 128,
+      "title": "Escribir la spec del MVP en docs/",
+      "description": "Escribir la especificación del MVP en `docs/specs/mvp.md`: modelo de datos, operaciones expuestas, interfaz (API/CLI/MCP), y criterios de aceptación.\n\n**Entregable:** spec revisable que sirva como base para desglosar los tickets de implementación de la Parte 2.\n\nDepende de: definición del alcance del MVP.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "febdc122-090d-4529-8c68-353978a54bd4",
+      "labelIds": [],
+      "createdAt": "2026-08-14T19:50:08.177Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T19:50:08.177Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:05:38.497Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:07:21.055Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "ec63f2c8-f862-4792-84c9-cf7b4dfaac8d",
+      "identifier": "AT-127",
+      "number": 127,
+      "title": "Definir el alcance del MVP de prime-board",
+      "description": "A partir del relevamiento, decidir qué entra y qué queda fuera del MVP. Criterio rector: prime-board es para agentes → API-first, operable por CLI/MCP, sin depender de UI para el flujo principal.\n\n**Entregable:** lista cerrada de funcionalidades del MVP con justificación breve de cada inclusión/exclusión.\n\nDepende de: relevamiento de funcionalidades core.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "febdc122-090d-4529-8c68-353978a54bd4",
+      "labelIds": [],
+      "createdAt": "2026-08-14T19:50:01.100Z",
+      "updatedAt": "2026-08-16T10:29:18.313Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T19:50:01.100Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T20:04:31.626Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T20:05:35.725Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    },
+    {
+      "id": "05514fbe-3fa6-4e31-9cd6-dc5dee0644f1",
+      "identifier": "AT-126",
+      "number": 126,
+      "title": "Relevar funcionalidades core de Linear",
+      "description": "Hacer un inventario de las funcionalidades de Linear candidatas a clonar: issues (estados, prioridades, labels, asignación), proyectos, hitos, ciclos, comentarios, búsqueda/filtros, API (GraphQL/MCP), webhooks, etc.\n\n**Entregable:** documento `docs/relevamiento-linear.md` con el inventario y una primera clasificación (imprescindible / deseable / fuera de alcance) pensando en agentes como usuarios principales.",
+      "teamId": "2f4a1164-5b4b-470a-b78c-5715a878a19d",
+      "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+      "priority": 0,
+      "assigneeId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "creatorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "parentId": null,
+      "projectId": "00c10c04-f07f-4743-8e17-ae4c993058b0",
+      "milestoneId": "febdc122-090d-4529-8c68-353978a54bd4",
+      "labelIds": [],
+      "createdAt": "2026-08-14T19:49:45.521Z",
+      "updatedAt": "2026-08-16T10:29:24.304Z",
+      "archivedAt": null,
+      "stateHistory": [
+        {
+          "stateId": "04a5221e-877d-4756-913b-c5faf518cdd2",
+          "startedAt": "2026-08-14T19:49:45.521Z"
+        },
+        {
+          "stateId": "f45937af-6476-4eff-9c66-a038b534067e",
+          "startedAt": "2026-08-14T19:57:09.368Z"
+        },
+        {
+          "stateId": "cf698471-f427-41cd-accc-831478fe49f5",
+          "startedAt": "2026-08-14T19:59:40.609Z"
+        }
+      ],
+      "attachments": [],
+      "documents": [],
+      "dueDate": null,
+      "estimate": null,
+      "cycleId": null
+    }
+  ],
+  "comments": [
+    {
+      "id": "ba21e0ff-c28b-4619-a736-792b610e7a98",
+      "issueId": "63f08aad-0f51-4fa6-8bcc-58fb4f3d2dfd",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Política documentada en `docs/specs/migracion-linear.md` e implementada en el conversor:\n\n* adjuntos y documents se convierten en enlaces;\n* threads/inline se aplanan y generan `loss` explícita;\n* cycles, estimates y due dates generan `loss` y bloquean apply;\n* status updates/initiatives generan `loss`;\n* el estado Linear `duplicate` se conserva por nombre con tipo `canceled` y warning.\n\n`--allow-losses` requiere consentimiento explícito.",
+      "createdAt": "2026-08-16T09:55:19.429Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "79325e76-b887-4539-8d76-2252fd3f2903",
+      "issueId": "abf849b8-1980-465d-9332-209bed0c1875",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Reconciliación completa implementada en `a9ea3cc`: además de conteos, `--check` compara snapshots trazados de issues (identificador, título, team, estado, prioridad, asignación, creator, parent, project, milestone, labels, fechas y descripción/artefactos). Reporta `contentMismatches` y aborta con exit code no cero.",
+      "createdAt": "2026-08-16T10:16:53.199Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "05456df4-6db5-40c0-8674-ca63d023e7d1",
+      "issueId": "abf849b8-1980-465d-9332-209bed0c1875",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "El reporte persistido en `meta/migration-report.json` ahora incluye conteos de actores, equipos, estados, labels, proyectos, milestones, issues, comentarios y relaciones. `--check` los compara contra la captura y devuelve `countMismatches`/exit code no cero cuando divergen. La validación de contenido completo sobre la captura real queda para AT-193.",
+      "createdAt": "2026-08-16T10:08:39.397Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "6919a733-8dc0-4f7c-bdfd-9d893296b372",
+      "issueId": "abf849b8-1980-465d-9332-209bed0c1875",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Implementado en `a6c5144`: `reconcileLinearExport` compara snapshots contra la captura usando el `source-map`, detecta colisiones, pending creates/updates e issues extra; la CLI expone `--check`. Tests cubren colisión y staging reconciliado. Queda pendiente validar la captura real en AT-193.",
+      "createdAt": "2026-08-16T10:06:08.924Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "95dbc96c-863e-448e-a3e2-6093036bdb68",
+      "issueId": "abf849b8-1980-465d-9332-209bed0c1875",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "El comando de importación ya tiene `--dry-run` y reporta conflicts/losses/warnings en texto o JSON. La reconciliación contra un estado existente y la garantía de segunda ejecución sin cambios quedan como siguiente slice.",
+      "createdAt": "2026-08-16T09:53:02.656Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "29dd968a-f6fb-4564-a390-0f71e441e798",
+      "issueId": "0003bfbd-6ad2-40fc-97a2-43d967a0b65b",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Implementado en `68be26e` y commits siguientes: importador determinista de workspace, actores, equipos, estados, labels, proyectos, milestones, issues, comentarios, actividad y relaciones; persiste `source-map` y reporte de pérdidas. El modo `--merge-local` integra el repo actual y rekeyea colisiones a PRB. Typecheck y 200 tests pasan.",
+      "createdAt": "2026-08-16T10:06:10.712Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "632d1bbc-35d3-4786-9939-c6a942b89505",
+      "issueId": "0003bfbd-6ad2-40fc-97a2-43d967a0b65b",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Avance implementado:\n\n* `parseLinearExport` valida la envoltura del JSON.\n* `writeLinearExportToRepo` convierte workspace, actores, teams, estados, labels, proyectos, milestones, issues, padres, comentarios y relaciones a snapshots/logs.\n* Conserva fechas, autores, prioridades, archivado y numeración.\n* `bun run import:linear --from <export.json> --out <repo> [--dry-run] [--apply]` expone el flujo.\n* Round-trip probado mediante `rebuildFromRepo`.\n\nQueda pendiente integrar la reconciliación contra un repo operativo con datos locales `PRB` antes de cerrar el issue.",
+      "createdAt": "2026-08-16T09:53:00.474Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "aaa3e1e9-85a9-4799-88f3-59bae94c0bb0",
+      "issueId": "a96ba454-5c68-4028-ba9b-2ce97d79d0a4",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Completado el mapa de trazabilidad:\n\n* `source-map.ts` define el formato versionado `linear` y valida mappings sin nombres ambiguos.\n* `linear-repo-export.ts` genera mappings para actores, teams, estados, labels, proyectos, milestones, issues, comentarios y relaciones.\n* Se persiste en `.prime-board/meta/source-map.json` y `exportBoard` lo preserva.\n* API keys, hashes y secretos no forman parte del formato.\n\nTests incluidos y suite completa: 196 pass.",
+      "createdAt": "2026-08-16T09:52:50.050Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "8db2b63d-06f0-4fc5-a0e8-2f96969d390b",
+      "issueId": "a96ba454-5c68-4028-ba9b-2ce97d79d0a4",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Implementado el primer vertical slice: `source-map.ts` valida mapas versionados `linear` y evita remapeos ambiguos; `linear-plan.ts` calcula planes deterministas de issues, propone `create`/`update` y marca colisiones, mapas obsoletos y IDs duplicados. Tests de la seam pública: 6 pasan.",
+      "createdAt": "2026-08-16T09:45:19.150Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "439af534-d763-4e97-98dd-8797a9a3951a",
+      "issueId": "b42d121c-e0c4-4891-886e-3b45494e58b0",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Contrato documentado en `docs/specs/migracion-linear.md`.\n\nDefine el formato del Linear export, trazabilidad por UUID, estados del plan (`create`, `update`, `unchanged`, `conflict`, `loss`), resolución en dos pasadas e idempotencia. El importador solo aplica planes sin conflictos ni pérdidas no aprobadas.",
+      "createdAt": "2026-08-16T09:43:04.363Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "b81a6c59-aba5-4e2d-b569-e726dea24794",
+      "issueId": "7121e2bb-8a5f-4147-9a2b-3b5358395222",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Decisión registrada en `docs/adr/0006-namespace-de-la-migracion-de-linear.md`.\n\n* Linear conserva la clave `AT` y sus identificadores públicos.\n* Los issues propios de prime-board que colisionan o no existen en Linear se rekeyean al team `PRB`.\n* Los issues demo `PB` quedan fuera del corte.\n* La migración exige un mapa estable `Linear UUID → prime-board identifier`.\n\nEl ADR documenta también las consecuencias y las alternativas rechazadas.",
+      "createdAt": "2026-08-16T09:41:53.036Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "031f16d5-9566-4285-a8d8-5d0899b2fbdb",
+      "issueId": "1af39432-8a55-4c35-b9e5-8dd430815122",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Avance: contrato, namespace, políticas de pérdida, importador, reconciliación y merge seguro están implementados en main. AT-193/AT-195 permanecen pendientes hasta disponer de una exportación completa de Linear con UUIDs y ejecutar la validación final.",
+      "createdAt": "2026-08-16T10:13:01.798Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "df285751-062b-466d-984a-d83f32e61ab6",
+      "issueId": "ddc2d447-3a80-4b2e-9db3-f56a6d183e91",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "Runbook de corte y rollback agregado en `docs/specs/cutover-linear.md` (`6a2a94f`). El corte operativo sigue deliberadamente pendiente de AT-193 y de la captura completa con UUIDs; no se cambian aún las instrucciones activas de agentes.",
+      "createdAt": "2026-08-16T10:17:45.220Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "067d93e0-74ee-420f-9268-57f5b4d34264",
+      "issueId": "ddc2d447-3a80-4b2e-9db3-f56a6d183e91",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "No se corta todavía. El merge escribe un output nuevo, conserva Linear `AT`, rekeyea locales a `PRB` y deja reporte para rollback. El corte documental debe hacerse después de ejecutar AT-193 y verificar la captura completa.",
+      "createdAt": "2026-08-16T10:13:00.039Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "d9662f60-b5f1-4955-b138-00bf00941526",
+      "issueId": "9f563d2f-48fc-4f03-9984-b7613840247c",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "La CLI ahora rechaza antes de escribir cualquier captura cuyos IDs de origen no sean UUID (`NON_UUID_SOURCE_ID`, commit `ab55efd`). Esto evita migrar accidentalmente la salida normalizada del MCP, que solo expone `AT-*`. AT-193 necesita una exportación API completa con UUIDs originales.",
+      "createdAt": "2026-08-16T10:20:17.559Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "c7fe698e-ed06-444e-9c20-74573ac0bd6a",
+      "issueId": "9f563d2f-48fc-4f03-9984-b7613840247c",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "La ejecución final queda preparada en la CLI (`--dry-run`, `--check`, `--merge-local`, `--apply`), pero no se ejecuta aún: la interfaz MCP disponible expone identificadores legibles `AT-*`, no los UUID de issues requeridos por el contrato de trazabilidad. Hace falta una captura JSON completa de Linear con UUIDs, entidades y relaciones antes de validar o cortar.",
+      "createdAt": "2026-08-16T10:12:52.879Z",
+      "parentId": null,
+      "quotedText": null
+    },
+    {
+      "id": "b7001879-c886-4aa3-a875-78adc3f8d945",
+      "issueId": "c0decadf-e217-434b-91c0-d0169d352530",
+      "authorId": "3a1308f6-3b01-4793-bebf-82024fb14572",
+      "body": "La importación de comentarios, actividad y relaciones quedó cubierta por el conversor y sus pruebas de round-trip. Los refs se traducen a claves legibles en export y se resuelven de vuelta por UUID durante la reconstrucción.",
+      "createdAt": "2026-08-16T10:06:12.355Z",
+      "parentId": null,
+      "quotedText": null
+    }
+  ],
+  "relations": []
+}

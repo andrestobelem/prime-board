@@ -1,4 +1,0 @@
-{"actor":"claude","issue":"PB-101","payload":{"title":"Auto after","team":null,"state":null,"assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-15T03:40:57.867Z","type":"created"}
-{"actor":"claude","issue":"PB-101","payload":{},"ts":"2026-08-15T03:40:57.873Z","type":"archived"}
-{"actor":"admin","issue":"PB-101","payload":{"body":"Smoke verificado: el siguiente issue automático recibió PB-101 después de PB-100, sin colisión."},"ts":"2026-08-16T09:02:45.160Z","type":"commented"}
-{"actor":"admin","issue":"PB-101","payload":{"from":"Backlog","to":"Done"},"ts":"2026-08-16T09:02:45.213Z","type":"state_changed"}

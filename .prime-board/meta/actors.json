@@ -5,6 +5,11 @@
     "type": "human"
   },
   {
+    "email": "andres.tobelem@gmail.com",
+    "name": "Andrés Tobelem",
+    "type": "human"
+  },
+  {
     "email": null,
     "name": "claude",
     "type": "agent"
@@ -12,6 +17,11 @@
   {
     "email": null,
     "name": "demo-agent",
+    "type": "agent"
+  },
+  {
+    "email": "linear-82afff80-2cd1-473e-bb13-0a24003e65eb@linear.linear.app",
+    "name": "Linear",
     "type": "agent"
   }
 ]
