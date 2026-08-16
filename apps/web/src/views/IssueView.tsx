@@ -5,7 +5,14 @@ import { mutate, useQuery } from "../api.ts";
 import { Avatar, LabelChip, PRIORITY_NAMES, StateIcon } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
 import { renderMarkdown } from "../markdown.ts";
-import { Link } from "../router.tsx";
+import { Link, navigate } from "../router.tsx";
+
+const ISSUE_NAV_QUERY = `query($teamId: ID) {
+  issues(filter: { team: { eq: $teamId } }, first: 250, orderBy: CREATED_DESC) {
+    nodes { identifier }
+    pageInfo { hasNextPage }
+  }
+}`;
 
 const ISSUE_QUERY = `query($id: ID!) {
   issue(id: $id) {
@@ -95,6 +102,15 @@ function timeAgo(iso: string): string {
 export function IssueView({ issueRef }: { issueRef: string }) {
   const result = useQuery<any>(ISSUE_QUERY, { id: issueRef });
   const issue = result.data?.issue;
+  const navigation = useQuery<any>(ISSUE_NAV_QUERY, { teamId: issue?.team.id ?? null });
+  const navigationIds: string[] =
+    navigation.data?.issues.nodes.map((item: any) => item.identifier) ?? [];
+  const navigationIndex = navigationIds.indexOf(issueRef);
+  const previousIssue = navigationIndex > 0 ? navigationIds[navigationIndex - 1] : null;
+  const nextIssue =
+    navigationIndex >= 0 && navigationIndex < navigationIds.length - 1
+      ? navigationIds[navigationIndex + 1]
+      : null;
 
   const [title, setTitle] = useState("");
   const [editingDescription, setEditingDescription] = useState(false);
@@ -108,6 +124,8 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   const [subIssueTitle, setSubIssueTitle] = useState("");
   const [subIssueSaving, setSubIssueSaving] = useState(false);
   const [subIssueError, setSubIssueError] = useState<string | null>(null);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (issue) {
@@ -119,6 +137,21 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
   if (result.error) return <div className="error-banner">{result.error.message}</div>;
   if (!issue) return <div className="empty">Issue {issueRef} not found.</div>;
+
+  async function copyText(value: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  function copyIssueLink() {
+    void copyText(window.location.href);
+    setActionsOpen(false);
+  }
 
   const update = (input: Record<string, unknown>) =>
     mutate(
@@ -210,6 +243,53 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   return (
     <div className="issue-detail">
       <div className="issue-main">
+        <div className="issue-header">
+          <div className="issue-header-id">
+            <span className="issue-identifier">{issue.identifier}</span>
+            <div className="issue-actions">
+              <button
+                className="issue-icon-button"
+                aria-label="Issue actions"
+                aria-expanded={actionsOpen}
+                onClick={() => setActionsOpen((open) => !open)}
+              >
+                <Icon name="more" size={16} />
+              </button>
+              {actionsOpen && (
+                <div className="issue-actions-menu" role="menu">
+                  <button role="menuitem" onClick={copyIssueLink}>
+                    <Icon name="link" size={14} /> Copy issue link
+                  </button>
+                  <button role="menuitem" onClick={() => void copyText(issue.identifier)}>
+                    <Icon name="copy" size={14} /> Copy identifier
+                  </button>
+                  <Link to={`/team/${issue.team.key}`}>
+                    <Icon name="issues" size={14} /> Open in team list
+                  </Link>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="issue-header-actions">
+            <button
+              className="issue-icon-button"
+              aria-label="Previous issue"
+              disabled={!previousIssue || navigation.loading}
+              onClick={() => previousIssue && navigate(`/issue/${previousIssue}`)}
+            >
+              ‹
+            </button>
+            <button
+              className="issue-icon-button"
+              aria-label="Next issue"
+              disabled={!nextIssue || navigation.loading}
+              onClick={() => nextIssue && navigate(`/issue/${nextIssue}`)}
+            >
+              ›
+            </button>
+          </div>
+        </div>
+        {copied && <span className="copied-hint">Link copied</span>}
         <input
           className="issue-title-input"
           value={title}
@@ -367,7 +447,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
 
       <div className="issue-props">
         <div className="prop">
-          <span>State</span>
+          <span className="prop-label">
+            <Icon name="check" size={13} /> State
+          </span>
           <select
             value={issue.state.id}
             onChange={(event) => update({ stateId: event.target.value })}
@@ -380,7 +462,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           </select>
         </div>
         <div className="prop">
-          <span>Priority</span>
+          <span className="prop-label">
+            <Icon name="sort" size={13} /> Priority
+          </span>
           <select
             value={issue.priority}
             onChange={(event) => update({ priority: Number(event.target.value) })}
@@ -393,7 +477,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           </select>
         </div>
         <div className="prop">
-          <span>Assignee</span>
+          <span className="prop-label">
+            <Icon name="assignee" size={13} /> Assignee
+          </span>
           <select
             value={issue.assignee?.id ?? ""}
             onChange={(event) => update({ assigneeId: event.target.value || null })}
@@ -408,7 +494,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           </select>
         </div>
         <div className="prop">
-          <span>Cycle</span>
+          <span className="prop-label">
+            <Icon name="calendar" size={13} /> Cycle
+          </span>
           <select
             value={issue.cycle?.id ?? ""}
             disabled={cycleSaving}
@@ -425,7 +513,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           {cycleError && <span className="prop-error">{cycleError}</span>}
         </div>
         <div className="prop">
-          <span>Project</span>
+          <span className="prop-label">
+            <Icon name="project" size={13} /> Project
+          </span>
           <select
             value={issue.project?.id ?? ""}
             onChange={(event) => update({ projectId: event.target.value || null })}
@@ -440,7 +530,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
         </div>
         {issue.project && issue.project.milestones.length > 0 && (
           <div className="prop">
-            <span>Milestone</span>
+            <span className="prop-label">
+              <Icon name="milestone" size={13} /> Milestone
+            </span>
             <select
               value={issue.milestone?.id ?? ""}
               onChange={(event) => update({ milestoneId: event.target.value || null })}
@@ -455,7 +547,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           </div>
         )}
         <div className="prop">
-          <span>Labels</span>
+          <span className="prop-label">
+            <Icon name="tag" size={13} /> Labels
+          </span>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {issue.team.labels.map((label: any) => {
               const active = activeLabelIds.has(label.id);
@@ -474,7 +568,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
         </div>
         {issue.parent && (
           <div className="prop">
-            <span>Parent</span>
+            <span className="prop-label">
+              <Icon name="link" size={13} /> Parent
+            </span>
             <Link to={`/issue/${issue.parent.identifier}`}>
               <span style={{ color: "var(--text-muted)" }}>
                 {issue.parent.identifier} {issue.parent.title}
@@ -483,13 +579,17 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           </div>
         )}
         <div className="prop">
-          <span>Branch</span>
+          <span className="prop-label">
+            <Icon name="link" size={13} /> Branch
+          </span>
           <code style={{ fontSize: 11, color: "var(--text-muted)", wordBreak: "break-all" }}>
             {issue.branchName}
           </code>
         </div>
         <div className="prop">
-          <span>Created by</span>
+          <span className="prop-label">
+            <Icon name="members" size={13} /> Created by
+          </span>
           <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <Avatar actor={issue.creator} /> {issue.creator.name}
           </span>
