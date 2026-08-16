@@ -89,10 +89,10 @@ El archivo de eventos de un issue versionado en el repo (`.prime-board/log/AT-17
 Es la fuente de verdad (ver ADR-0004).
 _Avoid_: Journal, history file
 
-**Snapshot**:
+**Issue Markdown**:
 El markdown derivado de un issue en el repo (`.prime-board/issues/AT-172.md`), pensado para
 leerse en un PR. Se regenera; nunca se edita a mano.
-_Avoid_: Dump, export file
+_Avoid_: Snapshot, dump, export file
 
 **Index**:
 La base SQLite derivada del log, usada para queries, filtros y full-text. Es descartable y se
