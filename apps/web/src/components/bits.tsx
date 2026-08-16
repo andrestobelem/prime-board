@@ -17,11 +17,7 @@ export function PriorityIcon({ priority }: { priority: number }) {
   const label = PRIORITY_NAMES[priority] ?? "No priority";
   // Urgent es el único que se destaca con color; el resto queda en el gris del texto.
   return (
-    <Icon
-      name={name}
-      className={`priority-icon${priority === 1 ? " urgent" : ""}`}
-      title={label}
-    />
+    <Icon name={name} className={`priority-icon${priority === 1 ? " urgent" : ""}`} title={label} />
   );
 }
 
@@ -58,11 +54,19 @@ export function StateIcon({ state }: { state: { type: string; color?: string; na
 }
 
 export function Avatar({ actor }: { actor: { name: string; type: string } | null }) {
-  if (!actor) return <span className="avatar" title="Unassigned">–</span>;
+  if (!actor)
+    return (
+      <span className="avatar" title="Unassigned">
+        –
+      </span>
+    );
   const isAgent = actor.type === "AGENT";
   const initials = actor.name.slice(0, 2).toUpperCase();
   return (
-    <span className={`avatar${isAgent ? " agent" : ""}`} title={`${actor.name}${isAgent ? " (agent)" : ""}`}>
+    <span
+      className={`avatar${isAgent ? " agent" : ""}`}
+      title={`${actor.name}${isAgent ? " (agent)" : ""}`}
+    >
       {isAgent ? <Icon name="bot" size={11} /> : initials}
     </span>
   );
@@ -70,7 +74,7 @@ export function Avatar({ actor }: { actor: { name: string; type: string } | null
 
 export function LabelChip({ label }: { label: { name: string; color: string } }) {
   return (
-    <span className="label-chip">
+    <span className="label-chip" style={{ borderColor: label.color }}>
       <span className="dot" style={{ background: label.color }} />
       {label.name}
     </span>

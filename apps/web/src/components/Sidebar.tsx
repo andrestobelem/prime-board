@@ -32,15 +32,18 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
           <Link to={`/team/${team.key}`} className={active(`/team/${team.key}`)}>
             <Icon name="issues" /> Issues
           </Link>
-          {team.projects.filter((p) => !CLOSED_STATES.includes(p.state)).map((project) => (
-            <Link
-              key={project.id}
-              to={`/project/${project.id}`}
-              className={active(`/project/${project.id}`)}
-            >
-              <Icon name="project" className="nested" /> {project.name}
-            </Link>
-          ))}
+          {team.projects.length > 0 && <div className="section">Projects</div>}
+          {team.projects
+            .filter((p) => !CLOSED_STATES.includes(p.state))
+            .map((project) => (
+              <Link
+                key={project.id}
+                to={`/project/${project.id}`}
+                className={active(`/project/${project.id}`)}
+              >
+                <Icon name="project" className="nested" /> {project.name}
+              </Link>
+            ))}
           {team.projects.some((p) => CLOSED_STATES.includes(p.state)) && (
             <>
               <button
@@ -54,24 +57,32 @@ export function Sidebar({ workspace, teams }: SidebarProps) {
                 Completados ({team.projects.filter((p) => CLOSED_STATES.includes(p.state)).length})
               </button>
               {showClosed[team.id] &&
-                team.projects.filter((p) => CLOSED_STATES.includes(p.state)).map((project) => (
-                  <Link
-                    key={project.id}
-                    to={`/project/${project.id}`}
-                    className={active(`/project/${project.id}`)}
-                  >
-                    <Icon name="project" className="nested-deep" />
-                    <span style={{ opacity: 0.7 }}>{project.name}</span>
-                  </Link>
-                ))}
+                team.projects
+                  .filter((p) => CLOSED_STATES.includes(p.state))
+                  .map((project) => (
+                    <Link
+                      key={project.id}
+                      to={`/project/${project.id}`}
+                      className={active(`/project/${project.id}`)}
+                    >
+                      <Icon name="project" className="nested-deep" />
+                      <span style={{ opacity: 0.7 }}>{project.name}</span>
+                    </Link>
+                  ))}
             </>
           )}
         </div>
       ))}
       <div className="spacer" />
-      <div className="hint"><kbd>C</kbd> new issue · <kbd>⌘K</kbd> commands</div>
-      <Link to="/members" className={active("/members")}><Icon name="members" /> Members</Link>
-      <Link to="/settings" className={active("/settings")}><Icon name="settings" /> Settings</Link>
+      <div className="hint">
+        <kbd>C</kbd> new issue · <kbd>⌘K</kbd> commands
+      </div>
+      <Link to="/members" className={active("/members")}>
+        <Icon name="members" /> Members
+      </Link>
+      <Link to="/settings" className={active("/settings")}>
+        <Icon name="settings" /> Settings
+      </Link>
     </nav>
   );
 }
