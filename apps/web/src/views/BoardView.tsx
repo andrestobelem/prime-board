@@ -9,6 +9,7 @@ import {
   type IssueListItem,
 } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
+import { issueStateColumnKey, stateColumnKey } from "../board-grouping.ts";
 import { navigate } from "../router.tsx";
 
 const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter) {
@@ -105,7 +106,7 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
       for (const state of [...team.states].sort(
         (a: StateInfo, b: StateInfo) => a.position - b.position,
       )) {
-        const key = `${state.name}/${state.type}`;
+        const key = stateColumnKey(state, isProject);
         const column: Column = merged.get(key) ?? {
           key,
           label: state.name,
@@ -161,9 +162,7 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
     if (groupBy === "milestone") return issue.milestone?.id ?? "none";
     if (groupBy === "assignee") return issue.assignee?.id ?? "none";
     if (groupBy === "priority") return String(issue.priority);
-    return groupBy === "state" && isProject
-      ? `${issue.state.name}/${issue.state.type}`
-      : issue.state.id;
+    return issueStateColumnKey(issue.state, isProject);
   }
 
   function drop(column: Column) {
