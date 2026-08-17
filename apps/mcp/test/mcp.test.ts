@@ -64,6 +64,9 @@ describe("mcp tools", () => {
     const tools = await client.listTools();
     const names = tools.tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
+      "archive_project",
+      "delete_milestone",
+      "delete_project_update",
       "delete_saved_view",
       "get_issue",
       "get_project",
@@ -74,14 +77,19 @@ describe("mcp tools", () => {
       "list_issue_labels",
       "list_issue_statuses",
       "list_issues",
+      "list_milestones",
+      "list_project_updates",
       "list_projects",
       "list_saved_views",
       "list_teams",
       "list_users",
       "save_comment",
       "save_issue",
+      "save_milestone",
       "save_project",
+      "save_project_update",
       "save_saved_view",
+      "unarchive_project",
       "unlink_issues",
     ]);
   });
@@ -188,6 +196,65 @@ describe("mcp tools", () => {
       await client.callTool({ name: "get_project", arguments: { id: project.id } }),
     );
     expect(fetched.issues.nodes.map((n: any) => n.identifier)).toEqual(["PB-1"]);
+  });
+
+  it("expone el ciclo de vida de proyectos, milestones y updates", async () => {
+    const project = parseResult(
+      await client.callTool({ name: "save_project", arguments: { name: "MCP lifecycle" } }),
+    );
+    const archived = parseResult(
+      await client.callTool({ name: "archive_project", arguments: { id: project.id } }),
+    );
+    expect(archived.archivedAt).not.toBeNull();
+    const hidden = parseResult(await client.callTool({ name: "list_projects", arguments: {} }));
+    expect(hidden.map((item: any) => item.id)).not.toContain(project.id);
+    const included = parseResult(
+      await client.callTool({ name: "list_projects", arguments: { includeArchived: true } }),
+    );
+    expect(included.find((item: any) => item.id === project.id).archivedAt).not.toBeNull();
+    const unarchived = parseResult(
+      await client.callTool({ name: "unarchive_project", arguments: { id: project.id } }),
+    );
+    expect(unarchived.archivedAt).toBeNull();
+
+    const milestone = parseResult(
+      await client.callTool({
+        name: "save_milestone",
+        arguments: { project: project.id, name: "MCP milestone" },
+      }),
+    );
+    const milestones = parseResult(
+      await client.callTool({ name: "list_milestones", arguments: { project: project.id } }),
+    );
+    expect(milestones.map((item: any) => item.id)).toEqual([milestone.id]);
+    const renamed = parseResult(
+      await client.callTool({
+        name: "save_milestone",
+        arguments: { id: milestone.id, name: "MCP milestone updated" },
+      }),
+    );
+    expect(renamed.name).toBe("MCP milestone updated");
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_milestone", arguments: { id: milestone.id } }),
+      ),
+    ).toEqual({ success: true, orphanedIssues: 0 });
+
+    const update = parseResult(
+      await client.callTool({
+        name: "save_project_update",
+        arguments: { project: project.id, health: "on_track", body: "MCP update" },
+      }),
+    );
+    const updates = parseResult(
+      await client.callTool({ name: "list_project_updates", arguments: { project: project.id } }),
+    );
+    expect(updates.map((item: any) => item.id)).toEqual([update.id]);
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_project_update", arguments: { id: update.id } }),
+      ),
+    ).toEqual({ success: true });
   });
 
   it("los errores de la API viajan como errores MCP", async () => {

@@ -408,18 +408,23 @@ export function createServer(config: McpConfig): McpServer {
           .enum(["backlog", "planned", "started", "paused", "completed", "canceled"])
           .optional(),
         team: z.string().optional().describe("Team key or ID"),
+        includeArchived: z.boolean().optional(),
       },
     },
-    async ({ state, team }) => {
+    async ({ state, team, includeArchived }) => {
       const teamId = team ? (await resolveTeam(config, team)).id : null;
       const data = await gqlRequest(
         config,
-        `query($state: ProjectState, $team: ID) {
-      projects(state: $state, team: $team) {
-        id name description state targetDate lead { id name } teams { key }
+        `query($state: ProjectState, $team: ID, $includeArchived: Boolean) {
+      projects(state: $state, team: $team, includeArchived: $includeArchived) {
+        id name description state targetDate archivedAt lead { id name } teams { key }
       }
     }`,
-        { state: state ? state.toUpperCase() : null, team: teamId },
+        {
+          state: state ? state.toUpperCase() : null,
+          team: teamId,
+          includeArchived: Boolean(includeArchived),
+        },
       );
       return json(data.projects);
     },
@@ -436,8 +441,9 @@ export function createServer(config: McpConfig): McpServer {
         config,
         `query($id: ID!) {
       project(id: $id) {
-        id name description state targetDate lead { id name }
-        milestones { id name targetDate progress }
+        id name description state targetDate archivedAt lead { id name }
+        milestones { id name description targetDate position progress }
+        updates { id health body risks createdAt updatedAt author { id name type } }
         issues(first: 100) { nodes { identifier title state { name type } assignee { name } milestone { name } } }
       }
     }`,
@@ -501,6 +507,199 @@ export function createServer(config: McpConfig): McpServer {
         { input },
       );
       return json(data.projectCreate.project);
+    },
+  );
+
+  server.registerTool(
+    "archive_project",
+    {
+      description: "Archive a project by ID.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) {
+      projectArchive(id: $id) { project { id name state archivedAt } }
+    }`,
+        { id },
+      );
+      return json(data.projectArchive.project);
+    },
+  );
+
+  server.registerTool(
+    "unarchive_project",
+    {
+      description: "Unarchive a project by ID.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) {
+      projectUnarchive(id: $id) { project { id name state archivedAt } }
+    }`,
+        { id },
+      );
+      return json(data.projectUnarchive.project);
+    },
+  );
+
+  server.registerTool(
+    "list_milestones",
+    {
+      description: "List milestones belonging to a project.",
+      inputSchema: { project: z.string().describe("Project ID") },
+    },
+    async ({ project }) => {
+      const data = await gqlRequest(
+        config,
+        `query($id: ID!) {
+      project(id: $id) { milestones { id name description targetDate position createdAt project { id name } } }
+    }`,
+        { id: project },
+      );
+      if (!data.project) throw new Error(`NOT_FOUND: Project not found: ${project}`);
+      return json(data.project.milestones);
+    },
+  );
+
+  server.registerTool(
+    "save_milestone",
+    {
+      description: "Create or update a project milestone. Provide id to update.",
+      inputSchema: {
+        id: z.string().optional(),
+        project: z.string().optional().describe("Project ID (required to create)"),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        targetDate: z.string().optional(),
+        position: z.number().optional(),
+      },
+    },
+    async (args) => {
+      if (args.id) {
+        const input: Record<string, unknown> = {};
+        if (args.name !== undefined) input.name = args.name;
+        if (args.description !== undefined) input.description = args.description;
+        if (args.targetDate !== undefined) input.targetDate = args.targetDate;
+        if (args.position !== undefined) input.position = args.position;
+        const data = await gqlRequest(
+          config,
+          `mutation($id: ID!, $input: MilestoneUpdateInput!) {
+        milestoneUpdate(id: $id, input: $input) {
+          milestone { id name description targetDate position createdAt project { id name } }
+        }
+      }`,
+          { id: args.id, input },
+        );
+        return json(data.milestoneUpdate.milestone);
+      }
+      if (!args.project || !args.name) {
+        throw new Error(
+          "VALIDATION_FAILED: `project` and `name` are required to create a milestone",
+        );
+      }
+      const input: Record<string, unknown> = { projectId: args.project, name: args.name };
+      if (args.description !== undefined) input.description = args.description;
+      if (args.targetDate !== undefined) input.targetDate = args.targetDate;
+      if (args.position !== undefined) input.position = args.position;
+      const data = await gqlRequest(
+        config,
+        `mutation($input: MilestoneCreateInput!) {
+      milestoneCreate(input: $input) {
+        milestone { id name description targetDate position createdAt project { id name } }
+      }
+    }`,
+        { input },
+      );
+      return json(data.milestoneCreate.milestone);
+    },
+  );
+
+  server.registerTool(
+    "delete_milestone",
+    {
+      description: "Delete a project milestone by ID.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) { milestoneDelete(id: $id) { success orphanedIssues } }`,
+        { id },
+      );
+      return json(data.milestoneDelete);
+    },
+  );
+
+  server.registerTool(
+    "list_project_updates",
+    {
+      description: "List narrative updates belonging to a project.",
+      inputSchema: { project: z.string().describe("Project ID") },
+    },
+    async ({ project }) => {
+      const data = await gqlRequest(
+        config,
+        `query($id: ID!) {
+      project(id: $id) {
+        updates { id health body risks createdAt updatedAt project { id name } author { id name type } }
+      }
+    }`,
+        { id: project },
+      );
+      if (!data.project) throw new Error(`NOT_FOUND: Project not found: ${project}`);
+      return json(data.project.updates);
+    },
+  );
+
+  server.registerTool(
+    "save_project_update",
+    {
+      description: "Create a narrative project update.",
+      inputSchema: {
+        project: z.string().describe("Project ID"),
+        health: z.enum(["on_track", "at_risk", "off_track"]),
+        body: z.string(),
+        risks: z.string().optional(),
+      },
+    },
+    async ({ project, health, body, risks }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($input: ProjectUpdateCreateInput!) {
+      projectUpdateCreate(input: $input) {
+        projectUpdate { id health body risks createdAt updatedAt project { id name } author { id name type } }
+      }
+    }`,
+        {
+          input: {
+            projectId: project,
+            health: health.toUpperCase(),
+            body,
+            ...(risks === undefined ? {} : { risks }),
+          },
+        },
+      );
+      return json(data.projectUpdateCreate.projectUpdate);
+    },
+  );
+
+  server.registerTool(
+    "delete_project_update",
+    {
+      description: "Delete a narrative project update by ID.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) { projectUpdateDelete(id: $id) { success } }`,
+        { id },
+      );
+      return json(data.projectUpdateDelete);
     },
   );
 

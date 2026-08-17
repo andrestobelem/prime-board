@@ -119,10 +119,16 @@ pb issue create --team PRB --title "Hacer algo" --priority high --label agent:re
 pb issue update PRB-153 --state done
 pb issue comment PRB-153 --body -   # el body por stdin
 pb project view <id> --json
+pb project archive <id>
+pb project milestone-create --project <id> --name "Beta"
+pb project update-create --project <id> --health on_track --body -
 pb webhook create --url http://localhost:9999/hook --events issue.created
 ```
 
 - `--json` en todo comando de lectura → salida estable para parsear.
+- El CLI también expone `project archive|unarchive`, `milestone-list|create|update|delete` y
+  `update-list|create|delete`; los comandos de creación aceptan referencias por ID y los cuerpos
+  pueden leerse desde stdin con `--body -` o `--description -`.
 - Exit codes: `0` ok, `1` error de API, `2` error de uso.
 - Env `PRIME_BOARD_URL` / `PRIME_BOARD_API_KEY` pisan la config guardada.
 - `pb auth login` guarda las credenciales en `~/.prime-board/cli.json`; el directorio queda
@@ -134,6 +140,10 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
 El server MCP habla stdio y expone **las mismas tools que el MCP de Linear**
 (`list_issues`, `save_issue`, `save_comment`, `get_workspace`, ...): si tu agente ya
 sabe operar Linear, opera prime-board sin aprender nada.
+
+Además de issues, el MCP ofrece `archive_project`, `unarchive_project`,
+`list_milestones`, `save_milestone`, `delete_milestone`, `list_project_updates`,
+`save_project_update` y `delete_project_update` para completar el ciclo de vida de planificación.
 
 Config para un cliente MCP (Claude Desktop, prime-agent, etc.):
 

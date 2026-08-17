@@ -71,8 +71,19 @@ describe("pb auth", () => {
 describe("pb issue", () => {
   it("crea un issue con prioridad y lo muestra", () => {
     const created = pb([
-      "issue", "create", "--team", "PB", "--title", "CLI issue",
-      "--description", "made from cli", "--priority", "high", "--assignee", "me", "--json",
+      "issue",
+      "create",
+      "--team",
+      "PB",
+      "--title",
+      "CLI issue",
+      "--description",
+      "made from cli",
+      "--priority",
+      "high",
+      "--assignee",
+      "me",
+      "--json",
     ]);
     expect(created.code).toBe(0);
     const issue = JSON.parse(created.out);
@@ -114,11 +125,24 @@ describe("pb issue", () => {
     expect(apiError.code).toBe(2); // NOT_FOUND del CLI es UsageError con mensaje claro
     const usage = pb(["issue", "unknown-action"]);
     expect(usage.code).toBe(2);
-    const badPriority = pb(["issue", "create", "--team", "PB", "--title", "x", "--priority", "mega"]);
+    const badPriority = pb([
+      "issue",
+      "create",
+      "--team",
+      "PB",
+      "--title",
+      "x",
+      "--priority",
+      "mega",
+    ]);
     expect(badPriority.code).toBe(2);
     // Con una key inválida el server responde UNAUTHORIZED → exit 1.
     const invalid = Bun.spawnSync(["bun", join(ROOT, "apps/cli/src/index.ts"), "auth", "status"], {
-      env: { ...process.env, PRIME_BOARD_URL: `http://localhost:${PORT}`, PRIME_BOARD_API_KEY: "pb_bad" },
+      env: {
+        ...process.env,
+        PRIME_BOARD_URL: `http://localhost:${PORT}`,
+        PRIME_BOARD_API_KEY: "pb_bad",
+      },
     });
     expect(invalid.exitCode).toBe(1);
   });
@@ -127,7 +151,15 @@ describe("pb issue", () => {
 describe("pb project / team / webhook", () => {
   it("crea y lista proyectos con lead y estado", () => {
     const created = pb([
-      "project", "create", "--name", "Agent ops", "--state", "started", "--lead", "me", "--json",
+      "project",
+      "create",
+      "--name",
+      "Agent ops",
+      "--state",
+      "started",
+      "--lead",
+      "me",
+      "--json",
     ]);
     expect(created.code).toBe(0);
     const project = JSON.parse(created.out);
@@ -143,6 +175,86 @@ describe("pb project / team / webhook", () => {
     expect(JSON.parse(view.out).issues.nodes.map((n: any) => n.identifier)).toEqual(["PB-1"]);
   });
 
+  it("administra el ciclo de vida de proyectos, milestones y updates", () => {
+    const created = pb(["project", "create", "--name", "Lifecycle project", "--json"]);
+    expect(created.code).toBe(0);
+    const project = JSON.parse(created.out);
+
+    const archived = pb(["project", "archive", project.id, "--json"]);
+    expect(archived.code).toBe(0);
+    expect(JSON.parse(archived.out).archivedAt).not.toBeNull();
+    expect(
+      JSON.parse(pb(["project", "list", "--json"]).out).map((item: any) => item.id),
+    ).not.toContain(project.id);
+    expect(
+      JSON.parse(pb(["project", "list", "--include-archived", "--json"]).out).map(
+        (item: any) => item.id,
+      ),
+    ).toContain(project.id);
+    const unarchived = pb(["project", "unarchive", project.id, "--json"]);
+    expect(unarchived.code).toBe(0);
+    expect(JSON.parse(unarchived.out).archivedAt).toBeNull();
+
+    const invalidPosition = pb([
+      "project",
+      "milestone-create",
+      "--project",
+      project.id,
+      "--name",
+      "Invalid",
+      "--position",
+      "not-a-number",
+    ]);
+    expect(invalidPosition.code).toBe(2);
+
+    const milestone = pb([
+      "project",
+      "milestone-create",
+      "--project",
+      project.id,
+      "--name",
+      "Beta",
+      "--json",
+    ]);
+    expect(milestone.code).toBe(0);
+    const createdMilestone = JSON.parse(milestone.out);
+    expect(createdMilestone.name).toBe("Beta");
+    const milestoneUpdate = pb([
+      "project",
+      "milestone-update",
+      createdMilestone.id,
+      "--name",
+      "Beta shipped",
+      "--json",
+    ]);
+    expect(milestoneUpdate.code).toBe(0);
+    expect(JSON.parse(milestoneUpdate.out).name).toBe("Beta shipped");
+    const milestones = pb(["project", "milestone-list", project.id, "--json"]);
+    expect(milestones.code).toBe(0);
+    expect(JSON.parse(milestones.out).map((item: any) => item.name)).toEqual(["Beta shipped"]);
+
+    const update = pb([
+      "project",
+      "update-create",
+      "--project",
+      project.id,
+      "--health",
+      "on_track",
+      "--body",
+      "Ready for beta",
+      "--json",
+    ]);
+    expect(update.code).toBe(0);
+    const createdUpdate = JSON.parse(update.out);
+    expect(createdUpdate.body).toBe("Ready for beta");
+    const updates = pb(["project", "update-list", project.id, "--json"]);
+    expect(updates.code).toBe(0);
+    expect(JSON.parse(updates.out).map((item: any) => item.id)).toEqual([createdUpdate.id]);
+
+    expect(pb(["project", "update-delete", createdUpdate.id]).code).toBe(0);
+    expect(pb(["project", "milestone-delete", createdMilestone.id]).code).toBe(0);
+  });
+
   it("lista teams", () => {
     const result = pb(["team", "list", "--json"]);
     expect(result.code).toBe(0);
@@ -151,7 +263,13 @@ describe("pb project / team / webhook", () => {
 
   it("crea, lista y borra webhooks mostrando el secret una sola vez", () => {
     const created = pb([
-      "webhook", "create", "--url", "http://localhost:9/hook", "--events", "issue.created,comment.created", "--json",
+      "webhook",
+      "create",
+      "--url",
+      "http://localhost:9/hook",
+      "--events",
+      "issue.created,comment.created",
+      "--json",
     ]);
     expect(created.code).toBe(0);
     const payload = JSON.parse(created.out);

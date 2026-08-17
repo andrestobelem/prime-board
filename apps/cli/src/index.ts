@@ -18,7 +18,7 @@ Commands:
   auth login --url <url> --key <api-key>   Save credentials
   auth status                              Show current viewer
   issue list|view|create|update|comment    Work with issues
-  project list|view|create                 Work with projects
+  project list|view|create|archive|unarchive|milestone-*|update-*  Work with planning
   view list|create|update|duplicate|delete Saved views
   team list                                List teams
   webhook list|create|delete               Manage webhooks
