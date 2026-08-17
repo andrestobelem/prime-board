@@ -59,6 +59,13 @@ import {
   updateSavedView,
 } from "../domain/saved-views.ts";
 import { archiveInboxItem, listInboxActivity, markInboxRead } from "../domain/inbox.ts";
+import {
+  createFavorite,
+  deleteFavorite,
+  listFavorites,
+  mapFavorite,
+  reorderFavorite,
+} from "../domain/favorites.ts";
 import { mapActivity } from "../domain/activity.ts";
 import { getIssue, mapIssue } from "../domain/issues.ts";
 import {
@@ -207,6 +214,13 @@ export const resolvers = {
   Comment: issueResolvers.Comment,
   Activity: issueResolvers.Activity,
 
+  Favorite: {
+    project: (favorite: { projectId: string | null }, _args: unknown, context: Context) =>
+      favorite.projectId ? mapProject(getProject(context.db, favorite.projectId)!) : null,
+    savedView: (favorite: { savedViewId: string | null }, _args: unknown, context: Context) =>
+      favorite.savedViewId ? mapSavedView(getSavedView(context.db, favorite.savedViewId)!) : null,
+  },
+
   SavedView: {
     team: (view: { teamId: string | null }, _args: unknown, context: Context) => {
       if (!view.teamId) return null;
@@ -333,6 +347,10 @@ export const resolvers = {
       if (!row) return null;
       if (row.scope === "personal" && row.owner_id !== viewer.id) return null;
       return mapSavedView(row);
+    },
+    favorites: (_parent: unknown, _args: unknown, context: Context) => {
+      const viewer = requireViewer(context);
+      return listFavorites(context.db, viewer.id).map(mapFavorite);
     },
     inbox: (
       _parent: unknown,
@@ -623,6 +641,32 @@ export const resolvers = {
     savedViewDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       return { success: deleteSavedView(context.db, args.id, viewer.id) };
+    },
+    favoriteCreate: (
+      _parent: unknown,
+      args: { input: { projectId?: string | null; savedViewId?: string | null } },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      return {
+        success: true,
+        favorite: mapFavorite(createFavorite(context.db, viewer.id, args.input)),
+      };
+    },
+    favoriteDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      return { success: deleteFavorite(context.db, viewer.id, args.id) };
+    },
+    favoriteReorder: (
+      _parent: unknown,
+      args: { id: string; position: number },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      return {
+        success: true,
+        favorite: mapFavorite(reorderFavorite(context.db, viewer.id, args.id, args.position)),
+      };
     },
     cycleCreate: (
       _parent: unknown,

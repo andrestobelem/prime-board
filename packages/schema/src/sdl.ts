@@ -863,6 +863,23 @@ export const typeDefs = /* GraphQL */ `
     savedView: SavedView!
   }
 
+  type Favorite {
+    id: ID!
+    position: Float!
+    project: Project
+    savedView: SavedView
+  }
+
+  input FavoriteCreateInput {
+    projectId: ID
+    savedViewId: ID
+  }
+
+  type FavoritePayload {
+    success: Boolean!
+    favorite: Favorite!
+  }
+
   type Query {
     """
     Actor autenticado por la API key del header Authorization.
@@ -895,6 +912,7 @@ export const typeDefs = /* GraphQL */ `
     """
     savedViews(teamId: ID, includeArchived: Boolean = false): [SavedView!]!
     savedView(id: ID!): SavedView
+    favorites: [Favorite!]!
     """
     Eventos relevantes para el actor autenticado (asignaciones, comentarios en sus issues).
     """
@@ -955,6 +973,9 @@ export const typeDefs = /* GraphQL */ `
     savedViewUpdate(id: ID!, input: SavedViewUpdateInput!): SavedViewPayload!
     savedViewDuplicate(id: ID!): SavedViewPayload!
     savedViewDelete(id: ID!): DeletePayload!
+    favoriteCreate(input: FavoriteCreateInput!): FavoritePayload!
+    favoriteDelete(id: ID!): DeletePayload!
+    favoriteReorder(id: ID!, position: Int!): FavoritePayload!
     cycleCreate(input: CycleCreateInput!): CyclePayload!
     cycleUpdate(id: ID!, input: CycleUpdateInput!): CyclePayload!
     cycleDelete(id: ID!): DeletePayload!

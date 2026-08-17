@@ -65,6 +65,15 @@ function uniqueNaturalMap(rows: Array<[string, string]>, resource: string): Map<
   return result;
 }
 
+function savedViewNaturalKey(view: {
+  name: string;
+  scope: string;
+  team: string | null;
+  owner: string;
+}): string {
+  return JSON.stringify([view.scope, view.team, view.owner, view.name]);
+}
+
 function savedViewsUseField(views: Array<Record<string, any>>, field: string): boolean {
   const visit = (filter: unknown): boolean => {
     if (!filter || typeof filter !== "object" || Array.isArray(filter)) return false;
@@ -538,6 +547,52 @@ export function exportBoard(
         groupBy: view.group_by,
         columns: JSON.parse(view.columns_json || "[]"),
         archived: Boolean(view.archived_at),
+      })),
+    ),
+  );
+
+  const favoriteRows = db
+    .query(
+      `SELECT f.*, actors.name AS actor_name,
+              projects.name AS project_name,
+              sv.name AS saved_view_name, sv.scope AS saved_view_scope,
+              sv_owners.name AS saved_view_owner, sv_teams.key AS saved_view_team
+       FROM favorites f
+       JOIN actors ON actors.id = f.actor_id
+       LEFT JOIN projects ON projects.id = f.project_id
+       LEFT JOIN saved_views sv ON sv.id = f.saved_view_id
+       LEFT JOIN actors sv_owners ON sv_owners.id = sv.owner_id
+       LEFT JOIN teams sv_teams ON sv_teams.id = sv.team_id
+       ${teamFilter ? "WHERE f.project_id IS NOT NULL OR sv.team_id = ?1" : ""}
+       ORDER BY actors.name, f.position, f.created_at, f.id`,
+    )
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
+  for (const favorite of favoriteRows) {
+    if (!favorite.project_name) continue;
+    const count = db
+      .query("SELECT count(*) AS count FROM projects WHERE name = ?1")
+      .get(favorite.project_name) as { count: number };
+    if (count.count > 1) {
+      throw new Error(
+        `Cannot export favorites: ambiguous project reference "${favorite.project_name}"`,
+      );
+    }
+  }
+  write(
+    join(base, "meta", "favorites.json"),
+    stableStringify(
+      favoriteRows.map((favorite) => ({
+        actor: favorite.actor_name,
+        project: favorite.project_name ?? null,
+        savedView: favorite.saved_view_id
+          ? {
+              name: favorite.saved_view_name,
+              scope: favorite.saved_view_scope,
+              team: favorite.saved_view_team ?? null,
+              owner: favorite.saved_view_owner,
+            }
+          : null,
+        position: favorite.position,
       })),
     ),
   );

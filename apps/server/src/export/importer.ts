@@ -26,6 +26,15 @@ export interface RebuildOptions {
 
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 
+function savedViewNaturalKey(view: {
+  name: string;
+  scope: string;
+  team: string | null;
+  owner: string;
+}): string {
+  return JSON.stringify([view.scope, view.team, view.owner, view.name]);
+}
+
 /** Lee un issue en markdown: front-matter YAML + `# título` + descripción. */
 function readIssueMarkdown(path: string): Record<string, any> {
   const raw = readFileSync(path, "utf8");
@@ -138,6 +147,7 @@ export function rebuildFromRepo(
       "webhooks",
       "issues",
       "cycles",
+      "favorites",
       "saved_views",
       "initiative_teams",
       "initiative_projects",
@@ -495,6 +505,7 @@ export function rebuildFromRepo(
 
     // 6b. Vistas guardadas (PRB-209/244); se importan después de los issues
     // porque sus filtros también pueden referirlos por identifier.
+    const savedViewIds = new Map<string, string>();
     const savedViewsPath = join(base, "meta", "saved-views.json");
     if (existsSync(savedViewsPath)) {
       const savedViewLookups: Record<SavedViewRefTable, Map<string, string>> = {
@@ -526,12 +537,13 @@ export function rebuildFromRepo(
           "toIds",
           `Saved view "${view.name}"`,
         );
+        const savedViewId = newId();
         db.query(
           `INSERT INTO saved_views
             (id, name, scope, team_id, owner_id, filter_json, order_by, group_by, columns_json, created_at, updated_at, archived_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)`,
         ).run(
-          newId(),
+          savedViewId,
           view.name,
           view.scope,
           teamId,
@@ -542,6 +554,60 @@ export function rebuildFromRepo(
           JSON.stringify(view.columns ?? []),
           timestamp,
           view.archived ? timestamp : null,
+        );
+        const key = savedViewNaturalKey({
+          name: view.name,
+          scope: view.scope,
+          team: view.team ?? null,
+          owner: view.owner,
+        });
+        if (savedViewIds.has(key)) throw new Error(`Duplicate saved view reference: ${key}`);
+        savedViewIds.set(key, savedViewId);
+      }
+    }
+
+    // 6c. Favoritos: se resuelven por claves naturales después de proyectos y vistas.
+    const favoritesPath = join(base, "meta", "favorites.json");
+    if (existsSync(favoritesPath)) {
+      const favoriteTargets = new Set<string>();
+      for (const favorite of readJson(favoritesPath) as Array<Record<string, any>>) {
+        const actorId = actorIds.get(favorite.actor);
+        if (!actorId) throw new Error(`Favorite references unknown actor ${favorite.actor}`);
+        const project = favorite.project ?? null;
+        const savedView = favorite.savedView ?? null;
+        if ((project == null) === (savedView == null)) {
+          throw new Error(`Favorite for actor ${favorite.actor} must reference exactly one target`);
+        }
+        const projectId = project != null ? (projectIds.get(project) ?? null) : null;
+        if (project != null && !projectId) {
+          throw new Error(`Favorite references unknown project ${project}`);
+        }
+        const savedViewId = savedView
+          ? (savedViewIds.get(
+              savedViewNaturalKey({
+                name: savedView.name,
+                scope: savedView.scope,
+                team: savedView.team ?? null,
+                owner: savedView.owner,
+              }),
+            ) ?? null)
+          : null;
+        if (savedView != null && !savedViewId) {
+          throw new Error(`Favorite references unknown saved view ${savedView.name}`);
+        }
+        const targetKey = `${actorId}:${projectId ?? savedViewId}`;
+        if (favoriteTargets.has(targetKey)) throw new Error(`Duplicate favorite: ${targetKey}`);
+        favoriteTargets.add(targetKey);
+        db.query(
+          `INSERT INTO favorites (id, actor_id, project_id, saved_view_id, position, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+        ).run(
+          newId(),
+          actorId,
+          projectId,
+          savedViewId,
+          typeof favorite.position === "number" ? favorite.position : 0,
+          timestamp,
         );
       }
     }

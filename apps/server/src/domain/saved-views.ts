@@ -54,10 +54,12 @@ export function getSavedView(db: Database, id: string): SavedViewRow | null {
   return db.query("SELECT * FROM saved_views WHERE id = ?1").get(id) as SavedViewRow | null;
 }
 
-function canSee(row: SavedViewRow, viewerId: string): boolean {
+export function canViewSavedView(row: SavedViewRow, viewerId: string): boolean {
   if (row.scope === "personal") return row.owner_id === viewerId;
   return true;
 }
+
+const canSee = canViewSavedView;
 
 export function listSavedViews(
   db: Database,
