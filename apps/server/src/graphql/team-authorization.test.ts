@@ -397,6 +397,50 @@ describe("autorización de configuración de teams", () => {
     expect(deleted.errors).toBeUndefined();
   });
 
+  it("restringe el carry-over de ciclos al owner del team", async () => {
+    const destination = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: { teamId: $teamId, name: "Carry destination", startsAt: "2027-06-01", endsAt: "2027-06-14" }) { cycle { id } }
+      }`,
+      { teamId: setup.targetTeamId },
+    );
+    const destinationId = destination.data!.cycleCreate.cycle.id as string;
+    const issue = await gql(
+      app,
+      `mutation($teamId: ID!) { issueCreate(input: { teamId: $teamId, title: "Carry issue" }) { issue { id } } }`,
+      { teamId: setup.targetTeamId },
+    );
+    const issueId = issue.data!.issueCreate.issue.id as string;
+    const assigned = await gql(
+      app,
+      `mutation($id: ID!, $cycleId: ID!) { issueUpdate(id: $id, input: { cycleId: $cycleId }) { success } }`,
+      { id: issueId, cycleId: setup.targetCycleId },
+    );
+    expect(assigned.errors).toBeUndefined();
+
+    const denied = await gql(
+      app,
+      `mutation($from: ID!, $to: ID!) { cycleCarryOver(fromCycleId: $from, toCycleId: $to) { success } }`,
+      { from: setup.targetCycleId, to: destinationId },
+      setup.outsiderKey,
+    );
+    expect(denied.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+    const unchanged = await gql(app, `query($id: ID!) { issue(id: $id) { cycle { id } } }`, {
+      id: issueId,
+    });
+    expect(unchanged.data!.issue.cycle.id).toBe(setup.targetCycleId);
+
+    const allowed = await gql(
+      app,
+      `mutation($from: ID!, $to: ID!) { cycleCarryOver(fromCycleId: $from, toCycleId: $to) { success movedIssues } }`,
+      { from: setup.targetCycleId, to: destinationId },
+      setup.ownerKey,
+    );
+    expect(allowed.errors).toBeUndefined();
+    expect(allowed.data!.cycleCarryOver.movedIssues).toBe(1);
+  });
+
   it("conserva NOT_FOUND para recursos inexistentes", async () => {
     await expectError(
       `mutation($id: ID!) { teamUpdate(id: $id, input: { name: "Nope" }) { success } }`,

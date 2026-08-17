@@ -716,6 +716,8 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      const fromCycle = getCycle(context.db, args.fromCycleId);
+      if (fromCycle) assertCanManageTeam(context.db, viewer, fromCycle.team_id);
       const movedIssues = carryOverCycle(context.db, viewer.id, args.fromCycleId, args.toCycleId);
       return { success: true, movedIssues };
     },
