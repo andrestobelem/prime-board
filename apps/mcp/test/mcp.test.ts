@@ -64,30 +64,50 @@ describe("mcp tools", () => {
     const tools = await client.listTools();
     const names = tools.tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
+      "archive_inbox",
       "archive_project",
+      "carry_over_cycle",
+      "delete_cycle",
+      "delete_favorite",
+      "delete_initiative",
       "delete_milestone",
       "delete_project_update",
+      "delete_review",
       "delete_saved_view",
+      "get_cycle",
+      "get_initiative",
       "get_issue",
       "get_project",
+      "get_review",
       "get_team",
       "get_workspace",
       "link_issues",
       "list_comments",
+      "list_cycles",
+      "list_favorites",
+      "list_inbox",
+      "list_initiatives",
       "list_issue_labels",
       "list_issue_statuses",
       "list_issues",
       "list_milestones",
       "list_project_updates",
       "list_projects",
+      "list_reviews",
       "list_saved_views",
       "list_teams",
       "list_users",
+      "mark_inbox_read",
+      "reorder_favorite",
       "save_comment",
+      "save_cycle",
+      "save_favorite",
+      "save_initiative",
       "save_issue",
       "save_milestone",
       "save_project",
       "save_project_update",
+      "save_review",
       "save_saved_view",
       "unarchive_project",
       "unlink_issues",
@@ -255,6 +275,118 @@ describe("mcp tools", () => {
         await client.callTool({ name: "delete_project_update", arguments: { id: update.id } }),
       ),
     ).toEqual({ success: true });
+  });
+
+  it("expone cycles, reviews, initiatives, inbox y favorites", async () => {
+    const cycle = parseResult(
+      await client.callTool({
+        name: "save_cycle",
+        arguments: { team: "PB", name: "MCP cycle", startsAt: "2031-01-01", endsAt: "2031-01-14" },
+      }),
+    );
+    expect(cycle.name).toBe("MCP cycle");
+    expect(
+      parseResult(await client.callTool({ name: "list_cycles", arguments: { team: "PB" } })),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ id: cycle.id })]));
+    const secondCycle = parseResult(
+      await client.callTool({
+        name: "save_cycle",
+        arguments: {
+          team: "PB",
+          name: "MCP cycle 2",
+          startsAt: "2031-02-01",
+          endsAt: "2031-02-14",
+        },
+      }),
+    );
+    expect(
+      parseResult(
+        await client.callTool({
+          name: "carry_over_cycle",
+          arguments: { from: cycle.id, to: secondCycle.id },
+        }),
+      ),
+    ).toEqual({ success: true, movedIssues: 0 });
+    expect(
+      parseResult(await client.callTool({ name: "delete_cycle", arguments: { id: cycle.id } })),
+    ).toEqual({ success: true });
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_cycle", arguments: { id: secondCycle.id } }),
+      ),
+    ).toEqual({ success: true });
+
+    const issue = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { team: "PB", title: "MCP review target" },
+      }),
+    );
+    const review = parseResult(
+      await client.callTool({
+        name: "save_review",
+        arguments: { issue: issue.identifier, reviewer: "me" },
+      }),
+    );
+    expect(review.status).toBe("REQUESTED");
+    expect(
+      parseResult(
+        await client.callTool({
+          name: "save_review",
+          arguments: { id: review.id, status: "approved" },
+        }),
+      ),
+    ).toMatchObject({ status: "APPROVED" });
+    expect(
+      parseResult(await client.callTool({ name: "delete_review", arguments: { id: review.id } })),
+    ).toEqual({ success: true });
+
+    const initiative = parseResult(
+      await client.callTool({ name: "save_initiative", arguments: { name: "MCP initiative" } }),
+    );
+    expect(parseResult(await client.callTool({ name: "list_initiatives", arguments: {} }))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: initiative.id })]),
+    );
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_initiative", arguments: { id: initiative.id } }),
+      ),
+    ).toEqual({ success: true });
+
+    const project = parseResult(
+      await client.callTool({ name: "save_project", arguments: { name: "MCP favorite project" } }),
+    );
+    const favorite = parseResult(
+      await client.callTool({ name: "save_favorite", arguments: { project: project.id } }),
+    );
+    expect(parseResult(await client.callTool({ name: "list_favorites", arguments: {} }))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: favorite.id })]),
+    );
+    expect(
+      parseResult(
+        await client.callTool({
+          name: "reorder_favorite",
+          arguments: { id: favorite.id, position: 0 },
+        }),
+      ),
+    ).toMatchObject({ id: favorite.id, position: 0 });
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_favorite", arguments: { id: favorite.id } }),
+      ),
+    ).toEqual({ success: true });
+
+    expect(
+      Array.isArray(parseResult(await client.callTool({ name: "list_inbox", arguments: {} }))),
+    ).toBe(true);
+    expect(
+      (await client.callTool({ name: "mark_inbox_read", arguments: { id: "missing-inbox" } }))
+        .isError,
+    ).toBe(true);
+    expect(
+      (await client.callTool({ name: "archive_inbox", arguments: { id: "missing-inbox" } }))
+        .isError,
+    ).toBe(true);
   });
 
   it("los errores de la API viajan como errores MCP", async () => {

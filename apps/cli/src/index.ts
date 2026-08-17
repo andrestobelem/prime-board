@@ -3,6 +3,11 @@
 // Exit codes: 0 ok, 1 error de API, 2 error de uso.
 import { APP_VERSION } from "@prime-board/schema";
 import { authCommand } from "./commands/auth.ts";
+import { cycleCommand } from "./commands/cycle.ts";
+import { favoriteCommand } from "./commands/favorite.ts";
+import { inboxCommand } from "./commands/inbox.ts";
+import { initiativeCommand } from "./commands/initiative.ts";
+import { reviewCommand } from "./commands/review.ts";
 import { issueCommand } from "./commands/issue.ts";
 import { projectCommand } from "./commands/project.ts";
 import { teamCommand } from "./commands/team.ts";
@@ -22,6 +27,11 @@ Commands:
   view list|create|update|duplicate|delete Saved views
   team list                                List teams
   webhook list|create|delete               Manage webhooks
+  cycle list|view|create|update|delete     Manage team cycles
+  review list|view|create|update|delete    Manage reviews
+  initiative list|view|create|update|delete Manage initiatives
+  inbox list|read|archive                  Manage personal inbox
+  favorite list|create|delete|reorder      Manage actor favorites
 
 Run \`pb <command>\` without arguments for detailed usage.
 Environment: PRIME_BOARD_URL, PRIME_BOARD_API_KEY override the saved config.`;
@@ -33,6 +43,16 @@ async function main(): Promise<void> {
       return authCommand(rest);
     case "issue":
       return issueCommand(rest);
+    case "cycle":
+      return cycleCommand(rest);
+    case "review":
+      return reviewCommand(rest);
+    case "initiative":
+      return initiativeCommand(rest);
+    case "inbox":
+      return inboxCommand(rest);
+    case "favorite":
+      return favoriteCommand(rest);
     case "project":
       return projectCommand(rest);
     case "view":

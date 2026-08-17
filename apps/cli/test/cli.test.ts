@@ -286,6 +286,77 @@ describe("pb project / team / webhook", () => {
   });
 });
 
+describe("pb planning, inbox and favorites", () => {
+  it("opera cycles, reviews, initiatives, inbox y favorites", () => {
+    const cycle = pb([
+      "cycle",
+      "create",
+      "--team",
+      "PB",
+      "--name",
+      "CLI cycle",
+      "--starts-at",
+      "2030-01-01",
+      "--ends-at",
+      "2030-01-14",
+      "--json",
+    ]);
+    expect(cycle.code).toBe(0);
+    const cycleId = JSON.parse(cycle.out).id;
+    const secondCycle = pb([
+      "cycle",
+      "create",
+      "--team",
+      "PB",
+      "--name",
+      "CLI cycle 2",
+      "--starts-at",
+      "2030-02-01",
+      "--ends-at",
+      "2030-02-14",
+      "--json",
+    ]);
+    expect(secondCycle.code).toBe(0);
+    const secondCycleId = JSON.parse(secondCycle.out).id;
+    expect(pb(["cycle", "list", "--team", "PB", "--json"]).code).toBe(0);
+    expect(
+      pb(["cycle", "carry-over", "--from", cycleId, "--to", secondCycleId, "--json"]).code,
+    ).toBe(0);
+    expect(pb(["cycle", "update", cycleId, "--state", "active", "--json"]).code).toBe(0);
+    expect(pb(["cycle", "delete", cycleId]).code).toBe(0);
+    expect(pb(["cycle", "delete", secondCycleId]).code).toBe(0);
+
+    const issue = pb(["issue", "create", "--team", "PB", "--title", "CLI review target", "--json"]);
+    const issueRef = JSON.parse(issue.out).identifier;
+    const review = pb(["review", "create", "--issue", issueRef, "--reviewer", "me", "--json"]);
+    expect(review.code).toBe(0);
+    const reviewId = JSON.parse(review.out).id;
+    expect(pb(["review", "list", "--open-only", "--json"]).code).toBe(0);
+    expect(pb(["review", "update", reviewId, "--status", "approved", "--json"]).code).toBe(0);
+    expect(pb(["review", "delete", reviewId]).code).toBe(0);
+
+    const initiative = pb(["initiative", "create", "--name", "CLI initiative", "--json"]);
+    expect(initiative.code).toBe(0);
+    const initiativeId = JSON.parse(initiative.out).id;
+    expect(pb(["initiative", "list", "--json"]).code).toBe(0);
+    expect(pb(["initiative", "update", initiativeId, "--state", "active", "--json"]).code).toBe(0);
+    expect(pb(["initiative", "delete", initiativeId]).code).toBe(0);
+
+    const project = pb(["project", "create", "--name", "Favorite project", "--json"]);
+    const projectId = JSON.parse(project.out).id;
+    const favorite = pb(["favorite", "create", "--project", projectId, "--json"]);
+    expect(favorite.code).toBe(0);
+    const favoriteId = JSON.parse(favorite.out).id;
+    expect(pb(["favorite", "list", "--json"]).code).toBe(0);
+    expect(pb(["favorite", "reorder", favoriteId, "--position", "0", "--json"]).code).toBe(0);
+    expect(pb(["favorite", "delete", favoriteId]).code).toBe(0);
+
+    expect(pb(["inbox", "list", "--json"]).code).toBe(0);
+    expect(pb(["inbox", "read", "missing-inbox-item"]).code).toBe(1);
+    expect(pb(["inbox", "archive", "missing-inbox-item"]).code).toBe(1);
+  });
+});
+
 describe("pb issue link / unlink (AT-179)", () => {
   it("linkea con --blocked-by y lo muestra en view", () => {
     pb(["issue", "create", "--team", "PB", "--title", "Blocker task"]);

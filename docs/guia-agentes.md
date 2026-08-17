@@ -129,6 +129,11 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
 - El CLI también expone `project archive|unarchive`, `milestone-list|create|update|delete` y
   `update-list|create|delete`; los comandos de creación aceptan referencias por ID y los cuerpos
   pueden leerse desde stdin con `--body -` o `--description -`.
+- Las superficies de planificación se operan con `pb cycle`, `pb review`, `pb initiative`,
+  `pb inbox` y `pb favorite`; todos sus comandos de lectura aceptan `--json` y las mutaciones
+  conservan los códigos de salida comunes del CLI.
+- El MCP refleja esas operaciones con `list/save/get/delete_*` y las tools específicas
+  `carry_over_cycle`, `mark_inbox_read`, `archive_inbox` y `reorder_favorite`.
 - Exit codes: `0` ok, `1` error de API, `2` error de uso.
 - Env `PRIME_BOARD_URL` / `PRIME_BOARD_API_KEY` pisan la config guardada.
 - `pb auth login` guarda las credenciales en `~/.prime-board/cli.json`; el directorio queda

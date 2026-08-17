@@ -285,6 +285,455 @@ export function createServer(config: McpConfig): McpServer {
     },
   );
 
+  server.registerTool(
+    "list_cycles",
+    {
+      description: "List cycles for a team.",
+      inputSchema: {
+        team: z.string().describe("Team key or ID"),
+        includeArchived: z.boolean().optional(),
+      },
+    },
+    async ({ team, includeArchived }) => {
+      const teamId = (await resolveTeam(config, team)).id;
+      const data = await gqlRequest(
+        config,
+        `query($teamId: ID!, $includeArchived: Boolean) {
+      cycles(teamId: $teamId, includeArchived: $includeArchived) {
+        id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt
+        team { id key name }
+      }
+    }`,
+        { teamId, includeArchived: Boolean(includeArchived) },
+      );
+      return json(data.cycles);
+    },
+  );
+
+  server.registerTool(
+    "get_cycle",
+    { description: "Retrieve a cycle by ID.", inputSchema: { id: z.string() } },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `query($id: ID!) { cycle(id: $id) {
+          id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt
+          team { id key name }
+        } }`,
+        { id },
+      );
+      if (!data.cycle) throw new Error(`NOT_FOUND: Cycle not found: ${id}`);
+      return json(data.cycle);
+    },
+  );
+
+  server.registerTool(
+    "save_cycle",
+    {
+      description: "Create or update a cycle. Provide id to update.",
+      inputSchema: {
+        id: z.string().optional(),
+        team: z.string().optional(),
+        name: z.string().optional(),
+        startsAt: z.string().optional(),
+        endsAt: z.string().optional(),
+        state: z.enum(["upcoming", "active", "completed"]).optional(),
+        archived: z.boolean().optional(),
+      },
+    },
+    async (args) => {
+      if (args.id) {
+        const input: Record<string, unknown> = {};
+        if (args.name !== undefined) input.name = args.name;
+        if (args.startsAt !== undefined) input.startsAt = args.startsAt;
+        if (args.endsAt !== undefined) input.endsAt = args.endsAt;
+        if (args.state !== undefined) input.state = args.state.toUpperCase();
+        if (args.archived !== undefined) input.archived = args.archived;
+        const data = await gqlRequest(
+          config,
+          `mutation($id: ID!, $input: CycleUpdateInput!) { cycleUpdate(id: $id, input: $input) {
+            cycle { id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt team { id key name } }
+          } }`,
+          { id: args.id, input },
+        );
+        return json(data.cycleUpdate.cycle);
+      }
+      if (!args.team || !args.name || !args.startsAt || !args.endsAt) {
+        throw new Error(
+          "VALIDATION_FAILED: `team`, `name`, `startsAt` and `endsAt` are required to create a cycle",
+        );
+      }
+      const input: Record<string, unknown> = {
+        teamId: (await resolveTeam(config, args.team)).id,
+        name: args.name,
+        startsAt: args.startsAt,
+        endsAt: args.endsAt,
+      };
+      if (args.state !== undefined) input.state = args.state.toUpperCase();
+      const data = await gqlRequest(
+        config,
+        `mutation($input: CycleCreateInput!) { cycleCreate(input: $input) {
+          cycle { id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt team { id key name } }
+        } }`,
+        { input },
+      );
+      return json(data.cycleCreate.cycle);
+    },
+  );
+
+  server.registerTool(
+    "delete_cycle",
+    { description: "Delete a cycle by ID.", inputSchema: { id: z.string() } },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) { cycleDelete(id: $id) { success } }`,
+        { id },
+      );
+      return json(data.cycleDelete);
+    },
+  );
+
+  server.registerTool(
+    "carry_over_cycle",
+    {
+      description: "Move open issues from one cycle to another.",
+      inputSchema: { from: z.string(), to: z.string() },
+    },
+    async ({ from, to }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($from: ID!, $to: ID!) { cycleCarryOver(fromCycleId: $from, toCycleId: $to) { success movedIssues } }`,
+        { from, to },
+      );
+      return json(data.cycleCarryOver);
+    },
+  );
+
+  server.registerTool(
+    "list_reviews",
+    {
+      description: "List reviews visible to the authenticated actor.",
+      inputSchema: {
+        openOnly: z.boolean().optional(),
+        first: z.number().optional(),
+        team: z.string().optional(),
+        project: z.string().optional(),
+        reviewer: z.string().optional(),
+        olderThanDays: z.number().optional(),
+      },
+    },
+    async ({ openOnly, first, team, project, reviewer, olderThanDays }) => {
+      const data = await gqlRequest(
+        config,
+        `query($openOnly: Boolean, $first: Int, $teamId: ID, $projectId: ID, $reviewerId: ID, $olderThanDays: Int) {
+      reviews(openOnly: $openOnly, first: $first, teamId: $teamId, projectId: $projectId, reviewerId: $reviewerId, olderThanDays: $olderThanDays) {
+        id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type }
+      }
+    }`,
+        {
+          openOnly: Boolean(openOnly),
+          first: first ?? 50,
+          teamId: team ? (await resolveTeam(config, team)).id : null,
+          projectId: project ?? null,
+          reviewerId: reviewer ? await resolveActor(config, reviewer) : null,
+          olderThanDays: olderThanDays ?? null,
+        },
+      );
+      return json(data.reviews);
+    },
+  );
+
+  server.registerTool(
+    "get_review",
+    {
+      description: "Retrieve a review visible to the authenticated actor.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `query($id: ID!) { review(id: $id) {
+        id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type }
+      } }`,
+        { id },
+      );
+      if (!data.review) throw new Error(`NOT_FOUND: Review not found: ${id}`);
+      return json(data.review);
+    },
+  );
+
+  server.registerTool(
+    "save_review",
+    {
+      description: "Create or update a review. Provide id to update.",
+      inputSchema: {
+        id: z.string().optional(),
+        issue: z.string().optional(),
+        reviewer: z.string().optional(),
+        status: z.enum(["requested", "in_progress", "approved", "rejected"]).optional(),
+      },
+    },
+    async (args) => {
+      if (args.id) {
+        const input: Record<string, unknown> = {};
+        if (args.status !== undefined) input.status = args.status.toUpperCase();
+        if (args.reviewer !== undefined)
+          input.reviewerId = await resolveActor(config, args.reviewer);
+        const data = await gqlRequest(
+          config,
+          `mutation($id: ID!, $input: ReviewUpdateInput!) { reviewUpdate(id: $id, input: $input) {
+          review { id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type } }
+        } }`,
+          { id: args.id, input },
+        );
+        return json(data.reviewUpdate.review);
+      }
+      if (!args.issue || !args.reviewer)
+        throw new Error(
+          "VALIDATION_FAILED: `issue` and `reviewer` are required to create a review",
+        );
+      const data = await gqlRequest(
+        config,
+        `mutation($input: ReviewCreateInput!) { reviewCreate(input: $input) {
+        review { id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type } }
+      } }`,
+        { input: { issueId: args.issue, reviewerId: await resolveActor(config, args.reviewer) } },
+      );
+      return json(data.reviewCreate.review);
+    },
+  );
+
+  server.registerTool(
+    "delete_review",
+    {
+      description: "Delete a review visible to the authenticated actor.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) { reviewDelete(id: $id) { success } }`,
+        { id },
+      );
+      return json(data.reviewDelete);
+    },
+  );
+
+  server.registerTool(
+    "list_initiatives",
+    {
+      description: "List initiatives visible to the authenticated actor.",
+      inputSchema: { includeArchived: z.boolean().optional() },
+    },
+    async ({ includeArchived }) => {
+      const data = await gqlRequest(
+        config,
+        `query($includeArchived: Boolean) { initiatives(includeArchived: $includeArchived) {
+        id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
+      } }`,
+        { includeArchived: Boolean(includeArchived) },
+      );
+      return json(data.initiatives);
+    },
+  );
+
+  server.registerTool(
+    "get_initiative",
+    {
+      description: "Retrieve an initiative visible to the authenticated actor.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `query($id: ID!) { initiative(id: $id) {
+        id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
+      } }`,
+        { id },
+      );
+      if (!data.initiative) throw new Error(`NOT_FOUND: Initiative not found: ${id}`);
+      return json(data.initiative);
+    },
+  );
+
+  server.registerTool(
+    "save_initiative",
+    {
+      description: "Create or update an initiative. Provide id to update.",
+      inputSchema: {
+        id: z.string().optional(),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        state: z.enum(["planned", "active", "completed", "canceled"]).optional(),
+        targetDate: z.string().optional(),
+        projects: z.array(z.string()).optional(),
+        teams: z.array(z.string()).optional(),
+        archived: z.boolean().optional(),
+      },
+    },
+    async (args) => {
+      const input: Record<string, unknown> = {};
+      if (args.name !== undefined) input.name = args.name;
+      if (args.description !== undefined) input.description = args.description;
+      if (args.state !== undefined) input.state = args.state.toUpperCase();
+      if (args.targetDate !== undefined) input.targetDate = args.targetDate;
+      if (args.projects !== undefined) input.projectIds = args.projects;
+      if (args.teams !== undefined)
+        input.teamIds = await Promise.all(
+          args.teams.map(async (team) => (await resolveTeam(config, team)).id),
+        );
+      if (args.archived !== undefined) input.archived = args.archived;
+      if (args.id) {
+        const data = await gqlRequest(
+          config,
+          `mutation($id: ID!, $input: InitiativeUpdateInput!) { initiativeUpdate(id: $id, input: $input) { initiative {
+          id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
+        } } }`,
+          { id: args.id, input },
+        );
+        return json(data.initiativeUpdate.initiative);
+      }
+      if (!args.name)
+        throw new Error("VALIDATION_FAILED: `name` is required to create an initiative");
+      const data = await gqlRequest(
+        config,
+        `mutation($input: InitiativeCreateInput!) { initiativeCreate(input: $input) { initiative {
+        id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
+      } } }`,
+        { input },
+      );
+      return json(data.initiativeCreate.initiative);
+    },
+  );
+
+  server.registerTool(
+    "delete_initiative",
+    { description: "Delete an initiative by ID.", inputSchema: { id: z.string() } },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) { initiativeDelete(id: $id) { success } }`,
+        { id },
+      );
+      return json(data.initiativeDelete);
+    },
+  );
+
+  server.registerTool(
+    "list_inbox",
+    {
+      description: "List inbox activity for the authenticated actor.",
+      inputSchema: { first: z.number().optional(), includeArchived: z.boolean().optional() },
+    },
+    async ({ first, includeArchived }) => {
+      const data = await gqlRequest(
+        config,
+        `query($first: Int, $includeArchived: Boolean) { inbox(first: $first, includeArchived: $includeArchived) {
+        id type payload createdAt isRead isArchived actor { id name type } issue { id identifier title }
+      } }`,
+        { first: first ?? 50, includeArchived: Boolean(includeArchived) },
+      );
+      return json(data.inbox);
+    },
+  );
+
+  server.registerTool(
+    "mark_inbox_read",
+    { description: "Mark an inbox item as read.", inputSchema: { id: z.string() } },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) { inboxMarkRead(id: $id) { inboxItem {
+        id type payload createdAt isRead isArchived actor { id name type } issue { id identifier title }
+      } } }`,
+        { id },
+      );
+      return json(data.inboxMarkRead.inboxItem);
+    },
+  );
+
+  server.registerTool(
+    "archive_inbox",
+    { description: "Archive an inbox item.", inputSchema: { id: z.string() } },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) { inboxArchive(id: $id) { inboxItem {
+        id type payload createdAt isRead isArchived actor { id name type } issue { id identifier title }
+      } } }`,
+        { id },
+      );
+      return json(data.inboxArchive.inboxItem);
+    },
+  );
+
+  server.registerTool(
+    "list_favorites",
+    { description: "List private favorites of the authenticated actor.", inputSchema: {} },
+    async () => {
+      const data = await gqlRequest(
+        config,
+        `{ favorites {
+        id position project { id name archivedAt } savedView { id name scope archivedAt }
+      } }`,
+      );
+      return json(data.favorites);
+    },
+  );
+
+  server.registerTool(
+    "save_favorite",
+    {
+      description: "Create a private favorite for a project or saved view.",
+      inputSchema: { project: z.string().optional(), savedView: z.string().optional() },
+    },
+    async ({ project, savedView }) => {
+      if ((project ? 1 : 0) + (savedView ? 1 : 0) !== 1)
+        throw new Error("VALIDATION_FAILED: exactly one of `project` or `savedView` is required");
+      const input = project ? { projectId: project } : { savedViewId: savedView };
+      const data = await gqlRequest(
+        config,
+        `mutation($input: FavoriteCreateInput!) { favoriteCreate(input: $input) { favorite {
+        id position project { id name archivedAt } savedView { id name scope archivedAt }
+      } } }`,
+        { input },
+      );
+      return json(data.favoriteCreate.favorite);
+    },
+  );
+
+  server.registerTool(
+    "delete_favorite",
+    { description: "Delete a private favorite by ID.", inputSchema: { id: z.string() } },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!) { favoriteDelete(id: $id) { success } }`,
+        { id },
+      );
+      return json(data.favoriteDelete);
+    },
+  );
+
+  server.registerTool(
+    "reorder_favorite",
+    {
+      description: "Move a private favorite to a position.",
+      inputSchema: { id: z.string(), position: z.number().int().min(0) },
+    },
+    async ({ id, position }) => {
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!, $position: Int!) { favoriteReorder(id: $id, position: $position) { favorite {
+        id position project { id name archivedAt } savedView { id name scope archivedAt }
+      } } }`,
+        { id, position },
+      );
+      return json(data.favoriteReorder.favorite);
+    },
+  );
+
   const RELATION_TYPES = ["blocked_by", "blocks", "related", "duplicate_of"] as const;
 
   server.registerTool(
