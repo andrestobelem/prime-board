@@ -97,6 +97,14 @@ query ($me: ID!) {
 }
 ```
 
+### Semántica de `filter.search`
+
+La búsqueda usa prefijos sobre tokens y frases exactas entre comillas. Una frase vacía
+(`""`) se ignora, por lo que no restringe los resultados; `*` se trata como un token
+literal y normalmente no devuelve resultados. Las comillas sin cerrar se tratan como
+separadores, nunca como sintaxis FTS5. Estas entradas no exponen errores internos de SQLite
+y conservan el comportamiento de filtros anidados y paginación.
+
 Ciclo de vida completo: `issueCreate` → `issueUpdate` (estado/prioridad/assignee/labels/
 parent/project) → `commentCreate` → `issueArchive`. Todo queda en `Issue.activity`.
 

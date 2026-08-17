@@ -13,13 +13,21 @@ beforeAll(async () => {
     "Drag & drop en el board",
     "Webhook signature docs",
   ]) {
-    await gql(app, `mutation($t: String!) { issueCreate(input: { teamKey: "PB", title: $t }) { success } }`, { t: title });
+    await gql(
+      app,
+      `mutation($t: String!) { issueCreate(input: { teamKey: "PB", title: $t }) { success } }`,
+      { t: title },
+    );
   }
 });
 afterAll(() => app.stop());
 
 const search = async (term: string) => {
-  const result = await gql(app, `query($s: String) { issues(filter: { search: $s }) { nodes { title } } }`, { s: term });
+  const result = await gql(
+    app,
+    `query($s: String) { issues(filter: { search: $s }) { nodes { title } } }`,
+    { s: term },
+  );
   expect(result.errors).toBeUndefined();
   return result.data!.issues.nodes.map((n: any) => n.title).sort();
 };
@@ -49,5 +57,27 @@ describe("full-text con prefijos", () => {
 
   it("no rompe con caracteres especiales", async () => {
     expect(await search("drag & drop")).toEqual(["Drag & drop en el board"]);
+  });
+
+  it("trata entradas FTS vacías o malformadas sin filtrar errores internos", async () => {
+    const all = [
+      "Configure webhooks retry policy",
+      "Definición del alcance del MVP",
+      "Drag & drop en el board",
+      "Webhook signature docs",
+    ].sort();
+    expect(await search('""')).toEqual(all);
+    expect(await search('"unclosed')).toEqual([]);
+    expect(await search("*")).toEqual([]);
+
+    const nested = await gql(
+      app,
+      `query($s: String) {
+        issues(first: 1, filter: { and: [{ search: $s }] }) { nodes { title } }
+      }`,
+      { s: '""' },
+    );
+    expect(nested.errors).toBeUndefined();
+    expect(nested.data!.issues.nodes).toHaveLength(1);
   });
 });

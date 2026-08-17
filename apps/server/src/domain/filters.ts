@@ -98,9 +98,11 @@ function intClauses(column: string, comparator: IntComparator, params: ParamSink
  * usuario se respetan como frase exacta, sin prefijo.
  */
 export function ftsQuery(search: string): string {
+  // Una comilla sin pareja se interpreta como separador, no como sintaxis FTS.
+  const normalized = (search.match(/"/g)?.length ?? 0) % 2 ? search.replaceAll('"', " ") : search;
   // Separa frases entre comillas ("foo bar") del resto de los términos.
-  const phrases = [...search.matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
-  const rest = search.replace(/"[^"]*"/g, " ");
+  const phrases = [...normalized.matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+  const rest = normalized.replace(/"[^"]*"/g, " ");
 
   const exact = phrases.map((phrase) => `"${phrase.replaceAll('"', '""')}"`);
   const prefixes = rest
@@ -168,9 +170,14 @@ export function buildIssueFilter(filter: IssueFilter, params: ParamSink): string
   }
 
   if (filter.search?.trim()) {
-    clauses.push(
-      `issues.rowid IN (SELECT rowid FROM issues_fts WHERE issues_fts MATCH ${params.add(ftsQuery(filter.search))})`,
-    );
+    // Una frase vacía (p. ej. `""`) significa búsqueda ignorada; `*` se
+    // conserva como token literal y las comillas sin cerrar se tratan como separadores.
+    const query = ftsQuery(filter.search);
+    if (query) {
+      clauses.push(
+        `issues.rowid IN (SELECT rowid FROM issues_fts WHERE issues_fts MATCH ${params.add(query)})`,
+      );
+    }
   }
 
   for (const sub of filter.and ?? []) {
