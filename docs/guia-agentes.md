@@ -125,6 +125,9 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
 - `--json` en todo comando de lectura → salida estable para parsear.
 - Exit codes: `0` ok, `1` error de API, `2` error de uso.
 - Env `PRIME_BOARD_URL` / `PRIME_BOARD_API_KEY` pisan la config guardada.
+- `pb auth login` guarda las credenciales en `~/.prime-board/cli.json`; el directorio queda
+  con permisos `0700` y el archivo con `0600`. El CLI vuelve a endurecer esos permisos al
+  cargar una configuración existente. No compartas ese archivo ni lo subas al repositorio.
 
 ## 6. MCP
 
