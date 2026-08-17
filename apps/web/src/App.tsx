@@ -81,6 +81,7 @@ export function App() {
   const shell = useQuery<ShellData>(SHELL_QUERY);
   const [createOpen, setCreateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [entityModal, setEntityModal] = useState<CreateModal | null>(null);
   const [favorites, setFavorites] = useState<SidebarFavorite[]>([]);
   const [groupBy, setGroupBy] = useState<GroupBy>(loadGroupBy);
@@ -101,6 +102,11 @@ export function App() {
         return;
       }
       if (isTypingTarget(event) || document.querySelector(".overlay")) return;
+      if (event.key === "?") {
+        event.preventDefault();
+        setShortcutsOpen((open) => !open);
+        return;
+      }
       if (event.key === "c" && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
         setCreateOpen(true);
@@ -109,6 +115,16 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  async function archiveCurrentIssue(): Promise<void> {
+    const issueRef = route[0] === "issue" ? (route[1] ?? null) : null;
+    if (!issueRef) return;
+    await mutate<{ issueArchive: { success: boolean } }>(
+      `mutation($id: ID!) { issueArchive(id: $id) { success } }`,
+      { id: issueRef },
+    );
+    window.location.hash = "#/my-issues";
+  }
 
   const toggleFavorite = async (
     target: { projectId?: string; savedViewId?: string },
@@ -456,7 +472,67 @@ export function App() {
           shell={shell.data}
           onClose={() => setPaletteOpen(false)}
           onNewIssue={() => setCreateOpen(true)}
+          currentIssueRef={route[0] === "issue" ? (route[1] ?? null) : null}
+          onArchiveCurrentIssue={archiveCurrentIssue}
         />
+      )}
+      {shortcutsOpen && (
+        <div
+          className="overlay"
+          onMouseDown={(event) => event.target === event.currentTarget && setShortcutsOpen(false)}
+        >
+          <div
+            className="modal shortcuts-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="shortcuts-title"
+          >
+            <div className="modal-header">
+              <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+              <button
+                className="icon-action"
+                aria-label="Close shortcuts"
+                onClick={() => setShortcutsOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <dl className="shortcut-list">
+              <dt>
+                <kbd>C</kbd>
+              </dt>
+              <dd>Create an issue</dd>
+              <dt>
+                <kbd>⌘/Ctrl K</kbd>
+              </dt>
+              <dd>Open command palette</dd>
+              <dt>
+                <kbd>J</kbd> / <kbd>K</kbd>
+              </dt>
+              <dd>Move issue focus</dd>
+              <dt>
+                <kbd>Enter</kbd>
+              </dt>
+              <dd>Open focused issue</dd>
+              <dt>
+                <kbd>X</kbd>
+              </dt>
+              <dd>Archive focused issue</dd>
+              <dt>
+                <kbd>⌘/Ctrl A</kbd>
+              </dt>
+              <dd>Select visible issues</dd>
+              <dt>
+                <kbd>Esc</kbd>
+              </dt>
+              <dd>Clear selection or close an overlay</dd>
+              <dt>
+                <kbd>?</kbd>
+              </dt>
+              <dd>Show this help</dd>
+            </dl>
+          </div>
+        </div>
       )}
       {entityModal?.kind === "view" && (
         <EntityModal

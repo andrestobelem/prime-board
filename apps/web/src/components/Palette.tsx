@@ -16,33 +16,66 @@ interface PaletteProps {
   shell: ShellData;
   onClose: () => void;
   onNewIssue: () => void;
+  currentIssueRef?: string | null;
+  onArchiveCurrentIssue?: () => Promise<void>;
 }
 
-export function Palette({ shell, onClose, onNewIssue }: PaletteProps) {
+export function Palette({
+  shell,
+  onClose,
+  onNewIssue,
+  currentIssueRef,
+  onArchiveCurrentIssue,
+}: PaletteProps) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const [searchResults, setSearchResults] = useState<PaletteItem[]>([]);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const contextualCommands: PaletteItem[] =
+    currentIssueRef && onArchiveCurrentIssue
+      ? [
+          {
+            id: "archive-current-issue",
+            label: `Archive issue ${currentIssueRef}`,
+            kind: "issue action",
+            run: () => {
+              void onArchiveCurrentIssue();
+              onClose();
+            },
+          },
+        ]
+      : [];
+
   const commands: PaletteItem[] = [
+    ...contextualCommands,
     {
       id: "new-issue",
       label: "New issue",
       kind: "action",
-      run: () => { onClose(); onNewIssue(); },
+      run: () => {
+        onClose();
+        onNewIssue();
+      },
     },
     ...shell.teams.flatMap((team) => [
       {
         id: `team-${team.id}`,
         label: `Go to team ${team.name} — list`,
         kind: "navigate",
-        run: () => { onClose(); navigate(`/team/${team.key}`); },
+        run: () => {
+          onClose();
+          navigate(`/team/${team.key}`);
+        },
       },
       {
         id: `board-${team.id}`,
         label: `Go to team ${team.name} — board`,
         kind: "navigate",
-        run: () => { onClose(); navigate(`/board/${team.key}`); },
+        run: () => {
+          onClose();
+          navigate(`/board/${team.key}`);
+        },
       },
     ]),
     ...shell.teams.flatMap((team) =>
@@ -50,20 +83,29 @@ export function Palette({ shell, onClose, onNewIssue }: PaletteProps) {
         id: `project-${project.id}`,
         label: `Go to project ${project.name} (${team.key})`,
         kind: "navigate",
-        run: () => { onClose(); navigate(`/project/${project.id}`); },
+        run: () => {
+          onClose();
+          navigate(`/project/${project.id}`);
+        },
       })),
     ),
     {
       id: "settings",
       label: "Open settings",
       kind: "navigate",
-      run: () => { onClose(); navigate("/settings"); },
+      run: () => {
+        onClose();
+        navigate("/settings");
+      },
     },
     ...(["dark", "light", "system"] as const).map((mode) => ({
       id: `theme-${mode}`,
       label: `Theme: ${mode[0]!.toUpperCase()}${mode.slice(1)}`,
       kind: "theme",
-      run: () => { setThemePreference(mode); onClose(); },
+      run: () => {
+        setThemePreference(mode);
+        onClose();
+      },
     })),
   ];
 
@@ -85,13 +127,20 @@ export function Palette({ shell, onClose, onNewIssue }: PaletteProps) {
         const data = await gql<{ issues: { nodes: Array<{ identifier: string; title: string }> } }>(
           `query($search: String) {
             issues(filter: { search: $search }, first: 8) { nodes { identifier title } }
-          }`, { search: lower });
-        setSearchResults(data.issues.nodes.map((issue) => ({
-          id: `issue-${issue.identifier}`,
-          label: `${issue.identifier} ${issue.title}`,
-          kind: "issue",
-          run: () => { onClose(); navigate(`/issue/${issue.identifier}`); },
-        })));
+          }`,
+          { search: lower },
+        );
+        setSearchResults(
+          data.issues.nodes.map((issue) => ({
+            id: `issue-${issue.identifier}`,
+            label: `${issue.identifier} ${issue.title}`,
+            kind: "issue",
+            run: () => {
+              onClose();
+              navigate(`/issue/${issue.identifier}`);
+            },
+          })),
+        );
       } catch {
         setSearchResults([]);
       }
@@ -109,7 +158,10 @@ export function Palette({ shell, onClose, onNewIssue }: PaletteProps) {
   }, [onClose]);
 
   return (
-    <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className="overlay"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <div className="modal">
         <input
           className="palette-input"

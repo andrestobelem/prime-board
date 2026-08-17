@@ -11,12 +11,22 @@ import {
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import { issueStateColumnKey, stateColumnKey } from "../board-grouping.ts";
 import { navigate } from "../router.tsx";
+import {
+  BulkIssueActions,
+  IssueActionMenu,
+  type IssueActionInput,
+  type IssueActionOptions,
+} from "../components/IssueActions.tsx";
+import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-actions.ts";
+import { isIssueShortcutTarget } from "../issue-selection.ts";
 
 const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter) {
   team(key: $key) {
     id key name
     states { id name type color position }
     projects { id name milestones { id name } }
+    labels { id name color }
+    cycles { id name number }
   }
   actors { id name type }
   issues(filter: $filter, first: 250) {
@@ -30,7 +40,7 @@ const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter) {
 const PROJECT_BOARD_QUERY = `query($id: ID!, $filter: IssueFilter) {
   project(id: $id) {
     id name
-    teams { id key states { id name type color position } }
+    teams { id key states { id name type color position } labels { id name color } cycles { id name number } }
     milestones { id name }
   }
   actors { id name type }
@@ -78,8 +88,37 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
   const [local, setLocal] = useState<BoardCard[] | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overState, setOverState] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => setLocal(null), [result.data]);
+
+  useEffect(() => {
+    const visible = new Set((result.data?.issues?.nodes ?? []).map((issue: BoardCard) => issue.id));
+    setSelectedIds((current) => new Set([...current].filter((id) => visible.has(id))));
+    setFocusedId((current) => (current && visible.has(current) ? current : null));
+  }, [result.data]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (isIssueShortcutTarget(event.target) || document.querySelector(".overlay")) return;
+      const visible = result.data?.issues?.nodes ?? [];
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        setSelectedIds(new Set(visible.map((issue: BoardCard) => issue.id)));
+      } else if (event.key === "Escape") {
+        setSelectedIds(new Set());
+        setFocusedId(null);
+      } else if ((event.key === "x" || event.key === "X") && focusedId) {
+        event.preventDefault();
+        void archiveIssue(focusedId);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusedId, result.data]);
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
   if (result.error) return <div className="error-banner">{result.error.message}</div>;
@@ -96,6 +135,84 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
 
   const issues: BoardCard[] = local ?? result.data.issues.nodes;
   const actors: Array<{ id: string; name: string; type: string }> = result.data.actors;
+  const actionOptions: IssueActionOptions = {
+    states: isProject ? [] : container.states,
+    actors,
+    labels: isProject ? [] : container.labels,
+    projects: isProject
+      ? []
+      : container.projects.map((project: any) => ({ id: project.id, name: project.name })),
+    cycles: isProject ? [] : container.cycles,
+  };
+
+  async function bulkAction(input: IssueActionInput): Promise<void> {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await runIssueActions(ids, async (id) => {
+        const response = await mutate<{ issueUpdate: { success: boolean } }>(
+          issueUpdateMutation(),
+          {
+            id,
+            input,
+          },
+        );
+        return response.issueUpdate;
+      });
+      setSelectedIds(new Set());
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not update selected issues.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function bulkArchive(): Promise<void> {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await runIssueActions(ids, async (id) => {
+        const response = await mutate<{ issueArchive: { success: boolean } }>(archiveMutation(), {
+          id,
+        });
+        return response.issueArchive;
+      });
+      setSelectedIds(new Set());
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not archive selected issues.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function updateIssue(id: string, input: IssueActionInput): Promise<void> {
+    const response = await mutate<{ issueUpdate: { success: boolean } }>(issueUpdateMutation(), {
+      id,
+      input,
+    });
+    if (!response.issueUpdate.success) throw new Error(`Could not update issue ${id}.`);
+  }
+
+  async function archiveIssue(id: string): Promise<void> {
+    setActionError(null);
+    try {
+      const response = await mutate<{ issueArchive: { success: boolean } }>(archiveMutation(), {
+        id,
+      });
+      if (!response.issueArchive.success) throw new Error(`Could not archive issue ${id}.`);
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : `Could not archive issue ${id}.`);
+    }
+  }
 
   // Estados del alcance. En un proyecto multi-team se fusionan por nombre+tipo:
   // una columna por concepto, que sabe traducirse al state id de cada team.
@@ -208,17 +325,38 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
         : groupBy === "state"
           ? { stateId }
           : column.patch;
+    setActionError(null);
     mutate(
       `mutation($id: ID!, $input: IssueUpdateInput!) {
       issueUpdate(id: $id, input: $input) { success }
     }`,
       { id: dragId, input },
-    ).catch(() => setLocal(null));
+    )
+      .then((response: any) => {
+        if (!response.issueUpdate?.success) throw new Error("Could not update the issue.");
+      })
+      .catch((error) => {
+        setLocal(null);
+        setActionError(error instanceof Error ? error.message : "Could not update the issue.");
+      });
     setDragId(null);
   }
 
   return (
     <>
+      <BulkIssueActions
+        selectedCount={selectedIds.size}
+        options={actionOptions}
+        onAction={bulkAction}
+        onArchive={bulkArchive}
+        onClear={() => setSelectedIds(new Set())}
+        loading={actionLoading}
+      />
+      {actionError && (
+        <div className="error-banner" role="alert">
+          {actionError}
+        </div>
+      )}
       <IssueListLimitNotice hasNextPage={result.data.issues.pageInfo.hasNextPage} />
       <div className="board">
         {columns.map((column) => {
@@ -250,8 +388,12 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
               {cards.map((issue) => (
                 <div
                   key={issue.id}
-                  className="board-card"
+                  className={`board-card${focusedId === issue.id ? " focused" : ""}`}
+                  role="button"
+                  tabIndex={focusedId === issue.id ? 0 : -1}
+                  aria-current={focusedId === issue.id ? "true" : undefined}
                   draggable
+                  onMouseEnter={() => setFocusedId(issue.id)}
                   onDragStart={() => setDragId(issue.id)}
                   onDragEnd={() => {
                     setDragId(null);
@@ -259,7 +401,29 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
                   }}
                   onClick={() => navigate(`/issue/${issue.identifier}`)}
                 >
-                  <span className="identifier">{issue.identifier}</span>
+                  <span className="board-card-topline">
+                    <input
+                      className="issue-select"
+                      type="checkbox"
+                      aria-label={`Select ${issue.identifier}`}
+                      checked={selectedIds.has(issue.id)}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={() =>
+                        setSelectedIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(issue.id)) next.delete(issue.id);
+                          else next.add(issue.id);
+                          return next;
+                        })
+                      }
+                    />
+                    <span className="identifier">{issue.identifier}</span>
+                    <IssueActionMenu
+                      options={actionOptions}
+                      onAction={(input) => updateIssue(issue.id, input)}
+                      onArchive={() => archiveIssue(issue.id)}
+                    />
+                  </span>
                   <span className="card-title">{issue.title}</span>
                   <span className="card-footer">
                     <PriorityIcon priority={issue.priority} />

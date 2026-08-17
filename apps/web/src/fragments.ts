@@ -6,4 +6,5 @@ export const ISSUE_LIST_FIELDS = `
   labels { id name color }
   project { id name }
   milestone { id name }
+  cycle { id name number }
 `;

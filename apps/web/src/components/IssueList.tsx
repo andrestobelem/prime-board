@@ -3,6 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router.tsx";
 import { Avatar, LabelChip, PriorityIcon, StateIcon } from "./bits.tsx";
+import {
+  IssueActionMenu,
+  type IssueActionInput,
+  type IssueActionOptions,
+} from "./IssueActions.tsx";
+import { isIssueShortcutTarget } from "../issue-selection.ts";
 
 export interface IssueListItem {
   id: string;
@@ -13,6 +19,8 @@ export interface IssueListItem {
   assignee: { id: string; name: string; type: string } | null;
   labels: Array<{ id: string; name: string; color: string }>;
   milestone?: { id: string; name: string } | null;
+  cycle?: { id: string; name: string; number?: number } | null;
+  project?: { id: string; name: string } | null;
 }
 
 export function isTypingTarget(event: KeyboardEvent): boolean {
@@ -76,16 +84,24 @@ function groupOf(issue: IssueListItem, by: GroupBy): { key: string; label: strin
 export interface IssueSelection {
   selectedIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
+  onSelectAll?: () => void;
+  onClear?: () => void;
 }
 
 export function IssueList({
   issues,
   groupBy = "state",
   selection,
+  actionOptions,
+  onIssueAction,
+  onArchiveIssue,
 }: {
   issues: IssueListItem[];
   groupBy?: GroupBy;
   selection?: IssueSelection;
+  actionOptions?: IssueActionOptions;
+  onIssueAction?: (id: string, input: IssueActionInput) => Promise<void>;
+  onArchiveIssue?: (id: string) => Promise<void>;
 }) {
   const [focusIndex, setFocusIndex] = useState(-1);
   const focusRef = useRef(focusIndex);
@@ -127,7 +143,25 @@ export function IssueList({
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (isTypingTarget(event) || document.querySelector(".overlay")) return;
+      if (isIssueShortcutTarget(event.target) || document.querySelector(".overlay")) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        selection?.onSelectAll?.();
+        return;
+      }
+      if (event.key === "Escape") {
+        selection?.onClear?.();
+        setFocusIndex(-1);
+        return;
+      }
+      if ((event.key === "x" || event.key === "X") && !event.metaKey && !event.ctrlKey) {
+        const focused = flat[focusRef.current];
+        if (focused && onArchiveIssue) {
+          event.preventDefault();
+          void onArchiveIssue(focused.id);
+        }
+        return;
+      }
       if (event.key === "j" || event.key === "ArrowDown") {
         event.preventDefault();
         setFocusIndex((index) => Math.min(index + 1, flat.length - 1));
@@ -141,7 +175,7 @@ export function IssueList({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [flat]);
+  }, [flat, onArchiveIssue, selection]);
 
   useEffect(() => {
     document.querySelector(".issue-row.focused")?.scrollIntoView({ block: "nearest" });
@@ -172,6 +206,9 @@ export function IssueList({
               <div
                 key={issue.id}
                 className={`issue-row${index === focusIndex ? " focused" : ""}`}
+                role="button"
+                tabIndex={index === focusIndex ? 0 : -1}
+                aria-current={index === focusIndex ? "true" : undefined}
                 onClick={() => navigate(`/issue/${issue.identifier}`)}
                 onMouseEnter={() => setFocusIndex(index)}
               >
@@ -193,6 +230,13 @@ export function IssueList({
                     <LabelChip key={label.id} label={label} />
                   ))}
                   <Avatar actor={issue.assignee} />
+                  {actionOptions && onIssueAction && onArchiveIssue && (
+                    <IssueActionMenu
+                      options={actionOptions}
+                      onAction={(input) => onIssueAction(issue.id, input)}
+                      onArchive={() => onArchiveIssue(issue.id)}
+                    />
+                  )}
                 </span>
               </div>
             );

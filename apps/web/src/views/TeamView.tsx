@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { mutate, useQuery } from "../api.ts";
 import { IssueFilterToolbar } from "../components/IssueFilterToolbar.tsx";
+import type { IssueActionInput, IssueActionOptions } from "../components/IssueActions.tsx";
+import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-actions.ts";
 import {
   IssueList,
   IssueListLimitNotice,
@@ -20,6 +22,8 @@ const TEAM_QUERY = `query($key: String, $teamId: ID, $filter: IssueFilter) {
   team(key: $key) {
     id key name
     states { id name type color position }
+    projects { id name }
+    cycles { id name number }
   }
   actors { id name type }
   labels(team: $teamId) { id name color }
@@ -38,7 +42,14 @@ interface TeamState {
 }
 
 interface TeamData {
-  team: { id: string; key: string; name: string; states: TeamState[] } | null;
+  team: {
+    id: string;
+    key: string;
+    name: string;
+    states: TeamState[];
+    projects: Array<{ id: string; name: string }>;
+    cycles: Array<{ id: string; name: string; number: number }>;
+  } | null;
   actors: Array<{ id: string; name: string; type: string }>;
   labels: Array<{ id: string; name: string; color: string }>;
   issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean } };
@@ -89,27 +100,68 @@ export function TeamView({
     });
   }, [visibleIds]);
 
-  async function bulkUpdateState(stateId: string): Promise<void> {
+  const actionOptions: IssueActionOptions = {
+    states: result.data?.team?.states ?? [],
+    actors: result.data?.actors ?? [],
+    labels: result.data?.labels ?? [],
+    projects: result.data?.team?.projects ?? [],
+    cycles: result.data?.team?.cycles ?? [],
+  };
+
+  async function bulkAction(input: IssueActionInput): Promise<void> {
     const ids = [...selectedIds];
     if (!ids.length) return;
     setBulkLoading(true);
     setBulkError(null);
     try {
-      for (const id of ids) {
+      await runIssueActions(ids, async (id) => {
         const response = await mutate<{ issueUpdate: { success: boolean } }>(
-          `mutation($id: ID!, $input: IssueUpdateInput!) {
-            issueUpdate(id: $id, input: $input) { success }
-          }`,
-          { id, input: { stateId } },
+          issueUpdateMutation(),
+          { id, input },
         );
-        if (!response.issueUpdate.success) throw new Error("An issue could not be updated.");
-      }
+        return response.issueUpdate;
+      });
       setSelectedIds(new Set());
     } catch (error) {
       setBulkError(error instanceof Error ? error.message : "Could not update selected issues.");
     } finally {
       setBulkLoading(false);
     }
+  }
+
+  async function bulkArchive(): Promise<void> {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setBulkLoading(true);
+    setBulkError(null);
+    try {
+      await runIssueActions(ids, async (id) => {
+        const response = await mutate<{ issueArchive: { success: boolean } }>(archiveMutation(), {
+          id,
+        });
+        return response.issueArchive;
+      });
+      setSelectedIds(new Set());
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : "Could not archive selected issues.");
+    } finally {
+      setBulkLoading(false);
+    }
+  }
+
+  async function updateIssue(id: string, input: IssueActionInput): Promise<void> {
+    const response = await mutate<{ issueUpdate: { success: boolean } }>(issueUpdateMutation(), {
+      id,
+      input,
+    });
+    if (!response.issueUpdate.success) throw new Error(`Could not update issue ${id}.`);
+  }
+
+  async function archiveIssue(id: string): Promise<void> {
+    const response = await mutate<{ issueArchive: { success: boolean } }>(archiveMutation(), {
+      id,
+    });
+    if (!response.issueArchive.success) throw new Error(`Could not archive issue ${id}.`);
   }
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
@@ -133,7 +185,10 @@ export function TeamView({
           )
         }
         onClearSelection={() => setSelectedIds(new Set())}
-        onBulkState={bulkUpdateState}
+        onBulkState={(stateId) => bulkAction({ stateId })}
+        actionOptions={actionOptions}
+        onBulkAction={bulkAction}
+        onBulkArchive={bulkArchive}
         bulkLoading={bulkLoading}
       />
       {bulkError && <div className="error-banner">{bulkError}</div>}
@@ -150,7 +205,12 @@ export function TeamView({
               else next.add(id);
               return next;
             }),
+          onSelectAll: () => setSelectedIds(new Set(issues.map((issue) => issue.id))),
+          onClear: () => setSelectedIds(new Set()),
         }}
+        actionOptions={actionOptions}
+        onIssueAction={updateIssue}
+        onArchiveIssue={archiveIssue}
       />
     </>
   );

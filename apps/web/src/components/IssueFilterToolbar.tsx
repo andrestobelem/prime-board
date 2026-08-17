@@ -4,6 +4,11 @@ import {
   EMPTY_ISSUE_FILTER,
   type IssueFilterDraft,
 } from "../issue-filter.ts";
+import {
+  BulkIssueActions,
+  type IssueActionInput,
+  type IssueActionOptions,
+} from "./IssueActions.tsx";
 
 interface StateOption {
   id: string;
@@ -34,6 +39,9 @@ export function IssueFilterToolbar({
   onSelectAll,
   onClearSelection,
   onBulkState,
+  actionOptions,
+  onBulkAction,
+  onBulkArchive,
   bulkLoading = false,
 }: {
   draft: IssueFilterDraft;
@@ -46,6 +54,9 @@ export function IssueFilterToolbar({
   onSelectAll: () => void;
   onClearSelection: () => void;
   onBulkState: (stateId: string) => Promise<void>;
+  actionOptions?: IssueActionOptions;
+  onBulkAction?: (input: IssueActionInput) => Promise<void>;
+  onBulkArchive?: () => Promise<void>;
   bulkLoading?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -76,7 +87,16 @@ export function IssueFilterToolbar({
           {selectedCount === visibleCount && visibleCount > 0 ? "Deselect all" : "Select visible"}
         </button>
       </div>
-      {selectedCount > 0 && (
+      {actionOptions && onBulkAction && onBulkArchive ? (
+        <BulkIssueActions
+          selectedCount={selectedCount}
+          options={actionOptions}
+          onAction={onBulkAction}
+          onArchive={onBulkArchive}
+          onClear={onClearSelection}
+          loading={bulkLoading}
+        />
+      ) : selectedCount > 0 ? (
         <div className="selection-toolbar" aria-live="polite">
           <span>{selectedCount} selected</span>
           <select
@@ -101,7 +121,7 @@ export function IssueFilterToolbar({
           </button>
           {bulkLoading && <span className="toolbar-status">Updating…</span>}
         </div>
-      )}
+      ) : null}
       {open && (
         <div className="filter-popover" role="dialog" aria-label="Issue filters">
           <label>
