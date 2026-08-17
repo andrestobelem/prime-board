@@ -146,6 +146,18 @@ describe("cycles", () => {
     );
     expect(invalidCreate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
 
+    const invalidOrder = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Invalid Offset Order",
+          startsAt: "2026-09-01T00:00:00Z", endsAt: "2026-09-01T01:00:00+03:00"
+        }) { success }
+      }`,
+      { teamId },
+    );
+    expect(invalidOrder.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
     const created = await gql(
       app,
       `mutation($teamId: ID!) {
