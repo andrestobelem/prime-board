@@ -103,6 +103,19 @@
     ]
   },
   {
+    "archived": true,
+    "description": null,
+    "lead": "Andrés Tobelem",
+    "milestones": [],
+    "name": "QA temp no write?",
+    "state": "backlog",
+    "targetDate": null,
+    "teams": [
+      "AT",
+      "PRB"
+    ]
+  },
+  {
     "archived": false,
     "description": "Épica: migrar prime-board a event sourcing versionado en git, con el repo como fuente de verdad y SQLite como índice derivado. Diseño en docs/investigacion-tickets-en-repo.md (AT-153).",
     "lead": "claude",
