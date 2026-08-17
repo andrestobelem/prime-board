@@ -6,7 +6,7 @@ import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueLi
 import { Palette } from "./components/Palette.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
 import { Icon } from "./components/icons.tsx";
-import { Sidebar } from "./components/Sidebar.tsx";
+import { Sidebar, type SidebarFavorite } from "./components/Sidebar.tsx";
 import { EntityModal } from "./components/EntityModal.tsx";
 import { Switcher } from "./components/Switcher.tsx";
 import { Link, useRoute } from "./router.tsx";
@@ -36,6 +36,11 @@ const SHELL_QUERY = `{
   }
   initiatives { id name state }
   savedViews { id name scope team { id key } }
+  favorites {
+    id position
+    project { id name }
+    savedView { id name }
+  }
 }`;
 
 type CreateModal =
@@ -59,6 +64,7 @@ export interface ShellData {
     scope: string;
     team: { id: string; key: string } | null;
   }>;
+  favorites: SidebarFavorite[];
 }
 
 function loadGroupBy(): GroupBy {
@@ -75,11 +81,16 @@ export function App() {
   const [createOpen, setCreateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [entityModal, setEntityModal] = useState<CreateModal | null>(null);
+  const [favorites, setFavorites] = useState<SidebarFavorite[]>([]);
   const [groupBy, setGroupBy] = useState<GroupBy>(loadGroupBy);
 
   useEffect(() => {
     localStorage.setItem("pb.group-by", groupBy);
   }, [groupBy]);
+
+  useEffect(() => {
+    if (shell.data) setFavorites(shell.data.favorites);
+  }, [shell.data]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -97,6 +108,55 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  const toggleFavorite = async (
+    target: { projectId?: string; savedViewId?: string },
+    current: SidebarFavorite | undefined,
+  ) => {
+    if (current) {
+      await mutate(`mutation($id: ID!) { favoriteDelete(id: $id) { success } }`, {
+        id: current.id,
+      });
+      setFavorites((items) => items.filter((item) => item.id !== current.id));
+      return;
+    }
+    const result = await mutate<{
+      favoriteCreate: { favorite: { id: string; position: number } };
+    }>(
+      `mutation($input: FavoriteCreateInput!) { favoriteCreate(input: $input) { favorite { id position } } }`,
+      { input: target },
+    );
+    const project = target.projectId
+      ? navigation.projects.find((item) => item.id === target.projectId)
+      : null;
+    const view = target.savedViewId
+      ? shell.data?.savedViews.find((item) => item.id === target.savedViewId)
+      : null;
+    setFavorites((items) => [
+      ...items,
+      {
+        id: result.favoriteCreate.favorite.id,
+        position: result.favoriteCreate.favorite.position,
+        project: project ? { id: project.id, name: project.name } : null,
+        savedView: view ? { id: view.id, name: view.name } : null,
+      },
+    ]);
+  };
+
+  const reorderFavorite = async (favorite: SidebarFavorite, position: number) => {
+    await mutate(
+      `mutation($id: ID!, $position: Int!) { favoriteReorder(id: $id, position: $position) { favorite { id position } } }`,
+      { id: favorite.id, position },
+    );
+    setFavorites((items) => {
+      const currentIndex = items.findIndex((item) => item.id === favorite.id);
+      if (currentIndex < 0) return items;
+      const next = [...items];
+      const [selected] = next.splice(currentIndex, 1);
+      next.splice(Math.min(position, next.length), 0, selected!);
+      return next.map((item, index) => ({ ...item, position: index }));
+    });
+  };
 
   if (!hasKey || (shell.error && shell.error.code === "UNAUTHORIZED")) {
     return (
@@ -340,6 +400,9 @@ export function App() {
           views: navigation.teams.find((candidate) => candidate.id === team.id)?.views ?? [],
         }))}
         views={navigation.workspaceViews}
+        favorites={favorites}
+        onToggleFavorite={toggleFavorite}
+        onReorderFavorite={reorderFavorite}
         initiatives={shell.data?.initiatives ?? []}
         onCreateView={async () => {
           const team = teams.find((candidate) => candidate.key === currentTeamKey) ?? teams[0];

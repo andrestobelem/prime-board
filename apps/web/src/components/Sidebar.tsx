@@ -3,6 +3,16 @@
 import { useEffect, useState } from "react";
 import { Link, useRoute } from "../router.tsx";
 import { Icon } from "./icons.tsx";
+import type { NavigationView } from "../navigation.ts";
+
+export interface SidebarFavorite {
+  id: string;
+  position: number;
+  project: { id: string; name: string } | null;
+  savedView: { id: string; name: string } | null;
+}
+
+type FavoriteTarget = { projectId?: string; savedViewId?: string };
 
 interface SidebarProps {
   workspace: { name: string } | null;
@@ -26,6 +36,12 @@ interface SidebarProps {
     team: { id: string; key: string } | null;
   }>;
   initiatives?: Array<{ id: string; name: string; state: string }>;
+  favorites?: SidebarFavorite[];
+  onToggleFavorite?: (
+    target: FavoriteTarget,
+    current: SidebarFavorite | undefined,
+  ) => void | Promise<void>;
+  onReorderFavorite?: (favorite: SidebarFavorite, position: number) => void | Promise<void>;
   onCreateView?: () => void | Promise<void>;
   onCreateCycle?: (teamId: string) => void | Promise<void>;
   onCreateInitiative?: () => void | Promise<void>;
@@ -38,6 +54,9 @@ export function Sidebar({
   teams,
   views = [],
   initiatives = [],
+  favorites = [],
+  onToggleFavorite,
+  onReorderFavorite,
   onCreateView,
   onCreateCycle,
   onCreateInitiative,
@@ -45,8 +64,51 @@ export function Sidebar({
   const route = useRoute();
   // Los proyectos cerrados se colapsan para no saturar el sidebar (AT-30).
   const [showClosed, setShowClosed] = useState<Record<string, boolean>>({});
+  const [favoritesOpen, setFavoritesOpen] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const favoriteFor = (target: FavoriteTarget) =>
+    favorites.find((favorite) =>
+      target.projectId
+        ? favorite.project?.id === target.projectId
+        : favorite.savedView?.id === target.savedViewId,
+    );
+  const toggleFavorite = (target: FavoriteTarget) => {
+    if (onToggleFavorite) void onToggleFavorite(target, favoriteFor(target));
+  };
   const active = (path: string) => (`/${route.join("/")}` === path ? "active" : "");
+  const favoriteButton = (target: FavoriteTarget, label: string) => {
+    if (!onToggleFavorite) return null;
+    const current = favoriteFor(target);
+    return (
+      <button
+        className="favorite-action"
+        aria-label={current ? `Remove ${label} from favorites` : `Add ${label} to favorites`}
+        title={current ? "Remove from favorites" : "Add to favorites"}
+        onClick={() => toggleFavorite(target)}
+      >
+        <Icon name={current ? "x" : "plus"} size={12} />
+      </button>
+    );
+  };
+  const renderProject = (
+    project: { id: string; name: string; state: string },
+    iconClass: string,
+  ) => (
+    <div className="resource-row" key={project.id}>
+      <Link to={`/project/${project.id}`} className={active(`/project/${project.id}`)}>
+        <Icon name="project" className={iconClass} /> {project.name}
+      </Link>
+      {favoriteButton({ projectId: project.id }, project.name)}
+    </div>
+  );
+  const renderView = (view: NavigationView) => (
+    <div className="resource-row" key={view.id}>
+      <Link to={`/view/${view.id}`} className={active(`/view/${view.id}`)}>
+        <Icon name="filter" className="nested" /> {view.name}
+      </Link>
+      {favoriteButton({ savedViewId: view.id }, view.name)}
+    </div>
+  );
 
   useEffect(() => setMobileOpen(false), [route.join("/")]);
 
@@ -94,6 +156,74 @@ export function Sidebar({
         <Link to="/projects" className={active("/projects")}>
           <Icon name="project" /> Projects
         </Link>
+        {(favorites.length > 0 || onToggleFavorite) && (
+          <>
+            <button
+              className="nav favorites-heading"
+              aria-expanded={favoritesOpen}
+              onClick={() => setFavoritesOpen((open) => !open)}
+            >
+              <Icon name={favoritesOpen ? "chevron-down" : "chevron-right"} size={12} />
+              <span>Favorites</span>
+            </button>
+            {favoritesOpen &&
+              (favorites.length === 0 ? (
+                <div className="hint" style={{ padding: "0 12px 8px" }}>
+                  Pin a project or view to keep it here
+                </div>
+              ) : (
+                favorites.map((favorite, index) => {
+                  const target = favorite.project
+                    ? { projectId: favorite.project.id }
+                    : { savedViewId: favorite.savedView!.id };
+                  const path = favorite.project
+                    ? `/project/${favorite.project.id}`
+                    : `/view/${favorite.savedView!.id}`;
+                  const name = favorite.project?.name ?? favorite.savedView?.name ?? "Favorite";
+                  return (
+                    <div className="favorite-row" key={favorite.id}>
+                      <Link to={path} className={active(path)}>
+                        <Icon name={favorite.project ? "project" : "filter"} className="nested" />
+                        <span>{name}</span>
+                      </Link>
+                      {onReorderFavorite && (
+                        <span className="favorite-order">
+                          <button
+                            className="favorite-action"
+                            aria-label={`Move ${name} up`}
+                            title="Move up"
+                            disabled={index === 0}
+                            onClick={() => void onReorderFavorite(favorite, index - 1)}
+                          >
+                            <Icon name="arrow-up" size={11} />
+                          </button>
+                          <button
+                            className="favorite-action"
+                            aria-label={`Move ${name} down`}
+                            title="Move down"
+                            disabled={index === favorites.length - 1}
+                            onClick={() => void onReorderFavorite(favorite, index + 1)}
+                          >
+                            <Icon name="arrow-down" size={11} />
+                          </button>
+                        </span>
+                      )}
+                      {onToggleFavorite && (
+                        <button
+                          className="favorite-action"
+                          aria-label={`Remove ${name} from favorites`}
+                          title="Remove from favorites"
+                          onClick={() => toggleFavorite(target)}
+                        >
+                          <Icon name="x" size={12} />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              ))}
+          </>
+        )}
         <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ flex: 1 }}>Initiatives</span>
           {onCreateInitiative && (
@@ -134,11 +264,7 @@ export function Sidebar({
             No workspace views yet
           </div>
         )}
-        {views.map((view) => (
-          <Link key={view.id} to={`/view/${view.id}`} className={active(`/view/${view.id}`)}>
-            <Icon name="filter" className="nested" /> {view.name}
-          </Link>
-        ))}
+        {views.map(renderView)}
         {teams.map((team) => (
           <div key={team.id}>
             <div className="section">{team.name}</div>
@@ -151,15 +277,7 @@ export function Sidebar({
             {team.projects.length > 0 && <div className="section">Projects</div>}
             {team.projects
               .filter((p) => !CLOSED_STATES.includes(p.state))
-              .map((project) => (
-                <Link
-                  key={project.id}
-                  to={`/project/${project.id}`}
-                  className={active(`/project/${project.id}`)}
-                >
-                  <Icon name="project" className="nested" /> {project.name}
-                </Link>
-              ))}
+              .map((project) => renderProject(project, "nested"))}
             {team.projects.some((p) => CLOSED_STATES.includes(p.state)) && (
               <>
                 <button
@@ -175,24 +293,11 @@ export function Sidebar({
                 {showClosed[team.id] &&
                   team.projects
                     .filter((p) => CLOSED_STATES.includes(p.state))
-                    .map((project) => (
-                      <Link
-                        key={project.id}
-                        to={`/project/${project.id}`}
-                        className={active(`/project/${project.id}`)}
-                      >
-                        <Icon name="project" className="nested-deep" />
-                        <span style={{ opacity: 0.7 }}>{project.name}</span>
-                      </Link>
-                    ))}
+                    .map((project) => renderProject(project, "nested-deep"))}
               </>
             )}
             {team.views && team.views.length > 0 && <div className="section">Views</div>}
-            {(team.views ?? []).map((view) => (
-              <Link key={view.id} to={`/view/${view.id}`} className={active(`/view/${view.id}`)}>
-                <Icon name="filter" className="nested" /> {view.name}
-              </Link>
-            ))}
+            {(team.views ?? []).map(renderView)}
             <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ flex: 1 }}>Cycles</span>
               {onCreateCycle && (

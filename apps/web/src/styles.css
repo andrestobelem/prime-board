@@ -159,6 +159,52 @@ select:focus {
   font-size: 11px;
   padding: 6px 10px;
 }
+/* Favorite and resource actions stay visible without breaking the mobile drawer. */
+.sidebar .resource-row,
+.sidebar .favorite-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.sidebar .resource-row > a,
+.sidebar .favorite-row > a {
+  flex: 1;
+  min-width: 0;
+}
+.sidebar .resource-row > a > :last-child,
+.sidebar .favorite-row > a > :last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar .favorite-action {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  border-radius: var(--radius);
+}
+.sidebar .favorite-action:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.sidebar .favorite-action:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.sidebar .favorite-order {
+  display: inline-flex;
+}
+.sidebar .favorites-heading {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 kbd {
   background: var(--surface);
   border: 1px solid var(--border);
