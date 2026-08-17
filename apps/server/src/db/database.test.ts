@@ -1,4 +1,5 @@
 // Tests de AT-131: migraciones, bootstrap idempotente y persistencia entre aperturas.
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +7,7 @@ import { join } from "node:path";
 import { hashApiKey } from "../auth/keys.ts";
 import { openDatabase } from "./database.ts";
 import { bootstrap } from "./seed.ts";
+import migration0016 from "./migrations/0016_webhook_ownership.sql" with { type: "text" };
 
 const tempDirs: string[] = [];
 
@@ -128,6 +130,42 @@ describe("bootstrap", () => {
       .query("SELECT rowid FROM issues_fts WHERE issues_fts MATCH ?1")
       .values("webhooks");
     expect(hits.length).toBe(1);
+    db.close();
+  });
+});
+
+describe("webhook ownership migration", () => {
+  it("atribuye los webhooks existentes al admin sin leer el secret", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE actors (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        workspace_role TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE webhooks (
+        id TEXT PRIMARY KEY,
+        url TEXT NOT NULL,
+        secret TEXT NOT NULL,
+        events TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+    db.query(
+      "INSERT INTO actors (id, name, workspace_role, created_at) VALUES ('admin-id', 'admin', 'admin', '2026-01-01'), ('other-id', 'other', 'member', '2026-01-02')",
+    ).run();
+    db.query(
+      "INSERT INTO webhooks (id, url, secret, events, enabled, created_at) VALUES ('hook-id', 'https://example.com', 'secret', '[\"*\"]', 1, '2026-01-01')",
+    ).run();
+
+    db.exec(migration0016);
+
+    const owner = db.query("SELECT owner_id FROM webhooks WHERE id = 'hook-id'").get() as {
+      owner_id: string;
+    };
+    expect(owner.owner_id).toBe("admin-id");
     db.close();
   });
 });

@@ -112,7 +112,11 @@ export function rebuildFromRepo(
     }
     return { key, actor };
   });
-  const webhooks = db.query("SELECT * FROM webhooks").all() as Array<Record<string, unknown>>;
+  const webhooks = db
+    .query(
+      "SELECT webhooks.*, actors.name AS owner_name FROM webhooks LEFT JOIN actors ON actors.id = webhooks.owner_id",
+    )
+    .all() as Array<Record<string, unknown>>;
 
   const result: RebuildResult = { issues: 0, events: 0, comments: 0, preservedKeys: 0 };
 
@@ -734,8 +738,13 @@ export function rebuildFromRepo(
       result.preservedKeys += 1;
     }
     for (const hook of webhooks) {
+      const ownerId =
+        (hook.owner_id != null ? actorIdsBySourceId.get(String(hook.owner_id)) : undefined) ??
+        (hook.owner_name != null ? actorIds.get(String(hook.owner_name)) : undefined) ??
+        actorIds.get("admin");
+      if (!ownerId) throw new Error("Cannot restore webhook without an owner");
       db.query(
-        "INSERT INTO webhooks (id, url, secret, events, enabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO webhooks (id, url, secret, events, enabled, created_at, owner_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
       ).run(
         hook.id as string,
         hook.url as string,
@@ -743,6 +752,7 @@ export function rebuildFromRepo(
         hook.events as string,
         hook.enabled as number,
         hook.created_at as string,
+        ownerId,
       );
     }
   })();

@@ -314,8 +314,8 @@ export const resolvers = {
       return listLabels(context.db, args.team).map(mapLabel);
     },
     webhooks: (_parent: unknown, _args: unknown, context: Context) => {
-      requireViewer(context);
-      return listWebhooks(context.db).map(mapWebhook);
+      const viewer = requireViewer(context);
+      return listWebhooks(context.db, viewer.id, isWorkspaceAdmin(viewer)).map(mapWebhook);
     },
     savedViews: (
       _parent: unknown,
@@ -489,13 +489,15 @@ export const resolvers = {
       args: { input: { url: string; secret?: string | null; events?: string[] | null } },
       context: Context,
     ) => {
-      requireViewer(context);
-      const { row, secret } = createWebhook(context.db, args.input);
+      const viewer = requireViewer(context);
+      const { row, secret } = createWebhook(context.db, viewer.id, args.input);
       return { success: true, webhook: mapWebhook(row), secret };
     },
     webhookDelete: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
-      return { success: deleteWebhook(context.db, args.id) };
+      const viewer = requireViewer(context);
+      return {
+        success: deleteWebhook(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)),
+      };
     },
     labelCreate: (
       _parent: unknown,

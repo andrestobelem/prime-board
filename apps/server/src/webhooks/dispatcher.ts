@@ -13,6 +13,7 @@ export interface WebhookRow {
   events: string;
   enabled: number;
   created_at: string;
+  owner_id: string | null;
 }
 
 export interface EventActor {

@@ -15,12 +15,18 @@ export function mapWebhook(row: WebhookRow) {
   };
 }
 
-export function listWebhooks(db: Database): WebhookRow[] {
-  return db.query("SELECT * FROM webhooks ORDER BY created_at").all() as WebhookRow[];
+export function listWebhooks(db: Database, actorId: string, isAdmin: boolean): WebhookRow[] {
+  if (isAdmin) {
+    return db.query("SELECT * FROM webhooks ORDER BY created_at").all() as WebhookRow[];
+  }
+  return db
+    .query("SELECT * FROM webhooks WHERE owner_id = ?1 ORDER BY created_at")
+    .all(actorId) as WebhookRow[];
 }
 
 export function createWebhook(
   db: Database,
+  ownerId: string,
   input: { url: string; secret?: string | null; events?: string[] | null },
 ): { row: WebhookRow; secret: string } {
   let parsed: URL;
@@ -46,15 +52,26 @@ export function createWebhook(
 
   const id = newId();
   db.query(
-    "INSERT INTO webhooks (id, url, secret, events, enabled, created_at) VALUES (?1, ?2, ?3, ?4, 1, ?5)",
-  ).run(id, input.url, secret, JSON.stringify(events), now());
+    "INSERT INTO webhooks (id, url, secret, events, enabled, created_at, owner_id) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6)",
+  ).run(id, input.url, secret, JSON.stringify(events), now(), ownerId);
   const row = db.query("SELECT * FROM webhooks WHERE id = ?1").get(id) as WebhookRow;
   return { row, secret };
 }
 
-export function deleteWebhook(db: Database, id: string): boolean {
-  const existing = db.query("SELECT id FROM webhooks WHERE id = ?1").get(id);
+export function deleteWebhook(
+  db: Database,
+  id: string,
+  actorId: string,
+  isAdmin: boolean,
+): boolean {
+  const existing = db.query("SELECT id, owner_id FROM webhooks WHERE id = ?1").get(id) as {
+    id: string;
+    owner_id: string | null;
+  } | null;
   if (!existing) throw apiError("NOT_FOUND", "Webhook not found");
+  if (!isAdmin && existing.owner_id !== actorId) {
+    throw apiError("UNAUTHORIZED", "You can only manage your own webhooks");
+  }
   db.query("DELETE FROM webhooks WHERE id = ?1").run(id);
   return true;
 }
