@@ -967,6 +967,15 @@ kbd {
   letter-spacing: 0.8px;
   text-transform: uppercase;
 }
+.settings-readonly-banner {
+  margin: 14px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: var(--bg-sidebar);
+  font-size: 12px;
+}
 .settings-panel {
   margin-top: 16px;
   overflow: hidden;

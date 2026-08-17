@@ -6,11 +6,13 @@ import { Icon } from "../components/icons.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
 
 const QUERY = `query($key: String) {
+  viewer { id workspaceRole }
   team(key: $key) {
     id key name
     defaultState { id }
     states { id name type color position }
     labels { id name color teamId }
+    memberships { actor { id } role }
   }
 }`;
 
@@ -33,6 +35,12 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
   if (result.error) return <div className="error-banner">{result.error.message}</div>;
   const team = result.data?.team;
   if (!team) return <div className="empty">Team {teamKey} not found.</div>;
+  const viewer = result.data?.viewer;
+  const canManage =
+    viewer?.workspaceRole === "ADMIN" ||
+    team.memberships.some(
+      (membership: any) => membership.actor.id === viewer?.id && membership.role === "OWNER",
+    );
 
   async function runMutation(key: string, operation: () => Promise<unknown>): Promise<boolean> {
     setSaving(key);
@@ -157,6 +165,11 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
           {error}
         </div>
       )}
+      {!canManage && (
+        <div className="settings-readonly-banner" role="status">
+          You can view these settings, but only a team owner or workspace admin can edit them.
+        </div>
+      )}
 
       <section className="settings-panel" aria-labelledby="workflow-states-title">
         <div className="settings-panel-header">
@@ -181,7 +194,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                       className="settings-name-input"
                       aria-label={`Name for ${state.name}`}
                       defaultValue={state.name}
-                      disabled={stateSaving}
+                      disabled={!canManage || stateSaving}
                       onBlur={(event) => {
                         const next = event.target.value.trim();
                         if (next && next !== state.name) void updateState(state.id, { name: next });
@@ -199,7 +212,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                   <select
                     aria-label={`Type for ${state.name}`}
                     value={state.type}
-                    disabled={stateSaving}
+                    disabled={!canManage || stateSaving}
                     onChange={(event) => void updateState(state.id, { type: event.target.value })}
                   >
                     {STATE_TYPES.map((type) => (
@@ -213,13 +226,13 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     aria-label={`Color for ${state.name}`}
                     type="color"
                     value={state.color}
-                    disabled={stateSaving}
+                    disabled={!canManage || stateSaving}
                     onChange={(event) => void updateState(state.id, { color: event.target.value })}
                   />
-                  {state.id !== team.defaultState.id && (
+                  {canManage && state.id !== team.defaultState.id && (
                     <button
                       className="btn secondary compact"
-                      disabled={stateSaving}
+                      disabled={!canManage || stateSaving}
                       onClick={() =>
                         void runMutation(`state-${state.id}`, () =>
                           mutate(
@@ -238,7 +251,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     className="icon-action danger"
                     aria-label={`Delete ${state.name}`}
                     title="Delete state"
-                    disabled={stateSaving}
+                    disabled={!canManage || stateSaving}
                     onClick={() =>
                       setDeleteTarget({ id: state.id, kind: "state", name: state.name })
                     }
@@ -249,7 +262,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     className="icon-action"
                     aria-label={`Move ${state.name} up`}
                     title="Move up"
-                    disabled={stateSaving || index === 0}
+                    disabled={!canManage || stateSaving || index === 0}
                     onClick={() => void moveState(index, -1)}
                   >
                     <Icon name="arrow-up" size={14} />
@@ -258,7 +271,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     className="icon-action"
                     aria-label={`Move ${state.name} down`}
                     title="Move down"
-                    disabled={stateSaving || index === team.states.length - 1}
+                    disabled={!canManage || stateSaving || index === team.states.length - 1}
                     onClick={() => void moveState(index, 1)}
                   >
                     <Icon name="arrow-down" size={14} />
@@ -268,39 +281,41 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
             );
           })}
         </div>
-        <form
-          className="settings-add-row"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void createState();
-          }}
-        >
-          <input
-            aria-label="New state name"
-            placeholder="New state"
-            value={stateName}
-            disabled={saving === "new-state"}
-            onChange={(event) => setStateName(event.target.value)}
-          />
-          <select
-            aria-label="New state type"
-            value={stateType}
-            onChange={(event) => setStateType(event.target.value)}
+        {canManage && (
+          <form
+            className="settings-add-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createState();
+            }}
           >
-            {STATE_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {type.toLowerCase()}
-              </option>
-            ))}
-          </select>
-          <button
-            className="btn"
-            type="submit"
-            disabled={!stateName.trim() || saving === "new-state"}
-          >
-            <Icon name="plus" size={14} /> Add state
-          </button>
-        </form>
+            <input
+              aria-label="New state name"
+              placeholder="New state"
+              value={stateName}
+              disabled={saving === "new-state"}
+              onChange={(event) => setStateName(event.target.value)}
+            />
+            <select
+              aria-label="New state type"
+              value={stateType}
+              onChange={(event) => setStateType(event.target.value)}
+            >
+              {STATE_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {type.toLowerCase()}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn"
+              type="submit"
+              disabled={!stateName.trim() || saving === "new-state"}
+            >
+              <Icon name="plus" size={14} /> Add state
+            </button>
+          </form>
+        )}
       </section>
 
       <section className="settings-panel" aria-labelledby="labels-title">
@@ -330,7 +345,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     className="settings-name-input"
                     aria-label={`Name for ${label.name}`}
                     defaultValue={label.name}
-                    disabled={labelSaving}
+                    disabled={!canManage || labelSaving}
                     onBlur={(event) => {
                       const next = event.target.value.trim();
                       if (next && next !== label.name) void updateLabel(label.id, { name: next });
@@ -341,14 +356,14 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     aria-label={`Color for ${label.name}`}
                     type="color"
                     value={label.color}
-                    disabled={labelSaving}
+                    disabled={!canManage || labelSaving}
                     onChange={(event) => void updateLabel(label.id, { color: event.target.value })}
                   />
                   <button
                     className="icon-action danger"
                     aria-label={`Delete ${label.name}`}
                     title="Delete label"
-                    disabled={labelSaving}
+                    disabled={!canManage || labelSaving}
                     onClick={() =>
                       setDeleteTarget({ id: label.id, kind: "label", name: label.name })
                     }
@@ -360,44 +375,46 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
             );
           })}
         </div>
-        <form
-          className="settings-add-row"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void createLabel();
-          }}
-        >
-          <input
-            aria-label="New label name"
-            placeholder="New label"
-            value={labelName}
-            disabled={saving === "new-label"}
-            onChange={(event) => setLabelName(event.target.value)}
-          />
-          <input
-            className="state-color-input"
-            aria-label="New label color"
-            type="color"
-            value={labelColor}
-            disabled={saving === "new-label"}
-            onChange={(event) => setLabelColor(event.target.value)}
-          />
-          <select
-            aria-label="New label scope"
-            value={labelScope}
-            onChange={(event) => setLabelScope(event.target.value)}
+        {canManage && (
+          <form
+            className="settings-add-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createLabel();
+            }}
           >
-            <option value="team">team</option>
-            <option value="workspace">workspace</option>
-          </select>
-          <button
-            className="btn"
-            type="submit"
-            disabled={!labelName.trim() || saving === "new-label"}
-          >
-            <Icon name="plus" size={14} /> Add label
-          </button>
-        </form>
+            <input
+              aria-label="New label name"
+              placeholder="New label"
+              value={labelName}
+              disabled={saving === "new-label"}
+              onChange={(event) => setLabelName(event.target.value)}
+            />
+            <input
+              className="state-color-input"
+              aria-label="New label color"
+              type="color"
+              value={labelColor}
+              disabled={saving === "new-label"}
+              onChange={(event) => setLabelColor(event.target.value)}
+            />
+            <select
+              aria-label="New label scope"
+              value={labelScope}
+              onChange={(event) => setLabelScope(event.target.value)}
+            >
+              <option value="team">team</option>
+              <option value="workspace">workspace</option>
+            </select>
+            <button
+              className="btn"
+              type="submit"
+              disabled={!labelName.trim() || saving === "new-label"}
+            >
+              <Icon name="plus" size={14} /> Add label
+            </button>
+          </form>
+        )}
       </section>
 
       {deleteTarget && (
