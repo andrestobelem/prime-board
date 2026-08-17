@@ -61,6 +61,10 @@ export function getTeam(
   return null;
 }
 
+export function getWorkflowState(db: Database, id: string): WorkflowStateRow | null {
+  return db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow | null;
+}
+
 export function listTeamStates(db: Database, teamId: string): WorkflowStateRow[] {
   return db
     .query("SELECT * FROM workflow_states WHERE team_id = ?1 ORDER BY position")

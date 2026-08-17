@@ -17,6 +17,10 @@ export function mapLabel(row: LabelRow) {
   return { id: row.id, name: row.name, color: row.color, teamId: row.team_id };
 }
 
+export function getLabel(db: Database, id: string): LabelRow | null {
+  return db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow | null;
+}
+
 export function createLabel(
   db: Database,
   input: { name: string; color?: string | null; teamId?: string | null },
@@ -34,8 +38,9 @@ export function createLabel(
   if (duplicate) throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
 
   const id = newId();
-  db.query("INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
-    .run(id, name, input.color ?? "#95a2b3", input.teamId ?? null, now());
+  db.query(
+    "INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+  ).run(id, name, input.color ?? "#95a2b3", input.teamId ?? null, now());
   return db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow;
 }
 
@@ -50,17 +55,30 @@ export function updateLabel(
     const name = input.name.trim();
     if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
     const duplicate = label.team_id
-      ? db.query("SELECT id FROM labels WHERE team_id = ?1 AND name = ?2 AND id != ?3").get(label.team_id, name, id)
-      : db.query("SELECT id FROM labels WHERE team_id IS NULL AND name = ?1 AND id != ?2").get(name, id);
-    if (duplicate) throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
+      ? db
+          .query("SELECT id FROM labels WHERE team_id = ?1 AND name = ?2 AND id != ?3")
+          .get(label.team_id, name, id)
+      : db
+          .query("SELECT id FROM labels WHERE team_id IS NULL AND name = ?1 AND id != ?2")
+          .get(name, id);
+    if (duplicate)
+      throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
   }
   const sets: string[] = [];
   const params: unknown[] = [];
-  if (input.name != null) { params.push(input.name.trim()); sets.push(`name = ?${params.length}`); }
-  if (input.color != null) { params.push(input.color); sets.push(`color = ?${params.length}`); }
+  if (input.name != null) {
+    params.push(input.name.trim());
+    sets.push(`name = ?${params.length}`);
+  }
+  if (input.color != null) {
+    params.push(input.color);
+    sets.push(`color = ?${params.length}`);
+  }
   if (sets.length > 0) {
     params.push(id);
-    db.query(`UPDATE labels SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(...(params as never[]));
+    db.query(`UPDATE labels SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
+      ...(params as never[]),
+    );
   }
   return db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow;
 }
@@ -71,7 +89,9 @@ export function deleteLabel(db: Database, id: string): number {
   if (!label) throw apiError("NOT_FOUND", "Label not found");
   let affected = 0;
   db.transaction(() => {
-    const used = db.query("SELECT count(*) AS n FROM issue_labels WHERE label_id = ?1").get(id) as { n: number };
+    const used = db.query("SELECT count(*) AS n FROM issue_labels WHERE label_id = ?1").get(id) as {
+      n: number;
+    };
     affected = used.n;
     db.query("DELETE FROM issue_labels WHERE label_id = ?1").run(id);
     db.query("DELETE FROM labels WHERE id = ?1").run(id);
@@ -115,7 +135,12 @@ export interface LabelOps {
 }
 
 /** Aplica set/add/remove de labels a un issue, registrando actividad. */
-export function applyLabelOps(db: Database, actorId: string, issue: IssueRow, ops: LabelOps): boolean {
+export function applyLabelOps(
+  db: Database,
+  actorId: string,
+  issue: IssueRow,
+  ops: LabelOps,
+): boolean {
   const current = new Set(listIssueLabels(db, issue.id).map((label) => label.id));
   let target = new Set(current);
 
@@ -129,12 +154,20 @@ export function applyLabelOps(db: Database, actorId: string, issue: IssueRow, op
 
   for (const labelId of toAdd) {
     const label = assertApplicable(db, issue, labelId);
-    db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(issue.id, labelId);
+    db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(
+      issue.id,
+      labelId,
+    );
     recordActivity(db, issue.id, actorId, "labeled", { label: label.name });
   }
   for (const labelId of toRemove) {
-    const label = db.query("SELECT name FROM labels WHERE id = ?1").get(labelId) as { name: string } | null;
-    db.query("DELETE FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2").run(issue.id, labelId);
+    const label = db.query("SELECT name FROM labels WHERE id = ?1").get(labelId) as {
+      name: string;
+    } | null;
+    db.query("DELETE FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2").run(
+      issue.id,
+      labelId,
+    );
     recordActivity(db, issue.id, actorId, "unlabeled", { label: label?.name ?? labelId });
   }
   return true;

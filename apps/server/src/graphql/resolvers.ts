@@ -16,6 +16,7 @@ import {
   createWorkflowState,
   getDefaultState,
   getTeam,
+  getWorkflowState,
   listTeamStates,
   mapTeam,
   mapWorkflowState,
@@ -30,13 +31,21 @@ import { apiError, requireViewer } from "./errors.ts";
 import {
   assertCanManageActor,
   assertCanManageApiKey,
+  assertCanManageTeam,
   assertWorkspaceAdmin,
   isWorkspaceAdmin,
 } from "../auth/permissions.ts";
 import { withRepoSyncDispatch } from "./repo-sync-dispatch.ts";
 import { issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
-import { createLabel, deleteLabel, listLabels, mapLabel, updateLabel } from "../domain/labels.ts";
+import {
+  createLabel,
+  deleteLabel,
+  getLabel,
+  listLabels,
+  mapLabel,
+  updateLabel,
+} from "../domain/labels.ts";
 import { createWebhook, deleteWebhook, listWebhooks, mapWebhook } from "../domain/webhooks.ts";
 import { getProject, listProjects, mapProject } from "../domain/projects.ts";
 import {
@@ -410,7 +419,8 @@ export const resolvers = {
       args: { id: string; input: TeamUpdateInput },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertCanManageTeam(context.db, viewer, args.id);
       const team = mapTeam(updateTeam(context.db, args.id, args.input));
       return { success: true, team };
     },
@@ -482,7 +492,12 @@ export const resolvers = {
       args: { input: { name: string; color?: string | null; teamId?: string | null } },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      if (args.input.teamId != null) {
+        assertCanManageTeam(context.db, viewer, args.input.teamId);
+      } else {
+        assertWorkspaceAdmin(viewer);
+      }
       const label = mapLabel(createLabel(context.db, args.input));
       return { success: true, label };
     },
@@ -491,7 +506,9 @@ export const resolvers = {
       args: { id: string; input: Parameters<typeof updateWorkflowState>[2] },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      const existing = getWorkflowState(context.db, args.id);
+      if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
       const state = mapWorkflowState(updateWorkflowState(context.db, args.id, args.input));
       return { success: true, workflowState: state };
     },
@@ -501,6 +518,8 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      const existing = getWorkflowState(context.db, args.id);
+      if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
       const moved = deleteWorkflowState(context.db, viewer.id, args.id, args.moveToStateId);
       return { success: true, movedIssues: moved };
     },
@@ -509,12 +528,22 @@ export const resolvers = {
       args: { id: string; input: { name?: string | null; color?: string | null } },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      const existing = getLabel(context.db, args.id);
+      if (existing) {
+        if (existing.team_id == null) assertWorkspaceAdmin(viewer);
+        else assertCanManageTeam(context.db, viewer, existing.team_id);
+      }
       const label = mapLabel(updateLabel(context.db, args.id, args.input));
       return { success: true, label };
     },
     labelDelete: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      const existing = getLabel(context.db, args.id);
+      if (existing) {
+        if (existing.team_id == null) assertWorkspaceAdmin(viewer);
+        else assertCanManageTeam(context.db, viewer, existing.team_id);
+      }
       const affected = deleteLabel(context.db, args.id);
       return { success: true, affectedIssues: affected };
     },
@@ -531,7 +560,8 @@ export const resolvers = {
       },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertCanManageTeam(context.db, viewer, args.input.teamId);
       const workflowState = mapWorkflowState(createWorkflowState(context.db, args.input));
       return { success: true, workflowState };
     },
@@ -595,7 +625,8 @@ export const resolvers = {
       },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertCanManageTeam(context.db, viewer, args.input.teamId);
       return { success: true, cycle: mapCycle(createCycle(context.db, args.input)) };
     },
     cycleUpdate: (
@@ -612,11 +643,15 @@ export const resolvers = {
       },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      const existing = getCycle(context.db, args.id);
+      if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
       return { success: true, cycle: mapCycle(updateCycle(context.db, args.id, args.input)) };
     },
     cycleDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      const existing = getCycle(context.db, args.id);
+      if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
       return { success: deleteCycle(context.db, viewer.id, args.id) };
     },
     cycleCarryOver: (
