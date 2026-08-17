@@ -12,6 +12,12 @@ interface SidebarProps {
     name: string;
     projects: Array<{ id: string; name: string; state: string }>;
     cycles?: Array<{ id: string; name: string; number: number; state: string }>;
+    views?: Array<{
+      id: string;
+      name: string;
+      scope: string;
+      team: { id: string; key: string } | null;
+    }>;
   }>;
   views?: Array<{
     id: string;
@@ -85,6 +91,9 @@ export function Sidebar({
         <Link to="/reviews" className={active("/reviews")}>
           <Icon name="check" /> Reviews
         </Link>
+        <Link to="/projects" className={active("/projects")}>
+          <Icon name="project" /> Projects
+        </Link>
         <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ flex: 1 }}>Initiatives</span>
           {onCreateInitiative && (
@@ -105,6 +114,29 @@ export function Sidebar({
             className={active(`/initiative/${initiative.id}`)}
           >
             <Icon name="milestone" className="nested" /> {initiative.name}
+          </Link>
+        ))}
+        <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ flex: 1 }}>Views</span>
+          {onCreateView && (
+            <button
+              className="nav"
+              style={{ padding: 0, margin: 0, width: "auto" }}
+              title="New view"
+              onClick={() => void onCreateView()}
+            >
+              <Icon name="plus" size={12} />
+            </button>
+          )}
+        </div>
+        {views.length === 0 && (
+          <div className="hint" style={{ padding: "0 12px 8px" }}>
+            No workspace views yet
+          </div>
+        )}
+        {views.map((view) => (
+          <Link key={view.id} to={`/view/${view.id}`} className={active(`/view/${view.id}`)}>
+            <Icon name="filter" className="nested" /> {view.name}
           </Link>
         ))}
         {teams.map((team) => (
@@ -155,6 +187,12 @@ export function Sidebar({
                     ))}
               </>
             )}
+            {team.views && team.views.length > 0 && <div className="section">Views</div>}
+            {(team.views ?? []).map((view) => (
+              <Link key={view.id} to={`/view/${view.id}`} className={active(`/view/${view.id}`)}>
+                <Icon name="filter" className="nested" /> {view.name}
+              </Link>
+            ))}
             <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ flex: 1 }}>Cycles</span>
               {onCreateCycle && (
@@ -178,29 +216,6 @@ export function Sidebar({
               </Link>
             ))}
           </div>
-        ))}
-        <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ flex: 1 }}>Views</span>
-          {onCreateView && (
-            <button
-              className="nav"
-              style={{ padding: 0, margin: 0, width: "auto" }}
-              title="New view"
-              onClick={() => void onCreateView()}
-            >
-              <Icon name="plus" size={12} />
-            </button>
-          )}
-        </div>
-        {views.length === 0 && (
-          <div className="hint" style={{ padding: "0 12px 8px" }}>
-            No saved views yet
-          </div>
-        )}
-        {views.map((view) => (
-          <Link key={view.id} to={`/view/${view.id}`} className={active(`/view/${view.id}`)}>
-            <Icon name="filter" className="nested" /> {view.name}
-          </Link>
         ))}
         <div className="spacer" />
         <div className="hint">

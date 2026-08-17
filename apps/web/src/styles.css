@@ -1093,3 +1093,38 @@ kbd {
     padding: 12px;
   }
 }
+
+/* Workspace projects index (PRB-269). */
+.projects-page {
+  max-width: 860px;
+  margin: 0 auto;
+}
+.projects-page h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.projects-page .page-header {
+  padding: 12px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.projects-list {
+  display: grid;
+  gap: 1px;
+  margin-top: 12px;
+}
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.project-row:hover {
+  background: var(--surface-hover);
+}
+.project-row .muted {
+  margin-left: auto;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}

@@ -24,6 +24,8 @@ import { InboxView } from "./views/InboxView.tsx";
 import { TeamSettingsView } from "./views/TeamSettingsView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
 import { TeamsView } from "./views/TeamsView.tsx";
+import { ProjectsView } from "./views/ProjectsView.tsx";
+import { buildNavigation } from "./navigation.ts";
 
 const SHELL_QUERY = `{
   workspace { id name }
@@ -111,6 +113,7 @@ export function App() {
 
   const [section, param] = route;
   const teams = shell.data?.teams ?? [];
+  const navigation = buildNavigation(teams, shell.data?.savedViews ?? []);
   const defaultTeam = teams[0]?.key;
   const currentTeamKey =
     section === "team" || section === "board"
@@ -127,6 +130,9 @@ export function App() {
   } else if (section === "teams") {
     topbar = <span className="title">Teams</span>;
     content = <TeamsView teams={teams} />;
+  } else if (section === "projects") {
+    topbar = <span className="title">Projects</span>;
+    content = <ProjectsView projects={navigation.projects} />;
   } else if (section === "settings") {
     topbar = <span className="title">Settings</span>;
     content = <SettingsView />;
@@ -234,9 +240,7 @@ export function App() {
     );
     content = <IssueView issueRef={param} />;
   } else if ((section === "project" || section === "project-board") && param) {
-    const project = shell.data?.teams
-      .flatMap((team) => team.projects)
-      .find((candidate) => candidate.id === param);
+    const project = navigation.projects.find((candidate) => candidate.id === param);
     const boardActive = section === "project-board";
     topbar = (
       <>
@@ -331,8 +335,11 @@ export function App() {
     <div className="app">
       <Sidebar
         workspace={shell.data?.workspace ?? null}
-        teams={teams}
-        views={shell.data?.savedViews ?? []}
+        teams={teams.map((team) => ({
+          ...team,
+          views: navigation.teams.find((candidate) => candidate.id === team.id)?.views ?? [],
+        }))}
+        views={navigation.workspaceViews}
         initiatives={shell.data?.initiatives ?? []}
         onCreateView={async () => {
           const team = teams.find((candidate) => candidate.key === currentTeamKey) ?? teams[0];
