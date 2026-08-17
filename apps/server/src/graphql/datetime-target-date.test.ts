@@ -21,6 +21,17 @@ describe("targetDate DateTime validation", () => {
     );
     expect(invalidProject.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
 
+    const invalidLiteral = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        projectCreate(input: {
+          name: "Invalid literal target date", teamIds: [$teamId], targetDate: 123
+        }) { success }
+      }`,
+      { teamId },
+    );
+    expect(invalidLiteral.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
     const project = await gql(
       app,
       `mutation($teamId: ID!) {

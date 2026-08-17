@@ -16,6 +16,7 @@ import { applyLabelOps, type LabelOps } from "./labels.ts";
 import { assertMilestoneMatchesProject } from "./milestones.ts";
 import { projectIncludesTeam } from "./projects.ts";
 import { validateCycleForTeam } from "./cycles.ts";
+import { parseDateTime } from "./datetime.ts";
 import { getDefaultState, getTeam } from "./teams.ts";
 
 export interface IssueRow {
@@ -188,9 +189,7 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
   if (input.milestoneId) {
     assertMilestoneMatchesProject(db, input.milestoneId, input.projectId ?? null);
   }
-  if (input.createdAt != null && Number.isNaN(Date.parse(input.createdAt))) {
-    throw apiError("VALIDATION_FAILED", "createdAt must be a valid ISO-8601 date");
-  }
+  if (input.createdAt != null) parseDateTime(input.createdAt, "createdAt");
   if (
     input.creatorId != null &&
     !db.query("SELECT id FROM actors WHERE id = ?1").get(input.creatorId)

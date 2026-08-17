@@ -36,6 +36,7 @@ import {
   isWorkspaceAdmin,
 } from "../auth/permissions.ts";
 import { withRepoSyncDispatch } from "./repo-sync-dispatch.ts";
+import { parseDateTime } from "../domain/datetime.ts";
 import { issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
 import {
@@ -101,8 +102,17 @@ import {
 const DateTime = new GraphQLScalarType({
   name: "DateTime",
   serialize: (value) => value,
-  parseValue: (value) => value,
-  parseLiteral: (ast) => (ast.kind === Kind.STRING ? ast.value : null),
+  parseValue: (value) => {
+    parseDateTime(value, "DateTime");
+    return value;
+  },
+  parseLiteral: (ast) => {
+    if (ast.kind !== Kind.STRING) {
+      throw apiError("VALIDATION_FAILED", "DateTime must be a valid ISO-8601 date");
+    }
+    parseDateTime(ast.value, "DateTime");
+    return ast.value;
+  },
 });
 
 const JSONScalar = new GraphQLScalarType({

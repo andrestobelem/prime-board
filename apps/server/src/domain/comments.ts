@@ -4,6 +4,7 @@ import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { recordActivity } from "./activity.ts";
 import { getIssueByRef } from "./issues.ts";
+import { parseDateTime } from "./datetime.ts";
 
 export interface CommentRow {
   id: string;
@@ -41,10 +42,11 @@ export function createComment(
   const body = input.body.trim();
   if (!body) throw apiError("VALIDATION_FAILED", "Comment body cannot be empty");
 
-  if (input.createdAt != null && Number.isNaN(Date.parse(input.createdAt))) {
-    throw apiError("VALIDATION_FAILED", "createdAt must be a valid ISO-8601 date");
-  }
-  if (input.authorId != null && !db.query("SELECT id FROM actors WHERE id = ?1").get(input.authorId)) {
+  if (input.createdAt != null) parseDateTime(input.createdAt, "createdAt");
+  if (
+    input.authorId != null &&
+    !db.query("SELECT id FROM actors WHERE id = ?1").get(input.authorId)
+  ) {
     throw apiError("NOT_FOUND", "Comment author not found");
   }
   const author = input.authorId ?? actorId;
@@ -56,7 +58,14 @@ export function createComment(
       "INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
     ).run(id, issue.id, author, body, timestamp);
     // El body va en el evento para que el log pueda reconstruir el comentario.
-    recordActivity(db, issue.id, author, "commented", { commentId: id, body }, input.createdAt ?? undefined);
+    recordActivity(
+      db,
+      issue.id,
+      author,
+      "commented",
+      { commentId: id, body },
+      input.createdAt ?? undefined,
+    );
   })();
   return db.query("SELECT * FROM comments WHERE id = ?1").get(id) as CommentRow;
 }
