@@ -1,54 +1,63 @@
 [
   {
     "email": "andres.tobelem@gmail.com",
+    "id": "01a00a56-10a7-7001-aa04-f17aa67d3721",
     "name": "Andrés Tobelem",
     "type": "human",
     "workspaceRole": "member"
   },
   {
     "email": null,
+    "id": "01a00a56-10a7-7004-a964-cec07e019061",
     "name": "Carorila",
     "type": "agent",
     "workspaceRole": "member"
   },
   {
     "email": "linear-82afff80-2cd1-473e-bb13-0a24003e65eb@linear.linear.app",
+    "id": "01a00a56-10a7-7005-a73b-555a27e050f9",
     "name": "Linear",
     "type": "agent",
     "workspaceRole": "member"
   },
   {
     "email": null,
+    "id": "01a00a56-10a7-7002-b608-fa26396ec9e1",
     "name": "Lucía",
     "type": "agent",
     "workspaceRole": "member"
   },
   {
     "email": null,
+    "id": "01a00a56-10a7-7003-89f6-4dc5debd084e",
     "name": "Micaela",
     "type": "agent",
     "workspaceRole": "member"
   },
   {
     "email": null,
+    "id": "01a00a56-10a7-7006-b0dd-6ffc221921e4",
     "name": "Sofía",
     "type": "agent",
     "workspaceRole": "member"
   },
   {
     "email": null,
+    "id": "01a00a56-10a7-7007-ad75-1b89ea7ad267",
     "name": "admin",
     "type": "human",
     "workspaceRole": "admin"
   },
   {
     "email": null,
+    "id": "01a00a56-10a7-7008-818e-bf05af4cd33d",
     "name": "claude",
     "type": "agent",
     "workspaceRole": "member"
   },
   {
     "email": null,
+    "id": "01a00a56-10a7-7009-b6dd-fbe922618422",
     "name": "demo-agent",
     "type": "agent",
     "workspaceRole": "member"

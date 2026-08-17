@@ -4,7 +4,7 @@
     "columns": [],
     "filter": {
       "team": {
-        "eq": "01a00a56-10a7-700a-b13e-b10cc7e445a9"
+        "eq": "AT"
       }
     },
     "groupBy": "state",
