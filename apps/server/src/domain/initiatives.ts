@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { getProject } from "./projects.ts";
+import { parseDateTime } from "./datetime.ts";
 import { assertTeamMember, isTeamMember } from "./team-memberships.ts";
 
 export type InitiativeState = "planned" | "active" | "completed" | "canceled";
@@ -124,6 +125,7 @@ export function createInitiative(
 ): InitiativeRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Initiative name cannot be empty");
+  if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
   const id = newId();
   const timestamp = now();
   const state = input.state ? resolveState(input.state) : "planned";
@@ -165,6 +167,7 @@ export function updateInitiative(
   const existing = getInitiative(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Initiative not found");
   assertCanMutate(db, existing, viewerId);
+  if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
 
   const sets: string[] = [];
   const params: unknown[] = [];

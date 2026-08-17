@@ -3,9 +3,15 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { getActor } from "./actors.ts";
+import { parseDateTime } from "./datetime.ts";
 
 export const PROJECT_STATES = [
-  "backlog", "planned", "started", "paused", "completed", "canceled",
+  "backlog",
+  "planned",
+  "started",
+  "paused",
+  "completed",
+  "canceled",
 ] as const;
 
 export interface ProjectRow {
@@ -41,8 +47,11 @@ export function getProject(db: Database, id: string): ProjectRow | null {
 export function archiveProject(db: Database, id: string, archived: boolean): ProjectRow {
   const project = getProject(db, id);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
-  db.query("UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3")
-    .run(archived ? now() : null, now(), id);
+  db.query("UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3").run(
+    archived ? now() : null,
+    now(),
+    id,
+  );
   return getProject(db, id)!;
 }
 
@@ -78,7 +87,9 @@ export function listProjectTeamIds(db: Database, projectId: string): string[] {
 
 export function projectIncludesTeam(db: Database, projectId: string, teamId: string): boolean {
   return Boolean(
-    db.query("SELECT 1 FROM project_teams WHERE project_id = ?1 AND team_id = ?2").get(projectId, teamId),
+    db
+      .query("SELECT 1 FROM project_teams WHERE project_id = ?1 AND team_id = ?2")
+      .get(projectId, teamId),
   );
 }
 
@@ -92,15 +103,25 @@ function setProjectTeams(db: Database, projectId: string, teamIds: string[]): vo
   }
   db.query("DELETE FROM project_teams WHERE project_id = ?1").run(projectId);
   for (const teamId of new Set(teamIds)) {
-    db.query("INSERT INTO project_teams (project_id, team_id) VALUES (?1, ?2)").run(projectId, teamId);
+    db.query("INSERT INTO project_teams (project_id, team_id) VALUES (?1, ?2)").run(
+      projectId,
+      teamId,
+    );
   }
 }
 
 function allTeamIds(db: Database): string[] {
-  return db.query("SELECT id FROM teams").values().map((row) => row[0] as string);
+  return db
+    .query("SELECT id FROM teams")
+    .values()
+    .map((row) => row[0] as string);
 }
 
-function validate(db: Database, input: { state?: string | null; leadId?: string | null }): void {
+function validate(
+  db: Database,
+  input: { state?: string | null; leadId?: string | null; targetDate?: string | null },
+): void {
+  if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
   if (input.state != null && !PROJECT_STATES.includes(input.state as never)) {
     throw apiError("VALIDATION_FAILED", `Invalid project state: ${input.state}`);
   }
@@ -131,8 +152,13 @@ export function createProject(
       `INSERT INTO projects (id, name, description, state, lead_id, target_date, created_at, updated_at)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
     ).run(
-      id, name, input.description ?? null, input.state ?? "backlog",
-      input.leadId ?? null, input.targetDate ?? null, timestamp,
+      id,
+      name,
+      input.description ?? null,
+      input.state ?? "backlog",
+      input.leadId ?? null,
+      input.targetDate ?? null,
+      timestamp,
     );
     // Sin teamIds explícitos, el proyecto se asocia a todos los teams actuales
     // (compatibilidad con clientes previos a AT-152).

@@ -3,6 +3,7 @@
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
+import { parseDateTime } from "./datetime.ts";
 
 export interface MilestoneRow {
   id: string;
@@ -39,14 +40,25 @@ export function listMilestones(db: Database, projectId: string): MilestoneRow[] 
 
 export function createMilestone(
   db: Database,
-  input: { projectId: string; name: string; description?: string | null; targetDate?: string | null; position?: number | null },
+  input: {
+    projectId: string;
+    name: string;
+    description?: string | null;
+    targetDate?: string | null;
+    position?: number | null;
+  },
 ): MilestoneRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Milestone name cannot be empty");
   if (!db.query("SELECT id FROM projects WHERE id = ?1").get(input.projectId)) {
     throw apiError("NOT_FOUND", "Project not found");
   }
-  if (db.query("SELECT id FROM milestones WHERE project_id = ?1 AND name = ?2").get(input.projectId, name)) {
+  if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
+  if (
+    db
+      .query("SELECT id FROM milestones WHERE project_id = ?1 AND name = ?2")
+      .get(input.projectId, name)
+  ) {
     throw apiError("VALIDATION_FAILED", `Milestone ${name} already exists in this project`);
   }
   const max = db
@@ -58,18 +70,31 @@ export function createMilestone(
   db.query(
     `INSERT INTO milestones (id, project_id, name, description, target_date, position, created_at, updated_at)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
-  ).run(id, input.projectId, name, input.description ?? null, input.targetDate ?? null,
-        input.position ?? max.max + 1, timestamp);
+  ).run(
+    id,
+    input.projectId,
+    name,
+    input.description ?? null,
+    input.targetDate ?? null,
+    input.position ?? max.max + 1,
+    timestamp,
+  );
   return getMilestone(db, id)!;
 }
 
 export function updateMilestone(
   db: Database,
   id: string,
-  input: { name?: string | null; description?: string | null; targetDate?: string | null; position?: number | null },
+  input: {
+    name?: string | null;
+    description?: string | null;
+    targetDate?: string | null;
+    position?: number | null;
+  },
 ): MilestoneRow {
   const milestone = getMilestone(db, id);
   if (!milestone) throw apiError("NOT_FOUND", "Milestone not found");
+  if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
   const sets: string[] = [];
   const params: unknown[] = [];
   const push = (column: string, value: unknown) => {
@@ -87,7 +112,9 @@ export function updateMilestone(
   if (sets.length > 0) {
     push("updated_at", now());
     params.push(id);
-    db.query(`UPDATE milestones SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(...(params as never[]));
+    db.query(`UPDATE milestones SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
+      ...(params as never[]),
+    );
   }
   return getMilestone(db, id)!;
 }

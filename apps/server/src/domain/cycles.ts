@@ -2,6 +2,7 @@
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
+import { parseDateTime } from "./datetime.ts";
 import { recordActivity } from "./activity.ts";
 
 export type CycleState = "upcoming" | "active" | "completed";
@@ -64,13 +65,6 @@ function resolveState(state: string): CycleState {
   return normalized;
 }
 
-function parseCycleDate(value: unknown, field: "startsAt" | "endsAt"): number {
-  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
-    throw apiError("VALIDATION_FAILED", `Cycle ${field} must be a valid ISO-8601 date`);
-  }
-  return Date.parse(value);
-}
-
 export function createCycle(
   db: Database,
   input: {
@@ -86,8 +80,8 @@ export function createCycle(
   if (!db.query("SELECT id FROM teams WHERE id = ?1").get(input.teamId)) {
     throw apiError("NOT_FOUND", "Team not found");
   }
-  const startsAt = parseCycleDate(input.startsAt, "startsAt");
-  const endsAt = parseCycleDate(input.endsAt, "endsAt");
+  const startsAt = parseDateTime(input.startsAt, "Cycle startsAt");
+  const endsAt = parseDateTime(input.endsAt, "Cycle endsAt");
   if (startsAt > endsAt) {
     throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
   }
@@ -131,7 +125,7 @@ export function updateCycle(
   }
   const startsAt = input.startsAt ?? existing.starts_at;
   const endsAt = input.endsAt ?? existing.ends_at;
-  if (parseCycleDate(startsAt, "startsAt") > parseCycleDate(endsAt, "endsAt")) {
+  if (parseDateTime(startsAt, "Cycle startsAt") > parseDateTime(endsAt, "Cycle endsAt")) {
     throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
   }
   if (input.startsAt != null) push("starts_at", input.startsAt);
