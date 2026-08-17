@@ -71,6 +71,11 @@ button {
   cursor: pointer;
   padding: 0;
 }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 input,
 textarea,
 select {
@@ -181,6 +186,18 @@ select:focus {
 .sidebar button.nav:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+.sidebar .new-issue-nav {
+  margin: 4px 0 2px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.sidebar .new-issue-nav:hover {
+  border-color: var(--accent);
+}
+.sidebar .new-issue-nav kbd {
+  margin-left: auto;
 }
 /* Anidado del árbol de proyectos: antes era paddingLeft en el glifo. */
 .sidebar .icon.nested {
@@ -921,6 +938,243 @@ kbd {
   color: var(--text-muted);
 }
 
+/* ---- team settings ---- */
+.team-settings-page {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 28px 32px 48px;
+}
+.settings-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.settings-page-header h1 {
+  margin: 4px 0 6px;
+  font-size: 22px;
+  letter-spacing: -0.2px;
+}
+.settings-page-header p,
+.settings-panel-header p {
+  margin: 0;
+  color: var(--text-muted);
+}
+.settings-eyebrow {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.settings-panel {
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.settings-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-panel-header h2 {
+  margin: 0 0 5px;
+  font-size: 14px;
+}
+.settings-panel-header p {
+  font-size: 12px;
+}
+.settings-count {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 11px;
+  padding-top: 2px;
+}
+.settings-list {
+  display: flex;
+  flex-direction: column;
+}
+.settings-empty {
+  padding: 18px 20px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.team-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 62px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.team-setting-row:last-child {
+  border-bottom: 0;
+}
+.team-setting-row:hover {
+  background: var(--surface-hover);
+}
+.team-setting-identity,
+.team-setting-controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.team-setting-identity {
+  flex: 1;
+}
+.team-setting-identity > div {
+  min-width: 0;
+}
+.team-setting-controls {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.team-setting-controls select {
+  min-width: 108px;
+  font-size: 12px;
+}
+.settings-name-input {
+  width: 190px;
+  min-width: 0;
+  padding: 2px 4px;
+  background: transparent;
+  border-color: transparent;
+  font-weight: 500;
+}
+.settings-name-input:hover,
+.settings-name-input:focus {
+  background: var(--surface);
+  border-color: var(--border);
+}
+.settings-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+.default-badge {
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  text-transform: none;
+}
+.state-color-input {
+  width: 30px;
+  height: 28px;
+  padding: 2px;
+  border-radius: 5px;
+}
+.icon-action {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+}
+.icon-action:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+.icon-action.danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+.icon-action:disabled,
+.settings-name-input:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.btn.compact {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.settings-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: var(--bg-sidebar);
+}
+.settings-add-row input:not([type="color"]) {
+  min-width: 0;
+  flex: 1;
+}
+.settings-add-row select {
+  font-size: 12px;
+}
+
+/* ---- quick create ---- */
+.quick-create-modal {
+  width: 620px;
+}
+.quick-create-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.quick-create-heading strong {
+  font-size: 15px;
+}
+.quick-create-heading p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.quick-create-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.quick-create-field > span {
+  font-weight: 500;
+}
+.quick-create-field em {
+  color: var(--text-faint);
+  font-style: normal;
+  font-weight: 400;
+}
+.quick-create-title-row {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 8px;
+}
+.quick-create-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.quick-create-field textarea {
+  min-height: 130px;
+  resize: vertical;
+}
+.quick-create-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
 .settings {
   max-width: 480px;
   padding: 32px;
@@ -1280,6 +1534,40 @@ kbd {
     padding: 20px;
   }
   .team-home-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .team-settings-page {
+    padding: 20px 12px 32px;
+  }
+  .settings-panel-header,
+  .team-setting-row {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .team-setting-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .team-setting-controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .settings-name-input {
+    width: min(52vw, 190px);
+  }
+  .settings-add-row {
+    flex-wrap: wrap;
+    padding: 12px 14px;
+  }
+  .settings-add-row input:not([type="color"]) {
+    flex-basis: 100%;
+  }
+  .quick-create-title-row,
+  .quick-create-options {
     grid-template-columns: 1fr;
   }
 }

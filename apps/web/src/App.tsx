@@ -427,6 +427,7 @@ export function App() {
         onToggleFavorite={toggleFavorite}
         onReorderFavorite={reorderFavorite}
         onLogout={logout}
+        onCreateIssue={() => setCreateOpen(true)}
         initiatives={shell.data?.initiatives ?? []}
         onCreateView={async () => {
           const team = teams.find((candidate) => candidate.key === currentTeamKey) ?? teams[0];

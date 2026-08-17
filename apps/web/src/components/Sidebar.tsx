@@ -43,6 +43,7 @@ interface SidebarProps {
   ) => void | Promise<void>;
   onReorderFavorite?: (favorite: SidebarFavorite, position: number) => void | Promise<void>;
   onLogout?: () => void;
+  onCreateIssue?: () => void;
   onCreateView?: () => void | Promise<void>;
   onCreateCycle?: (teamId: string) => void | Promise<void>;
   onCreateInitiative?: () => void | Promise<void>;
@@ -59,6 +60,7 @@ export function Sidebar({
   onToggleFavorite,
   onReorderFavorite,
   onLogout,
+  onCreateIssue,
   onCreateView,
   onCreateCycle,
   onCreateInitiative,
@@ -193,6 +195,13 @@ export function Sidebar({
             </div>
           )}
         </div>
+        {onCreateIssue && (
+          <button className="nav new-issue-nav" onClick={onCreateIssue}>
+            <Icon name="plus" size={14} />
+            <span>New issue</span>
+            <kbd>C</kbd>
+          </button>
+        )}
         <div className="section">Workspace</div>
         <Link to="/teams" className={active("/teams")}>
           <Icon name="members" /> Teams
