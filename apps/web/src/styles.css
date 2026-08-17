@@ -9,7 +9,7 @@
   --border-subtle: #1f2126;
   --text: #e2e3e5;
   --text-muted: #8a8f98;
-  --text-faint: #5c6067;
+  --text-faint: #777b84;
   --accent: #5e6ad2;
   --accent-hover: #6e7ae2;
   --danger: #eb5757;
@@ -26,7 +26,7 @@ html[data-theme="light"] {
   --border-subtle: #e8e9eb;
   --text: #282a30;
   --text-muted: #6b6f76;
-  --text-faint: #9a9ea6;
+  --text-faint: #737780;
   --accent: #5e6ad2;
   --accent-hover: #4f5ac2;
   --danger: #d94b4b;
@@ -1005,6 +1005,13 @@ kbd {
   margin-left: auto;
   font-size: 11px;
   color: var(--text-faint);
+}
+
+.save-notice {
+  display: inline-block;
+  margin: 4px 0;
+  color: var(--accent-hover);
+  font-size: 12px;
 }
 
 .copied-hint {

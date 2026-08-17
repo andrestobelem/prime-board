@@ -6,6 +6,7 @@ import { Avatar, LabelChip, PRIORITY_NAMES, StateIcon } from "../components/bits
 import { Icon } from "../components/icons.tsx";
 import { renderMarkdown } from "../markdown.ts";
 import { Link, navigate } from "../router.tsx";
+import { ConfirmModal } from "../components/EntityModal.tsx";
 
 const ISSUE_NAV_QUERY = `query($teamId: ID) {
   issues(filter: { team: { eq: $teamId } }, first: 250, orderBy: CREATED_DESC) {
@@ -125,7 +126,11 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   const [subIssueSaving, setSubIssueSaving] = useState(false);
   const [subIssueError, setSubIssueError] = useState<string | null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (issue) {
@@ -154,28 +159,44 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   }
 
   const update = (input: Record<string, unknown>) =>
-    mutate(
+    mutate<{ issueUpdate: { success: boolean } }>(
       `mutation($id: ID!, $input: IssueUpdateInput!) {
       issueUpdate(id: $id, input: $input) { success }
     }`,
       { id: issue.id, input },
     );
 
+  async function runUpdate(input: Record<string, unknown>, notice = "Saved"): Promise<void> {
+    setSaving(true);
+    setSaveError(null);
+    setSaveNotice(null);
+    try {
+      const response = await update(input);
+      if (!response.issueUpdate.success) throw new Error("The issue could not be updated.");
+      setSaveNotice(notice);
+      window.setTimeout(() => setSaveNotice(null), 1800);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The issue could not be updated.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function saveTitle() {
     const trimmed = title.trim();
-    if (trimmed && trimmed !== issue.title) update({ title: trimmed });
+    if (trimmed && trimmed !== issue.title) void runUpdate({ title: trimmed });
   }
 
   function saveDescription() {
     setEditingDescription(false);
-    if (description !== (issue.description ?? "")) update({ description });
+    if (description !== (issue.description ?? "")) void runUpdate({ description });
   }
 
   async function saveCycle(cycleId: string) {
     setCycleSaving(true);
     setCycleError(null);
     try {
-      await update({ cycleId: cycleId || null });
+      await runUpdate({ cycleId: cycleId || null });
     } catch (error) {
       setCycleError((error as Error).message);
     } finally {
@@ -196,6 +217,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
         { input: { teamId: issue.team.id, parentId: issue.id, title: trimmed, description: "" } },
       );
       setSubIssueTitle("");
+      setSaveNotice("Sub-issue created");
     } catch (error) {
       setSubIssueError((error as Error).message);
     } finally {
@@ -206,13 +228,23 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   async function submitComment() {
     const body = comment.trim();
     if (!body) return;
-    setComment("");
-    await mutate(
-      `mutation($input: CommentCreateInput!) {
-      commentCreate(input: $input) { comment { id } }
-    }`,
-      { input: { issueId: issue.id, body } },
-    );
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await mutate(
+        `mutation($input: CommentCreateInput!) {
+        commentCreate(input: $input) { comment { id } }
+      }`,
+        { input: { issueId: issue.id, body } },
+      );
+      setComment("");
+      setSaveNotice("Comment added");
+      window.setTimeout(() => setSaveNotice(null), 1800);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The comment could not be added.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function addRelation() {
@@ -227,374 +259,451 @@ export function IssueView({ issueRef }: { issueRef: string }) {
         { input: { issueId: issue.id, relatedIssueId: ref, type: relationType } },
       );
       setRelationRef("");
+      setSaveNotice("Relation added");
     } catch (error) {
       setRelationError((error as Error).message);
     }
   }
 
-  const removeRelation = (relationId: string) =>
-    mutate(`mutation($id: ID!) { issueRelationDelete(id: $id) { success } }`, { id: relationId });
+  async function removeRelation(relationId: string): Promise<void> {
+    try {
+      await mutate(`mutation($id: ID!) { issueRelationDelete(id: $id) { success } }`, {
+        id: relationId,
+      });
+      setSaveNotice("Relation removed");
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The relation could not be removed.");
+    }
+  }
 
   const toggleLabel = (labelId: string, active: boolean) =>
-    update(active ? { removeLabelIds: [labelId] } : { addLabelIds: [labelId] });
+    runUpdate(active ? { removeLabelIds: [labelId] } : { addLabelIds: [labelId] });
+
+  async function archiveIssue(): Promise<void> {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await mutate<{ issueArchive: { success: boolean } }>(
+        `mutation($id: ID!) { issueArchive(id: $id) { success } }`,
+        { id: issue.id },
+      );
+      if (!response.issueArchive.success) throw new Error("The issue could not be archived.");
+      navigate(`/team/${issue.team.key}`);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The issue could not be archived.");
+      throw error;
+    } finally {
+      setSaving(false);
+      setArchiveOpen(false);
+    }
+  }
 
   const activeLabelIds = new Set(issue.labels.map((label: any) => label.id));
 
   return (
-    <div className="issue-detail">
-      <div className="issue-main">
-        <div className="issue-header">
-          <div className="issue-header-id">
-            <span className="issue-identifier">{issue.identifier}</span>
-            <div className="issue-actions">
-              <button
-                className="issue-icon-button"
-                aria-label="Issue actions"
-                aria-expanded={actionsOpen}
-                onClick={() => setActionsOpen((open) => !open)}
-              >
-                <Icon name="more" size={16} />
-              </button>
-              {actionsOpen && (
-                <div className="issue-actions-menu" role="menu">
-                  <button role="menuitem" onClick={copyIssueLink}>
-                    <Icon name="link" size={14} /> Copy issue link
-                  </button>
-                  <button role="menuitem" onClick={() => void copyText(issue.identifier)}>
-                    <Icon name="copy" size={14} /> Copy identifier
-                  </button>
-                  <Link to={`/team/${issue.team.key}`}>
-                    <Icon name="issues" size={14} /> Open in team list
-                  </Link>
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="issue-header-actions">
-            <button
-              className="issue-icon-button"
-              aria-label="Previous issue"
-              disabled={!previousIssue || navigation.loading}
-              onClick={() => previousIssue && navigate(`/issue/${previousIssue}`)}
-            >
-              ‹
-            </button>
-            <button
-              className="issue-icon-button"
-              aria-label="Next issue"
-              disabled={!nextIssue || navigation.loading}
-              onClick={() => nextIssue && navigate(`/issue/${nextIssue}`)}
-            >
-              ›
-            </button>
-          </div>
-        </div>
-        {copied && <span className="copied-hint">Link copied</span>}
-        <input
-          className="issue-title-input"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={saveTitle}
-          onKeyDown={(event) => event.key === "Enter" && (event.target as HTMLInputElement).blur()}
-        />
-
-        <div style={{ marginTop: 16 }}>
-          {editingDescription ? (
-            <div>
-              <textarea
-                className="description-editor"
-                autoFocus
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") saveDescription();
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) saveDescription();
-                }}
-              />
-              <div className="composer actions" style={{ marginTop: 6 }}>
-                <button className="btn" onClick={saveDescription}>
-                  Save
+    <>
+      <div className="issue-detail">
+        <div className="issue-main">
+          <div className="issue-header">
+            <div className="issue-header-id">
+              <span className="issue-identifier">{issue.identifier}</span>
+              <div className="issue-actions">
+                <button
+                  className="issue-icon-button"
+                  aria-label="Issue actions"
+                  aria-expanded={actionsOpen}
+                  onClick={() => setActionsOpen((open) => !open)}
+                >
+                  <Icon name="more" size={16} />
                 </button>
+                {actionsOpen && (
+                  <div className="issue-actions-menu" role="menu">
+                    <button role="menuitem" onClick={copyIssueLink}>
+                      <Icon name="link" size={14} /> Copy issue link
+                    </button>
+                    <button role="menuitem" onClick={() => void copyText(issue.identifier)}>
+                      <Icon name="copy" size={14} /> Copy identifier
+                    </button>
+                    <button role="menuitem" className="danger" onClick={() => setArchiveOpen(true)}>
+                      <Icon name="archive" size={14} /> Archive issue
+                    </button>
+                    <Link to={`/team/${issue.team.key}`}>
+                      <Icon name="issues" size={14} /> Open in team list
+                    </Link>
+                  </div>
+                )}
               </div>
             </div>
-          ) : issue.description ? (
-            <div onClick={() => setEditingDescription(true)} style={{ cursor: "text" }}>
-              <Markdown text={issue.description} />
+            <div className="issue-header-actions">
+              <button
+                className="issue-icon-button"
+                aria-label="Previous issue"
+                disabled={!previousIssue || navigation.loading}
+                onClick={() => previousIssue && navigate(`/issue/${previousIssue}`)}
+              >
+                ‹
+              </button>
+              <button
+                className="issue-icon-button"
+                aria-label="Next issue"
+                disabled={!nextIssue || navigation.loading}
+                onClick={() => nextIssue && navigate(`/issue/${nextIssue}`)}
+              >
+                ›
+              </button>
             </div>
-          ) : (
-            <div className="description-placeholder" onClick={() => setEditingDescription(true)}>
-              Add a description…
+          </div>
+          {copied && <span className="copied-hint">Link copied</span>}
+          {saveNotice && (
+            <div className="save-notice" role="status">
+              {saveNotice}
             </div>
           )}
-        </div>
+          {saveError && (
+            <div className="error-banner" role="alert">
+              {saveError}
+            </div>
+          )}
+          {saving && <span className="prop-status">Saving…</span>}
+          <input
+            className="issue-title-input"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            onBlur={saveTitle}
+            onKeyDown={(event) =>
+              event.key === "Enter" && (event.target as HTMLInputElement).blur()
+            }
+          />
 
-        <div className="section-title">Sub-issues</div>
-        {issue.children.map((child: any) => (
-          <div className="sub-issue" key={child.identifier}>
-            <StateIcon state={child.state} />
-            <Link to={`/issue/${child.identifier}`}>
-              <span style={{ color: "var(--text-faint)", marginRight: 6 }}>{child.identifier}</span>
-              {child.title}
-            </Link>
+          <div style={{ marginTop: 16 }}>
+            {editingDescription ? (
+              <div>
+                <textarea
+                  className="description-editor"
+                  autoFocus
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") saveDescription();
+                    if (event.key === "Enter" && (event.metaKey || event.ctrlKey))
+                      saveDescription();
+                  }}
+                />
+                <div className="composer actions" style={{ marginTop: 6 }}>
+                  <button className="btn" onClick={saveDescription}>
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : issue.description ? (
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setEditingDescription(true)}
+                onKeyDown={(event) =>
+                  (event.key === "Enter" || event.key === " ") && setEditingDescription(true)
+                }
+                style={{ cursor: "text" }}
+              >
+                <Markdown text={issue.description} />
+              </div>
+            ) : (
+              <div
+                className="description-placeholder"
+                role="button"
+                tabIndex={0}
+                onClick={() => setEditingDescription(true)}
+                onKeyDown={(event) =>
+                  (event.key === "Enter" || event.key === " ") && setEditingDescription(true)
+                }
+              >
+                Add a description…
+              </div>
+            )}
           </div>
-        ))}
-        <div className="composer" style={{ marginTop: 8 }}>
-          <div style={{ display: "flex", gap: 6 }}>
+
+          <div className="section-title">Sub-issues</div>
+          {issue.children.map((child: any) => (
+            <div className="sub-issue" key={child.identifier}>
+              <StateIcon state={child.state} />
+              <Link to={`/issue/${child.identifier}`}>
+                <span style={{ color: "var(--text-faint)", marginRight: 6 }}>
+                  {child.identifier}
+                </span>
+                {child.title}
+              </Link>
+            </div>
+          ))}
+          <div className="composer" style={{ marginTop: 8 }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                placeholder="Create a sub-issue…"
+                value={subIssueTitle}
+                disabled={subIssueSaving}
+                onChange={(event) => setSubIssueTitle(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void createSubIssue();
+                }}
+              />
+              <button
+                className="btn"
+                disabled={subIssueSaving || !subIssueTitle.trim()}
+                onClick={() => void createSubIssue()}
+              >
+                {subIssueSaving ? "Creating…" : "Create"}
+              </button>
+            </div>
+            {subIssueError && <div className="error-banner">{subIssueError}</div>}
+          </div>
+
+          <div className="section-title">Relations</div>
+          {issue.relations.map((relation: any) => (
+            <div className="sub-issue" key={relation.id}>
+              <StateIcon state={relation.relatedIssue.state} />
+              <span style={{ color: "var(--text-muted)", fontSize: 12, minWidth: 72 }}>
+                {RELATION_LABELS[relation.type] ?? relation.type}
+              </span>
+              <Link to={`/issue/${relation.relatedIssue.identifier}`}>
+                <span style={{ color: "var(--text-faint)", marginRight: 6 }}>
+                  {relation.relatedIssue.identifier}
+                </span>
+                {relation.relatedIssue.title}
+              </Link>
+              <button
+                className="btn"
+                title="Remove relation"
+                aria-label="Remove relation"
+                style={{ marginLeft: "auto", padding: "0 6px" }}
+                onClick={() => removeRelation(relation.id)}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+            <select value={relationType} onChange={(event) => setRelationType(event.target.value)}>
+              <option value="BLOCKED_BY">blocked by</option>
+              <option value="BLOCKS">blocks</option>
+              <option value="RELATED">related to</option>
+              <option value="DUPLICATE_OF">duplicate of</option>
+            </select>
             <input
-              placeholder="Create a sub-issue…"
-              value={subIssueTitle}
-              disabled={subIssueSaving}
-              onChange={(event) => setSubIssueTitle(event.target.value)}
+              placeholder="Issue ID, e.g. PB-12"
+              value={relationRef}
+              onChange={(event) => setRelationRef(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && addRelation()}
+              style={{ width: 140 }}
+            />
+            <button className="btn" onClick={addRelation}>
+              Link
+            </button>
+            {relationError && (
+              <span style={{ color: "var(--red, #eb5757)", fontSize: 12 }}>{relationError}</span>
+            )}
+          </div>
+
+          <div className="section-title">Comments</div>
+          {issue.comments.map((entry: any) => (
+            <div className="comment" key={entry.id}>
+              <div className="meta">
+                <Avatar actor={entry.actor} />
+                <span className="author">{entry.actor.name}</span>
+                <span>{timeAgo(entry.createdAt)}</span>
+              </div>
+              <Markdown text={entry.body} />
+            </div>
+          ))}
+          <div className="composer">
+            <textarea
+              placeholder="Leave a comment… (markdown supported, ⌘Enter to send)"
+              value={comment}
+              onChange={(event) => setComment(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") void createSubIssue();
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) submitComment();
               }}
             />
-            <button
-              className="btn"
-              disabled={subIssueSaving || !subIssueTitle.trim()}
-              onClick={() => void createSubIssue()}
-            >
-              {subIssueSaving ? "Creating…" : "Create"}
-            </button>
-          </div>
-          {subIssueError && <div className="error-banner">{subIssueError}</div>}
-        </div>
-
-        <div className="section-title">Relations</div>
-        {issue.relations.map((relation: any) => (
-          <div className="sub-issue" key={relation.id}>
-            <StateIcon state={relation.relatedIssue.state} />
-            <span style={{ color: "var(--text-muted)", fontSize: 12, minWidth: 72 }}>
-              {RELATION_LABELS[relation.type] ?? relation.type}
-            </span>
-            <Link to={`/issue/${relation.relatedIssue.identifier}`}>
-              <span style={{ color: "var(--text-faint)", marginRight: 6 }}>
-                {relation.relatedIssue.identifier}
-              </span>
-              {relation.relatedIssue.title}
-            </Link>
-            <button
-              className="btn"
-              title="Remove relation"
-              style={{ marginLeft: "auto", padding: "0 6px" }}
-              onClick={() => removeRelation(relation.id)}
-            >
-              <Icon name="x" size={12} />
-            </button>
-          </div>
-        ))}
-        <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
-          <select value={relationType} onChange={(event) => setRelationType(event.target.value)}>
-            <option value="BLOCKED_BY">blocked by</option>
-            <option value="BLOCKS">blocks</option>
-            <option value="RELATED">related to</option>
-            <option value="DUPLICATE_OF">duplicate of</option>
-          </select>
-          <input
-            placeholder="Issue ID, e.g. PB-12"
-            value={relationRef}
-            onChange={(event) => setRelationRef(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && addRelation()}
-            style={{ width: 140 }}
-          />
-          <button className="btn" onClick={addRelation}>
-            Link
-          </button>
-          {relationError && (
-            <span style={{ color: "var(--red, #eb5757)", fontSize: 12 }}>{relationError}</span>
-          )}
-        </div>
-
-        <div className="section-title">Comments</div>
-        {issue.comments.map((entry: any) => (
-          <div className="comment" key={entry.id}>
-            <div className="meta">
-              <Avatar actor={entry.actor} />
-              <span className="author">{entry.actor.name}</span>
-              <span>{timeAgo(entry.createdAt)}</span>
+            <div className="actions">
+              <button className="btn" onClick={submitComment}>
+                Comment
+              </button>
             </div>
-            <Markdown text={entry.body} />
           </div>
-        ))}
-        <div className="composer">
-          <textarea
-            placeholder="Leave a comment… (markdown supported, ⌘Enter to send)"
-            value={comment}
-            onChange={(event) => setComment(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) submitComment();
-            }}
-          />
-          <div className="actions">
-            <button className="btn" onClick={submitComment}>
-              Comment
-            </button>
-          </div>
+
+          <div className="section-title">Activity</div>
+          {issue.activity.map((entry: any) => (
+            <div className="activity-item" key={entry.id}>
+              <span className="who">
+                {entry.actor.name}
+                {entry.actor.type === "AGENT" && <Icon name="bot" size={12} />}
+              </span>
+              <span>{(ACTIVITY_TEXT[entry.type] ?? (() => entry.type))(entry.payload)}</span>
+              <span style={{ marginLeft: "auto" }}>{timeAgo(entry.createdAt)}</span>
+            </div>
+          ))}
         </div>
 
-        <div className="section-title">Activity</div>
-        {issue.activity.map((entry: any) => (
-          <div className="activity-item" key={entry.id}>
-            <span className="who">
-              {entry.actor.name}
-              {entry.actor.type === "AGENT" && <Icon name="bot" size={12} />}
-            </span>
-            <span>{(ACTIVITY_TEXT[entry.type] ?? (() => entry.type))(entry.payload)}</span>
-            <span style={{ marginLeft: "auto" }}>{timeAgo(entry.createdAt)}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="issue-props">
-        <div className="prop">
-          <span className="prop-label">
-            <Icon name="check" size={13} /> State
-          </span>
-          <select
-            value={issue.state.id}
-            onChange={(event) => update({ stateId: event.target.value })}
-          >
-            {issue.team.states.map((state: any) => (
-              <option key={state.id} value={state.id}>
-                {state.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="prop">
-          <span className="prop-label">
-            <Icon name="sort" size={13} /> Priority
-          </span>
-          <select
-            value={issue.priority}
-            onChange={(event) => update({ priority: Number(event.target.value) })}
-          >
-            {PRIORITY_NAMES.map((name, index) => (
-              <option key={name} value={index}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="prop">
-          <span className="prop-label">
-            <Icon name="assignee" size={13} /> Assignee
-          </span>
-          <select
-            value={issue.assignee?.id ?? ""}
-            onChange={(event) => update({ assigneeId: event.target.value || null })}
-          >
-            <option value="">Unassigned</option>
-            {result.data.actors.map((actor: any) => (
-              <option key={actor.id} value={actor.id}>
-                {actor.name}
-                {actor.type === "AGENT" ? " (agent)" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="prop">
-          <span className="prop-label">
-            <Icon name="calendar" size={13} /> Cycle
-          </span>
-          <select
-            value={issue.cycle?.id ?? ""}
-            disabled={cycleSaving}
-            onChange={(event) => void saveCycle(event.target.value)}
-          >
-            <option value="">No cycle</option>
-            {issue.team.cycles.map((cycle: any) => (
-              <option key={cycle.id} value={cycle.id}>
-                {cycle.name} (#{cycle.number})
-              </option>
-            ))}
-          </select>
-          {cycleSaving && <span className="prop-status">Saving…</span>}
-          {cycleError && <span className="prop-error">{cycleError}</span>}
-        </div>
-        <div className="prop">
-          <span className="prop-label">
-            <Icon name="project" size={13} /> Project
-          </span>
-          <select
-            value={issue.project?.id ?? ""}
-            onChange={(event) => update({ projectId: event.target.value || null })}
-          >
-            <option value="">No project</option>
-            {issue.team.projects.map((project: any) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        {issue.project && issue.project.milestones.length > 0 && (
+        <div className="issue-props">
           <div className="prop">
             <span className="prop-label">
-              <Icon name="milestone" size={13} /> Milestone
+              <Icon name="check" size={13} /> State
             </span>
             <select
-              value={issue.milestone?.id ?? ""}
-              onChange={(event) => update({ milestoneId: event.target.value || null })}
+              value={issue.state.id}
+              onChange={(event) => void runUpdate({ stateId: event.target.value })}
             >
-              <option value="">No milestone</option>
-              {issue.project.milestones.map((milestone: any) => (
-                <option key={milestone.id} value={milestone.id}>
-                  {milestone.name}
+              {issue.team.states.map((state: any) => (
+                <option key={state.id} value={state.id}>
+                  {state.name}
                 </option>
               ))}
             </select>
           </div>
-        )}
-        <div className="prop">
-          <span className="prop-label">
-            <Icon name="tag" size={13} /> Labels
-          </span>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {issue.team.labels.map((label: any) => {
-              const active = activeLabelIds.has(label.id);
-              return (
-                <button
-                  key={label.id}
-                  style={{ opacity: active ? 1 : 0.45 }}
-                  title={active ? "Remove label" : "Add label"}
-                  onClick={() => toggleLabel(label.id, active)}
-                >
-                  <LabelChip label={label} />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        {issue.parent && (
           <div className="prop">
             <span className="prop-label">
-              <Icon name="link" size={13} /> Parent
+              <Icon name="sort" size={13} /> Priority
             </span>
-            <Link to={`/issue/${issue.parent.identifier}`}>
-              <span style={{ color: "var(--text-muted)" }}>
-                {issue.parent.identifier} {issue.parent.title}
-              </span>
-            </Link>
+            <select
+              value={issue.priority}
+              onChange={(event) => void runUpdate({ priority: Number(event.target.value) })}
+            >
+              {PRIORITY_NAMES.map((name, index) => (
+                <option key={name} value={index}>
+                  {name}
+                </option>
+              ))}
+            </select>
           </div>
-        )}
-        <div className="prop">
-          <span className="prop-label">
-            <Icon name="link" size={13} /> Branch
-          </span>
-          <code style={{ fontSize: 11, color: "var(--text-muted)", wordBreak: "break-all" }}>
-            {issue.branchName}
-          </code>
-        </div>
-        <div className="prop">
-          <span className="prop-label">
-            <Icon name="members" size={13} /> Created by
-          </span>
-          <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <Avatar actor={issue.creator} /> {issue.creator.name}
-          </span>
+          <div className="prop">
+            <span className="prop-label">
+              <Icon name="assignee" size={13} /> Assignee
+            </span>
+            <select
+              value={issue.assignee?.id ?? ""}
+              onChange={(event) => void runUpdate({ assigneeId: event.target.value || null })}
+            >
+              <option value="">Unassigned</option>
+              {result.data.actors.map((actor: any) => (
+                <option key={actor.id} value={actor.id}>
+                  {actor.name}
+                  {actor.type === "AGENT" ? " (agent)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="prop">
+            <span className="prop-label">
+              <Icon name="calendar" size={13} /> Cycle
+            </span>
+            <select
+              value={issue.cycle?.id ?? ""}
+              disabled={cycleSaving}
+              onChange={(event) => void saveCycle(event.target.value)}
+            >
+              <option value="">No cycle</option>
+              {issue.team.cycles.map((cycle: any) => (
+                <option key={cycle.id} value={cycle.id}>
+                  {cycle.name} (#{cycle.number})
+                </option>
+              ))}
+            </select>
+            {cycleSaving && <span className="prop-status">Saving…</span>}
+            {cycleError && <span className="prop-error">{cycleError}</span>}
+          </div>
+          <div className="prop">
+            <span className="prop-label">
+              <Icon name="project" size={13} /> Project
+            </span>
+            <select
+              value={issue.project?.id ?? ""}
+              onChange={(event) => void runUpdate({ projectId: event.target.value || null })}
+            >
+              <option value="">No project</option>
+              {issue.team.projects.map((project: any) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {issue.project && issue.project.milestones.length > 0 && (
+            <div className="prop">
+              <span className="prop-label">
+                <Icon name="milestone" size={13} /> Milestone
+              </span>
+              <select
+                value={issue.milestone?.id ?? ""}
+                onChange={(event) => void runUpdate({ milestoneId: event.target.value || null })}
+              >
+                <option value="">No milestone</option>
+                {issue.project.milestones.map((milestone: any) => (
+                  <option key={milestone.id} value={milestone.id}>
+                    {milestone.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="prop">
+            <span className="prop-label">
+              <Icon name="tag" size={13} /> Labels
+            </span>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {issue.team.labels.map((label: any) => {
+                const active = activeLabelIds.has(label.id);
+                return (
+                  <button
+                    key={label.id}
+                    style={{ opacity: active ? 1 : 0.45 }}
+                    title={active ? "Remove label" : "Add label"}
+                    aria-label={`${active ? "Remove" : "Add"} label ${label.name}`}
+                    aria-pressed={active}
+                    onClick={() => void toggleLabel(label.id, active)}
+                  >
+                    <LabelChip label={label} />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {issue.parent && (
+            <div className="prop">
+              <span className="prop-label">
+                <Icon name="link" size={13} /> Parent
+              </span>
+              <Link to={`/issue/${issue.parent.identifier}`}>
+                <span style={{ color: "var(--text-muted)" }}>
+                  {issue.parent.identifier} {issue.parent.title}
+                </span>
+              </Link>
+            </div>
+          )}
+          <div className="prop">
+            <span className="prop-label">
+              <Icon name="link" size={13} /> Branch
+            </span>
+            <code style={{ fontSize: 11, color: "var(--text-muted)", wordBreak: "break-all" }}>
+              {issue.branchName}
+            </code>
+          </div>
+          <div className="prop">
+            <span className="prop-label">
+              <Icon name="members" size={13} /> Created by
+            </span>
+            <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <Avatar actor={issue.creator} /> {issue.creator.name}
+            </span>
+          </div>
         </div>
       </div>
-    </div>
+      {archiveOpen && (
+        <ConfirmModal
+          title="Archive issue"
+          message={`Archive ${issue.identifier}? It will leave active issue lists.`}
+          confirmLabel="Archive"
+          onClose={() => setArchiveOpen(false)}
+          onConfirm={archiveIssue}
+        />
+      )}
+    </>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface EntityModalOption {
   value: string;
@@ -28,6 +28,14 @@ export function EntityModal({ title, fields, submitLabel, onClose, onSubmit }: E
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previousFocus.current = document.activeElement as HTMLElement | null;
+    modalRef.current?.focus();
+    return () => previousFocus.current?.focus();
+  }, []);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -55,9 +63,18 @@ export function EntityModal({ title, fields, submitLabel, onClose, onSubmit }: E
       className="overlay"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <div className="modal">
+      <div
+        className="modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="entity-modal-title"
+        tabIndex={-1}
+      >
         <div className="modal-body">
-          <strong>{title}</strong>
+          <h2 id="entity-modal-title" style={{ margin: 0, fontSize: 16 }}>
+            {title}
+          </h2>
           {fields.map((field, index) => {
             const value = values[field.key] ?? "";
             const setValue = (next: string) =>
@@ -125,6 +142,14 @@ export function ConfirmModal({
 }: ConfirmModalProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previousFocus.current = document.activeElement as HTMLElement | null;
+    modalRef.current?.focus();
+    return () => previousFocus.current?.focus();
+  }, []);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -152,9 +177,18 @@ export function ConfirmModal({
       className="overlay"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <div className="modal">
+      <div
+        className="modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-modal-title"
+        tabIndex={-1}
+      >
         <div className="modal-body">
-          <strong>{title}</strong>
+          <h2 id="confirm-modal-title" style={{ margin: 0, fontSize: 16 }}>
+            {title}
+          </h2>
           <p style={{ color: "var(--text-muted)", margin: 0 }}>{message}</p>
           {error && <div className="error-banner">{error}</div>}
         </div>
