@@ -265,9 +265,13 @@ export function Sidebar({
           </div>
         )}
         {views.map(renderView)}
+        <div className="section">Your teams</div>
         {teams.map((team) => (
           <div key={team.id}>
             <div className="section">{team.name}</div>
+            <Link to={`/team/${team.key}/home`} className={active(`/team/${team.key}/home`)}>
+              <Icon name="workspace" /> Home
+            </Link>
             <Link to={`/triage/${team.key}`} className={active(`/triage/${team.key}`)}>
               <Icon name="filter" /> Triage
             </Link>

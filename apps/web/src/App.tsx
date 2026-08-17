@@ -23,6 +23,7 @@ import { MyIssuesView } from "./views/MyIssuesView.tsx";
 import { InboxView } from "./views/InboxView.tsx";
 import { TeamSettingsView } from "./views/TeamSettingsView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
+import { TeamHomeView } from "./views/TeamHomeView.tsx";
 import { TeamsView } from "./views/TeamsView.tsx";
 import { ProjectsView } from "./views/ProjectsView.tsx";
 import { buildNavigation } from "./navigation.ts";
@@ -171,7 +172,7 @@ export function App() {
     );
   }
 
-  const [section, param] = route;
+  const [section, param, subroute] = route;
   const teams = shell.data?.teams ?? [];
   const navigation = buildNavigation(teams, shell.data?.savedViews ?? []);
   const defaultTeam = teams[0]?.key;
@@ -287,6 +288,22 @@ export function App() {
     ) : (
       <div className="empty">Team {param} not found.</div>
     );
+  } else if (section === "team" && param && subroute === "home") {
+    const team = teams.find((candidate) => candidate.key === param);
+    topbar = team ? (
+      <>
+        <Switcher teams={teams} current={{ kind: "team", key: param }} view="team" />
+        <Icon name="chevron-right" size={14} className="crumb-sep" />
+        <span className="title">Home</span>
+      </>
+    ) : (
+      <span className="title">Team home</span>
+    );
+    content = team ? (
+      <TeamHomeView team={team} />
+    ) : (
+      <div className="empty">Team {param} not found.</div>
+    );
   } else if (section === "issue" && param) {
     const teamKey = param.split("-")[0];
     topbar = (
@@ -336,7 +353,7 @@ export function App() {
     ) : (
       <ProjectView projectId={param} />
     );
-  } else if ((section === "team" || section === "board") && param) {
+  } else if ((section === "team" || section === "board") && param && !subroute) {
     const team = teams.find((candidate) => candidate.key === param);
     topbar = (
       <>
