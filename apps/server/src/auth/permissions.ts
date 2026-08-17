@@ -27,6 +27,18 @@ export function assertCanManageTeam(db: Database, viewer: ActorRow, teamId: stri
   }
 }
 
+/** Los issues y sus recursos dependientes pertenecen al team del issue. */
+export function assertCanManageIssue(
+  db: Database,
+  viewer: ActorRow,
+  teamId: string | null | undefined,
+): void {
+  if (isWorkspaceAdmin(viewer) || !teamId) return;
+  if (!isTeamMember(db, teamId, viewer.id)) {
+    throw apiError("UNAUTHORIZED", "Issue team membership is required");
+  }
+}
+
 export function assertCanManageActor(viewer: ActorRow, actorId: string): void {
   if (!isWorkspaceAdmin(viewer) && viewer.id !== actorId) {
     throw apiError("UNAUTHORIZED", "You can only manage your own actor");

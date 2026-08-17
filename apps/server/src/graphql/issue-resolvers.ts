@@ -31,10 +31,34 @@ import {
   type RelationType,
 } from "../domain/relations.ts";
 import { getTeam, listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
+import { assertCanManageIssue } from "../auth/permissions.ts";
 import type { Context } from "./context.ts";
 import { requireViewer } from "./errors.ts";
 
 type MappedIssue = ReturnType<typeof mapIssue>;
+
+function assertIssueAccess(
+  context: Context,
+  viewer: ReturnType<typeof requireViewer>,
+  ref: string,
+) {
+  const issue = getIssueByRef(context.db, ref);
+  assertCanManageIssue(context.db, viewer, issue?.team_id);
+  return issue;
+}
+
+function assertRelationAccess(
+  context: Context,
+  viewer: ReturnType<typeof requireViewer>,
+  id: string,
+): void {
+  const relation = context.db
+    .query("SELECT issue_id, related_id FROM issue_relations WHERE id = ?1")
+    .get(id) as { issue_id: string; related_id: string } | null;
+  if (!relation) return;
+  assertIssueAccess(context, viewer, relation.issue_id);
+  assertIssueAccess(context, viewer, relation.related_id);
+}
 
 /** Forma plana del issue para payloads de webhooks. */
 function issueEventData(row: IssueRow) {
@@ -173,6 +197,8 @@ export const issueResolvers = {
   Mutation: {
     issueCreate: (_parent: unknown, args: { input: IssueCreateInput }, context: Context) => {
       const viewer = requireViewer(context);
+      const team = getTeam(context.db, { id: args.input.teamId, key: args.input.teamKey });
+      assertCanManageIssue(context.db, viewer, team?.id);
       const row = createIssue(context.db, viewer.id, args.input);
       context.events.emit("issue.created", viewer, issueEventData(row));
       return { success: true, issue: mapIssue(row) };
@@ -183,6 +209,7 @@ export const issueResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      assertIssueAccess(context, viewer, args.id);
       const { row, changes } = updateIssue(context.db, viewer.id, args.id, args.input);
       if (changes.length > 0) {
         const changeMap = Object.fromEntries(
@@ -194,6 +221,7 @@ export const issueResolvers = {
     },
     issueArchive: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      assertIssueAccess(context, viewer, args.id);
       const row = archiveIssue(context.db, viewer.id, args.id);
       context.events.emit("issue.archived", viewer, issueEventData(row));
       return { success: true, issue: mapIssue(row) };
@@ -204,6 +232,8 @@ export const issueResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      assertIssueAccess(context, viewer, args.input.issueId);
+      assertIssueAccess(context, viewer, args.input.relatedIssueId);
       const created = createRelation(context.db, viewer.id, args.input);
       context.events.emit("issue.updated", viewer, issueEventData(created.issue), {
         relations: {
@@ -215,6 +245,7 @@ export const issueResolvers = {
     },
     issueRelationDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      assertRelationAccess(context, viewer, args.id);
       const removed = deleteRelation(context.db, viewer.id, args.id);
       return { success: true };
     },
@@ -224,6 +255,7 @@ export const issueResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      assertIssueAccess(context, viewer, args.input.issueId);
       const row = createComment(context.db, viewer.id, args.input);
       const issue = getIssue(context.db, row.issue_id)!;
       context.events.emit("comment.created", viewer, {

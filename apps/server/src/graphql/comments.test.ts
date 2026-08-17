@@ -21,6 +21,14 @@ beforeAll(async () => {
     { actorId: actor.data!.actorCreate.actor.id },
   );
   agentKey = key.data!.apiKeyCreate.key;
+  const team = await gql(app, `{ team(key: "PB") { id } }`);
+  await gql(
+    app,
+    `mutation($teamId: ID!, $actorId: ID!) {
+      teamMembershipCreate(input: { teamId: $teamId, actorId: $actorId, role: MEMBER }) { success }
+    }`,
+    { teamId: team.data!.team.id, actorId: actor.data!.actorCreate.actor.id },
+  );
   await gql(
     app,
     `mutation { issueCreate(input: { teamKey: "PB", title: "Ship it" }) { issue { id } } }`,
