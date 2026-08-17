@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "archived": false,
+    "description": null,
+    "name": "resolver",
+    "owner": "admin",
+    "projects": [
+      "Repo como fuente de verdad"
+    ],
+    "state": "active",
+    "targetDate": null,
+    "teams": []
+  }
+]
