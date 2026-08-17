@@ -130,4 +130,55 @@ describe("cycles", () => {
     );
     expect(badDates.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
   });
+
+  it("rechaza DateTime no parseables y no persiste cambios inválidos", async () => {
+    const team = await gql(app, `{ team(key: "PB") { id } }`);
+    const teamId = team.data!.team.id;
+
+    const invalidCreate = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Invalid DateTime", startsAt: "not-a-date", endsAt: "zzz"
+        }) { success }
+      }`,
+      { teamId },
+    );
+    expect(invalidCreate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const created = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Valid DateTime", startsAt: "2026-11-01", endsAt: "2026-11-14"
+        }) { cycle { id startsAt endsAt } }
+      }`,
+      { teamId },
+    );
+    const cycle = created.data!.cycleCreate.cycle;
+
+    const invalidUpdate = await gql(
+      app,
+      `mutation($id: ID!) {
+        cycleUpdate(id: $id, input: { startsAt: "not-a-date" }) { success }
+      }`,
+      { id: cycle.id },
+    );
+    expect(invalidUpdate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const listed = await gql(
+      app,
+      `query($teamId: ID!) { cycles(teamId: $teamId) { id name startsAt endsAt } }`,
+      { teamId },
+    );
+    expect(listed.data!.cycles).not.toContainEqual(
+      expect.objectContaining({ name: "Invalid DateTime" }),
+    );
+    expect(listed.data!.cycles).toContainEqual({
+      id: cycle.id,
+      name: "Valid DateTime",
+      startsAt: "2026-11-01",
+      endsAt: "2026-11-14",
+    });
+  });
 });

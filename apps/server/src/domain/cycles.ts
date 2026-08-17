@@ -64,6 +64,13 @@ function resolveState(state: string): CycleState {
   return normalized;
 }
 
+function parseCycleDate(value: unknown, field: "startsAt" | "endsAt"): number {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+    throw apiError("VALIDATION_FAILED", `Cycle ${field} must be a valid ISO-8601 date`);
+  }
+  return Date.parse(value);
+}
+
 export function createCycle(
   db: Database,
   input: {
@@ -79,7 +86,9 @@ export function createCycle(
   if (!db.query("SELECT id FROM teams WHERE id = ?1").get(input.teamId)) {
     throw apiError("NOT_FOUND", "Team not found");
   }
-  if (input.startsAt > input.endsAt) {
+  const startsAt = parseCycleDate(input.startsAt, "startsAt");
+  const endsAt = parseCycleDate(input.endsAt, "endsAt");
+  if (startsAt > endsAt) {
     throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
   }
   const state = input.state ? resolveState(input.state) : "upcoming";
@@ -122,7 +131,7 @@ export function updateCycle(
   }
   const startsAt = input.startsAt ?? existing.starts_at;
   const endsAt = input.endsAt ?? existing.ends_at;
-  if (startsAt > endsAt) {
+  if (parseCycleDate(startsAt, "startsAt") > parseCycleDate(endsAt, "endsAt")) {
     throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
   }
   if (input.startsAt != null) push("starts_at", input.startsAt);
