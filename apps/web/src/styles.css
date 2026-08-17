@@ -115,6 +115,48 @@ select:focus {
 .sidebar .workspace .logo {
   color: var(--accent);
 }
+.workspace-menu {
+  position: relative;
+}
+.sidebar .workspace-trigger {
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.sidebar .workspace-trigger span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-menu-popup {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% - 4px);
+  left: 8px;
+  right: 8px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 30%);
+}
+.sidebar .workspace-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: left;
+}
+.sidebar .workspace-menu-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
 .sidebar .section {
   color: var(--text-faint);
   font-size: 11px;

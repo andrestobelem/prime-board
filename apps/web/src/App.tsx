@@ -77,7 +77,7 @@ function loadGroupBy(): GroupBy {
 
 export function App() {
   const route = useRoute();
-  const hasKey = Boolean(getApiKey());
+  const [hasKey, setHasKey] = useState(() => Boolean(getApiKey()));
   const shell = useQuery<ShellData>(SHELL_QUERY);
   const [createOpen, setCreateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -142,6 +142,12 @@ export function App() {
         savedView: view ? { id: view.id, name: view.name } : null,
       },
     ]);
+  };
+
+  const logout = () => {
+    localStorage.removeItem("pb.apiKey");
+    setFavorites([]);
+    setHasKey(false);
   };
 
   const reorderFavorite = async (favorite: SidebarFavorite, position: number) => {
@@ -420,6 +426,7 @@ export function App() {
         favorites={favorites}
         onToggleFavorite={toggleFavorite}
         onReorderFavorite={reorderFavorite}
+        onLogout={logout}
         initiatives={shell.data?.initiatives ?? []}
         onCreateView={async () => {
           const team = teams.find((candidate) => candidate.key === currentTeamKey) ?? teams[0];

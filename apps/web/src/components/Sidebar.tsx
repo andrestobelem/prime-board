@@ -42,6 +42,7 @@ interface SidebarProps {
     current: SidebarFavorite | undefined,
   ) => void | Promise<void>;
   onReorderFavorite?: (favorite: SidebarFavorite, position: number) => void | Promise<void>;
+  onLogout?: () => void;
   onCreateView?: () => void | Promise<void>;
   onCreateCycle?: (teamId: string) => void | Promise<void>;
   onCreateInitiative?: () => void | Promise<void>;
@@ -57,6 +58,7 @@ export function Sidebar({
   favorites = [],
   onToggleFavorite,
   onReorderFavorite,
+  onLogout,
   onCreateView,
   onCreateCycle,
   onCreateInitiative,
@@ -65,6 +67,7 @@ export function Sidebar({
   // Los proyectos cerrados se colapsan para no saturar el sidebar (AT-30).
   const [showClosed, setShowClosed] = useState<Record<string, boolean>>({});
   const [favoritesOpen, setFavoritesOpen] = useState(true);
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const favoriteFor = (target: FavoriteTarget) =>
     favorites.find((favorite) =>
@@ -111,6 +114,15 @@ export function Sidebar({
   );
 
   useEffect(() => setMobileOpen(false), [route.join("/")]);
+  useEffect(() => setWorkspaceMenuOpen(false), [route.join("/")]);
+  useEffect(() => {
+    if (!workspaceMenuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setWorkspaceMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [workspaceMenuOpen]);
 
   return (
     <>
@@ -136,9 +148,50 @@ export function Sidebar({
         >
           <Icon name="x" size={18} />
         </button>
-        <div className="workspace">
-          <Icon name="workspace" size={18} className="logo" />
-          {workspace?.name ?? "prime-board"}
+        <div className="workspace-menu">
+          <button
+            className="workspace workspace-trigger"
+            aria-haspopup="menu"
+            aria-expanded={workspaceMenuOpen}
+            aria-controls="workspace-menu"
+            onClick={() => setWorkspaceMenuOpen((open) => !open)}
+          >
+            <Icon name="workspace" size={18} className="logo" />
+            <span>{workspace?.name ?? "prime-board"}</span>
+            <Icon name={workspaceMenuOpen ? "chevron-down" : "chevron-right"} size={12} />
+          </button>
+          {workspaceMenuOpen && (
+            <div id="workspace-menu" className="workspace-menu-popup" role="menu">
+              <Link
+                to="/settings"
+                className="workspace-menu-item"
+                role="menuitem"
+                onClick={() => setWorkspaceMenuOpen(false)}
+              >
+                <Icon name="settings" /> Settings
+              </Link>
+              <Link
+                to="/members"
+                className="workspace-menu-item"
+                role="menuitem"
+                onClick={() => setWorkspaceMenuOpen(false)}
+              >
+                <Icon name="members" /> Invite and manage members
+              </Link>
+              {onLogout && (
+                <button
+                  className="workspace-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setWorkspaceMenuOpen(false);
+                    onLogout();
+                  }}
+                >
+                  <Icon name="x" /> Log out
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <div className="section">Workspace</div>
         <Link to="/teams" className={active("/teams")}>
