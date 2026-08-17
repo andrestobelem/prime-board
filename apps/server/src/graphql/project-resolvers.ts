@@ -21,12 +21,18 @@ import {
 import {
   createProjectUpdate,
   deleteProjectUpdate,
+  getProjectUpdate,
   listProjectUpdates,
   mapProjectUpdate,
 } from "../domain/project-updates.ts";
 import { getTeam, mapTeam } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
 import { requireViewer } from "./errors.ts";
+import {
+  assertCanCreateProject,
+  assertCanManageProject,
+  assertCanManageProjectTeams,
+} from "../auth/permissions.ts";
 
 type MappedProject = ReturnType<typeof mapProject>;
 
@@ -114,22 +120,27 @@ export const projectResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      assertCanCreateProject(context.db, viewer, args.input.teamIds);
       const project = mapProject(createProject(context.db, args.input));
       context.events.emit("project.created", viewer, project);
       return { success: true, project };
     },
     milestoneDelete: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      const milestone = getMilestone(context.db, args.id);
+      if (milestone) assertCanManageProject(context.db, viewer, milestone.project_id);
       const orphaned = deleteMilestone(context.db, args.id);
       return { success: true, orphanedIssues: orphaned };
     },
     projectArchive: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertCanManageProject(context.db, viewer, args.id);
       const archived = mapProject(archiveProject(context.db, args.id, true));
       return { success: true, project: archived };
     },
     projectUnarchive: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertCanManageProject(context.db, viewer, args.id);
       const restored = mapProject(archiveProject(context.db, args.id, false));
       return { success: true, project: restored };
     },
@@ -138,7 +149,8 @@ export const projectResolvers = {
       args: { input: Parameters<typeof createMilestone>[1] },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      assertCanManageProject(context.db, viewer, args.input.projectId);
       const created = mapMilestone(createMilestone(context.db, args.input));
       return { success: true, milestone: created };
     },
@@ -147,7 +159,9 @@ export const projectResolvers = {
       args: { id: string; input: Parameters<typeof updateMilestone>[2] },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      const milestone = getMilestone(context.db, args.id);
+      if (milestone) assertCanManageProject(context.db, viewer, milestone.project_id);
       const updated = mapMilestone(updateMilestone(context.db, args.id, args.input));
       return { success: true, milestone: updated };
     },
@@ -157,6 +171,10 @@ export const projectResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      assertCanManageProject(context.db, viewer, args.id);
+      if (args.input.teamIds !== undefined && args.input.teamIds !== null) {
+        assertCanManageProjectTeams(context.db, viewer, args.input.teamIds);
+      }
       const project = mapProject(updateProject(context.db, args.id, args.input));
       context.events.emit("project.updated", viewer, project);
       return { success: true, project };
@@ -174,6 +192,7 @@ export const projectResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      assertCanManageProject(context.db, viewer, args.input.projectId);
       const projectUpdate = mapProjectUpdate(
         createProjectUpdate(context.db, viewer.id, args.input),
       );
@@ -186,7 +205,9 @@ export const projectResolvers = {
       return { success: true, projectUpdate };
     },
     projectUpdateDelete: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
+      const projectUpdate = getProjectUpdate(context.db, args.id);
+      if (projectUpdate) assertCanManageProject(context.db, viewer, projectUpdate.project_id);
       return { success: deleteProjectUpdate(context.db, args.id) };
     },
   },
