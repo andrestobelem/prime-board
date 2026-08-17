@@ -8,6 +8,21 @@
 > exportación, réplica y reconstrucción, prevalecen [`README.md`](../../README.md),
 > [`docs/guia-agentes.md`](../guia-agentes.md) y [ADR-0004](../adr/0004-repo-como-fuente-de-verdad.md).
 
+## 0. Estado de esta especificación
+
+Esta es la especificación histórica del MVP y conserva decisiones útiles para el
+modelo local-first. El producto vigente también incluye capacidades que se incorporaron
+después del MVP: relaciones entre issues, milestones, ciclos, inbox, initiatives,
+vistas guardadas y project/status updates. La matriz de clientes y el alcance vigente
+están documentados en [`docs/alcance-mvp.md`](../alcance-mvp.md); esa matriz, el schema
+GraphQL y los tickets `PRB-*` son la referencia actual para distinguir una capacidad
+implementada de un gap de UI.
+
+Siguen fuera de alcance: multi-workspace/multi-tenant, Documents, Timeline/analytics,
+funcionalidad enterprise (SSO/SCIM, SLAs) e integraciones que no sean necesarias para
+el flujo API-first de agentes. Linear se usa como archivo histórico y no como contrato
+actual del producto.
+
 ## 1. Resumen
 
 prime-board es un clon de Linear para agentes: un issue tracker **local-first,
