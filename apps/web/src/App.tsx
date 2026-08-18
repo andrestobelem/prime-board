@@ -28,7 +28,7 @@ import { TeamView } from "./views/TeamView.tsx";
 import { TeamHomeView } from "./views/TeamHomeView.tsx";
 import { TeamsView } from "./views/TeamsView.tsx";
 import { ProjectsView } from "./views/ProjectsView.tsx";
-import { buildNavigation, getTeamKeyForRoute } from "./navigation.ts";
+import { buildNavigation, getDefaultTeamPath, getTeamKeyForRoute } from "./navigation.ts";
 
 const SHELL_QUERY = `{
   workspace { id name }
@@ -468,7 +468,7 @@ export function App() {
       );
   } else if (shell.data) {
     if (defaultTeam) {
-      window.location.hash = `#/team/${defaultTeam}`;
+      window.location.hash = `#${getDefaultTeamPath(defaultTeam)}`;
       content = <div className="loading">Loading…</div>;
     } else {
       content = <div className="empty">No teams yet.</div>;

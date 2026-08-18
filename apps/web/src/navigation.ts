@@ -66,6 +66,11 @@ export interface RouteTeamContext {
   cycles?: Array<{ id: string }>;
 }
 
+/** Ruta predeterminada al abrir un team: el board, no la lista. */
+export function getDefaultTeamPath(teamKey: string): string {
+  return `/board/${teamKey}`;
+}
+
 /** Returns the team represented by the current route for creation flows. */
 export function getTeamKeyForRoute(route: string[], teams: RouteTeamContext[]): string | undefined {
   const [section, param] = route;

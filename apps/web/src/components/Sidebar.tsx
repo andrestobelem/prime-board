@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Link, useRoute } from "../router.tsx";
 import { Icon } from "./icons.tsx";
-import type { NavigationView } from "../navigation.ts";
+import { getDefaultTeamPath, type NavigationView } from "../navigation.ts";
 
 export interface SidebarFavorite {
   id: string;
@@ -344,8 +344,11 @@ export function Sidebar({
             <Link to={`/triage/${team.key}`} className={active(`/triage/${team.key}`)}>
               <Icon name="filter" /> Triage
             </Link>
-            <Link to={`/team/${team.key}`} className={active(`/team/${team.key}`)}>
-              <Icon name="issues" /> Issues
+            <Link
+              to={getDefaultTeamPath(team.key)}
+              className={active(getDefaultTeamPath(team.key))}
+            >
+              <Icon name="board" /> Board
             </Link>
             {team.projects.length > 0 && <div className="section">Projects</div>}
             {team.projects

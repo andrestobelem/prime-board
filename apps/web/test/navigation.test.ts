@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildNavigation, getTeamKeyForRoute } from "../src/navigation.ts";
+import { buildNavigation, getDefaultTeamPath, getTeamKeyForRoute } from "../src/navigation.ts";
 
 const teams = [
   { id: "one", projects: [{ id: "shared", name: "Shared", state: "started" }] },
@@ -65,5 +65,9 @@ describe("contexto de team para Quick Create", () => {
   it("usa el primer team solo cuando la ruta no aporta contexto", () => {
     expect(getTeamKeyForRoute(["inbox"], routeTeams)).toBe("ONE");
     expect(getTeamKeyForRoute(["project", "missing"], routeTeams)).toBe("ONE");
+  });
+
+  it("abre el board como vista predeterminada del team", () => {
+    expect(getDefaultTeamPath("TWO")).toBe("/board/TWO");
   });
 });
