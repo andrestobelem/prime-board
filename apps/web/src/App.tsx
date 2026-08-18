@@ -566,6 +566,10 @@ export function App() {
               </dt>
               <dd>Archive focused issue</dd>
               <dt>
+                <kbd>Shift X</kbd>
+              </dt>
+              <dd>Archive selected issues</dd>
+              <dt>
                 <kbd>⌘/Ctrl A</kbd>
               </dt>
               <dd>Select visible issues</dd>
