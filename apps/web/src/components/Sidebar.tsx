@@ -45,7 +45,7 @@ interface SidebarProps {
   onReorderFavorite?: (favorite: SidebarFavorite, position: number) => void | Promise<void>;
   onLogout?: () => void;
   onCreateIssue?: () => void;
-  onCreateView?: () => void | Promise<void>;
+  onCreateView?: (teamId?: string) => void | Promise<void>;
   onCreateCycle?: (teamId: string) => void | Promise<void>;
   onCreateInitiative?: () => void | Promise<void>;
 }
@@ -369,7 +369,19 @@ export function Sidebar({
                     .map((project) => renderProject(project, "nested-deep"))}
               </>
             )}
-            {team.views && team.views.length > 0 && <div className="section">Views</div>}
+            <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ flex: 1 }}>Views</span>
+              {onCreateView && (
+                <button
+                  className="nav"
+                  style={{ padding: 0, margin: 0, width: "auto" }}
+                  title={`New ${team.name} view`}
+                  onClick={() => void onCreateView(team.id)}
+                >
+                  <Icon name="plus" size={12} />
+                </button>
+              )}
+            </div>
             {(team.views ?? []).map(renderView)}
             <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ flex: 1 }}>Cycles</span>

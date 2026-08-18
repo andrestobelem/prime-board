@@ -48,7 +48,11 @@ const SHELL_QUERY = `{
 }`;
 
 type CreateModal =
-  | { kind: "view"; team: { id: string; key: string; name: string } }
+  | {
+      kind: "view";
+      scope: "WORKSPACE" | "TEAM" | "PERSONAL";
+      team: { id: string; key: string; name: string } | null;
+    }
   | { kind: "cycle"; teamId: string }
   | { kind: "initiative" };
 
@@ -494,9 +498,9 @@ export function App() {
         onLogout={logout}
         onCreateIssue={() => setCreateOpen(true)}
         initiatives={shell.data?.initiatives ?? []}
-        onCreateView={async () => {
-          const team = teams.find((candidate) => candidate.key === currentTeamKey) ?? teams[0];
-          if (team) setEntityModal({ kind: "view", team });
+        onCreateView={async (teamId) => {
+          const team = teamId ? (teams.find((candidate) => candidate.id === teamId) ?? null) : null;
+          setEntityModal({ kind: "view", scope: team ? "TEAM" : "WORKSPACE", team });
         }}
         onCreateCycle={async (teamId) => {
           setEntityModal({ kind: "cycle", teamId });
@@ -587,11 +591,37 @@ export function App() {
         <EntityModal
           title="Create view"
           submitLabel="Create view"
-          fields={[{ key: "name", label: "Name", placeholder: "View name" }]}
+          fields={[
+            { key: "name", label: "Name", placeholder: "View name" },
+            {
+              key: "scope",
+              label: "Scope",
+              type: "select",
+              value: entityModal.scope,
+              options: [
+                { value: "WORKSPACE", label: "Workspace" },
+                { value: "TEAM", label: "Team" },
+                { value: "PERSONAL", label: "Personal" },
+              ],
+            },
+            {
+              key: "teamId",
+              label: "Team filter (optional)",
+              type: "select",
+              value: entityModal.team?.id ?? "",
+              options: [
+                { value: "", label: "All teams" },
+                ...teams.map((team) => ({ value: team.id, label: team.name })),
+              ],
+            },
+          ]}
           onClose={() => setEntityModal(null)}
           onSubmit={async (values) => {
             const name = values.name?.trim();
             if (!name) throw new Error("Name is required");
+            const scope = (values.scope || entityModal.scope) as "WORKSPACE" | "TEAM" | "PERSONAL";
+            const teamId = values.teamId || undefined;
+            if (scope === "TEAM" && !teamId) throw new Error("Select a team for a team view");
             const data = await mutate<{ savedViewCreate: { savedView: { id: string } } }>(
               `mutation($input: SavedViewCreateInput!) {
                 savedViewCreate(input: $input) { savedView { id } }
@@ -599,11 +629,12 @@ export function App() {
               {
                 input: {
                   name,
-                  scope: "TEAM",
-                  teamId: entityModal.team.id,
-                  filter: { team: { eq: entityModal.team.id } },
+                  scope,
+                  teamId: scope === "TEAM" ? teamId : undefined,
+                  filter: teamId ? { team: { eq: teamId } } : {},
                   orderBy: "UPDATED_DESC",
                   groupBy,
+                  columns: visibleColumns,
                 },
               },
             );
