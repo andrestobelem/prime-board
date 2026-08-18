@@ -52,5 +52,5 @@ export function updateWorkspace(
     now(),
     workspace.id,
   );
-  return getWorkspace(db)!;
+  return getWorkspace(db, workspace.id)!;
 }

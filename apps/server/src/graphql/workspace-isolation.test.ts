@@ -140,6 +140,62 @@ describe("cross-workspace isolation matrix", () => {
     expect(project.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
   });
 
+  it("protege referencias ajenas en creates y nested links", async () => {
+    const active = await createActiveIssue("Cross-workspace create references");
+    const cases = [
+      {
+        name: "issue team",
+        query: `mutation($id: ID!) { issueCreate(input: { teamId: $id, title: "foreign team" }) { success } }`,
+        variables: { id: foreign.teamId },
+      },
+      {
+        name: "issue assignee",
+        query: `mutation($id: ID!) { issueCreate(input: { teamKey: "PB", assigneeId: $id, title: "foreign assignee" }) { success } }`,
+        variables: { id: foreign.actorId },
+      },
+      {
+        name: "issue parent",
+        query: `mutation($id: ID!) { issueCreate(input: { teamKey: "PB", parentId: $id, title: "foreign parent" }) { success } }`,
+        variables: { id: foreign.issueId },
+      },
+      {
+        name: "issue project",
+        query: `mutation($id: ID!) { issueCreate(input: { teamKey: "PB", projectId: $id, title: "foreign project" }) { success } }`,
+        variables: { id: foreign.projectId },
+      },
+      {
+        name: "project lead",
+        query: `mutation($id: ID!) { projectCreate(input: { name: "foreign lead", leadId: $id }) { success } }`,
+        variables: { id: foreign.actorId },
+      },
+      {
+        name: "project team",
+        query: `mutation($id: ID!) { projectCreate(input: { name: "foreign team", teamIds: [$id] }) { success } }`,
+        variables: { id: foreign.teamId },
+      },
+      {
+        name: "membership team",
+        query: `mutation($team: ID!, $actor: ID!) { teamMembershipCreate(input: { teamId: $team, actorId: $actor }) { success } }`,
+        variables: { team: foreign.teamId, actor: foreign.actorId },
+      },
+      {
+        name: "comment author",
+        query: `mutation($issue: ID!, $actor: ID!) { commentCreate(input: { issueId: $issue, authorId: $actor, body: "foreign author" }) { success } }`,
+        variables: { issue: active.id, actor: foreign.actorId },
+      },
+      {
+        name: "favorite project",
+        query: `mutation($id: ID!) { favoriteCreate(input: { projectId: $id }) { success } }`,
+        variables: { id: foreign.projectId },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = await gql(app, testCase.query, testCase.variables);
+      expect(result.errors?.[0]?.extensions?.code, testCase.name).toBe("NOT_FOUND");
+    }
+  });
+
   it("no expone ni permite borrar Webhooks ajenos", async () => {
     const listed = await gql(app, "{ webhooks { id } }");
     expect(listed.errors).toBeUndefined();

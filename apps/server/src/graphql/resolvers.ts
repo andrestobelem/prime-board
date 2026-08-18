@@ -5,8 +5,6 @@ import {
   updateActor,
   createApiKey,
   deleteApiKey,
-  getActor,
-  listActors,
   listApiKeys,
   mapActor,
   mapApiKey,
@@ -18,7 +16,6 @@ import {
   deleteTeam,
   createWorkflowState,
   getDefaultState,
-  getTeam,
   getWorkflowState,
   listTeamStates,
   mapTeam,
@@ -30,6 +27,23 @@ import {
   type TeamUpdateInput,
 } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
+import {
+  assertActiveWorkspace,
+  listActorsInWorkspace,
+  listWebhooksInWorkspace,
+  lookupActor,
+  lookupIssue,
+  lookupIssueById,
+  lookupProject,
+  lookupTeam,
+  requireActor,
+  requireIssue,
+  requireProject,
+  requireTeam,
+  requireWebhook,
+  scopeWorkspaceRow,
+  scopeWorkspaceRows,
+} from "../domain/workspace-guards.ts";
 import { apiError, requireViewer } from "./errors.ts";
 import {
   assertCanManageActor,
@@ -51,8 +65,8 @@ import {
   mapLabel,
   updateLabel,
 } from "../domain/labels.ts";
-import { createWebhook, deleteWebhook, listWebhooks, mapWebhook } from "../domain/webhooks.ts";
-import { getProject, listProjects, mapProject } from "../domain/projects.ts";
+import { createWebhook, deleteWebhook, mapWebhook } from "../domain/webhooks.ts";
+import { listProjects, mapProject } from "../domain/projects.ts";
 import {
   canAccessSavedView,
   createSavedView,
@@ -78,7 +92,7 @@ import {
   reorderFavorite,
 } from "../domain/favorites.ts";
 import { mapActivity } from "../domain/activity.ts";
-import { getIssue, getIssueByRef, mapIssue } from "../domain/issues.ts";
+import { mapIssue } from "../domain/issues.ts";
 import {
   carryOverCycle,
   createCycle,
@@ -148,7 +162,7 @@ function emitBulkIssueUpdates(
   changes: Record<string, { from: unknown; to: unknown }>,
 ): void {
   for (const issueId of issueIds) {
-    const issue = getIssue(context.db, issueId);
+    const issue = lookupIssueById(context, issueId);
     if (issue) context.events.emit("issue.updated", viewer, issueEventData(issue), changes);
   }
 }
@@ -225,9 +239,9 @@ export const resolvers = {
 
   TeamMembership: {
     team: (membership: { teamId: string }, _args: unknown, context: Context) =>
-      mapTeam(getTeam(context.db, { id: membership.teamId })!),
+      mapTeam(lookupTeam(context, { id: membership.teamId })!),
     actor: (membership: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(getActor(context.db, membership.actorId)!),
+      mapActor(lookupActor(context, membership.actorId)!),
   },
 
   Issue: issueResolvers.Issue,
@@ -241,7 +255,7 @@ export const resolvers = {
 
   Favorite: {
     project: (favorite: { projectId: string | null }, _args: unknown, context: Context) =>
-      favorite.projectId ? mapProject(getProject(context.db, favorite.projectId)!) : null,
+      favorite.projectId ? mapProject(lookupProject(context, favorite.projectId)!) : null,
     savedView: (favorite: { savedViewId: string | null }, _args: unknown, context: Context) =>
       favorite.savedViewId ? mapSavedView(getSavedView(context.db, favorite.savedViewId)!) : null,
   },
@@ -249,23 +263,23 @@ export const resolvers = {
   SavedView: {
     team: (view: { teamId: string | null }, _args: unknown, context: Context) => {
       if (!view.teamId) return null;
-      const row = getTeam(context.db, { id: view.teamId });
+      const row = lookupTeam(context, { id: view.teamId });
       return row ? mapTeam(row) : null;
     },
     owner: (view: { ownerId: string }, _args: unknown, context: Context) =>
-      mapActor(getActor(context.db, view.ownerId)!),
+      mapActor(lookupActor(context, view.ownerId)!),
   },
 
   InboxItem: {
     actor: (item: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(getActor(context.db, item.actorId)!),
+      mapActor(lookupActor(context, item.actorId)!),
     issue: (item: { issueId: string }, _args: unknown, context: Context) =>
-      mapIssue(getIssue(context.db, item.issueId)!),
+      mapIssue(lookupIssueById(context, item.issueId)!),
   },
 
   Cycle: {
     team: (cycle: { teamId: string }, _args: unknown, context: Context) =>
-      mapTeam(getTeam(context.db, { id: cycle.teamId })!),
+      mapTeam(lookupTeam(context, { id: cycle.teamId })!),
     progress: (cycle: { id: string }, _args: unknown, context: Context) =>
       cycleProgress(context.db, cycle.id).progress,
     completedIssues: (cycle: { id: string }, _args: unknown, context: Context) =>
@@ -276,26 +290,26 @@ export const resolvers = {
 
   Review: {
     issue: (review: { issueId: string }, _args: unknown, context: Context) =>
-      mapIssue(getIssue(context.db, review.issueId)!),
+      mapIssue(lookupIssueById(context, review.issueId)!),
     requester: (review: { requesterId: string }, _args: unknown, context: Context) =>
-      mapActor(getActor(context.db, review.requesterId)!),
+      mapActor(lookupActor(context, review.requesterId)!),
     reviewer: (review: { reviewerId: string }, _args: unknown, context: Context) =>
-      mapActor(getActor(context.db, review.reviewerId)!),
+      mapActor(lookupActor(context, review.reviewerId)!),
   },
 
   Initiative: {
     projects: (initiative: { id: string }, _args: unknown, context: Context) =>
       listInitiativeProjectIds(context.db, initiative.id)
-        .map((projectId) => getProject(context.db, projectId))
+        .map((projectId) => lookupProject(context, projectId))
         .filter(Boolean)
         .map((row) => mapProject(row!)),
     teams: (initiative: { id: string }, _args: unknown, context: Context) =>
       listInitiativeTeamIds(context.db, initiative.id)
-        .map((teamId) => getTeam(context.db, { id: teamId }))
+        .map((teamId) => lookupTeam(context, { id: teamId }))
         .filter(Boolean)
         .map((row) => mapTeam(row!)),
     owner: (initiative: { ownerId: string | null }, _args: unknown, context: Context) =>
-      initiative.ownerId ? mapActor(getActor(context.db, initiative.ownerId)!) : null,
+      initiative.ownerId ? mapActor(lookupActor(context, initiative.ownerId)!) : null,
     progress: (initiative: { id: string }, _args: unknown, context: Context) =>
       initiativeProgress(context.db, initiative.id).progress,
     completedIssues: (initiative: { id: string }, _args: unknown, context: Context) =>
@@ -306,7 +320,7 @@ export const resolvers = {
 
   ApiKey: {
     actor: (apiKey: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(getActor(context.db, apiKey.actorId)!),
+      mapActor(lookupActor(context, apiKey.actorId)!),
   },
 
   Actor: {
@@ -330,12 +344,13 @@ export const resolvers = {
     },
     teams: (_parent: unknown, args: { includeArchived?: boolean | null }, context: Context) => {
       requireViewer(context);
+      assertActiveWorkspace(context);
       const rows = context.db
         .query(
           `SELECT * FROM teams ${args.includeArchived ? "" : "WHERE archived_at IS NULL"} ORDER BY created_at`,
         )
         .all() as TeamRow[];
-      return rows.map(mapTeam);
+      return scopeWorkspaceRows(context, rows).map(mapTeam);
     },
     team: (
       _parent: unknown,
@@ -343,31 +358,36 @@ export const resolvers = {
       context: Context,
     ) => {
       requireViewer(context);
-      const row = getTeam(context.db, args);
+      const row = lookupTeam(context, args);
       if (row?.archived_at && !args.includeArchived) return null;
       return row ? mapTeam(row) : null;
     },
     actors: (_parent: unknown, args: { type?: string }, context: Context) => {
       requireViewer(context);
-      return listActors(context.db, args.type).map(mapActor);
+      return listActorsInWorkspace(context, args.type).map(mapActor);
     },
     teamMemberships: (_parent: unknown, args: { teamId: string }, context: Context) => {
       requireViewer(context);
-      const team = getTeam(context.db, { id: args.teamId });
+      const team = lookupTeam(context, { id: args.teamId });
       if (team?.archived_at) return [];
-      return listTeamMemberships(context.db, args.teamId).map(mapTeamMembership);
+      return scopeWorkspaceRows(context, listTeamMemberships(context.db, args.teamId)).map(
+        mapTeamMembership,
+      );
     },
     labels: (_parent: unknown, args: { team?: string }, context: Context) => {
       requireViewer(context);
-      const team = args.team ? getTeam(context.db, { id: args.team }) : null;
+      const team = args.team ? lookupTeam(context, { id: args.team }) : null;
       // Selectors omit team labels from archived Teams while preserving workspace labels.
-      return listLabels(context.db, team?.archived_at ? null : args.team)
+      return scopeWorkspaceRows(
+        context,
+        listLabels(context.db, team?.archived_at ? null : args.team),
+      )
         .filter((label) => !team?.archived_at || label.team_id == null)
         .map(mapLabel);
     },
     webhooks: (_parent: unknown, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
-      return listWebhooks(context.db, viewer.id, isWorkspaceAdmin(viewer)).map(mapWebhook);
+      return listWebhooksInWorkspace(context, viewer.id, isWorkspaceAdmin(viewer)).map(mapWebhook);
     },
     savedViews: (
       _parent: unknown,
@@ -376,22 +396,25 @@ export const resolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (args.teamId) {
-        const team = getTeam(context.db, { id: args.teamId });
+        const team = lookupTeam(context, { id: args.teamId });
         if (team?.archived_at && !args.includeArchived) return [];
       }
-      return listSavedViews(context.db, viewer.id, args.teamId, Boolean(args.includeArchived)).map(
-        mapSavedView,
-      );
+      return scopeWorkspaceRows(
+        context,
+        listSavedViews(context.db, viewer.id, args.teamId, Boolean(args.includeArchived)),
+      ).map(mapSavedView);
     },
     savedView: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       const row = getSavedView(context.db, args.id);
-      if (!row || !canAccessSavedView(context.db, row, viewer.id)) return null;
+      if (!row) return null;
+      scopeWorkspaceRow(context, row);
+      if (!canAccessSavedView(context.db, row, viewer.id)) return null;
       return mapSavedView(row);
     },
     favorites: (_parent: unknown, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
-      return listFavorites(context.db, viewer.id).map(mapFavorite);
+      return scopeWorkspaceRows(context, listFavorites(context.db, viewer.id)).map(mapFavorite);
     },
     inbox: (
       _parent: unknown,
@@ -399,10 +422,13 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
-      return listInboxActivity(context.db, viewer.id, {
-        first: args.first ?? 50,
-        includeArchived: Boolean(args.includeArchived),
-      }).map((row) => ({
+      return scopeWorkspaceRows(
+        context,
+        listInboxActivity(context.db, viewer.id, {
+          first: args.first ?? 50,
+          includeArchived: Boolean(args.includeArchived),
+        }),
+      ).map((row) => ({
         ...mapActivity(row),
         issueId: row.issue_id,
         isRead: Boolean(row.is_read),
@@ -421,7 +447,7 @@ export const resolvers = {
         includeArchived: Boolean(args.includeArchived),
       });
       return {
-        nodes: page.rows.map((row) => ({
+        nodes: scopeWorkspaceRows(context, page.rows).map((row) => ({
           ...mapActivity(row),
           issueId: row.issue_id,
           isRead: Boolean(row.is_read),
@@ -440,14 +466,17 @@ export const resolvers = {
       context: Context,
     ) => {
       requireViewer(context);
-      const team = getTeam(context.db, { id: args.teamId });
+      const team = lookupTeam(context, { id: args.teamId });
       if (team?.archived_at && !args.includeArchived) return [];
-      return listCycles(context.db, args.teamId, Boolean(args.includeArchived)).map(mapCycle);
+      return scopeWorkspaceRows(
+        context,
+        listCycles(context.db, args.teamId, Boolean(args.includeArchived)),
+      ).map(mapCycle);
     },
     cycle: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
       const row = getCycle(context.db, args.id);
-      return row ? mapCycle(row) : null;
+      return row ? mapCycle(scopeWorkspaceRow(context, row)) : null;
     },
     reviews: (
       _parent: unknown,
@@ -463,22 +492,25 @@ export const resolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (args.teamId) {
-        const team = getTeam(context.db, { id: args.teamId });
+        const team = lookupTeam(context, { id: args.teamId });
         if (team?.archived_at) return [];
       }
-      const rows = listReviews(context.db, viewer.id, {
-        openOnly: Boolean(args.openOnly),
-        first: args.first ?? 50,
-        teamId: args.teamId,
-        projectId: args.projectId,
-        reviewerId: args.reviewerId,
-        olderThanDays: args.olderThanDays,
-      });
+      const rows = scopeWorkspaceRows(
+        context,
+        listReviews(context.db, viewer.id, {
+          openOnly: Boolean(args.openOnly),
+          first: args.first ?? 50,
+          teamId: args.teamId,
+          projectId: args.projectId,
+          reviewerId: args.reviewerId,
+          olderThanDays: args.olderThanDays,
+        }),
+      );
       // La cola se basa en requester/reviewer, pero una key revocada no debe
       // conservar acceso a reviews del team.
       return rows
         .filter((row) => {
-          const issue = getIssue(context.db, row.issue_id);
+          const issue = lookupIssueById(context, row.issue_id);
           return Boolean(
             issue &&
             (isWorkspaceAdmin(viewer) || isTeamMember(context.db, issue.team_id, viewer.id)),
@@ -490,7 +522,8 @@ export const resolvers = {
       const viewer = requireViewer(context);
       const row = getReview(context.db, args.id);
       if (!row) return null;
-      const issue = getIssue(context.db, row.issue_id);
+      scopeWorkspaceRow(context, row);
+      const issue = lookupIssueById(context, row.issue_id);
       if (
         !issue ||
         (!isWorkspaceAdmin(viewer) &&
@@ -507,14 +540,17 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
-      return listInitiatives(context.db, Boolean(args.includeArchived), viewer.id).map(
-        mapInitiative,
-      );
+      return scopeWorkspaceRows(
+        context,
+        listInitiatives(context.db, Boolean(args.includeArchived), viewer.id),
+      ).map(mapInitiative);
     },
     initiative: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       const row = getInitiative(context.db, args.id);
-      return row && canViewInitiative(context.db, row.id, viewer.id) ? mapInitiative(row) : null;
+      if (!row) return null;
+      scopeWorkspaceRow(context, row);
+      return canViewInitiative(context.db, row.id, viewer.id) ? mapInitiative(row) : null;
     },
   },
 
@@ -527,11 +563,13 @@ export const resolvers = {
     teamArchive: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       assertWorkspaceAdmin(viewer);
+      requireTeam(context, { id: args.id });
       return { success: true, team: mapTeam(archiveTeam(context.db, args.id, true)) };
     },
     teamUnarchive: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       assertWorkspaceAdmin(viewer);
+      requireTeam(context, { id: args.id });
       return { success: true, team: mapTeam(archiveTeam(context.db, args.id, false)) };
     },
     teamDelete: (
@@ -541,6 +579,7 @@ export const resolvers = {
     ) => {
       const viewer = requireViewer(context);
       assertWorkspaceAdmin(viewer);
+      requireTeam(context, { id: args.id });
       const deleted = deleteTeam(context.db, args.id, args.confirmation);
       context.events.emit("team.deleted", viewer, {
         id: deleted.id,
@@ -575,6 +614,7 @@ export const resolvers = {
     ) => {
       const viewer = requireViewer(context);
       assertCanManageTeam(context.db, viewer, args.id);
+      requireTeam(context, { id: args.id });
       const team = mapTeam(updateTeam(context.db, args.id, args.input));
       return { success: true, team };
     },
@@ -584,6 +624,8 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      requireTeam(context, { id: args.input.teamId });
+      requireActor(context, args.input.actorId);
       return {
         success: true,
         membership: mapTeamMembership(
@@ -613,6 +655,7 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      requireActor(context, args.id);
       assertCanManageActor(viewer, args.id);
       const actor = mapActor(updateActor(context.db, args.id, args.input));
       return { success: true, actor };
@@ -623,6 +666,7 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      requireActor(context, args.input.actorId);
       assertCanManageActor(viewer, args.input.actorId);
       const { row, key } = createApiKey(context.db, args.input);
       return { success: true, apiKey: mapApiKey(row), key };
@@ -643,6 +687,7 @@ export const resolvers = {
     },
     webhookDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      requireWebhook(context, args.id);
       return {
         success: deleteWebhook(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)),
       };
@@ -801,6 +846,7 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (args.input.projectId) requireProject(context, args.input.projectId);
       return {
         success: true,
         favorite: mapFavorite(createFavorite(context.db, viewer.id, args.input)),
@@ -888,8 +934,9 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
-      const issue = getIssueByRef(context.db, args.input.issueId);
-      assertCanManageIssue(context.db, viewer, issue?.team_id);
+      const issue = requireIssue(context, args.input.issueId);
+      assertCanManageIssue(context.db, viewer, issue.team_id);
+      if (args.input.reviewerId) requireActor(context, args.input.reviewerId);
       return { success: true, review: mapReview(createReview(context.db, viewer.id, args.input)) };
     },
     reviewUpdate: (
@@ -903,7 +950,7 @@ export const resolvers = {
       const viewer = requireViewer(context);
       const existing = getReview(context.db, args.id);
       if (existing) {
-        const issue = getIssue(context.db, existing.issue_id);
+        const issue = lookupIssueById(context, existing.issue_id);
         assertCanManageIssue(context.db, viewer, issue?.team_id);
       }
       return {
@@ -917,7 +964,7 @@ export const resolvers = {
       const viewer = requireViewer(context);
       const existing = getReview(context.db, args.id);
       if (existing) {
-        const issue = getIssue(context.db, existing.issue_id);
+        const issue = lookupIssueById(context, existing.issue_id);
         assertCanManageIssue(context.db, viewer, issue?.team_id);
       }
       return { success: deleteReview(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)) };

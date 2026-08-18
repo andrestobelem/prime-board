@@ -1,14 +1,10 @@
 // Resolvers del dominio issue (AT-134). Se ensamblan en resolvers.ts.
-import { getActor, mapActor } from "../domain/actors.ts";
+import { mapActor } from "../domain/actors.ts";
 import type { IssueFilter, IssueOrder } from "../domain/filters.ts";
 import {
   archiveIssue,
   createIssue,
-  getIssue,
-  getIssueByRef,
   identifierOf,
-  listChildren,
-  listIssues,
   mapIssue,
   slugify,
   updateIssue,
@@ -21,19 +17,33 @@ import { translateActivityRefs, type RefTable } from "../domain/activity-schema.
 import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getMilestone, mapMilestone } from "../domain/milestones.ts";
-import { getProject, mapProject } from "../domain/projects.ts";
+import { mapProject } from "../domain/projects.ts";
 import { getCycle, mapCycle } from "../domain/cycles.ts";
 import {
   createRelation,
   deleteRelation,
-  listRelations,
   mapRelation,
   type RelationType,
   type StoredRelationType,
 } from "../domain/relations.ts";
-import { getTeam, listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
+import { listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
 import { assertCanManageIssue, assertCanUseImportFields } from "../auth/permissions.ts";
 import type { Context } from "./context.ts";
+import {
+  lookupActor,
+  lookupIssue,
+  lookupIssueById,
+  lookupProject,
+  lookupTeam,
+  requireIssue,
+  requireActor,
+  requireProject,
+  requireTeam,
+  listChildrenInWorkspace,
+  listIssuesInWorkspace,
+  listRelationsInWorkspace,
+  requireRelation,
+} from "../domain/workspace-guards.ts";
 import { requireViewer } from "./errors.ts";
 
 type MappedIssue = ReturnType<typeof mapIssue>;
@@ -43,8 +53,8 @@ function assertIssueAccess(
   viewer: ReturnType<typeof requireViewer>,
   ref: string,
 ) {
-  const issue = getIssueByRef(context.db, ref);
-  assertCanManageIssue(context.db, viewer, issue?.team_id);
+  const issue = requireIssue(context, ref);
+  assertCanManageIssue(context.db, viewer, issue.team_id);
   return issue;
 }
 
@@ -53,10 +63,7 @@ function assertRelationAccess(
   viewer: ReturnType<typeof requireViewer>,
   id: string,
 ): void {
-  const relation = context.db
-    .query("SELECT issue_id, related_id FROM issue_relations WHERE id = ?1")
-    .get(id) as { issue_id: string; related_id: string } | null;
-  if (!relation) return;
+  const relation = requireRelation(context, id);
   assertIssueAccess(context, viewer, relation.issue_id);
   assertIssueAccess(context, viewer, relation.related_id);
 }
@@ -83,26 +90,26 @@ export function issueEventData(row: IssueRow) {
 export const issueResolvers = {
   Issue: {
     team: (issue: MappedIssue, _args: unknown, context: Context) =>
-      mapTeam(getTeam(context.db, { id: issue._row.team_id })!),
+      mapTeam(lookupTeam(context, { id: issue._row.team_id })!),
     state: (issue: MappedIssue, _args: unknown, context: Context) => {
       const states = listTeamStates(context.db, issue._row.team_id);
       return mapWorkflowState(states.find((state) => state.id === issue._row.state_id)!);
     },
     assignee: (issue: MappedIssue, _args: unknown, context: Context) =>
-      issue._row.assignee_id ? mapActor(getActor(context.db, issue._row.assignee_id)!) : null,
+      issue._row.assignee_id ? mapActor(lookupActor(context, issue._row.assignee_id)!) : null,
     creator: (issue: MappedIssue, _args: unknown, context: Context) =>
-      mapActor(getActor(context.db, issue._row.creator_id)!),
+      mapActor(lookupActor(context, issue._row.creator_id)!),
     parent: (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.parent_id) return null;
-      const parent = getIssue(context.db, issue._row.parent_id);
+      const parent = lookupIssueById(context, issue._row.parent_id);
       return parent ? mapIssue(parent) : null;
     },
     children: (issue: MappedIssue, args: { includeArchived?: boolean | null }, context: Context) =>
-      listChildren(context.db, issue.id, Boolean(args.includeArchived)).map(mapIssue),
+      listChildrenInWorkspace(context, issue.id, Boolean(args.includeArchived)).map(mapIssue),
     labels: (issue: MappedIssue, _args: unknown, context: Context) =>
       listIssueLabels(context.db, issue.id).map(mapLabel),
     project: (issue: MappedIssue, _args: unknown, context: Context) =>
-      issue._row.project_id ? mapProject(getProject(context.db, issue._row.project_id)!) : null,
+      issue._row.project_id ? mapProject(lookupProject(context, issue._row.project_id)!) : null,
     milestone: (issue: MappedIssue, _args: unknown, context: Context) =>
       issue._row.milestone_id
         ? mapMilestone(getMilestone(context.db, issue._row.milestone_id)!)
@@ -113,14 +120,14 @@ export const issueResolvers = {
     comments: (issue: MappedIssue, _args: unknown, context: Context) =>
       listComments(context.db, issue.id).map(mapComment),
     relations: (issue: MappedIssue, _args: unknown, context: Context) =>
-      listRelations(context.db, issue.id).map(mapRelation),
+      listRelationsInWorkspace(context, issue.id).map(mapRelation),
     activity: (issue: MappedIssue, _args: unknown, context: Context) =>
       listActivity(context.db, issue.id).map(mapActivity),
     url: (issue: MappedIssue, _args: unknown, context: Context) =>
       `http://localhost:${context.config.port}/issue/${issue.identifier}`,
     branchName: (issue: MappedIssue, _args: unknown, context: Context) => {
       const row: IssueRow = issue._row;
-      const owner = row.assignee_id ? getActor(context.db, row.assignee_id) : null;
+      const owner = row.assignee_id ? lookupActor(context, row.assignee_id) : null;
       const prefix = slugify(owner?.name ?? "board") || "board";
       const slug = slugify(row.title);
       return `${prefix}/${identifierOf(row).toLowerCase()}${slug ? `-${slug}` : ""}`;
@@ -129,19 +136,19 @@ export const issueResolvers = {
 
   IssueRelation: {
     relatedIssue: (relation: { _relatedId: string }, _args: unknown, context: Context) =>
-      mapIssue(getIssue(context.db, relation._relatedId)!),
+      mapIssue(lookupIssueById(context, relation._relatedId)!),
   },
 
   Comment: {
     actor: (comment: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(getActor(context.db, comment.actorId)!),
+      mapActor(lookupActor(context, comment.actorId)!),
     issue: (comment: { issueId: string }, _args: unknown, context: Context) =>
-      mapIssue(getIssue(context.db, comment.issueId)!),
+      mapIssue(lookupIssueById(context, comment.issueId)!),
   },
 
   Activity: {
     actor: (activity: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(getActor(context.db, activity.actorId)!),
+      mapActor(lookupActor(context, activity.actorId)!),
     // Traduce ids a nombres reales antes de mandar el payload al cliente
     // (AT-190): el esquema de referencias (AT-187) es el mismo que usan
     // exporter/importer, solo cambia el resolve — acá consulta la DB en vivo
@@ -173,7 +180,7 @@ export const issueResolvers = {
   Query: {
     issue: (_parent: unknown, args: { id: string }, context: Context) => {
       requireViewer(context);
-      const row = getIssueByRef(context.db, args.id);
+      const row = lookupIssue(context, args.id);
       return row ? mapIssue(row) : null;
     },
     issues: (
@@ -182,7 +189,7 @@ export const issueResolvers = {
       context: Context,
     ) => {
       requireViewer(context);
-      const page = listIssues(context.db, {
+      const page = listIssuesInWorkspace(context, {
         filter: args.filter,
         first: args.first ?? 50,
         after: args.after,
@@ -199,8 +206,12 @@ export const issueResolvers = {
     issueCreate: (_parent: unknown, args: { input: IssueCreateInput }, context: Context) => {
       const viewer = requireViewer(context);
       assertCanUseImportFields(viewer, args.input);
-      const team = getTeam(context.db, { id: args.input.teamId, key: args.input.teamKey });
-      assertCanManageIssue(context.db, viewer, team?.id);
+      const team = requireTeam(context, { id: args.input.teamId, key: args.input.teamKey });
+      assertCanManageIssue(context.db, viewer, team.id);
+      if (args.input.assigneeId) requireActor(context, args.input.assigneeId);
+      if (args.input.parentId) requireIssue(context, args.input.parentId);
+      if (args.input.projectId) requireProject(context, args.input.projectId);
+      if (args.input.creatorId) requireActor(context, args.input.creatorId);
       const row = createIssue(context.db, viewer.id, args.input);
       context.events.emit("issue.created", viewer, issueEventData(row));
       return { success: true, issue: mapIssue(row) };
@@ -212,6 +223,9 @@ export const issueResolvers = {
     ) => {
       const viewer = requireViewer(context);
       assertIssueAccess(context, viewer, args.id);
+      if (args.input.assigneeId) requireActor(context, args.input.assigneeId);
+      if (args.input.parentId) requireIssue(context, args.input.parentId);
+      if (args.input.projectId) requireProject(context, args.input.projectId);
       const { row, changes } = updateIssue(context.db, viewer.id, args.id, args.input);
       if (changes.length > 0) {
         const changeMap = Object.fromEntries(
@@ -262,8 +276,8 @@ export const issueResolvers = {
       const viewer = requireViewer(context);
       assertRelationAccess(context, viewer, args.id);
       const removed = deleteRelation(context.db, viewer.id, args.id);
-      const source = getIssue(context.db, removed.issueId)!;
-      const target = getIssue(context.db, removed.relatedId)!;
+      const source = lookupIssueById(context, removed.issueId)!;
+      const target = lookupIssueById(context, removed.relatedId)!;
       const inverse: Record<StoredRelationType, RelationType> = {
         blocks: "blocked_by",
         related: "related",
@@ -298,8 +312,9 @@ export const issueResolvers = {
       const viewer = requireViewer(context);
       assertCanUseImportFields(viewer, args.input);
       assertIssueAccess(context, viewer, args.input.issueId);
+      if (args.input.authorId) requireActor(context, args.input.authorId);
       const row = createComment(context.db, viewer.id, args.input);
-      const issue = getIssue(context.db, row.issue_id)!;
+      const issue = lookupIssueById(context, row.issue_id)!;
       context.events.emit("comment.created", viewer, {
         id: row.id,
         issueId: row.issue_id,
