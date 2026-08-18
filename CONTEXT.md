@@ -1,150 +1,223 @@
 # prime-board
 
-Un gestor de issues y proyectos modelado sobre Linear, pensado para que lo operen **agentes**
-antes que humanos. Este glosario fija el vocabulario del dominio; los términos van en inglés
-porque son los identificadores de la app (ver `AGENTS.md`).
+prime-board es un gestor de trabajo para agentes. Este glosario fija las entidades, relaciones y
+alcances del dominio; los términos canónicos se conservan en inglés porque también son los
+identificadores de la aplicación.
 
-## Actores y pertenencia
+## Espacio y autorización
 
 **Workspace**:
-La instalación entera de prime-board: un único espacio con todos sus teams y actores. No hay
-más de uno por instancia.
+La instalación completa de prime-board: un único espacio que contiene todos los actors, teams y
+recursos de planificación. Una instalación no contiene otro workspace.
 _Avoid_: Organization, tenant, account
 
-**Team**:
-Agrupación de trabajo dueña de sus propios workflow states, labels y prefijo de identificador
-(`AT`, `PB`). Un issue pertenece a exactamente un team.
-_Avoid_: Squad, group, workspace
-
 **Actor**:
-Quien opera el board. Es de tipo **Human** o **Agent**; ambos crean issues, comentan y son
-asignables, y se autentican con su propia API key.
+Persona o agente que opera el workspace. Puede crear y asignar issues, comentar, autenticarse y
+recibir actividad; `Human` y `Agent` son tipos de Actor, no roles de autorización.
 _Avoid_: User, account
 
+**Workspace Role**:
+Capacidad global de un Actor dentro del workspace: `admin` o `member`. Es independiente del tipo
+del actor y de sus memberships; un admin puede administrar recursos que no pertenecen a un team.
+_Avoid_: Workspace membership, account role
+
+**Team**:
+Agrupación de trabajo que posee sus workflow states, cycles y configuración team-scoped, y define
+el prefijo de los identifiers (`AT`, `PB`, `PRB`). Cada Issue pertenece a exactamente un Team.
+_Avoid_: Squad, group
+
 **Membership**:
-La pertenencia de un **Actor** a un **Team**. Un actor puede tener memberships en varios
-teams; un issue sigue perteneciendo a exactamente un team. La membership tiene un rol mínimo
-(`member` u `owner`); el owner administra el roster. La UI puede decir «Members» para el
-roster; el término de dominio de la relación es Membership.
-_Avoid_: User assignment, account link, seat
+Relación entre un Actor y un Team. Tiene rol `member` u `owner`; el owner administra el roster y
+no puede eliminarse al último owner. Membership y asignación de una Issue son relaciones distintas.
+_Avoid_: User assignment, seat
+
+**Scope**:
+Alcance de pertenencia y visibilidad de un recurso: `workspace`, `team`, `project` o `personal`.
+Un recurso puede heredar autorización de su scope aunque su contenido refiera a entidades de otro
+scope.
+_Avoid_: Tenant scope, namespace
+
+**Workspace-scoped**:
+Recurso sin Team asociado, visible para cualquier Actor autenticado y administrable según su
+Workspace Role.
+_Avoid_: Global, public
+
+**Team-scoped**:
+Recurso asociado a un Team. Su lectura o mutación puede depender de la Membership de ese Team;
+los owners y admins conservan las capacidades administrativas definidas por el producto.
+_Avoid_: Group-scoped
+
+**Project-scoped**:
+Recurso que pertenece a un Project y hereda el alcance de los Teams asociados a ese Project.
+Milestones y Project Updates son project-scoped.
+_Avoid_: Epic-scoped
 
 ## Trabajo
 
 **Identifier**:
-Clave legible e inmutable de un issue (`AT-172`): prefijo del **Team** + número. No se
-renumera ni se reasigna.
+Clave legible e inmutable de una Issue (`AT-172`): prefijo del Team más un número único dentro de
+ese Team. No se renumera ni se reasigna.
 _Avoid_: Issue key, ticket number, slug
 
 **Issue**:
-La unidad de trabajo. Tiene un Identifier, un workflow state, una prioridad de 0 a 4 y,
-opcionalmente, un padre.
+Unidad de trabajo perteneciente a un Team, con título, descripción, Workflow State, Priority,
+Creator y, opcionalmente, Assignee, Parent, Project, Milestone, Cycle y Labels. Puede archivarse
+sin dejar de existir.
 _Avoid_: Ticket, task, card, story
 
+**Creator**:
+Actor que originó una Issue. Es un dato de procedencia y no implica ownership ni permisos sobre la
+Issue.
+_Avoid_: Owner, author
+
+**Assignee**:
+Actor responsable de una Issue en un momento dado. Una Issue puede no tener Assignee; la
+asignación no crea una Membership ni exige que el Actor pertenezca al Team.
+_Avoid_: Owner, member
+
 **Sub-issue**:
-Un issue cuyo `parent` es otro issue. No es una entidad distinta: es la misma cosa en una
-relación jerárquica.
+Issue cuyo Parent es otra Issue del mismo Team. No es una entidad distinta: es una relación
+jerárquica entre Issues y no una Relation.
 _Avoid_: Subtask, child task
 
+**Parent**:
+Relación jerárquica opcional de una Issue hacia otra Issue del mismo Team. La cadena no puede
+formar ciclos.
+_Avoid_: Epic, container
+
 **Relation**:
-Arista tipada entre dos issues: **blocked-by / blocks** (dirigida, sin ciclos), **related**
-(simétrica) y **duplicate-of / duplicated-by** (dirigida). Se guarda una sola vez y cada
-extremo la ve con el tipo que le corresponde. Distinta del `parent`: no es jerarquía.
+Arista tipada entre dos Issues: `blocks`/`blocked_by` es dirigida y acíclica, `related` es
+simétrica y `duplicate_of`/`duplicated_by` es dirigida. Se almacena una sola relación canónica y
+cada extremo la observa con su tipo inverso cuando corresponde.
 _Avoid_: Link, dependency, edge
 
 **Blocked**:
-Un issue con al menos una relación blocked-by cuyo bloqueante sigue abierto.
+Estado derivado de una Issue abierta que tiene al menos una Relation `blocked_by` cuyo bloqueante
+sigue abierto.
 _Avoid_: Stuck, waiting
 
 **Frontier**:
-Conjunto derivado de issues abiertos cuyos bloqueantes están todos cerrados. Delimita el
-trabajo que puede avanzar sin esperar a que otro issue se desbloquee.
-_Avoid_: Unblocked set, ready queue, next issues
+Conjunto derivado de Issues abiertas cuyos bloqueantes están todos cerrados. Delimita el trabajo
+que puede avanzar sin esperar otra Issue.
+_Avoid_: Unblocked set, ready queue
 
 **Workflow State**:
-La posición de un issue en el ciclo de vida de su team (`Todo`, `In Progress`, `Ready for
-Agent`). Cada team define los suyos; cada uno declara un **State Type**.
+Posición de una Issue en el ciclo de vida de su Team (`Todo`, `In Progress`, `Ready for Agent`,
+etc.). Cada Team define sus propios estados y cada estado declara un State Type.
 _Avoid_: Status, column, stage
 
 **State Type**:
-Categoría del ciclo de vida que declara un Workflow State: `triage`, `backlog`,
-`unstarted`, `started`, `completed`, `canceled`. Es lo que la UI y las integraciones
-interpretan (abierto/cerrado, columnas, filtros), no el nombre del estado.
+Categoría semántica de un Workflow State: `triage`, `backlog`, `unstarted`, `started`,
+`completed` o `canceled`. Las integraciones interpretan el tipo, no el nombre visible del estado.
 _Avoid_: Status category, lifecycle type
 
 **Label**:
-Etiqueta transversal y acumulable de un issue (`web`, `graphql`, `epic:repo-truth`). A
-diferencia del workflow state, un issue puede tener muchas o ninguna.
+Etiqueta acumulable y opcional de una Issue (`web`, `graphql`, `epic:repo-truth`). Puede ser
+workspace-scoped o pertenecer a un Team; un Issue puede tener muchas Labels o ninguna.
 _Avoid_: Tag, category
 
 **Priority**:
-Entero de 0 a 4 con la misma semántica que Linear: 0 sin prioridad, 1 urgent, 2 high,
-3 medium, 4 low. El orden es inverso al número.
+Valor entero de 0 a 4: 0 sin prioridad, 1 urgent, 2 high, 3 medium y 4 low. Un número menor
+representa mayor urgencia.
+_Avoid_: Severity
+
+**Archived**:
+Estado de retención de una entidad que deja de aparecer en consultas normales, pero conserva su
+identidad e historial y puede incluirse explícitamente en consultas históricas.
+_Avoid_: Deleted, removed
 
 ## Planificación
 
 **Project**:
-Un esfuerzo con nombre, estado y fecha objetivo, que agrupa issues de **uno o varios teams**.
-Un team puede tener varios projects.
+Esfuerzo con nombre, estado y fecha objetivo que agrupa Issues de uno o varios Teams. La relación
+Project–Team es many-to-many; para asignar una Issue, su Team debe estar asociado al Project.
 _Avoid_: Epic, board
 
 **Milestone**:
-Una fase dentro de un project, con su propia fecha objetivo y su progreso. Los milestones
-ordenan el project; los projects agrupan el trabajo. Distinto de **Cycle**.
-_Avoid_: Phase, sprint, iteration, part
-
-**Initiative**:
-Agrupa projects bajo un objetivo estratégico. Puede ser workspace-scoped (sin teams, visible
-para todo actor autenticado) o team-scoped (limitada a uno o más teams). Distinta de Project:
-el project agrupa issues; la initiative agrupa projects.
-_Avoid_: Epic, theme, OKR
+Fase ordenada dentro de un Project, con fecha objetivo y progreso derivado de sus Issues. Es
+project-scoped y no es un Cycle.
+_Avoid_: Phase, sprint, iteration
 
 **Cycle**:
-Ventana de tiempo de un **Team** (`upcoming` / `active` / `completed`) a la que se asignan
-issues. Distinta de Milestone: el cycle es del team y es time-boxed; el milestone es del
-project.
-_Avoid_: Sprint, iteration
+Ventana de tiempo de un Team (`upcoming`, `active` o `completed`) a la que se asignan Issues. Es
+team-scoped y time-boxed; no representa una fase de Project.
+_Avoid_: Sprint, iteration, milestone
 
-## Colaboración y superficie
-
-**Review**:
-Pedido de revisión entre actors sobre un issue (`requested` → `in_progress` →
-`approved` / `rejected`).
-_Avoid_: PR review, approval request
+**Initiative**:
+Objetivo estratégico que agrupa Projects. Puede ser workspace-scoped o estar asociada a uno o
+más Teams; no agrupa Issues directamente.
+_Avoid_: Epic, theme, OKR
 
 **Project Update**:
-Nota de salud de un project (`on_track` / `at_risk` / `off_track`) con cuerpo narrativo.
+Nota narrativa de salud de un Project con estado `on_track`, `at_risk` u `off_track`, autor y
+cuerpo. Es información de seguimiento, no un cambio de estado del Project.
 _Avoid_: Status report, pulse
 
+## Colaboración y superficies personales
+
+**Review**:
+Solicitud de revisión entre Actors sobre una Issue, con ciclo `requested` → `in_progress` →
+`approved` o `rejected`.
+_Avoid_: PR review, approval request
+
 **Saved View**:
-Preset nombrado de filtros y alcance (`personal`, `team` o `workspace`).
-_Avoid_: Filter, bookmark, custom view
+Preset nombrado de filtros, orden, agrupación y columnas. Puede ser `personal`, `team` o
+`workspace`; una vista personal pertenece a su Actor y una vista team requiere el Team indicado.
+_Avoid_: Filter, bookmark
 
-**Inbox**:
-Cola personal de **Activity** relevante para un actor (menciones, asignaciones, comentarios).
-_Avoid_: Notifications, feed, mailbox
-
-## Registro
+**Favorite**:
+Relación privada y ordenada entre un Actor y un Project o Saved View. No cambia la visibilidad ni
+la pertenencia del recurso favorito.
+_Avoid_: Bookmark, shortcut
 
 **Activity**:
-El historial append-only de lo que le pasó a un issue: cada cambio queda como un evento con
-su actor y su fecha. Es el registro del que se reconstruye el issue.
-_Avoid_: History, audit log, changelog
+Evento append-only asociado a una Issue que registra un cambio observable, su Actor y su momento.
+Alimenta el historial, el Inbox y la réplica del repositorio; no es por sí solo el estado operativo
+actual de la Issue.
+_Avoid_: Audit log, changelog
 
 **Comment**:
-Texto que un actor agrega a un issue. En prime-board es además el lugar donde se deja la
-**evidencia**: qué se entregó y cómo se verificó.
+Texto que un Actor agrega a una Issue. El contenido pertenece a la conversación de la Issue y
+además genera una Activity `commented`; no se duplica dentro del Issue Markdown.
+_Avoid_: Note, message
+
+**Inbox**:
+Proyección personal de Activity relevante para un Actor, como asignaciones, cambios de Issues o
+menciones. No es un segundo historial: cada entrada referencia una Activity y su estado personal se
+mantiene mediante un Inbox Receipt.
+_Avoid_: Notifications, feed, mailbox
+
+**Inbox Receipt**:
+Estado personal de un Actor sobre una entrada del Inbox: leída o archivada. No modifica la
+Activity ni altera su relevancia histórica para otros Actors.
+_Avoid_: Notification state
+
+**Webhook**:
+Suscripción de un Actor a eventos del workspace, entregada a una URL externa. Es una superficie de
+integración y no una fuente adicional del estado de las entidades.
+_Avoid_: Callback, notification
+
+## Registro y réplica
+
+**Operational State**:
+Estado vigente del Workspace que la API consulta y modifica. Es la referencia para resolver
+permisos, filtros y relaciones actuales.
+_Avoid_: Snapshot, cache
+
+**Repository Replica**:
+Representación versionada y legible del Operational State, sus Activities y metadatos. Se genera
+para revisión, recuperación y colaboración; no se edita manualmente ni sustituye al estado
+operativo sin un rebuild explícito.
+_Avoid_: Backup, dump
 
 **Log**:
-El archivo de eventos de un issue versionado en el repo (`.prime-board/log/AT-172.jsonl`).
-Es la fuente de verdad (ver ADR-0004).
-_Avoid_: Journal, history file
+Serie versionada de Activities de una Issue dentro de la Repository Replica
+(`.prime-board/log/AT-172.jsonl`). Conserva el historial exportado y puede participar en un rebuild,
+pero la API sigue siendo la autoridad operativa.
+_Avoid_: Journal, source of truth
 
 **Issue Markdown**:
-El markdown derivado de un issue en el repo (`.prime-board/issues/AT-172.md`), pensado para
-leerse en un PR. Se regenera; nunca se edita a mano.
-_Avoid_: Snapshot, dump, export file
-
-**Index**:
-La base SQLite derivada del log, usada para queries, filtros y full-text. Es descartable y se
-reconstruye con `bun run rebuild`.
-_Avoid_: Database, source of truth, cache
+Representación derivada y legible de una Issue dentro de la Repository Replica
+(`.prime-board/issues/AT-172.md`). Se regenera desde el estado operativo y sus referencias; nunca
+se edita a mano.
+_Avoid_: Snapshot, dump
