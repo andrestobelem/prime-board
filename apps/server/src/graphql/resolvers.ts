@@ -324,7 +324,7 @@ export const resolvers = {
       mapActor(requireViewer(context)),
     workspace: (_parent: unknown, _args: unknown, context: Context) => {
       requireViewer(context);
-      const row = getWorkspace(context.db);
+      const row = getWorkspace(context.db, context.workspace.workspaceId);
       if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
       return mapWorkspace(row);
     },
@@ -552,7 +552,12 @@ export const resolvers = {
     workspaceUpdate: (_parent: unknown, args: { input: { name: string } }, context: Context) => {
       const viewer = requireViewer(context);
       assertWorkspaceAdmin(viewer);
-      return { success: true, workspace: mapWorkspace(updateWorkspace(context.db, args.input)) };
+      return {
+        success: true,
+        workspace: mapWorkspace(
+          updateWorkspace(context.db, args.input, context.workspace.workspaceId),
+        ),
+      };
     },
     teamCreate: (
       _parent: unknown,

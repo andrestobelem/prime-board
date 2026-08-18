@@ -11,7 +11,12 @@ export interface WorkspaceRow {
   updated_at: string;
 }
 
-export function getWorkspace(db: Database): WorkspaceRow | null {
+export function getWorkspace(db: Database, id?: string): WorkspaceRow | null {
+  if (id) {
+    return db
+      .query("SELECT id, name, url_key, created_at, updated_at FROM workspace WHERE id = ?1")
+      .get(id) as WorkspaceRow | null;
+  }
   return db
     .query("SELECT id, name, url_key, created_at, updated_at FROM workspace LIMIT 1")
     .get() as WorkspaceRow | null;
@@ -31,8 +36,12 @@ export interface WorkspaceUpdateInput {
 }
 
 /** Cambia únicamente el nombre; urlKey e identidad del Workspace son estables. */
-export function updateWorkspace(db: Database, input: WorkspaceUpdateInput): WorkspaceRow {
-  const workspace = getWorkspace(db);
+export function updateWorkspace(
+  db: Database,
+  input: WorkspaceUpdateInput,
+  workspaceId?: string,
+): WorkspaceRow {
+  const workspace = getWorkspace(db, workspaceId);
   if (!workspace) throw apiError("NOT_FOUND", "Workspace is not initialized");
 
   const name = input.name.trim();

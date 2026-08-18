@@ -10,6 +10,7 @@ import { resolvers } from "./graphql/resolvers.ts";
 import { createRepoSync } from "./export/repo-sync.ts";
 import { trackedRepoSync } from "./graphql/repo-sync-dispatch.ts";
 import { WebhookDispatcher, type DispatcherOptions } from "./webhooks/dispatcher.ts";
+import { resolveWorkspaceContext } from "./domain/workspace-context.ts";
 
 export interface AppDeps {
   db: Database;
@@ -33,6 +34,7 @@ export function createApp({ db, config, webhookOptions }: AppDeps) {
     context: ({ request }): Context => ({
       db,
       config,
+      workspace: resolveWorkspaceContext(db),
       viewer: resolveViewer(db, request.headers.get("authorization")),
       events,
       repo: repo ? trackedRepoSync(repo) : null,

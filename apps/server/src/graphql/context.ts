@@ -4,10 +4,13 @@ import type { Config } from "../config.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 import type { TrackedRepoSync } from "./repo-sync-dispatch.ts";
 import type { WebhookDispatcher } from "../webhooks/dispatcher.ts";
+import type { WorkspaceContext } from "../domain/workspace-context.ts";
 
 export interface Context {
   db: Database;
   config: Config;
+  /** Workspace efectivo; hoy siempre es el singleton de la instalación. */
+  workspace: WorkspaceContext;
   viewer: ActorRow | null;
   events: WebhookDispatcher;
   /**
