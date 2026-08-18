@@ -22,6 +22,27 @@ prime-board server listening on http://localhost:3333
 Config por env: `PRIME_BOARD_PORT` (default 3333) y `PRIME_BOARD_DB`
 (default `~/.prime-board/prime-board.db`).
 
+### Instancia aislada para otro proyecto
+
+Si prime-board se usa para un repositorio externo, arrancá una instancia por proyecto desde el
+clon de prime-board:
+
+```bash
+bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto
+```
+
+El launcher usa una DB independiente en `~/.prime-board/projects/`, configura
+`PRIME_BOARD_REPO=/ruta/a/mi-proyecto` y escribe la réplica `.prime-board/` en ese proyecto.
+Podés cambiar el puerto o la DB con `--port` y `--db`. Para cargar la configuración en una
+shell sin arrancar otra instancia:
+
+```bash
+eval "$(bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto --print-env)"
+```
+
+Copiá `.agents/skills/prime-board-workflow` al proyecto consumidor para que el agente conozca
+el ciclo de crear, reclamar, validar, comentar evidencia y resolver issues.
+
 ### Datos de demo (opcional)
 
 ```bash

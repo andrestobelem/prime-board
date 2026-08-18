@@ -45,6 +45,27 @@ bun run export   # exporta el estado operativo a la réplica .prime-board/
 # UI en http://localhost:3333/?key=pb_...  ·  GraphQL en /graphql (GraphiQL en dev)
 ```
 
+## Usar prime-board en otro proyecto
+
+Para operar un proyecto externo con una instancia aislada, ejecutá desde este clon:
+
+```bash
+bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto
+```
+
+El launcher deriva una DB independiente en `~/.prime-board/projects/`, configura
+`PRIME_BOARD_REPO` con la raíz del proyecto y escribe allí la réplica `.prime-board/`.
+Usá `--port` y `--db` para personalizar la instancia. Para obtener solo las variables:
+
+```bash
+eval "$(bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto --print-env)"
+```
+
+La skill instalable para el agente está en
+[`.agents/skills/prime-board-workflow`](.agents/skills/prime-board-workflow). Copiala al
+`.agents/skills/` del proyecto consumidor junto con su configuración MCP. La skill define
+el ciclo de crear, reclamar, validar, comentar evidencia y resolver issues.
+
 ## Clientes de agentes
 
 Para operar con el CLI, guardá la API key que imprime el server y configurá el cliente:
