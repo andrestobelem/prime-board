@@ -7,19 +7,35 @@ identificadores de la aplicación.
 ## Espacio y autorización
 
 **Workspace**:
-La instalación completa de prime-board: un único espacio que contiene todos los actors, teams y
-recursos de planificación. Una instalación no contiene otro workspace.
+Límite de autorización y estado operativo que contiene actors, teams y recursos de planificación.
+La implementación actual mantiene un único Workspace por proceso/DB; la arquitectura se prepara
+para que una instalación pueda contener más de uno sin habilitar todavía su selección o creación.
 _Avoid_: Organization, tenant, account
 
+**Workspace Context**:
+Identidad efectiva del Workspace que acompaña una operación de API, CLI, MCP o UI y delimita sus
+lecturas, mutaciones, eventos y réplica. En el modo actual siempre resuelve el único Workspace de
+la instalación; no es un valor que el caller pueda falsificar mediante un input.
+_Avoid_: Current organization, namespace
+
 **Actor**:
-Persona o agente que opera el workspace. Puede crear y asignar issues, comentar, autenticarse y
-recibir actividad; `Human` y `Agent` son tipos de Actor, no roles de autorización.
+Persona o agente que opera uno o más Workspaces. Puede crear y asignar issues, comentar,
+autenticarse y recibir actividad; `Human` y `Agent` son tipos de Actor, no roles de autorización.
+La implementación actual conserva la identidad del Actor en el Workspace único mientras se prepara
+la futura relación de Membership de Workspace.
 _Avoid_: User, account
 
 **Workspace Role**:
-Capacidad global de un Actor dentro del workspace: `admin` o `member`. Es independiente del tipo
-del actor y de sus memberships; un admin puede administrar recursos que no pertenecen a un team.
+Capacidad de un Actor dentro de un Workspace: `admin` o `member`. En el modo single-workspace
+actual se conserva de forma compatible como atributo global del Actor; la preparación multi-workspace
+lo trasladará a una Membership de Workspace antes de habilitar más de uno.
 _Avoid_: Workspace membership, account role
+
+**Workspace Membership**:
+Relación futura entre un Actor y un Workspace que expresa pertenencia, rol, estado de acceso y
+posibles límites de sus credenciales. Todavía no se expone como entidad operativa separada porque
+la instalación sigue teniendo un único Workspace.
+_Avoid_: Team membership, seat
 
 **Team**:
 Agrupación de trabajo que posee sus workflow states, cycles y configuración team-scoped, y define
