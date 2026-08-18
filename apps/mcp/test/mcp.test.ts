@@ -65,15 +65,23 @@ describe("mcp tools", () => {
     const names = tools.tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
       "archive_inbox",
+      "archive_issue",
       "archive_project",
       "carry_over_cycle",
+      "create_webhook",
+      "delete_api_key",
       "delete_cycle",
       "delete_favorite",
       "delete_initiative",
+      "delete_issue_label",
+      "delete_issue_status",
       "delete_milestone",
       "delete_project_update",
       "delete_review",
       "delete_saved_view",
+      "delete_team_membership",
+      "delete_webhook",
+      "duplicate_saved_view",
       "get_cycle",
       "get_initiative",
       "get_issue",
@@ -95,20 +103,28 @@ describe("mcp tools", () => {
       "list_projects",
       "list_reviews",
       "list_saved_views",
+      "list_team_memberships",
       "list_teams",
       "list_users",
+      "list_webhooks",
       "mark_inbox_read",
       "reorder_favorite",
+      "save_api_key",
       "save_comment",
       "save_cycle",
       "save_favorite",
       "save_initiative",
       "save_issue",
+      "save_issue_label",
+      "save_issue_status",
       "save_milestone",
       "save_project",
       "save_project_update",
       "save_review",
       "save_saved_view",
+      "save_team",
+      "save_team_membership",
+      "save_user",
       "unarchive_project",
       "unlink_issues",
     ]);
@@ -119,6 +135,116 @@ describe("mcp tools", () => {
     expect(workspace.workspace.name).toBe("Prime Board");
     const teams = parseResult(await client.callTool({ name: "list_teams", arguments: {} }));
     expect(teams[0].key).toBe("PB");
+  });
+
+  it("administra teams, actores, memberships, estados, labels y API keys", async () => {
+    const team = parseResult(
+      await client.callTool({
+        name: "save_team",
+        arguments: { name: "MCP admin team", key: "MADM" },
+      }),
+    );
+    const updatedTeam = parseResult(
+      await client.callTool({
+        name: "save_team",
+        arguments: { id: team.id, name: "MCP managed team" },
+      }),
+    );
+    expect(updatedTeam.name).toBe("MCP managed team");
+    const invalidTeamKey = await client.callTool({
+      name: "save_team",
+      arguments: { id: team.id, key: "OTHER" },
+    });
+    expect(invalidTeamKey.isError).toBe(true);
+    expect(JSON.stringify(invalidTeamKey)).toContain("key");
+
+    const actor = parseResult(
+      await client.callTool({
+        name: "save_user",
+        arguments: { name: "mcp-managed-agent", type: "agent" },
+      }),
+    );
+    const updatedActor = parseResult(
+      await client.callTool({
+        name: "save_user",
+        arguments: { id: actor.id, email: "mcp@example.test" },
+      }),
+    );
+    expect(updatedActor.email).toBe("mcp@example.test");
+    const invalidActorType = await client.callTool({
+      name: "save_user",
+      arguments: { id: actor.id, type: "human" },
+    });
+    expect(invalidActorType.isError).toBe(true);
+    expect(JSON.stringify(invalidActorType)).toContain("type");
+
+    const key = parseResult(
+      await client.callTool({
+        name: "save_api_key",
+        arguments: { actor: actor.id, name: "MCP managed key" },
+      }),
+    );
+    expect(key.key).toMatch(/^pb_/);
+
+    const membership = parseResult(
+      await client.callTool({
+        name: "save_team_membership",
+        arguments: { team: "MADM", actor: actor.id, role: "member" },
+      }),
+    );
+    const memberships = parseResult(
+      await client.callTool({ name: "list_team_memberships", arguments: { team: "MADM" } }),
+    );
+    expect(memberships.map((item: any) => item.actorId)).toContain(actor.id);
+
+    const state = parseResult(
+      await client.callTool({
+        name: "save_issue_status",
+        arguments: { team: "MADM", name: "QA", type: "started" },
+      }),
+    );
+    const updatedState = parseResult(
+      await client.callTool({
+        name: "save_issue_status",
+        arguments: { id: state.id, name: "QA Ready" },
+      }),
+    );
+    expect(updatedState.name).toBe("QA Ready");
+
+    const label = parseResult(
+      await client.callTool({
+        name: "save_issue_label",
+        arguments: { team: "MADM", name: "qa" },
+      }),
+    );
+    const updatedLabel = parseResult(
+      await client.callTool({
+        name: "save_issue_label",
+        arguments: { id: label.id, name: "qa-ready" },
+      }),
+    );
+    expect(updatedLabel.name).toBe("qa-ready");
+
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_issue_label", arguments: { id: label.id } }),
+      ),
+    ).toEqual({ success: true, affectedIssues: 0 });
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_issue_status", arguments: { id: state.id } }),
+      ),
+    ).toEqual({ success: true, movedIssues: 0 });
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_team_membership", arguments: { id: membership.id } }),
+      ),
+    ).toEqual({ success: true });
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_api_key", arguments: { id: key.apiKey.id } }),
+      ),
+    ).toEqual({ success: true });
   });
 
   it("save_issue crea y actualiza con referencias amigables", async () => {
@@ -175,6 +301,56 @@ describe("mcp tools", () => {
     expect(detached.parent).toBeNull();
   });
 
+  it("save_issue distingue omission de null al limpiar assignee, project y milestone", async () => {
+    const project = parseResult(
+      await client.callTool({ name: "save_project", arguments: { name: "MCP clear fields" } }),
+    );
+    const milestone = parseResult(
+      await client.callTool({
+        name: "save_milestone",
+        arguments: { project: project.id, name: "MCP clear milestone" },
+      }),
+    );
+    const issue = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: {
+          team: "PB",
+          title: "MCP nullable fields",
+          description: "initial description",
+          assignee: "me",
+          project: project.id,
+          milestone: milestone.id,
+        },
+      }),
+    );
+    const unchanged = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { id: issue.id, title: "MCP nullable fields renamed" },
+      }),
+    );
+    expect(unchanged.assignee.name).toBe("admin");
+    expect(unchanged.project.id).toBe(project.id);
+    expect(unchanged.milestone.id).toBe(milestone.id);
+    const cleared = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: {
+          id: issue.id,
+          description: null,
+          assignee: null,
+          project: null,
+          milestone: null,
+        },
+      }),
+    );
+    expect(cleared.description).toBeNull();
+    expect(cleared.assignee).toBeNull();
+    expect(cleared.project).toBeNull();
+    expect(cleared.milestone).toBeNull();
+  });
+
   it("save_comment y get_issue con historial", async () => {
     await client.callTool({
       name: "save_comment",
@@ -203,6 +379,101 @@ describe("mcp tools", () => {
     expect(found.nodes.map((n: any) => n.identifier)).toEqual(["PB-1"]);
   });
 
+  it("list_issues filtra por label ID sin exigir team", async () => {
+    const label = parseResult(
+      await client.callTool({
+        name: "save_issue_label",
+        arguments: { team: "PB", name: "mcp-id-filter" },
+      }),
+    );
+    const issue = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { team: "PB", title: "MCP label ID filter", labels: [label.id] },
+      }),
+    );
+    const found = parseResult(
+      await client.callTool({
+        name: "list_issues",
+        arguments: { labels: [label.id] },
+      }),
+    );
+    expect(found.nodes.map((node: any) => node.identifier)).toContain(issue.identifier);
+  });
+
+  it("gestiona webhooks y duplica saved views sin filtrar secretos", async () => {
+    const created = parseResult(
+      await client.callTool({
+        name: "create_webhook",
+        arguments: { url: "https://example.test/hooks", events: ["issue.created"] },
+      }),
+    );
+    expect(created.webhook.url).toBe("https://example.test/hooks");
+    expect(typeof created.secret).toBe("string");
+    const listed = parseResult(await client.callTool({ name: "list_webhooks", arguments: {} }));
+    expect(listed.find((item: any) => item.id === created.webhook.id)).not.toHaveProperty("secret");
+    expect(
+      parseResult(
+        await client.callTool({ name: "delete_webhook", arguments: { id: created.webhook.id } }),
+      ),
+    ).toEqual({ success: true });
+
+    const view = parseResult(
+      await client.callTool({
+        name: "save_saved_view",
+        arguments: {
+          name: "MCP duplicate source",
+          scope: "personal",
+          orderBy: "updated_desc",
+          groupBy: "priority",
+          columns: ["title"],
+          filter: { priority: { eq: 1 } },
+        },
+      }),
+    );
+    const duplicate = parseResult(
+      await client.callTool({ name: "duplicate_saved_view", arguments: { id: view.id } }),
+    );
+    expect(duplicate.id).not.toBe(view.id);
+    expect(duplicate.filter).toEqual({ priority: { eq: 1 } });
+    expect(duplicate.orderBy).toBe(view.orderBy);
+    expect(duplicate.groupBy).toBe(view.groupBy);
+    expect(duplicate.columns).toEqual(view.columns);
+  });
+
+  it("list_issues recorre cursores y filtros de creator/parent", async () => {
+    const first = parseResult(
+      await client.callTool({
+        name: "list_issues",
+        arguments: { team: "PB", limit: 1, orderBy: "CREATED_ASC" },
+      }),
+    );
+    expect(first.nodes).toHaveLength(1);
+    expect(first.pageInfo.endCursor).toBeTruthy();
+    const second = parseResult(
+      await client.callTool({
+        name: "list_issues",
+        arguments: {
+          team: "PB",
+          limit: 1,
+          orderBy: "CREATED_ASC",
+          after: first.pageInfo.endCursor,
+        },
+      }),
+    );
+    expect(second.nodes).toHaveLength(1);
+    expect(second.nodes[0].identifier).not.toBe(first.nodes[0].identifier);
+    const filtered = parseResult(
+      await client.callTool({
+        name: "list_issues",
+        arguments: { team: "PB", creator: "me", parent: first.nodes[0].identifier },
+      }),
+    );
+    expect(
+      filtered.nodes.every((item: any) => item.parent.identifier === first.nodes[0].identifier),
+    ).toBe(true);
+  });
+
   it("save_project y get_project", async () => {
     const project = parseResult(
       await client.callTool({
@@ -216,6 +487,71 @@ describe("mcp tools", () => {
       await client.callTool({ name: "get_project", arguments: { id: project.id } }),
     );
     expect(fetched.issues.nodes.map((n: any) => n.identifier)).toEqual(["PB-1"]);
+  });
+
+  it("rechaza referencias ambiguas y acepta scopes cualificados", async () => {
+    const first = parseResult(
+      await client.callTool({ name: "save_project", arguments: { name: "MCP ambiguous project" } }),
+    );
+    await client.callTool({ name: "save_project", arguments: { name: "MCP ambiguous project" } });
+    const ambiguousProject = await client.callTool({
+      name: "list_issues",
+      arguments: { project: "MCP ambiguous project" },
+    });
+    expect(ambiguousProject.isError).toBe(true);
+    expect(JSON.stringify(ambiguousProject)).toContain("ambiguous");
+
+    const firstMilestone = parseResult(
+      await client.callTool({
+        name: "save_milestone",
+        arguments: { project: first.id, name: "MCP ambiguous milestone" },
+      }),
+    );
+    const second = parseResult(
+      await client.callTool({ name: "save_project", arguments: { name: "MCP other project" } }),
+    );
+    await client.callTool({
+      name: "save_milestone",
+      arguments: { project: second.id, name: "MCP ambiguous milestone" },
+    });
+    const ambiguousMilestone = await client.callTool({
+      name: "list_issues",
+      arguments: { milestone: "MCP ambiguous milestone" },
+    });
+    expect(ambiguousMilestone.isError).toBe(true);
+    const issue = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: {
+          team: "PB",
+          title: "MCP qualified milestone",
+          project: first.id,
+          milestone: "MCP ambiguous project/MCP ambiguous milestone",
+        },
+      }),
+    );
+    expect(issue.milestone.id).toBe(firstMilestone.id);
+
+    const workspaceLabel = parseResult(
+      await client.callTool({
+        name: "save_issue_label",
+        arguments: { name: "MCP scoped label" },
+      }),
+    );
+    const teamLabel = parseResult(
+      await client.callTool({
+        name: "save_issue_label",
+        arguments: { team: "PB", name: "MCP scoped label" },
+      }),
+    );
+    const labeled = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { team: "PB", title: "MCP scoped label issue", labels: ["MCP scoped label"] },
+      }),
+    );
+    expect(labeled.labels.map((label: any) => label.id)).toContain(teamLabel.id);
+    expect(labeled.labels.map((label: any) => label.id)).not.toContain(workspaceLabel.id);
   });
 
   it("expone el ciclo de vida de proyectos, milestones y updates", async () => {
@@ -432,6 +768,60 @@ describe("mcp issue relations (AT-179)", () => {
       arguments: { issue: "PB-2", relatedIssue: "PB-1", type: "blocked_by" },
     });
     expect(result.isError).toBe(true);
+  });
+
+  it("unlink_issues duplicate-of funciona desde ambos extremos", async () => {
+    const source = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { team: "PB", title: "MCP duplicate source" },
+      }),
+    );
+    const target = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { team: "PB", title: "MCP duplicate target" },
+      }),
+    );
+    await client.callTool({
+      name: "link_issues",
+      arguments: {
+        issue: source.identifier,
+        relatedIssue: target.identifier,
+        type: "duplicate_of",
+      },
+    });
+    const inverse = parseResult(
+      await client.callTool({
+        name: "unlink_issues",
+        arguments: {
+          issue: target.identifier,
+          relatedIssue: source.identifier,
+          type: "duplicate_of",
+        },
+      }),
+    );
+    expect(inverse).toEqual({ deleted: 1 });
+
+    await client.callTool({
+      name: "link_issues",
+      arguments: {
+        issue: source.identifier,
+        relatedIssue: target.identifier,
+        type: "duplicate_of",
+      },
+    });
+    const canonical = parseResult(
+      await client.callTool({
+        name: "unlink_issues",
+        arguments: {
+          issue: source.identifier,
+          relatedIssue: target.identifier,
+          type: "duplicate_of",
+        },
+      }),
+    );
+    expect(canonical).toEqual({ deleted: 1 });
   });
 
   it("unlink_issues borra la relación", async () => {
