@@ -114,6 +114,11 @@ export async function teamCommand(argv: string[]): Promise<void> {
     });
     if (!values.confirm) throw new UsageError("Deletion requires --confirm TEAM_KEY\n" + USAGE);
     const team = await resolveTeam(config, ref, true);
+    if (!values.json) {
+      console.error(
+        `WARNING: deleting ${team.key} is permanent; Issues, Projects, Cycles, Labels, Saved Views and Initiatives must already be removed.`,
+      );
+    }
     const data = await gqlRequest(
       config,
       `mutation($id: ID!, $confirmation: String!) {

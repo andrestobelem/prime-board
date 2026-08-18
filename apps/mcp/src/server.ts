@@ -121,7 +121,7 @@ export function createServer(config: McpConfig): McpServer {
     "delete_team",
     {
       description:
-        "Permanently delete an empty team. Confirmation must exactly match the team key.",
+        "Permanently delete an empty team. This removes its memberships and workflow states; Issues, Projects, Cycles, Labels, Saved Views and Initiatives must already be removed. Confirmation must exactly match the team key.",
       inputSchema: {
         team: z.string().describe("Team key or ID"),
         confirmation: z.string().min(1).describe("Exact team key confirmation"),

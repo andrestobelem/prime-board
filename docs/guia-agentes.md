@@ -159,7 +159,7 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
   conservan los códigos de salida comunes del CLI.
 - El MCP refleja esas operaciones con `list/save/get/delete_*` y las tools específicas
   `carry_over_cycle`, `mark_inbox_read`, `archive_inbox` y `reorder_favorite`.
-- Administración operativa: `pb team create|update|membership-*|workflow-state-*|label-*`,
+- Administración operativa: `pb team create|update|archive|unarchive|delete|membership-*|workflow-state-*|label-*`,
   `pb actor list|create|update` y `pb api-key create|delete` exponen las mutaciones
   administrativas GraphQL y conservan sus errores/autorización.
 - `pb issue archive <REF>` archiva una issue y devuelve la issue archivada con `--json`.
@@ -183,7 +183,7 @@ Para renombrar el Workspace, usá `save_workspace` con `{ "name": "Mi Workspace"
 la API rechaza la operación para actors con rol `MEMBER`. El nombre es independiente de las keys y
 nombres de Teams.
 
-Las operaciones administrativas tienen equivalentes explícitos: `archive_issue`, `save_team`,
+Las operaciones administrativas tienen equivalentes explícitos: `archive_issue`, `archive_team`, `unarchive_team`, `delete_team`, `save_team`,
 `list_team_memberships`, `save_team_membership`, `delete_team_membership`, `save_user`,
 `save_api_key`, `delete_api_key`, `save_issue_status`, `delete_issue_status`,
 `save_issue_label` y `delete_issue_label`. Las tools sólo adaptan entradas y salidas; la
