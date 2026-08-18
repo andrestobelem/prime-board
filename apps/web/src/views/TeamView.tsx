@@ -187,18 +187,28 @@ export function TeamView({
   }
 
   async function updateIssue(id: string, input: IssueActionInput): Promise<void> {
-    const response = await mutate<{ issueUpdate: { success: boolean } }>(issueUpdateMutation(), {
-      id,
-      input,
-    });
-    if (!response.issueUpdate.success) throw new Error(`Could not update issue ${id}.`);
+    try {
+      const response = await mutate<{ issueUpdate: { success: boolean } }>(issueUpdateMutation(), {
+        id,
+        input,
+      });
+      if (!response.issueUpdate.success) throw new Error(`Could not update issue ${id}.`);
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : `Could not update issue ${id}.`);
+      throw error;
+    }
   }
 
   async function archiveIssue(id: string): Promise<void> {
-    const response = await mutate<{ issueArchive: { success: boolean } }>(archiveMutation(), {
-      id,
-    });
-    if (!response.issueArchive.success) throw new Error(`Could not archive issue ${id}.`);
+    try {
+      const response = await mutate<{ issueArchive: { success: boolean } }>(archiveMutation(), {
+        id,
+      });
+      if (!response.issueArchive.success) throw new Error(`Could not archive issue ${id}.`);
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : `Could not archive issue ${id}.`);
+      throw error;
+    }
   }
 
   if (result.loading && !result.data) return <LoadingState />;

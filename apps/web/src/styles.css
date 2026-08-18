@@ -775,6 +775,11 @@ kbd {
   border-radius: 8px;
   box-shadow: 0 12px 30px rgb(0 0 0 / 30%);
 }
+.issue-action-error {
+  padding: 5px 7px;
+  color: var(--danger);
+  font-size: 11px;
+}
 .issue-context-menu select,
 .issue-context-menu button {
   width: 100%;

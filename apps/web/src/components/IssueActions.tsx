@@ -72,12 +72,16 @@ export function IssueActionMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function run(action: () => Promise<void>) {
     setSaving(true);
+    setError(null);
     try {
       await action();
       setOpen(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The issue action failed.");
     } finally {
       setSaving(false);
     }
