@@ -8,8 +8,8 @@ import { availableTeamActors } from "../team-memberships.ts";
 
 const QUERY = `query($key: String) {
   viewer { id workspaceRole }
-  team(key: $key) {
-    id key name
+  team(key: $key, includeArchived: true) {
+    id key name archivedAt
     defaultState { id }
     states { id name type color position }
     labels { id name color teamId }
@@ -22,6 +22,7 @@ const STATE_TYPES = ["TRIAGE", "BACKLOG", "UNSTARTED", "STARTED", "COMPLETED", "
 
 type DeleteTarget = { id: string; kind: "state" | "label"; name: string };
 type MembershipTarget = { id: string; name: string };
+type TeamLifecycleAction = "archive" | "restore" | "delete";
 
 export function TeamSettingsView({ teamKey }: { teamKey: string }) {
   const result = useQuery<any>(QUERY, { key: teamKey });
@@ -37,18 +38,22 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
   const [membershipRole, setMembershipRole] = useState("MEMBER");
   const [membershipSaving, setMembershipSaving] = useState(false);
   const [membershipDelete, setMembershipDelete] = useState<MembershipTarget | null>(null);
+  const [lifecycleAction, setLifecycleAction] = useState<TeamLifecycleAction | null>(null);
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
   if (result.error) return <div className="error-banner">{result.error.message}</div>;
   const team = result.data?.team;
   if (!team) return <div className="empty">Team {teamKey} not found.</div>;
   const viewer = result.data?.viewer;
-  const canManageWorkspaceLabels = viewer?.workspaceRole === "ADMIN";
+  const canManageWorkspace = viewer?.workspaceRole?.toUpperCase() === "ADMIN";
+  const canManageWorkspaceLabels = canManageWorkspace;
+  const teamArchived = Boolean(team.archivedAt);
   const canManage =
-    canManageWorkspaceLabels ||
-    team.memberships.some(
-      (membership: any) => membership.actor.id === viewer?.id && membership.role === "OWNER",
-    );
+    !teamArchived &&
+    (canManageWorkspace ||
+      team.memberships.some(
+        (membership: any) => membership.actor.id === viewer?.id && membership.role === "OWNER",
+      ));
   const availableActors = availableTeamActors(result.data?.actors ?? [], team.memberships);
 
   async function runMutation(key: string, operation: () => Promise<unknown>): Promise<boolean> {
@@ -63,6 +68,30 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
     } finally {
       setSaving(null);
     }
+  }
+
+  async function runLifecycleAction(): Promise<void> {
+    if (!lifecycleAction) return;
+    if (lifecycleAction === "delete") {
+      const response = await mutate<{ teamDelete: { success: boolean } }>(
+        `mutation($id: ID!, $confirmation: String!) {
+          teamDelete(id: $id, confirmation: $confirmation) { success }
+        }`,
+        { id: team.id, confirmation: team.key },
+      );
+      if (!response.teamDelete.success) throw new Error("The Team could not be deleted.");
+      setLifecycleAction(null);
+      window.location.hash = "#/settings";
+      return;
+    } else {
+      const mutation = lifecycleAction === "archive" ? "teamArchive" : "teamUnarchive";
+      const response = await mutate<{ [key: string]: { success: boolean } }>(
+        `mutation($id: ID!) { ${mutation}(id: $id) { success } }`,
+        { id: team.id },
+      );
+      if (!response[mutation]?.success) throw new Error("The Team lifecycle action failed.");
+    }
+    setLifecycleAction(null);
   }
 
   async function addMembership(): Promise<void> {
@@ -209,10 +238,45 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
           {error}
         </div>
       )}
-      {!canManage && (
+      {!canManage && !teamArchived && (
         <div className="settings-readonly-banner" role="status">
           You can view these settings, but only a team owner or workspace admin can edit them.
         </div>
+      )}
+      {teamArchived && (
+        <div className="settings-readonly-banner" role="status">
+          This Team is archived. Restore it before changing members, workflow states, or labels.
+        </div>
+      )}
+      {canManageWorkspace && (
+        <section className="settings-panel" aria-labelledby="team-lifecycle-title">
+          <div className="settings-panel-header">
+            <div>
+              <h2 id="team-lifecycle-title">Team lifecycle</h2>
+              <p>
+                Archive this Team to retain its history, or permanently delete it when it has no
+                dependent resources.
+              </p>
+            </div>
+            <div className="team-setting-controls">
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => setLifecycleAction(teamArchived ? "restore" : "archive")}
+              >
+                {teamArchived ? "Restore team" : "Archive team"}
+              </button>
+              <button
+                className="btn"
+                type="button"
+                style={{ background: "var(--danger)" }}
+                onClick={() => setLifecycleAction("delete")}
+              >
+                Delete permanently
+              </button>
+            </div>
+          </div>
+        </section>
       )}
 
       <section className="settings-panel" aria-labelledby="team-members-title">
@@ -533,6 +597,37 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
           </form>
         )}
       </section>
+
+      {lifecycleAction && (
+        <ConfirmModal
+          title={
+            lifecycleAction === "delete"
+              ? `Delete ${team.name} permanently`
+              : `${lifecycleAction === "archive" ? "Archive" : "Restore"} ${team.name}`
+          }
+          message={
+            lifecycleAction === "delete"
+              ? "Permanent deletion is irreversible and is blocked by Issues (and their Activities), Projects, Cycles, Labels, Saved Views, or Initiatives. Remove dependent resources first; the API makes no partial changes. If no blockers remain, Workflow States and Memberships are removed with the Team. Type the Team key to confirm."
+              : lifecycleAction === "archive"
+                ? `Archive Team ${team.key}? Its issues and history are retained, but the Team leaves normal views until restored.`
+                : `Restore Team ${team.key}? It will return to normal Team views and accept new work again.`
+          }
+          confirmLabel={
+            lifecycleAction === "delete"
+              ? "Delete permanently"
+              : lifecycleAction === "archive"
+                ? "Archive"
+                : "Restore"
+          }
+          confirmation={
+            lifecycleAction === "delete"
+              ? { label: `Type ${team.key} to confirm`, expected: team.key }
+              : undefined
+          }
+          onClose={() => setLifecycleAction(null)}
+          onConfirm={runLifecycleAction}
+        />
+      )}
 
       {membershipDelete && (
         <ConfirmModal

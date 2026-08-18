@@ -142,6 +142,8 @@ interface ConfirmModalProps {
   title: string;
   message: string;
   confirmLabel: string;
+  /** Exige un valor exacto antes de permitir una confirmación irreversible. */
+  confirmation?: { label: string; expected: string };
   onClose: () => void;
   onConfirm: () => Promise<void> | void;
 }
@@ -150,10 +152,12 @@ export function ConfirmModal({
   title,
   message,
   confirmLabel,
+  confirmation,
   onClose,
   onConfirm,
 }: ConfirmModalProps) {
   const [submitting, setSubmitting] = useState(false);
+  const [confirmationValue, setConfirmationValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
@@ -173,7 +177,7 @@ export function ConfirmModal({
   }, [onClose, submitting]);
 
   async function confirm() {
-    if (submitting) return;
+    if (submitting || (confirmation && confirmationValue !== confirmation.expected)) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -203,13 +207,30 @@ export function ConfirmModal({
             {title}
           </h2>
           <p style={{ color: "var(--text-muted)", margin: 0 }}>{message}</p>
+          {confirmation && (
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {confirmation.label}
+              <input
+                autoFocus
+                value={confirmationValue}
+                onChange={(event) => setConfirmationValue(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && void confirm()}
+              />
+            </label>
+          )}
           {error && <div className="error-banner">{error}</div>}
         </div>
         <div className="modal-footer">
           <button className="btn secondary" onClick={onClose} disabled={submitting}>
             Cancel
           </button>
-          <button className="btn" onClick={() => void confirm()} disabled={submitting}>
+          <button
+            className="btn"
+            onClick={() => void confirm()}
+            disabled={
+              submitting || Boolean(confirmation && confirmationValue !== confirmation.expected)
+            }
+          >
             {confirmLabel}
           </button>
         </div>
