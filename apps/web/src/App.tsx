@@ -39,6 +39,7 @@ const SHELL_QUERY = `{
   }
   initiatives { id name state }
   savedViews { id name scope team { id key } }
+  inbox(first: 50) { isRead }
   favorites {
     id position
     project { id name }
@@ -68,6 +69,7 @@ export interface ShellData {
     team: { id: string; key: string } | null;
   }>;
   favorites: SidebarFavorite[];
+  inbox: Array<{ isRead: boolean }>;
 }
 
 function loadGroupBy(): GroupBy {
@@ -486,6 +488,7 @@ export function App() {
         }))}
         views={navigation.workspaceViews}
         favorites={favorites}
+        unreadInboxCount={(shell.data?.inbox ?? []).filter((item) => !item.isRead).length}
         onToggleFavorite={toggleFavorite}
         onReorderFavorite={reorderFavorite}
         onLogout={logout}

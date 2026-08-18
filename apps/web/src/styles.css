@@ -206,6 +206,16 @@ select:focus {
 .sidebar .icon.nested-deep {
   margin-left: 20px;
 }
+.sidebar .nav-count {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--accent);
+  font-size: 11px;
+  text-align: center;
+}
 .sidebar a.active {
   background: var(--surface);
   color: var(--text);
@@ -395,6 +405,35 @@ kbd {
 }
 
 /* ---- issue list toolbar ---- */
+.inbox-toolbar,
+.my-issues-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.inbox-toolbar input,
+.inbox-toolbar select,
+.my-issues-toolbar input,
+.my-issues-toolbar select {
+  min-width: 110px;
+  font-size: 12px;
+}
+.inbox-unread-toggle {
+  display: inline-flex;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 4px;
+}
+.inbox-entry.focused {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .issue-toolbar {
   position: relative;
   display: flex;

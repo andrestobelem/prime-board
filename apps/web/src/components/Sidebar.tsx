@@ -37,6 +37,7 @@ interface SidebarProps {
   }>;
   initiatives?: Array<{ id: string; name: string; state: string }>;
   favorites?: SidebarFavorite[];
+  unreadInboxCount?: number;
   onToggleFavorite?: (
     target: FavoriteTarget,
     current: SidebarFavorite | undefined,
@@ -57,6 +58,7 @@ export function Sidebar({
   views = [],
   initiatives = [],
   favorites = [],
+  unreadInboxCount = 0,
   onToggleFavorite,
   onReorderFavorite,
   onLogout,
@@ -208,6 +210,11 @@ export function Sidebar({
         </Link>
         <Link to="/inbox" className={active("/inbox")}>
           <Icon name="comment" /> Inbox
+          {unreadInboxCount > 0 && (
+            <span className="nav-count" aria-label={`${unreadInboxCount} unread`}>
+              {unreadInboxCount}
+            </span>
+          )}
         </Link>
         <Link to="/my" className={active("/my")}>
           <Icon name="assignee" /> My issues
