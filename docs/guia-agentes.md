@@ -134,7 +134,11 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
   conservan los códigos de salida comunes del CLI.
 - El MCP refleja esas operaciones con `list/save/get/delete_*` y las tools específicas
   `carry_over_cycle`, `mark_inbox_read`, `archive_inbox` y `reorder_favorite`.
-- Exit codes: `0` ok, `1` error de API, `2` error de uso.
+- Administración operativa: `pb team create|update|membership-*|workflow-state-*|label-*`,
+  `pb actor list|create|update` y `pb api-key create|delete` exponen las mutaciones
+  administrativas GraphQL y conservan sus errores/autorización.
+- `pb issue archive <REF>` archiva una issue y devuelve la issue archivada con `--json`.
+- Exit codes: `0` ok, `1` error de API (incluye `NOT_FOUND` y `UNAUTHORIZED`), `2` error de uso o parseo de flags.
 - Env `PRIME_BOARD_URL` / `PRIME_BOARD_API_KEY` pisan la config guardada.
 - `pb auth login` guarda las credenciales en `~/.prime-board/cli.json`; el directorio queda
   con permisos `0700` y el archivo con `0600`. El CLI vuelve a endurecer esos permisos al
@@ -149,6 +153,12 @@ sabe operar Linear, opera prime-board sin aprender nada.
 Además de issues, el MCP ofrece `archive_project`, `unarchive_project`,
 `list_milestones`, `save_milestone`, `delete_milestone`, `list_project_updates`,
 `save_project_update` y `delete_project_update` para completar el ciclo de vida de planificación.
+
+Las operaciones administrativas tienen equivalentes explícitos: `archive_issue`, `save_team`,
+`list_team_memberships`, `save_team_membership`, `delete_team_membership`, `save_user`,
+`save_api_key`, `delete_api_key`, `save_issue_status`, `delete_issue_status`,
+`save_issue_label` y `delete_issue_label`. Las tools sólo adaptan entradas y salidas; la
+API GraphQL sigue siendo la autoridad para autorización y códigos de error.
 
 Config para un cliente MCP (Claude Desktop, prime-agent, etc.):
 

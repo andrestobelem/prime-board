@@ -39,6 +39,25 @@ modelo o de la API. Esos gaps se siguen en tickets `PRB-*` independientes. La ma
 no implica soporte multi-workspace: prime-board continúa siendo single-workspace y
 local-first.
 
+### Inventario de operaciones por cliente
+
+La paridad de las mutaciones administrativas y del archivo de issues se verifica con
+este inventario estable:
+
+| Dominio         | CLI `pb`                                   | MCP                                                                       |
+| --------------- | ------------------------------------------ | ------------------------------------------------------------------------- |
+| Issues          | `issue archive`                            | `archive_issue`                                                           |
+| Teams           | `team create/update`                       | `save_team`                                                               |
+| Memberships     | `team membership-list/create/delete`       | `list_team_memberships`, `save_team_membership`, `delete_team_membership` |
+| Actores         | `actor list/create/update`                 | `list_users`, `save_user`                                                 |
+| API keys        | `api-key create/delete`                    | `save_api_key`, `delete_api_key`                                          |
+| Workflow states | `team workflow-state-create/update/delete` | `save_issue_status`, `delete_issue_status`                                |
+| Labels          | `team label-create/update/delete`          | `save_issue_label`, `delete_issue_label`                                  |
+
+Las operaciones privilegiadas conservan la autorización del servidor GraphQL; el CLI y
+MCP no intentan replicarla localmente. Los contratos e2e de ambos clientes verifican el
+inventario, las respuestas JSON y los errores GraphQL.
+
 > **Decisión revisada (2026-08-14):** se evaluó usar PostgreSQL y se **ratificó SQLite puro**.
 > Racional: con local-first single-tenant el único escritor es el proceso Bun (la limitación
 > de concurrencia de SQLite no aplica), el volumen esperado es trivial, y Postgres rompería
