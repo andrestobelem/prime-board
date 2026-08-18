@@ -112,7 +112,7 @@ function setProjectTeams(db: Database, projectId: string, teamIds: string[]): vo
 
 function allTeamIds(db: Database): string[] {
   return db
-    .query("SELECT id FROM teams")
+    .query("SELECT id FROM teams WHERE archived_at IS NULL")
     .values()
     .map((row) => row[0] as string);
 }

@@ -497,7 +497,10 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
   const params = new ParamSink();
   const filter = options.filter ?? {};
   const clauses = [buildIssueFilter(filter, params)];
-  if (!filter.includeArchived) clauses.push("issues.archived_at IS NULL");
+  if (!filter.includeArchived) {
+    clauses.push("issues.archived_at IS NULL");
+    clauses.push("teams.archived_at IS NULL");
+  }
 
   if (options.after !== undefined && options.after !== null) {
     const decoded = decodeCursor(options.after);
@@ -511,7 +514,10 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
     const cursorParams = new ParamSink();
     const cursorId = cursorParams.add(decoded.id);
     const cursorClauses = [buildIssueFilter(filter, cursorParams)];
-    if (!filter.includeArchived) cursorClauses.push("issues.archived_at IS NULL");
+    if (!filter.includeArchived) {
+      cursorClauses.push("issues.archived_at IS NULL");
+      cursorClauses.push("teams.archived_at IS NULL");
+    }
     const cursorRow = db
       .query(`${SELECT_ISSUE} WHERE issues.id = ${cursorId} AND ${cursorClauses.join(" AND ")}`)
       .get(...(cursorParams.values as never[])) as IssueRow | null;

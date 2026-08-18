@@ -103,7 +103,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
     let states = null;
     let teamId: string | undefined;
     if (values.team) {
-      const team = await resolveTeam(config, values.team);
+      const team = await resolveTeam(config, values.team, Boolean(values["include-archived"]));
       teamId = team.id;
       filter.team = { eq: team.id };
       states = team.states;

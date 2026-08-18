@@ -30,7 +30,7 @@ export async function cycleCommand(argv: string[]): Promise<void> {
       },
     });
     if (!values.team) throw new UsageError(USAGE);
-    const teamId = (await resolveTeam(config, values.team)).id;
+    const teamId = (await resolveTeam(config, values.team, Boolean(values["include-archived"]))).id;
     const data = await gqlRequest(
       config,
       `query($teamId: ID!, $includeArchived: Boolean) {

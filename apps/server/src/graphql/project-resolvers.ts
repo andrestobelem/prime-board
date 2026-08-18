@@ -118,6 +118,10 @@ export const projectResolvers = {
       context: Context,
     ) => {
       requireViewer(context);
+      if (args.team) {
+        const team = getTeam(context.db, { id: args.team });
+        if (team?.archived_at && !args.includeArchived) return [];
+      }
       return listProjects(context.db, args.state, args.team, args.includeArchived).map(mapProject);
     },
     project: (_parent: unknown, args: { id: string }, context: Context) => {

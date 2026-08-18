@@ -514,7 +514,7 @@ export function exportBoard(
 
   const teams = db
     .query(
-      `SELECT id, key, name, description, default_state_id FROM teams ${teamFilter ? "WHERE id = ?1" : ""} ORDER BY key`,
+      `SELECT id, key, name, description, default_state_id, archived_at FROM teams ${teamFilter ? "WHERE id = ?1" : ""} ORDER BY key`,
     )
     .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<{
     id: string;
@@ -522,6 +522,7 @@ export function exportBoard(
     name: string;
     description: string | null;
     default_state_id: string | null;
+    archived_at: string | null;
   }>;
   write(
     join(base, "meta", "teams.json"),
@@ -530,6 +531,7 @@ export function exportBoard(
         key: team.key,
         name: team.name,
         description: team.description,
+        archived: Boolean(team.archived_at),
         defaultState: team.default_state_id
           ? (lookups.states.get(team.default_state_id) ?? null)
           : null,

@@ -4,14 +4,18 @@ import { gqlRequest } from "./api.ts";
 import type { CliConfig } from "./config.ts";
 import { ApiError, UsageError } from "./errors.ts";
 
-export async function resolveTeam(config: CliConfig, ref: string): Promise<any> {
+export async function resolveTeam(
+  config: CliConfig,
+  ref: string,
+  includeArchived = false,
+): Promise<any> {
   const byId = /^[0-9a-f-]{36}$/i.test(ref);
   const data = await gqlRequest(
     config,
     byId
-      ? `query($id: ID!) { team(id: $id) { id key name states { id name type } } }`
-      : `query($key: String!) { team(key: $key) { id key name states { id name type } } }`,
-    byId ? { id: ref } : { key: ref },
+      ? `query($id: ID!, $includeArchived: Boolean) { team(id: $id, includeArchived: $includeArchived) { id key name states { id name type } archivedAt } }`
+      : `query($key: String!, $includeArchived: Boolean) { team(key: $key, includeArchived: $includeArchived) { id key name states { id name type } archivedAt } }`,
+    byId ? { id: ref, includeArchived } : { key: ref, includeArchived },
   );
   if (!data.team) throw new ApiError(`Team not found: ${ref}`, "NOT_FOUND");
   return data.team;

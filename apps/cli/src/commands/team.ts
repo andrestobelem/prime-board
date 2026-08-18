@@ -1,4 +1,4 @@
-// pb team list|create|update|membership-*|workflow-state-*|label-*
+// pb team list|create|update|archive|unarchive|membership-*|workflow-state-*|label-*
 import { parseArgs } from "node:util";
 import { gqlRequest } from "../api.ts";
 import { loadConfig } from "../config.ts";
@@ -6,15 +6,18 @@ import { UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
 import { resolveActor, resolveTeam } from "../resolve.ts";
 
-const TEAM_FIELDS = `id key name description createdAt`;
+const TEAM_FIELDS = `id key name description createdAt archivedAt`;
 const MEMBERSHIP_FIELDS = `id teamId actorId role createdAt
   team { id key name } actor { id name email type workspaceRole }`;
 const STATE_FIELDS = `id name type color position`;
 const LABEL_FIELDS = `id name color teamId`;
 const USAGE = `Usage:
-  pb team list [--json]
+  pb team list [--include-archived] [--json]
   pb team create --name TEXT --key KEY [--description TEXT] [--json]
   pb team update <KEY|ID> [--name TEXT] [--description TEXT] [--default-state ID] [--json]
+  pb team archive <KEY|ID> [--json]
+  pb team unarchive <KEY|ID> [--json]
+  pb team delete <KEY|ID> --confirm KEY [--json]
   pb team membership-list <KEY|ID> [--json]
   pb team membership-create --team <KEY|ID> --actor <ID|NAME|me> [--role member|owner] [--json]
   pb team membership-delete <ID> [--json]
@@ -40,14 +43,22 @@ export async function teamCommand(argv: string[]): Promise<void> {
   const config = await loadConfig();
 
   if (action === "list") {
-    const { values } = parseArgs({ args: argv.slice(1), options: { json: { type: "boolean" } } });
+    const { values } = parseArgs({
+      args: argv.slice(1),
+      options: { "include-archived": { type: "boolean" }, json: { type: "boolean" } },
+    });
     const data = await gqlRequest(
       config,
-      `{ teams { ${TEAM_FIELDS} states { ${STATE_FIELDS} } } }`,
+      `query($includeArchived: Boolean) {
+        teams(includeArchived: $includeArchived) { ${TEAM_FIELDS} states { ${STATE_FIELDS} } }
+      }`,
+      { includeArchived: Boolean(values["include-archived"]) },
     );
     if (values.json) return printJson(data.teams);
     for (const team of data.teams)
-      console.log(`${team.key}  ${team.name}  (${team.states.length} states)`);
+      console.log(
+        `${team.key}  ${team.name}${team.archivedAt ? "  [archived]" : ""}  (${team.states.length} states)`,
+      );
     return;
   }
 
@@ -73,6 +84,45 @@ export async function teamCommand(argv: string[]): Promise<void> {
     );
     if (values.json) return printJson(data.teamCreate.team);
     console.log(`Created team: ${data.teamCreate.team.key} (${data.teamCreate.team.id})`);
+    return;
+  }
+
+  if (action === "archive" || action === "unarchive") {
+    const ref = argv[1];
+    if (!ref) throw new UsageError(USAGE);
+    const jsonOutput = jsonFlag(argv.slice(2));
+    const team = await resolveTeam(config, ref, action === "unarchive");
+    const mutation = action === "archive" ? "teamArchive" : "teamUnarchive";
+    const data = await gqlRequest(
+      config,
+      `mutation($id: ID!) { ${mutation}(id: $id) { team { ${TEAM_FIELDS} } } }`,
+      { id: team.id },
+    );
+    if (jsonOutput) return printJson(data[mutation].team);
+    console.log(
+      `${action === "archive" ? "Archived" : "Unarchived"} team ${data[mutation].team.key}`,
+    );
+    return;
+  }
+
+  if (action === "delete") {
+    const ref = argv[1];
+    if (!ref) throw new UsageError(USAGE);
+    const { values } = parseArgs({
+      args: argv.slice(2),
+      options: { confirm: { type: "string" }, json: { type: "boolean" } },
+    });
+    if (!values.confirm) throw new UsageError("Deletion requires --confirm TEAM_KEY\n" + USAGE);
+    const team = await resolveTeam(config, ref, true);
+    const data = await gqlRequest(
+      config,
+      `mutation($id: ID!, $confirmation: String!) {
+        teamDelete(id: $id, confirmation: $confirmation) { success }
+      }`,
+      { id: team.id, confirmation: values.confirm },
+    );
+    if (values.json) return printJson(data.teamDelete);
+    console.log(`Deleted team ${team.key}`);
     return;
   }
 

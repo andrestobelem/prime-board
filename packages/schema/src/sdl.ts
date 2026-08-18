@@ -40,6 +40,15 @@ export const typeDefs = /* GraphQL */ `
     createdAt: DateTime!
   }
 
+  input WorkspaceUpdateInput {
+    name: String!
+  }
+
+  type WorkspacePayload {
+    success: Boolean!
+    workspace: Workspace!
+  }
+
   type WorkflowState {
     id: ID!
     name: String!
@@ -63,6 +72,7 @@ export const typeDefs = /* GraphQL */ `
     cycles: [Cycle!]!
     memberships: [TeamMembership!]!
     createdAt: DateTime!
+    archivedAt: DateTime
   }
 
   type Label {
@@ -892,8 +902,8 @@ export const typeDefs = /* GraphQL */ `
     """
     viewer: Actor!
     workspace: Workspace!
-    teams: [Team!]!
-    team(id: ID, key: String): Team
+    teams(includeArchived: Boolean = false): [Team!]!
+    team(id: ID, key: String, includeArchived: Boolean = false): Team
     actors(type: ActorType): [Actor!]!
     teamMemberships(teamId: ID!): [TeamMembership!]!
     """
@@ -944,6 +954,10 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type Mutation {
+    workspaceUpdate(input: WorkspaceUpdateInput!): WorkspacePayload!
+    teamArchive(id: ID!): TeamPayload!
+    teamUnarchive(id: ID!): TeamPayload!
+    teamDelete(id: ID!, confirmation: String!): DeletePayload!
     teamCreate(input: TeamCreateInput!): TeamPayload!
     teamUpdate(id: ID!, input: TeamUpdateInput!): TeamPayload!
     teamMembershipCreate(input: TeamMembershipCreateInput!): TeamMembershipPayload!

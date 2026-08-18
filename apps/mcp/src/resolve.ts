@@ -3,14 +3,20 @@ import { gqlRequest, type McpConfig } from "./api.ts";
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function resolveTeam(config: McpConfig, ref: string): Promise<any> {
+export async function resolveTeam(
+  config: McpConfig,
+  ref: string,
+  includeArchived = false,
+): Promise<any> {
   const byId = UUID_RE.test(ref);
   const data = await gqlRequest(
     config,
-    `query($id: ID, $key: String) {
-    team(id: $id, key: $key) { id key name states { id name type color position } }
+    `query($id: ID, $key: String, $includeArchived: Boolean) {
+    team(id: $id, key: $key, includeArchived: $includeArchived) {
+      id key name archivedAt states { id name type color position }
+    }
   }`,
-    byId ? { id: ref } : { key: ref },
+    byId ? { id: ref, includeArchived } : { key: ref, includeArchived },
   );
   if (!data.team) throw new Error(`NOT_FOUND: Team not found: ${ref}`);
   return data.team;

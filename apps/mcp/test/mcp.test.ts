@@ -67,6 +67,7 @@ describe("mcp tools", () => {
       "archive_inbox",
       "archive_issue",
       "archive_project",
+      "archive_team",
       "carry_over_cycle",
       "create_webhook",
       "delete_api_key",
@@ -79,6 +80,7 @@ describe("mcp tools", () => {
       "delete_project_update",
       "delete_review",
       "delete_saved_view",
+      "delete_team",
       "delete_team_membership",
       "delete_webhook",
       "duplicate_saved_view",
@@ -125,7 +127,9 @@ describe("mcp tools", () => {
       "save_team",
       "save_team_membership",
       "save_user",
+      "save_workspace",
       "unarchive_project",
+      "unarchive_team",
       "unlink_issues",
     ]);
   });
@@ -135,6 +139,65 @@ describe("mcp tools", () => {
     expect(workspace.workspace.name).toBe("Prime Board");
     const teams = parseResult(await client.callTool({ name: "list_teams", arguments: {} }));
     expect(teams[0].key).toBe("PB");
+  });
+
+  it("save_workspace renombra y conserva urlKey", async () => {
+    const renamed = parseResult(
+      await client.callTool({ name: "save_workspace", arguments: { name: "MCP Workspace" } }),
+    );
+    expect(renamed).toMatchObject({ name: "MCP Workspace", urlKey: "prime-board" });
+    const current = parseResult(await client.callTool({ name: "get_workspace", arguments: {} }));
+    expect(current.workspace).toMatchObject({ name: "MCP Workspace", urlKey: "prime-board" });
+  });
+
+  it("archiva y restaura teams conservando la consulta histórica", async () => {
+    const team = parseResult(
+      await client.callTool({
+        name: "save_team",
+        arguments: { name: "MCP archive team", key: "MARC" },
+      }),
+    );
+    const archived = parseResult(
+      await client.callTool({ name: "archive_team", arguments: { team: team.id } }),
+    );
+    expect(archived).toMatchObject({ id: team.id, key: "MARC" });
+    expect(archived.archivedAt).toBeTruthy();
+    const hidden = parseResult(await client.callTool({ name: "list_teams", arguments: {} }));
+    expect(hidden.map((item: any) => item.key)).not.toContain("MARC");
+    const history = parseResult(
+      await client.callTool({ name: "list_teams", arguments: { includeArchived: true } }),
+    );
+    expect(history.find((item: any) => item.key === "MARC").archivedAt).toBeTruthy();
+    const restored = parseResult(
+      await client.callTool({ name: "unarchive_team", arguments: { team: "MARC" } }),
+    );
+    expect(restored.archivedAt).toBeNull();
+  });
+
+  it("borra definitivamente un Team vacío con confirmación explícita", async () => {
+    const team = parseResult(
+      await client.callTool({
+        name: "save_team",
+        arguments: { name: "MCP disposable", key: "MDL" },
+      }),
+    );
+    const mismatch = await client.callTool({
+      name: "delete_team",
+      arguments: { team: team.id, confirmation: "WRONG" },
+    });
+    expect(mismatch.isError).toBe(true);
+    expect(JSON.stringify(mismatch)).toContain("VALIDATION_FAILED");
+    const deleted = parseResult(
+      await client.callTool({
+        name: "delete_team",
+        arguments: { team: "MDL", confirmation: "MDL" },
+      }),
+    );
+    expect(deleted).toEqual({ success: true });
+    const history = parseResult(
+      await client.callTool({ name: "list_teams", arguments: { includeArchived: true } }),
+    );
+    expect(history.map((item: any) => item.key)).not.toContain("MDL");
   });
 
   it("administra teams, actores, memberships, estados, labels y API keys", async () => {

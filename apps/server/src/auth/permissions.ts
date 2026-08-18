@@ -2,7 +2,7 @@
 import type { Database } from "bun:sqlite";
 import type { ActorRow } from "./viewer.ts";
 import { getApiKey } from "../domain/actors.ts";
-import { getTeam } from "../domain/teams.ts";
+import { assertTeamActive, getTeam } from "../domain/teams.ts";
 import { getProject, listProjectTeamIds } from "../domain/projects.ts";
 import { isTeamMember, isTeamOwner } from "../domain/team-memberships.ts";
 import { apiError } from "../graphql/errors.ts";
@@ -42,9 +42,10 @@ export function assertCanUseImportFields(
 
 /** La configuración del team pertenece al admin del workspace o a sus owners. */
 export function assertCanManageTeam(db: Database, viewer: ActorRow, teamId: string): void {
-  if (isWorkspaceAdmin(viewer)) return;
   // El dominio conserva NOT_FOUND para mutations sobre teams inexistentes.
   if (!getTeam(db, { id: teamId })) return;
+  assertTeamActive(db, teamId);
+  if (isWorkspaceAdmin(viewer)) return;
   if (!isTeamOwner(db, teamId, viewer.id)) {
     throw apiError("UNAUTHORIZED", "Team owner permission is required");
   }
@@ -56,7 +57,9 @@ export function assertCanManageIssue(
   viewer: ActorRow,
   teamId: string | null | undefined,
 ): void {
-  if (isWorkspaceAdmin(viewer) || !teamId) return;
+  if (!teamId) return;
+  assertTeamActive(db, teamId);
+  if (isWorkspaceAdmin(viewer)) return;
   if (!isTeamMember(db, teamId, viewer.id)) {
     throw apiError("UNAUTHORIZED", "Issue team membership is required");
   }
@@ -90,17 +93,18 @@ export function assertCanCreateProject(
   viewer: ActorRow,
   teamIds?: string[] | null,
 ): void {
-  if (isWorkspaceAdmin(viewer)) return;
   const destinations =
     teamIds == null
       ? db
-          .query("SELECT id FROM teams ORDER BY id")
+          .query("SELECT id FROM teams WHERE archived_at IS NULL ORDER BY id")
           .values()
           .map((row) => row[0] as string)
       : teamIds;
   // Deja que el dominio conserve sus errores de validación/not-found.
   if (destinations.length === 0) return;
   if (destinations.some((teamId) => !getTeam(db, { id: teamId }))) return;
+  for (const teamId of destinations) assertTeamActive(db, teamId);
+  if (isWorkspaceAdmin(viewer)) return;
   if (destinations.some((teamId) => !isTeamMember(db, teamId, viewer.id))) {
     throw apiError("UNAUTHORIZED", "Project team membership is required");
   }
@@ -112,9 +116,11 @@ export function assertCanManageProjectTeams(
   viewer: ActorRow,
   teamIds: string[],
 ): void {
-  if (isWorkspaceAdmin(viewer) || teamIds.length === 0) return;
+  if (teamIds.length === 0) return;
   // La mutación debe poder seguir produciendo NOT_FOUND para teams inválidos.
   if (teamIds.some((teamId) => !getTeam(db, { id: teamId }))) return;
+  for (const teamId of teamIds) assertTeamActive(db, teamId);
+  if (isWorkspaceAdmin(viewer)) return;
   if (teamIds.some((teamId) => !isTeamMember(db, teamId, viewer.id))) {
     throw apiError("UNAUTHORIZED", "Project team membership is required");
   }

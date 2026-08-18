@@ -79,6 +79,12 @@ export function listSavedViews(
   const rows = db.query("SELECT * FROM saved_views ORDER BY created_at").all() as SavedViewRow[];
   return rows.filter((row) => {
     if (!includeArchived && row.archived_at) return false;
+    if (!includeArchived && row.team_id) {
+      const team = db.query("SELECT archived_at FROM teams WHERE id = ?1").get(row.team_id) as {
+        archived_at: string | null;
+      } | null;
+      if (team?.archived_at) return false;
+    }
     if (!canAccessSavedView(db, row, viewerId)) return false;
     if (teamId) {
       if (row.scope === "team") return row.team_id === teamId;
@@ -123,9 +129,12 @@ export function createSavedView(
   let teamId: string | null = input.teamId ?? null;
   if (scope === "team") {
     if (!teamId) throw apiError("VALIDATION_FAILED", "Team saved views require teamId");
-    if (!db.query("SELECT id FROM teams WHERE id = ?1").get(teamId)) {
-      throw apiError("NOT_FOUND", "Team not found");
-    }
+    const team = db.query("SELECT id, archived_at FROM teams WHERE id = ?1").get(teamId) as {
+      id: string;
+      archived_at: string | null;
+    } | null;
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
+    if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
   } else {
     teamId = null;
   }

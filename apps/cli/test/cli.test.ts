@@ -66,6 +66,14 @@ describe("pb auth", () => {
     expect(parsed.viewer.name).toBe("admin");
     expect(parsed.workspace.name).toBe("Prime Board");
   });
+
+  it("workspace update renombra y conserva urlKey", () => {
+    const updated = pb(["workspace", "update", "--name", "CLI Workspace", "--json"]);
+    expect(updated.code).toBe(0);
+    expect(JSON.parse(updated.out)).toMatchObject({ name: "CLI Workspace", urlKey: "prime-board" });
+    const viewed = pb(["workspace", "view", "--json"]);
+    expect(JSON.parse(viewed.out)).toMatchObject({ name: "CLI Workspace", urlKey: "prime-board" });
+  });
 });
 
 describe("pb issue", () => {
@@ -437,6 +445,43 @@ describe("pb project / team / webhook", () => {
     expect(teams.map((t: any) => t.key)).toEqual(["PB"]);
     const byId = pb(["issue", "list", "--team", teams[0].id, "--json"]);
     expect(byId.code).toBe(0);
+  });
+
+  it("archiva y restaura teams sin perder sus issues", () => {
+    const team = pb(["team", "create", "--name", "CLI archive team", "--key", "ARC", "--json"]);
+    expect(team.code).toBe(0);
+    const teamId = JSON.parse(team.out).id;
+    const issue = pb(["issue", "create", "--team", "ARC", "--title", "Retained", "--json"]);
+    expect(issue.code).toBe(0);
+    expect(JSON.parse(issue.out).identifier).toBe("ARC-1");
+
+    const archived = pb(["team", "archive", "ARC", "--json"]);
+    expect(archived.code).toBe(0);
+    expect(JSON.parse(archived.out)).toMatchObject({ id: teamId, key: "ARC" });
+    expect(JSON.parse(archived.out).archivedAt).toBeTruthy();
+    const hidden = pb(["team", "list", "--json"]);
+    expect(JSON.parse(hidden.out).map((item: any) => item.key)).not.toContain("ARC");
+    const history = pb(["team", "list", "--include-archived", "--json"]);
+    expect(JSON.parse(history.out).find((item: any) => item.key === "ARC").archivedAt).toBeTruthy();
+
+    const restored = pb(["team", "unarchive", "ARC", "--json"]);
+    expect(restored.code).toBe(0);
+    expect(JSON.parse(restored.out).archivedAt).toBeNull();
+    const next = pb(["issue", "create", "--team", "ARC", "--title", "After restore", "--json"]);
+    expect(next.code).toBe(0);
+    expect(JSON.parse(next.out).identifier).toBe("ARC-2");
+  });
+
+  it("borra definitivamente un Team vacío con confirmación explícita", () => {
+    const created = pb(["team", "create", "--name", "CLI disposable", "--key", "DCLI", "--json"]);
+    expect(created.code).toBe(0);
+    const mismatch = pb(["team", "delete", "DCLI", "--confirm", "WRONG"]);
+    expect(mismatch.code).toBe(1);
+    expect(mismatch.err).toContain("VALIDATION_FAILED");
+    const deleted = pb(["team", "delete", "DCLI", "--confirm", "DCLI", "--json"]);
+    expect(deleted.code).toBe(0);
+    expect(JSON.parse(deleted.out)).toEqual({ success: true });
+    expect(pb(["team", "list", "--include-archived", "--json"]).out).not.toContain("DCLI");
   });
 
   it("administra teams, actors, memberships, estados, labels y API keys", () => {

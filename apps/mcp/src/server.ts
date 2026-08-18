@@ -46,21 +46,98 @@ export function createServer(config: McpConfig): McpServer {
   );
 
   server.registerTool(
+    "save_workspace",
+    {
+      description: "Rename the workspace. Only Workspace Admins can perform this operation.",
+      inputSchema: { name: z.string().min(1).describe("New workspace name") },
+    },
+    async ({ name }) => {
+      if (!name.trim()) throw new Error("VALIDATION_FAILED: `name` cannot be empty");
+      const data = await gqlRequest(
+        config,
+        `mutation($input: WorkspaceUpdateInput!) {
+          workspaceUpdate(input: $input) { workspace { id name urlKey createdAt } }
+        }`,
+        { input: { name } },
+      );
+      return json(data.workspaceUpdate.workspace);
+    },
+  );
+
+  server.registerTool(
     "list_teams",
     {
       description: "List teams in the workspace.",
-      inputSchema: {},
+      inputSchema: { includeArchived: z.boolean().optional() },
     },
-    async () => json((await gqlRequest(config, "{ teams { id key name description } }")).teams),
+    async ({ includeArchived }) =>
+      json(
+        (
+          await gqlRequest(
+            config,
+            "query($includeArchived: Boolean) { teams(includeArchived: $includeArchived) { id key name description archivedAt } }",
+            { includeArchived: Boolean(includeArchived) },
+          )
+        ).teams,
+      ),
   );
 
   server.registerTool(
     "get_team",
     {
       description: "Retrieve a team by key (e.g. PB) or ID, including its workflow states.",
-      inputSchema: { team: z.string().describe("Team key or ID") },
+      inputSchema: {
+        team: z.string().describe("Team key or ID"),
+        includeArchived: z.boolean().optional(),
+      },
     },
-    async ({ team }) => json(await resolveTeam(config, team)),
+    async ({ team, includeArchived }) => json(await resolveTeam(config, team, includeArchived)),
+  );
+
+  for (const [toolName, archived, description] of [
+    ["archive_team", true, "Archive a team while preserving its history."],
+    ["unarchive_team", false, "Restore an archived team and its normal operations."],
+  ] as const) {
+    server.registerTool(
+      toolName,
+      {
+        description,
+        inputSchema: { team: z.string().describe("Team key or ID") },
+      },
+      async ({ team }) => {
+        const resolved = await resolveTeam(config, team, !archived);
+        const mutation = archived ? "teamArchive" : "teamUnarchive";
+        const data = await gqlRequest(
+          config,
+          `mutation($id: ID!) { ${mutation}(id: $id) { team { id key name description createdAt archivedAt } } }`,
+          { id: resolved.id },
+        );
+        return json(data[mutation].team);
+      },
+    );
+  }
+
+  server.registerTool(
+    "delete_team",
+    {
+      description:
+        "Permanently delete an empty team. Confirmation must exactly match the team key.",
+      inputSchema: {
+        team: z.string().describe("Team key or ID"),
+        confirmation: z.string().min(1).describe("Exact team key confirmation"),
+      },
+    },
+    async ({ team, confirmation }) => {
+      const resolved = await resolveTeam(config, team, true);
+      const data = await gqlRequest(
+        config,
+        `mutation($id: ID!, $confirmation: String!) {
+          teamDelete(id: $id, confirmation: $confirmation) { success }
+        }`,
+        { id: resolved.id, confirmation },
+      );
+      return json(data.teamDelete);
+    },
   );
 
   server.registerTool(
@@ -87,7 +164,7 @@ export function createServer(config: McpConfig): McpServer {
         const data = await gqlRequest(
           config,
           `mutation($id: ID!, $input: TeamUpdateInput!) {
-        teamUpdate(id: $id, input: $input) { team { id key name description createdAt states { id name type color position } } }
+        teamUpdate(id: $id, input: $input) { team { id key name description createdAt archivedAt states { id name type color position } } }
       }`,
           { id: args.id, input },
         );
@@ -98,7 +175,7 @@ export function createServer(config: McpConfig): McpServer {
       const data = await gqlRequest(
         config,
         `mutation($input: TeamCreateInput!) {
-      teamCreate(input: $input) { team { id key name description createdAt states { id name type color position } } }
+      teamCreate(input: $input) { team { id key name description createdAt archivedAt states { id name type color position } } }
     }`,
         {
           input: {
@@ -464,7 +541,7 @@ export function createServer(config: McpConfig): McpServer {
       let states = null;
       let teamId: string | undefined;
       if (args.team) {
-        const team = await resolveTeam(config, args.team);
+        const team = await resolveTeam(config, args.team, Boolean(args.includeArchived));
         teamId = team.id;
         filter.team = { eq: team.id };
         states = team.states;
@@ -734,7 +811,7 @@ export function createServer(config: McpConfig): McpServer {
       },
     },
     async ({ team, includeArchived }) => {
-      const teamId = (await resolveTeam(config, team)).id;
+      const teamId = (await resolveTeam(config, team, Boolean(includeArchived))).id;
       const data = await gqlRequest(
         config,
         `query($teamId: ID!, $includeArchived: Boolean) {

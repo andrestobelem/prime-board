@@ -14,6 +14,7 @@ export interface TeamRow {
   default_state_id: string | null;
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
 }
 
 export interface WorkflowStateRow {
@@ -32,6 +33,7 @@ export function mapTeam(row: TeamRow) {
     name: row.name,
     description: row.description,
     createdAt: row.created_at,
+    archivedAt: row.archived_at,
     _row: row,
   };
 }
@@ -59,6 +61,78 @@ export function getTeam(
       .get(ref.key.toUpperCase()) as TeamRow | null;
   }
   return null;
+}
+
+/** Rechaza mutaciones operativas sobre un Team archivado. */
+export function assertTeamActive(db: Database, teamId: string): TeamRow {
+  const team = getTeam(db, { id: teamId });
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
+  if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
+  return team;
+}
+
+/** Archiva o restaura un Team sin modificar sus recursos ni identificadores. */
+export function archiveTeam(db: Database, id: string, archived: boolean): TeamRow {
+  const team = getTeam(db, { id });
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
+  if (archived && team.archived_at) return team;
+  db.query("UPDATE teams SET archived_at = ?1, updated_at = ?2 WHERE id = ?3").run(
+    archived ? now() : null,
+    now(),
+    id,
+  );
+  return getTeam(db, { id })!;
+}
+
+/**
+ * Elimina definitivamente un Team vacío. Los estados y memberships son
+ * dependencias internas y se eliminan dentro de la misma transacción; todo
+ * recurso que conserva trabajo o referencias externas bloquea la operación.
+ */
+export function deleteTeam(db: Database, id: string, confirmation: string): TeamRow {
+  const initial = getTeam(db, { id });
+  if (!initial) throw apiError("NOT_FOUND", "Team not found");
+  if (confirmation !== initial.key) {
+    throw apiError("VALIDATION_FAILED", `Confirmation must exactly match team key ${initial.key}`);
+  }
+
+  db.transaction(() => {
+    const team = getTeam(db, { id });
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
+    if (confirmation !== team.key) {
+      throw apiError("VALIDATION_FAILED", `Confirmation must exactly match team key ${team.key}`);
+    }
+    const dependencies: Array<[string, string]> = [
+      ["issues", "SELECT count(*) AS count FROM issues WHERE team_id = ?1"],
+      ["projects", "SELECT count(*) AS count FROM project_teams WHERE team_id = ?1"],
+      ["cycles", "SELECT count(*) AS count FROM cycles WHERE team_id = ?1"],
+      ["labels", "SELECT count(*) AS count FROM labels WHERE team_id = ?1"],
+      ["saved views", "SELECT count(*) AS count FROM saved_views WHERE team_id = ?1"],
+      ["initiatives", "SELECT count(*) AS count FROM initiative_teams WHERE team_id = ?1"],
+    ];
+    const blockers = dependencies
+      .map(([resource, query]) => {
+        const row = db.query(query).get(team.id) as { count: number };
+        return [resource, row.count] as const;
+      })
+      .filter(([, count]) => count > 0)
+      .map(([resource, count]) => `${resource}=${count}`);
+    if (blockers.length > 0) {
+      throw apiError(
+        "VALIDATION_FAILED",
+        `Cannot delete team ${team.key}: remove dependent resources first (${blockers.join(", ")})`,
+      );
+    }
+
+    // These internal rows cannot outlive their Team and are removed atomically.
+    db.query("DELETE FROM team_memberships WHERE team_id = ?1").run(team.id);
+    // teams.default_state_id points back to workflow_states and must be cleared first.
+    db.query("UPDATE teams SET default_state_id = NULL WHERE id = ?1").run(team.id);
+    db.query("DELETE FROM workflow_states WHERE team_id = ?1").run(team.id);
+    db.query("DELETE FROM teams WHERE id = ?1").run(team.id);
+  })();
+
+  return initial;
 }
 
 export function getWorkflowState(db: Database, id: string): WorkflowStateRow | null {

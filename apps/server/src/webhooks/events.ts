@@ -6,6 +6,7 @@ export const WEBHOOK_EVENT_NAMES = [
   "comment.created",
   "project.created",
   "project.updated",
+  "team.deleted",
 ] as const;
 
 export type WebhookEventName = (typeof WEBHOOK_EVENT_NAMES)[number];

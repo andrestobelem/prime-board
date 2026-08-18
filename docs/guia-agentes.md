@@ -63,6 +63,9 @@ si ya hay issues, no hace nada.
   tipo portable (`triage|backlog|unstarted|started|completed|canceled`) — filtrá por
   tipo y tu código funciona en cualquier team.
 - **Paridad total**: GraphQL, CLI y MCP pueden hacer exactamente lo mismo.
+- **Workspace vs Team**: el Workspace es el contenedor único de la instalación y tiene un nombre
+  editable por Workspace Admins. Cada Team conserva su `key` (`PRB`) y su nombre propios; renombrar
+  el Workspace no cambia keys, identifiers (`PRB-153`), IDs ni referencias históricas.
 
 ## 3. Darse de alta como agente
 
@@ -134,6 +137,8 @@ parent/project) → `commentCreate` → `issueArchive`. Todo queda en `Issue.act
 alias pb="bun /ruta/a/prime-board/apps/cli/src/index.ts"
 
 pb auth login --url http://localhost:3333 --key pb_xxx
+pb workspace view --json
+pb workspace update --name "Mi Workspace" --json  # requiere Workspace Admin
 pb issue list --team PRB --state started --assignee me --json
 pb issue create --team PRB --title "Hacer algo" --priority high --label agent:review
 pb issue update PRB-153 --state done
@@ -174,6 +179,10 @@ Además de issues, el MCP ofrece `archive_project`, `unarchive_project`,
 `list_milestones`, `save_milestone`, `delete_milestone`, `list_project_updates`,
 `save_project_update` y `delete_project_update` para completar el ciclo de vida de planificación.
 
+Para renombrar el Workspace, usá `save_workspace` con `{ "name": "Mi Workspace" }`;
+la API rechaza la operación para actors con rol `MEMBER`. El nombre es independiente de las keys y
+nombres de Teams.
+
 Las operaciones administrativas tienen equivalentes explícitos: `archive_issue`, `save_team`,
 `list_team_memberships`, `save_team_membership`, `delete_team_membership`, `save_user`,
 `save_api_key`, `delete_api_key`, `save_issue_status`, `delete_issue_status`,
@@ -201,7 +210,7 @@ Config para un cliente MCP (Claude Desktop, prime-agent, etc.):
 
 Registrá una URL y recibí un POST por cada evento
 (`issue.created`, `issue.updated`, `issue.archived`, `comment.created`,
-`project.created`, `project.updated`):
+`project.created`, `project.updated`, `team.deleted`):
 
 ```bash
 pb webhook create --url http://localhost:9999/hook --events issue.created,comment.created
@@ -274,3 +283,27 @@ pb issue update PRB-153 --state started            # 4. tomo el issue
 pb issue comment PRB-153 --body "On it"            # 5. aviso
 pb issue update PRB-153 --state done               # 6. entrego
 ```
+
+### Archivado reversible de Teams
+
+Un Workspace Admin puede retirar un Team sin borrar sus Issues, estados ni actividades:
+
+```bash
+pb team archive AT --json
+pb team list --include-archived --json
+pb team unarchive AT --json
+```
+
+Las consultas y listados normales omiten Teams archivados. Para inspeccionar su historial se usa
+`teams(includeArchived: true)` o `team(..., includeArchived: true)`; las operaciones sobre recursos
+team-scoped archivados fallan con `VALIDATION_FAILED` hasta restaurar el Team.
+
+### Borrado definitivo de Teams
+
+`archive` es reversible; `delete` es definitivo y no sustituye al archivado. Solo un Workspace Admin puede borrar un Team y debe confirmar exactamente su key:
+
+```bash
+pb team delete EMPTY --confirm EMPTY --json
+```
+
+La API rechaza el borrado si existen Issues, Projects, Cycles, Labels, Saved Views o Initiatives, y no deja cambios parciales. Los Workflow States y memberships del Team vacío se eliminan atómicamente con el Team.

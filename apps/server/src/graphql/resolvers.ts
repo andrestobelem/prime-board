@@ -12,7 +12,10 @@ import {
   mapApiKey,
 } from "../domain/actors.ts";
 import {
+  archiveTeam,
+  assertTeamActive,
   createTeam,
+  deleteTeam,
   createWorkflowState,
   getDefaultState,
   getTeam,
@@ -113,6 +116,7 @@ import {
   listTeamMemberships,
   mapTeamMembership,
 } from "../domain/team-memberships.ts";
+import { getWorkspace, mapWorkspace, updateWorkspace } from "../domain/workspaces.ts";
 
 // Scalars passthrough: los timestamps viajan como strings ISO-8601 UTC.
 const DateTime = new GraphQLScalarType({
@@ -320,20 +324,27 @@ export const resolvers = {
       mapActor(requireViewer(context)),
     workspace: (_parent: unknown, _args: unknown, context: Context) => {
       requireViewer(context);
-      const row = context.db
-        .query("SELECT id, name, url_key, created_at FROM workspace LIMIT 1")
-        .get() as { id: string; name: string; url_key: string; created_at: string } | null;
+      const row = getWorkspace(context.db);
       if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
-      return { id: row.id, name: row.name, urlKey: row.url_key, createdAt: row.created_at };
+      return mapWorkspace(row);
     },
-    teams: (_parent: unknown, _args: unknown, context: Context) => {
+    teams: (_parent: unknown, args: { includeArchived?: boolean | null }, context: Context) => {
       requireViewer(context);
-      const rows = context.db.query("SELECT * FROM teams ORDER BY created_at").all() as TeamRow[];
+      const rows = context.db
+        .query(
+          `SELECT * FROM teams ${args.includeArchived ? "" : "WHERE archived_at IS NULL"} ORDER BY created_at`,
+        )
+        .all() as TeamRow[];
       return rows.map(mapTeam);
     },
-    team: (_parent: unknown, args: { id?: string; key?: string }, context: Context) => {
+    team: (
+      _parent: unknown,
+      args: { id?: string; key?: string; includeArchived?: boolean | null },
+      context: Context,
+    ) => {
       requireViewer(context);
       const row = getTeam(context.db, args);
+      if (row?.archived_at && !args.includeArchived) return null;
       return row ? mapTeam(row) : null;
     },
     actors: (_parent: unknown, args: { type?: string }, context: Context) => {
@@ -342,11 +353,17 @@ export const resolvers = {
     },
     teamMemberships: (_parent: unknown, args: { teamId: string }, context: Context) => {
       requireViewer(context);
+      const team = getTeam(context.db, { id: args.teamId });
+      if (team?.archived_at) return [];
       return listTeamMemberships(context.db, args.teamId).map(mapTeamMembership);
     },
     labels: (_parent: unknown, args: { team?: string }, context: Context) => {
       requireViewer(context);
-      return listLabels(context.db, args.team).map(mapLabel);
+      const team = args.team ? getTeam(context.db, { id: args.team }) : null;
+      // Selectors omit team labels from archived Teams while preserving workspace labels.
+      return listLabels(context.db, team?.archived_at ? null : args.team)
+        .filter((label) => !team?.archived_at || label.team_id == null)
+        .map(mapLabel);
     },
     webhooks: (_parent: unknown, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
@@ -358,6 +375,10 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (args.teamId) {
+        const team = getTeam(context.db, { id: args.teamId });
+        if (team?.archived_at && !args.includeArchived) return [];
+      }
       return listSavedViews(context.db, viewer.id, args.teamId, Boolean(args.includeArchived)).map(
         mapSavedView,
       );
@@ -419,6 +440,8 @@ export const resolvers = {
       context: Context,
     ) => {
       requireViewer(context);
+      const team = getTeam(context.db, { id: args.teamId });
+      if (team?.archived_at && !args.includeArchived) return [];
       return listCycles(context.db, args.teamId, Boolean(args.includeArchived)).map(mapCycle);
     },
     cycle: (_parent: unknown, args: { id: string }, context: Context) => {
@@ -439,6 +462,10 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (args.teamId) {
+        const team = getTeam(context.db, { id: args.teamId });
+        if (team?.archived_at) return [];
+      }
       const rows = listReviews(context.db, viewer.id, {
         openOnly: Boolean(args.openOnly),
         first: args.first ?? 50,
@@ -497,6 +524,36 @@ export const resolvers = {
   Mutation: withRepoSyncDispatch({
     ...issueResolvers.Mutation,
     ...projectResolvers.Mutation,
+    teamArchive: (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      return { success: true, team: mapTeam(archiveTeam(context.db, args.id, true)) };
+    },
+    teamUnarchive: (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      return { success: true, team: mapTeam(archiveTeam(context.db, args.id, false)) };
+    },
+    teamDelete: (
+      _parent: unknown,
+      args: { id: string; confirmation: string },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      const deleted = deleteTeam(context.db, args.id, args.confirmation);
+      context.events.emit("team.deleted", viewer, {
+        id: deleted.id,
+        key: deleted.key,
+        name: deleted.name,
+      });
+      return { success: true };
+    },
+    workspaceUpdate: (_parent: unknown, args: { input: { name: string } }, context: Context) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      return { success: true, workspace: mapWorkspace(updateWorkspace(context.db, args.input)) };
+    },
     teamCreate: (
       _parent: unknown,
       args: { input: { name: string; key: string; description?: string | null } },
@@ -715,16 +772,22 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      const existing = getSavedView(context.db, args.id);
+      if (existing?.team_id) assertTeamActive(context.db, existing.team_id);
       const savedView = mapSavedView(updateSavedView(context.db, args.id, viewer.id, args.input));
       return { success: true, savedView };
     },
     savedViewDuplicate: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      const existing = getSavedView(context.db, args.id);
+      if (existing?.team_id) assertTeamActive(context.db, existing.team_id);
       const savedView = mapSavedView(duplicateSavedView(context.db, args.id, viewer.id));
       return { success: true, savedView };
     },
     savedViewDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      const existing = getSavedView(context.db, args.id);
+      if (existing?.team_id) assertTeamActive(context.db, existing.team_id);
       return { success: deleteSavedView(context.db, args.id, viewer.id) };
     },
     favoriteCreate: (

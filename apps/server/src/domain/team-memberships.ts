@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { getActor } from "./actors.ts";
-import { getTeam } from "./teams.ts";
+import { assertTeamActive, getTeam } from "./teams.ts";
 
 export type TeamMembershipRole = "owner" | "member";
 
@@ -56,6 +56,7 @@ export function isTeamOwner(db: Database, teamId: string, actorId: string): bool
 }
 
 export function assertTeamMember(db: Database, teamId: string, actorId: string): void {
+  assertTeamActive(db, teamId);
   if (!isTeamMember(db, teamId, actorId)) throw apiError("NOT_FOUND", "Team resource not found");
 }
 
@@ -72,6 +73,7 @@ export function createTeamMembership(
   allowAdmin = false,
 ): TeamMembershipRow {
   if (!getTeam(db, { id: input.teamId })) throw apiError("NOT_FOUND", "Team not found");
+  assertTeamActive(db, input.teamId);
   if (!getActor(db, input.actorId)) throw apiError("NOT_FOUND", "Actor not found");
   assertTeamOwner(db, input.teamId, viewerId, allowAdmin);
   const role = (input.role ?? "member").toLowerCase() as TeamMembershipRole;
@@ -97,6 +99,7 @@ export function deleteTeamMembership(
 ): boolean {
   const membership = getTeamMembership(db, id);
   if (!membership) throw apiError("NOT_FOUND", "Team membership not found");
+  assertTeamActive(db, membership.team_id);
   assertTeamOwner(db, membership.team_id, viewerId, allowAdmin);
   if (membership.role === "owner") {
     const owners = db

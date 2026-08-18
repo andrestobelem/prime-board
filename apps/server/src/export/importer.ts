@@ -326,8 +326,15 @@ export function rebuildFromRepo(
       const teamId = newId();
       teamIds.set(team.key, teamId);
       db.query(
-        "INSERT INTO teams (id, name, key, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-      ).run(teamId, team.name, team.key, team.description ?? null, timestamp);
+        "INSERT INTO teams (id, name, key, description, created_at, updated_at, archived_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+      ).run(
+        teamId,
+        team.name,
+        team.key,
+        team.description ?? null,
+        timestamp,
+        team.archived ? timestamp : null,
+      );
       for (const state of team.states ?? []) {
         const stateId = newId();
         stateIds.set(`${team.key}/${state.name}`, stateId);

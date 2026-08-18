@@ -15,6 +15,7 @@ import { projectCommand } from "./commands/project.ts";
 import { teamCommand } from "./commands/team.ts";
 import { webhookCommand } from "./commands/webhook.ts";
 import { viewCommand } from "./commands/view.ts";
+import { workspaceCommand } from "./commands/workspace.ts";
 import { ApiError, UsageError } from "./errors.ts";
 
 const HELP = `pb ${APP_VERSION} — prime-board CLI
@@ -27,7 +28,7 @@ Commands:
   issue list|view|create|update|archive|comment Work with issues
   project list|view|create|archive|unarchive|milestone-*|update-*  Work with planning
   view list|create|update|duplicate|delete Saved views
-  team list|create|update|membership-*|workflow-state-*|label-* Manage teams
+  team list|create|update|archive|unarchive|membership-*|workflow-state-*|label-* Manage teams
   actor list|create|update                   Manage actors
   api-key create|delete                      Manage API keys
   webhook list|create|delete               Manage webhooks
@@ -36,6 +37,7 @@ Commands:
   initiative list|view|create|update|delete Manage initiatives
   inbox list|read|archive                  Manage personal inbox
   favorite list|create|delete|reorder      Manage actor favorites
+  workspace view|update                   View or rename the workspace
 
 Run \`pb <command>\` without arguments for detailed usage.
 Environment: PRIME_BOARD_URL, PRIME_BOARD_API_KEY override the saved config.`;
@@ -69,6 +71,8 @@ async function main(): Promise<void> {
       return teamCommand(rest);
     case "webhook":
       return webhookCommand(rest);
+    case "workspace":
+      return workspaceCommand(rest);
     case "--version":
     case "-v":
       console.log(APP_VERSION);
