@@ -156,6 +156,108 @@ describe("saved views", () => {
     expect(teamId).toBeTruthy();
   });
 
+  it("aplica membership a vistas de team en consultas y mutaciones", async () => {
+    const team = await gql(app, `{ team(key: "PB") { id } }`);
+    const teamId = team.data!.team.id;
+    const created = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        savedViewCreate(input: { name: "Private team view", scope: TEAM, teamId: $teamId }) {
+          savedView { id }
+        }
+      }`,
+      { teamId },
+    );
+    const viewId = created.data!.savedViewCreate.savedView.id;
+
+    const member = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "view-member", type: AGENT }) { actor { id } } }`,
+    );
+    const memberId = member.data!.actorCreate.actor.id;
+    const memberKeyResult = await gql(
+      app,
+      `mutation($actorId: ID!) { apiKeyCreate(input: { actorId: $actorId, name: "member-view" }) { key } }`,
+      { actorId: memberId },
+    );
+    const memberKey = memberKeyResult.data!.apiKeyCreate.key;
+    await gql(
+      app,
+      `mutation($teamId: ID!, $actorId: ID!) {
+        teamMembershipCreate(input: { teamId: $teamId, actorId: $actorId, role: MEMBER }) { success }
+      }`,
+      { teamId, actorId: memberId },
+    );
+
+    const memberList = await gql(
+      app,
+      `query($teamId: ID!) { savedViews(teamId: $teamId) { id name scope } }`,
+      { teamId },
+      memberKey,
+    );
+    expect(memberList.errors).toBeUndefined();
+    expect(memberList.data!.savedViews).toContainEqual({
+      id: viewId,
+      name: "Private team view",
+      scope: "TEAM",
+    });
+    const memberUpdate = await gql(
+      app,
+      `mutation($id: ID!) { savedViewUpdate(id: $id, input: { name: "Member renamed" }) { savedView { name } } }`,
+      { id: viewId },
+      memberKey,
+    );
+    expect(memberUpdate.errors).toBeUndefined();
+
+    const outsider = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "view-outsider", type: AGENT }) { actor { id } } }`,
+    );
+    const outsiderId = outsider.data!.actorCreate.actor.id;
+    const outsiderKeyResult = await gql(
+      app,
+      `mutation($actorId: ID!) { apiKeyCreate(input: { actorId: $actorId, name: "outsider-view" }) { key } }`,
+      { actorId: outsiderId },
+    );
+    const outsiderKey = outsiderKeyResult.data!.apiKeyCreate.key;
+
+    const outsiderList = await gql(
+      app,
+      `query($teamId: ID!) { savedViews(teamId: $teamId) { id } }`,
+      { teamId },
+      outsiderKey,
+    );
+    expect(outsiderList.errors).toBeUndefined();
+    expect(outsiderList.data!.savedViews).toEqual([]);
+    const outsiderGet = await gql(
+      app,
+      `query($id: ID!) { savedView(id: $id) { id } }`,
+      { id: viewId },
+      outsiderKey,
+    );
+    expect(outsiderGet.errors).toBeUndefined();
+    expect(outsiderGet.data!.savedView).toBeNull();
+
+    for (const mutation of [
+      `mutation($id: ID!) { savedViewUpdate(id: $id, input: { name: "hijacked" }) { success } }`,
+      `mutation($id: ID!) { savedViewDuplicate(id: $id) { success } }`,
+      `mutation($id: ID!) { savedViewDelete(id: $id) { success } }`,
+    ]) {
+      const denied = await gql(app, mutation, { id: viewId }, outsiderKey);
+      expect(denied.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+    }
+
+    const outsiderCreate = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        savedViewCreate(input: { name: "orphan", scope: TEAM, teamId: $teamId }) { success }
+      }`,
+      { teamId },
+      outsiderKey,
+    );
+    expect(outsiderCreate.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+  });
+
   it("vistas personales solo las ve su dueño", async () => {
     const mine = await gql(
       app,

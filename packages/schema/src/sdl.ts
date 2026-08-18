@@ -126,11 +126,12 @@ export const typeDefs = /* GraphQL */ `
     assignee: Actor
     creator: Actor!
     parent: Issue
-    children: [Issue!]!
+    children(includeArchived: Boolean = false): [Issue!]!
     labels: [Label!]!
     project: Project
     milestone: Milestone
     cycle: Cycle
+    sortOrder: Float!
     comments: [Comment!]!
     """
     Relaciones con otros issues (bloqueo, related, duplicados), desde ambos extremos.
@@ -236,6 +237,11 @@ export const typeDefs = /* GraphQL */ `
   type InboxItemPayload {
     success: Boolean!
     inboxItem: InboxItem!
+  }
+
+  type InboxConnection {
+    nodes: [InboxItem!]!
+    pageInfo: PageInfo!
   }
 
   enum CycleState {
@@ -399,7 +405,7 @@ export const typeDefs = /* GraphQL */ `
     targetDate: DateTime
     teams: [Team!]!
     milestones: [Milestone!]!
-    issues(first: Int = 50): IssueConnection!
+    issues(first: Int = 50, after: String): IssueConnection!
     """
     Historial de actualizaciones narrativas (PRB-207).
     """
@@ -456,7 +462,7 @@ export const typeDefs = /* GraphQL */ `
     targetDate: DateTime
     position: Float!
     project: Project!
-    issues(first: Int = 100): IssueConnection!
+    issues(first: Int = 100, after: String): IssueConnection!
     """
     Issues completados sobre el total (0..1).
     """
@@ -917,6 +923,8 @@ export const typeDefs = /* GraphQL */ `
     Eventos relevantes para el actor autenticado (asignaciones, comentarios en sus issues).
     """
     inbox(first: Int = 50, includeArchived: Boolean = false): [InboxItem!]!
+    inboxPage(first: Int = 50, after: String, includeArchived: Boolean = false): InboxConnection!
+    inboxUnreadCount: Int!
     cycles(teamId: ID!, includeArchived: Boolean = false): [Cycle!]!
     cycle(id: ID!): Cycle
     """

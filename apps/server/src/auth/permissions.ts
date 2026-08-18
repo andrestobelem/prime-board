@@ -17,6 +17,29 @@ export function assertWorkspaceAdmin(actor: ActorRow): void {
   }
 }
 
+export function assertCanUseImportFields(
+  viewer: ActorRow,
+  input: {
+    number?: number | null;
+    createdAt?: string | null;
+    creatorId?: string | null;
+    authorId?: string | null;
+  },
+): void {
+  if (isWorkspaceAdmin(viewer)) return;
+  if (
+    input.number != null ||
+    input.createdAt != null ||
+    input.creatorId != null ||
+    input.authorId != null
+  ) {
+    throw apiError(
+      "UNAUTHORIZED",
+      "Historical identity, dates, and issue numbers require workspace admin permission",
+    );
+  }
+}
+
 /** La configuración del team pertenece al admin del workspace o a sus owners. */
 export function assertCanManageTeam(db: Database, viewer: ActorRow, teamId: string): void {
   if (isWorkspaceAdmin(viewer)) return;

@@ -14,9 +14,13 @@ let app: TestApp;
 beforeAll(async () => {
   app = createTestApp();
   for (const title of ["Uno", "Dos", "Tres"]) {
-    await gql(app, `mutation($t: String!) {
+    await gql(
+      app,
+      `mutation($t: String!) {
       issueCreate(input: { teamKey: "PB", title: $t }) { success }
-    }`, { t: title });
+    }`,
+      { t: title },
+    );
   }
 });
 
@@ -28,13 +32,21 @@ const RELATIONS_QUERY = `query($id: ID!) {
 
 async function relationsOf(ref: string) {
   const result = await gql(app, RELATIONS_QUERY, { id: ref });
-  return result.data!.issue.relations as Array<{ id: string; type: string; relatedIssue: { identifier: string } }>;
+  return result.data!.issue.relations as Array<{
+    id: string;
+    type: string;
+    relatedIssue: { identifier: string };
+  }>;
 }
 
 async function createRelation(issueId: string, relatedIssueId: string, type: string) {
-  return gql(app, `mutation($input: IssueRelationCreateInput!) {
+  return gql(
+    app,
+    `mutation($input: IssueRelationCreateInput!) {
     issueRelationCreate(input: $input) { success relation { id type relatedIssue { identifier } } }
-  }`, { input: { issueId, relatedIssueId, type } });
+  }`,
+    { input: { issueId, relatedIssueId, type } },
+  );
 }
 
 describe("issue relations (blocked-by)", () => {
@@ -59,7 +71,9 @@ describe("issue relations (blocked-by)", () => {
     const duplicate = await createRelation("PB-2", "PB-1", "BLOCKS");
     expect(duplicate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
 
-    const row = app.db.query("SELECT * FROM issue_relations").all() as Array<Record<string, unknown>>;
+    const row = app.db.query("SELECT * FROM issue_relations").all() as Array<
+      Record<string, unknown>
+    >;
     expect(row).toHaveLength(1);
     expect(row[0]).toMatchObject({ type: "blocks" });
   });
@@ -80,9 +94,13 @@ describe("issue relations (blocked-by)", () => {
   });
 
   it("registra la relación en la actividad de ambos issues", async () => {
-    const activity = await gql(app, `query($id: ID!) {
+    const activity = await gql(
+      app,
+      `query($id: ID!) {
       issue(id: $id) { activity { type payload } }
-    }`, { id: "PB-2" });
+    }`,
+      { id: "PB-2" },
+    );
     const events = activity.data!.issue.activity.filter((e: any) => e.type === "relation_added");
     expect(events).toMatchObject([{ payload: { type: "blocks", issue: "PB-1" } }]);
   });
@@ -90,13 +108,69 @@ describe("issue relations (blocked-by)", () => {
   it("borra la relación y desaparece de los dos extremos", async () => {
     const extra = await createRelation("PB-3", "PB-1", "BLOCKED_BY");
     const [relation] = await relationsOf("PB-3");
-    const deleted = await gql(app, `mutation($id: ID!) {
+    const deleted = await gql(
+      app,
+      `mutation($id: ID!) {
       issueRelationDelete(id: $id) { success }
-    }`, { id: relation!.id });
+    }`,
+      { id: relation!.id },
+    );
     expect(deleted.data!.issueRelationDelete.success).toBe(true);
     expect(await relationsOf("PB-3")).toHaveLength(0);
     expect((await relationsOf("PB-1")).map((r) => r.relatedIssue.identifier)).toEqual(["PB-2"]);
     expect(extra.errors).toBeUndefined();
+  });
+
+  it("actualiza updatedAt de ambos issues al crear y borrar una relación", async () => {
+    const created = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Timestamp relation A" }) {
+        issue { id updatedAt }
+      } }`,
+    );
+    const related = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Timestamp relation B" }) {
+        issue { id updatedAt }
+      } }`,
+    );
+    const sourceId = created.data!.issueCreate.issue.id as string;
+    const targetId = related.data!.issueCreate.issue.id as string;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const relation = await createRelation(sourceId, targetId, "RELATED");
+    expect(relation.errors).toBeUndefined();
+    const afterCreate = await gql(
+      app,
+      `query($source: ID!, $target: ID!) {
+        source: issue(id: $source) { updatedAt }
+        target: issue(id: $target) { updatedAt }
+      }`,
+      { source: sourceId, target: targetId },
+    );
+    expect(afterCreate.data!.source.updatedAt).not.toBe(created.data!.issueCreate.issue.updatedAt);
+    expect(afterCreate.data!.target.updatedAt).not.toBe(related.data!.issueCreate.issue.updatedAt);
+
+    const relationId = relation.data!.issueRelationCreate.relation.id as string;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const beforeDelete = afterCreate.data!;
+    const deleted = await gql(
+      app,
+      `mutation($id: ID!) { issueRelationDelete(id: $id) { success } }`,
+      {
+        id: relationId,
+      },
+    );
+    expect(deleted.errors).toBeUndefined();
+    const afterDelete = await gql(
+      app,
+      `query($source: ID!, $target: ID!) {
+        source: issue(id: $source) { updatedAt }
+        target: issue(id: $target) { updatedAt }
+      }`,
+      { source: sourceId, target: targetId },
+    );
+    expect(afterDelete.data!.source.updatedAt).not.toBe(beforeDelete.source.updatedAt);
+    expect(afterDelete.data!.target.updatedAt).not.toBe(beforeDelete.target.updatedAt);
   });
 
   it("borrar una relación inexistente da NOT_FOUND", async () => {
@@ -122,10 +196,12 @@ describe("issue relations en el repo", () => {
       fresh.exec("PRAGMA foreign_keys = ON;");
       migrate(fresh);
       rebuildFromRepo(fresh, dir);
-      const relations = fresh.query(
-        `SELECT b.number AS blocker, t.number AS blocked, r.type FROM issue_relations r
+      const relations = fresh
+        .query(
+          `SELECT b.number AS blocker, t.number AS blocked, r.type FROM issue_relations r
          JOIN issues b ON b.id = r.issue_id JOIN issues t ON t.id = r.related_id`,
-      ).all();
+        )
+        .all();
       expect(relations).toMatchObject([{ blocker: 2, blocked: 1, type: "blocks" }]);
 
       // Round-trip: exportar la DB reconstruida produce el mismo snapshot.
@@ -142,9 +218,13 @@ describe("issue relations en el repo", () => {
 describe("validación de ciclos en relaciones de bloqueo (AT-176)", () => {
   beforeAll(async () => {
     for (const title of ["Ciclo A", "Ciclo B", "Ciclo C"]) {
-      await gql(app, `mutation($t: String!) {
+      await gql(
+        app,
+        `mutation($t: String!) {
         issueCreate(input: { teamKey: "PB", title: $t }) { success }
-      }`, { t: title });
+      }`,
+        { t: title },
+      );
     }
     // PB-4 bloqueado por PB-5: blocks(PB-5 → PB-4).
     await createRelation("PB-4", "PB-5", "BLOCKED_BY");
@@ -180,9 +260,13 @@ describe("validación de ciclos en relaciones de bloqueo (AT-176)", () => {
 describe("relaciones related y duplicate-of (AT-178)", () => {
   beforeAll(async () => {
     for (const title of ["Rel A", "Rel B", "Rel C"]) {
-      await gql(app, `mutation($t: String!) {
+      await gql(
+        app,
+        `mutation($t: String!) {
         issueCreate(input: { teamKey: "PB", title: $t }) { success }
-      }`, { t: title });
+      }`,
+        { t: title },
+      );
     }
   });
 
@@ -237,12 +321,12 @@ describe("relaciones related y duplicate-of (AT-178)", () => {
       fresh.exec("PRAGMA foreign_keys = ON;");
       migrate(fresh);
       rebuildFromRepo(fresh, dir);
-      const counts = fresh.query(
-        "SELECT type, count(*) AS n FROM issue_relations GROUP BY type ORDER BY type",
-      ).all();
-      const original = app.db.query(
-        "SELECT type, count(*) AS n FROM issue_relations GROUP BY type ORDER BY type",
-      ).all();
+      const counts = fresh
+        .query("SELECT type, count(*) AS n FROM issue_relations GROUP BY type ORDER BY type")
+        .all();
+      const original = app.db
+        .query("SELECT type, count(*) AS n FROM issue_relations GROUP BY type ORDER BY type")
+        .all();
       expect(counts).toEqual(original);
 
       exportBoard(fresh, other);

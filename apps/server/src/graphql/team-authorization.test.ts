@@ -397,6 +397,30 @@ describe("autorización de configuración de teams", () => {
     expect(deleted.errors).toBeUndefined();
   });
 
+  it("permite al workspace admin gestionar memberships sin pertenecer al team", async () => {
+    const actor = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "admin-managed-member", type: AGENT }) { actor { id } } }`,
+    );
+    const actorId = actor.data!.actorCreate.actor.id as string;
+    const created = await gql(
+      app,
+      `mutation($teamId: ID!, $actorId: ID!) {
+        teamMembershipCreate(input: { teamId: $teamId, actorId: $actorId, role: MEMBER }) {
+          membership { id }
+        }
+      }`,
+      { teamId: setup.targetTeamId, actorId },
+    );
+    expect(created.errors).toBeUndefined();
+    const deleted = await gql(
+      app,
+      `mutation($id: ID!) { teamMembershipDelete(id: $id) { success } }`,
+      { id: created.data!.teamMembershipCreate.membership.id },
+    );
+    expect(deleted.errors).toBeUndefined();
+  });
+
   it("restringe el carry-over de ciclos al owner del team", async () => {
     const destination = await gql(
       app,

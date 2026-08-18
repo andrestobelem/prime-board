@@ -59,18 +59,21 @@ export function assertTeamMember(db: Database, teamId: string, actorId: string):
   if (!isTeamMember(db, teamId, actorId)) throw apiError("NOT_FOUND", "Team resource not found");
 }
 
-function assertTeamOwner(db: Database, teamId: string, actorId: string): void {
-  if (!isTeamOwner(db, teamId, actorId)) throw apiError("NOT_FOUND", "Team resource not found");
+function assertTeamOwner(db: Database, teamId: string, actorId: string, allowAdmin = false): void {
+  if (!allowAdmin && !isTeamOwner(db, teamId, actorId)) {
+    throw apiError("NOT_FOUND", "Team resource not found");
+  }
 }
 
 export function createTeamMembership(
   db: Database,
   viewerId: string,
   input: { teamId: string; actorId: string; role?: string | null },
+  allowAdmin = false,
 ): TeamMembershipRow {
   if (!getTeam(db, { id: input.teamId })) throw apiError("NOT_FOUND", "Team not found");
   if (!getActor(db, input.actorId)) throw apiError("NOT_FOUND", "Actor not found");
-  assertTeamOwner(db, input.teamId, viewerId);
+  assertTeamOwner(db, input.teamId, viewerId, allowAdmin);
   const role = (input.role ?? "member").toLowerCase() as TeamMembershipRole;
   if (role !== "member" && role !== "owner") {
     throw apiError("VALIDATION_FAILED", `Invalid team membership role: ${input.role}`);
@@ -86,10 +89,15 @@ export function createTeamMembership(
   return getTeamMembership(db, id)!;
 }
 
-export function deleteTeamMembership(db: Database, viewerId: string, id: string): boolean {
+export function deleteTeamMembership(
+  db: Database,
+  viewerId: string,
+  id: string,
+  allowAdmin = false,
+): boolean {
   const membership = getTeamMembership(db, id);
   if (!membership) throw apiError("NOT_FOUND", "Team membership not found");
-  assertTeamOwner(db, membership.team_id, viewerId);
+  assertTeamOwner(db, membership.team_id, viewerId, allowAdmin);
   if (membership.role === "owner") {
     const owners = db
       .query("SELECT count(*) AS count FROM team_memberships WHERE team_id = ?1 AND role = 'owner'")

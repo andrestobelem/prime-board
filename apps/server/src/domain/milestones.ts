@@ -4,6 +4,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { parseDateTime } from "./datetime.ts";
+import { recordActivity } from "./activity.ts";
 
 export interface MilestoneRow {
   id: string;
@@ -119,20 +120,68 @@ export function updateMilestone(
   return getMilestone(db, id)!;
 }
 
+function preserveMilestoneActivityReferences(
+  db: Database,
+  milestoneId: string,
+  reference: string,
+): void {
+  const activities = db
+    .query("SELECT id, payload FROM activity WHERE type IN ('milestone_changed', 'created')")
+    .all() as Array<{ id: string; payload: string }>;
+  for (const activity of activities) {
+    const payload = JSON.parse(activity.payload) as Record<string, unknown>;
+    let changed = false;
+    for (const field of ["from", "to", "milestoneId"]) {
+      if (payload[field] === milestoneId) {
+        payload[field] = reference;
+        changed = true;
+      }
+    }
+    if (changed) {
+      db.query("UPDATE activity SET payload = ?1 WHERE id = ?2").run(
+        JSON.stringify(payload),
+        activity.id,
+      );
+    }
+  }
+}
+
 /**
  * Borra un milestone. Los issues asignados quedan sin milestone (no se borran ni
  * se bloquea la operación): el milestone es una agrupación, no una dependencia.
  */
-export function deleteMilestone(db: Database, id: string): number {
+export function deleteMilestone(db: Database, actorId: string, id: string): number {
   const milestone = getMilestone(db, id);
   if (!milestone) throw apiError("NOT_FOUND", "Milestone not found");
   let affected = 0;
+  const project = db
+    .query(
+      `SELECT projects.name AS project_name FROM projects
+     JOIN milestones ON milestones.project_id = projects.id WHERE milestones.id = ?1`,
+    )
+    .get(id) as { project_name: string };
+  // Keep a stable natural key even if another project later reuses the name.
+  const historicalReference = `${project.project_name}/${milestone.name}`;
   db.transaction(() => {
-    const orphaned = db
-      .query("SELECT count(*) AS n FROM issues WHERE milestone_id = ?1")
-      .get(id) as { n: number };
-    affected = orphaned.n;
-    db.query("UPDATE issues SET milestone_id = NULL WHERE milestone_id = ?1").run(id);
+    const issues = db
+      .query("SELECT id FROM issues WHERE milestone_id = ?1")
+      .values(id)
+      .map((row) => row[0] as string);
+    affected = issues.length;
+    const timestamp = now();
+    db.query("UPDATE issues SET milestone_id = NULL, updated_at = ?1 WHERE milestone_id = ?2").run(
+      timestamp,
+      id,
+    );
+    for (const issueId of issues) {
+      // Keep the natural reference because the milestone row is deleted below.
+      recordActivity(db, issueId, actorId, "milestone_changed", {
+        from: historicalReference,
+        to: null,
+        reason: "milestone_deleted",
+      });
+    }
+    preserveMilestoneActivityReferences(db, id, historicalReference);
     db.query("DELETE FROM milestones WHERE id = ?1").run(id);
   })();
   return affected;

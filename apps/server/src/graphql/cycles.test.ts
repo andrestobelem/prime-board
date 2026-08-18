@@ -131,6 +131,45 @@ describe("cycles", () => {
     expect(badDates.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
   });
 
+  it("actualiza updatedAt de issues al borrar un ciclo", async () => {
+    const team = await gql(app, `{ team(key: "PB") { id } }`);
+    const created = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Deleted cycle", startsAt: "2027-01-01", endsAt: "2027-01-14"
+        }) { cycle { id } }
+      }`,
+      { teamId: team.data!.team.id },
+    );
+    const cycleId = created.data!.cycleCreate.cycle.id;
+    const issue = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Cycle timestamp" }) { issue { id } } }`,
+    );
+    const issueId = issue.data!.issueCreate.issue.id;
+    await gql(
+      app,
+      `mutation($issueId: ID!, $cycleId: ID!) {
+        issueUpdate(id: $issueId, input: { cycleId: $cycleId }) { success }
+      }`,
+      { issueId, cycleId },
+    );
+    const before = await gql(app, `query($id: ID!) { issue(id: $id) { updatedAt cycle { id } } }`, {
+      id: issueId,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const deleted = await gql(app, `mutation($id: ID!) { cycleDelete(id: $id) { success } }`, {
+      id: cycleId,
+    });
+    expect(deleted.errors).toBeUndefined();
+    const after = await gql(app, `query($id: ID!) { issue(id: $id) { updatedAt cycle { id } } }`, {
+      id: issueId,
+    });
+    expect(after.data!.issue.cycle).toBeNull();
+    expect(after.data!.issue.updatedAt).not.toBe(before.data!.issue.updatedAt);
+  });
+
   it("rechaza DateTime no parseables y no persiste cambios inválidos", async () => {
     const team = await gql(app, `{ team(key: "PB") { id } }`);
     const teamId = team.data!.team.id;

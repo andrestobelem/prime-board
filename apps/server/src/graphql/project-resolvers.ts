@@ -1,6 +1,6 @@
 // Resolvers del dominio project (AT-137). Se ensamblan en resolvers.ts.
 import { getActor, mapActor } from "../domain/actors.ts";
-import { listIssues, mapIssue } from "../domain/issues.ts";
+import { getIssue, listIssues, mapIssue } from "../domain/issues.ts";
 import {
   archiveProject,
   createProject,
@@ -27,6 +27,7 @@ import {
 } from "../domain/project-updates.ts";
 import { getTeam, mapTeam } from "../domain/teams.ts";
 import type { Context } from "./context.ts";
+import { issueEventData } from "./issue-resolvers.ts";
 import { requireViewer } from "./errors.ts";
 import {
   assertCanCreateProject,
@@ -46,9 +47,17 @@ export const projectResolvers = {
       listProjectTeamIds(context.db, project.id).map((teamId) =>
         mapTeam(getTeam(context.db, { id: teamId })!),
       ),
-    issues: (project: MappedProject, args: { first?: number }, context: Context) => {
+    issues: (
+      project: MappedProject,
+      args: { first?: number; after?: string | null },
+      context: Context,
+    ) => {
       const first = Math.min(Math.max(args.first ?? 50, 1), 250);
-      const page = listIssues(context.db, { filter: { project: { eq: project.id } }, first });
+      const page = listIssues(context.db, {
+        filter: { project: { eq: project.id } },
+        first,
+        after: args.after,
+      });
       return {
         nodes: page.rows.map(mapIssue),
         pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
@@ -74,10 +83,15 @@ export const projectResolvers = {
   Milestone: {
     project: (milestone: { projectId: string }, _args: unknown, context: Context) =>
       mapProject(getProject(context.db, milestone.projectId)!),
-    issues: (milestone: { id: string }, args: { first?: number }, context: Context) => {
+    issues: (
+      milestone: { id: string },
+      args: { first?: number; after?: string | null },
+      context: Context,
+    ) => {
       const page = listIssues(context.db, {
         filter: { milestone: { eq: milestone.id } },
         first: Math.min(Math.max(args.first ?? 100, 1), 250),
+        after: args.after,
       });
       return {
         nodes: page.rows.map(mapIssue),
@@ -129,7 +143,19 @@ export const projectResolvers = {
       const viewer = requireViewer(context);
       const milestone = getMilestone(context.db, args.id);
       if (milestone) assertCanManageProject(context.db, viewer, milestone.project_id);
-      const orphaned = deleteMilestone(context.db, args.id);
+      const affected = context.db
+        .query("SELECT id FROM issues WHERE milestone_id = ?1")
+        .all(args.id)
+        .map((row) => (row as { id: string }).id);
+      const orphaned = deleteMilestone(context.db, viewer.id, args.id);
+      for (const issueId of affected) {
+        const issue = getIssue(context.db, issueId);
+        if (issue) {
+          context.events.emit("issue.updated", viewer, issueEventData(issue), {
+            milestone: { from: args.id, to: null },
+          });
+        }
+      }
       return { success: true, orphanedIssues: orphaned };
     },
     projectArchive: (_parent: unknown, args: { id: string }, context: Context) => {

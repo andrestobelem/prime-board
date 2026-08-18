@@ -42,11 +42,16 @@ function stableStringify(value: unknown): string {
 
 interface Lookups {
   actors: Map<string, string>;
+  /** Snapshot/front-matter names, which stay concise when they are unambiguous. */
   states: Map<string, string>;
   projects: Map<string, string>;
   milestones: Map<string, string>;
   cycles: Map<string, string>;
   labels: Map<string, string>;
+  /** Activity references are qualified only when a bare name would be ambiguous. */
+  activityStates: Map<string, string>;
+  activityProjects: Map<string, string>;
+  activityMilestones: Map<string, string>;
 }
 
 function uniqueNaturalMap(rows: Array<[string, string]>, resource: string): Map<string, string> {
@@ -93,25 +98,43 @@ function buildSavedViewLookups(
   teamKeys: Map<string, string>,
   identifiers: Map<string, string>,
   views: Array<Record<string, any>>,
+  teamId?: string,
 ): Record<SavedViewRefTable, Map<string, string>> {
-  const values = (sql: string) =>
+  const values = (sql: string, ...args: unknown[]) =>
     db
       .query(sql)
-      .values()
+      .values(...(args as never[]))
       .map((row) => [row[0] as string, row[1] as string] as [string, string]);
-  const projects = values("SELECT id, name FROM projects");
-  const milestones = values(
-    "SELECT milestones.id, projects.name || '/' || milestones.name " +
-      "FROM milestones JOIN projects ON projects.id = milestones.project_id",
-  );
+  const projectScope = teamId
+    ? " WHERE EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = projects.id AND project_teams.team_id = ?1)"
+    : "";
+  const scopeArgs = teamId ? [teamId] : [];
+  const projects = db
+    .query(`SELECT projects.id, projects.name FROM projects${projectScope}`)
+    .values(...scopeArgs)
+    .map((row) => [row[0] as string, row[1] as string] as [string, string]);
+  const milestones = db
+    .query(
+      `SELECT milestones.id, projects.name || '/' || milestones.name
+       FROM milestones JOIN projects ON projects.id = milestones.project_id${
+         teamId
+           ? " WHERE EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = projects.id AND project_teams.team_id = ?1)"
+           : ""
+       }`,
+    )
+    .values(...scopeArgs)
+    .map((row) => [row[0] as string, row[1] as string] as [string, string]);
   const needsProjects = savedViewsUseField(views, "project");
   const needsMilestones = savedViewsUseField(views, "milestone");
   return {
     teams: teamKeys,
     states: uniqueNaturalMap(
       values(
-        "SELECT workflow_states.id, teams.key || '/' || workflow_states.name " +
-          "FROM workflow_states JOIN teams ON teams.id = workflow_states.team_id",
+        `SELECT workflow_states.id, teams.key || '/' || workflow_states.name
+         FROM workflow_states JOIN teams ON teams.id = workflow_states.team_id${
+           teamId ? " WHERE workflow_states.team_id = ?1" : ""
+         }`,
+        ...scopeArgs,
       ),
       "workflow state",
     ),
@@ -143,15 +166,52 @@ function buildLookups(db: Database): Lookups {
         .values()
         .map((row) => [row[0] as string, row[1] as string]),
     );
+  const actors = toMap("SELECT id, name FROM actors");
+  const states = toMap("SELECT id, name FROM workflow_states");
+  const projects = toMap("SELECT id, name FROM projects");
+  const milestones = toMap("SELECT id, name FROM milestones");
+  const stateRows = db
+    .query(
+      `SELECT workflow_states.id, workflow_states.name, teams.key AS team_key
+       FROM workflow_states JOIN teams ON teams.id = workflow_states.team_id`,
+    )
+    .all() as Array<{ id: string; name: string; team_key: string }>;
+  const stateCounts = new Map<string, number>();
+  for (const row of stateRows) stateCounts.set(row.name, (stateCounts.get(row.name) ?? 0) + 1);
+  const activityStates = new Map(
+    stateRows.map((row) => [
+      row.id,
+      stateCounts.get(row.name) === 1 ? row.name : `${row.team_key}/${row.name}`,
+    ]),
+  );
+  const milestoneRows = db
+    .query(
+      `SELECT milestones.id, milestones.name, projects.name AS project_name
+       FROM milestones JOIN projects ON projects.id = milestones.project_id`,
+    )
+    .all() as Array<{ id: string; name: string; project_name: string }>;
+  const milestoneCounts = new Map<string, number>();
+  for (const row of milestoneRows)
+    milestoneCounts.set(row.name, (milestoneCounts.get(row.name) ?? 0) + 1);
+  const activityMilestones = new Map(
+    milestoneRows.map((row) => [
+      row.id,
+      milestoneCounts.get(row.name) === 1 ? row.name : `${row.project_name}/${row.name}`,
+    ]),
+  );
+  const activityProjects = new Map(projects);
   return {
-    actors: toMap("SELECT id, name FROM actors"),
-    states: toMap("SELECT id, name FROM workflow_states"),
-    projects: toMap("SELECT id, name FROM projects"),
-    milestones: toMap("SELECT id, name FROM milestones"),
+    actors,
+    states,
+    projects,
+    milestones,
     cycles: toMap(
       "SELECT cycles.id, teams.key || '/' || cycles.number FROM cycles JOIN teams ON teams.id = cycles.team_id",
     ),
     labels: toMap("SELECT id, name FROM labels"),
+    activityStates,
+    activityProjects,
+    activityMilestones,
   };
 }
 
@@ -178,10 +238,10 @@ function resolvePayload(
   const resolve = (table: RefTable, value: string): string | undefined =>
     (
       ({
-        states: lookups.states,
+        states: lookups.activityStates,
         actors: lookups.actors,
-        projects: lookups.projects,
-        milestones: lookups.milestones,
+        projects: lookups.activityProjects,
+        milestones: lookups.activityMilestones,
         cycles: lookups.cycles,
         issues: identifiers,
         teams: teamKeys,
@@ -232,6 +292,23 @@ interface ExportContext {
   teamKeys: Map<string, string>;
   identifiers: Map<string, string>;
   commentBodies: Map<string, string>;
+}
+
+function assertProjectNamesAreUnambiguous(db: Database, teamId?: string): void {
+  const row = db
+    .query(
+      `SELECT projects.name
+       FROM projects
+       ${teamId ? "WHERE EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = projects.id AND project_teams.team_id = ?1)" : ""}
+       GROUP BY projects.name
+       HAVING count(*) > 1
+       ORDER BY projects.name
+       LIMIT 1`,
+    )
+    .get(...((teamId ? [teamId] : []) as never[])) as { name: string } | null;
+  if (row) {
+    throw new Error(`Cannot export projects: ambiguous project reference "${row.name}"`);
+  }
 }
 
 function buildContext(db: Database): ExportContext {
@@ -404,6 +481,10 @@ export function exportBoard(
   if (options.teamKey && !teamFilter) {
     throw new Error(`Team not found: ${options.teamKey}`);
   }
+  // Project names are currently the public natural key in snapshots. Refuse to
+  // emit an ambiguous snapshot rather than allowing the importer to reassign
+  // issues, milestones, updates or initiatives to the last project read.
+  assertProjectNamesAreUnambiguous(db, teamFilter?.id);
 
   // Alcance del export: un rebuild desde un export parcial borraría lo que no
   // está en el repo, así que queda registrado y el importador lo verifica.
@@ -482,9 +563,13 @@ export function exportBoard(
 
   const projects = db
     .query(
-      "SELECT id, name, description, state, lead_id, target_date, archived_at FROM projects ORDER BY name",
+      `SELECT projects.id, projects.name, projects.description, projects.state, projects.lead_id,
+              projects.target_date, projects.archived_at
+       FROM projects
+       ${teamFilter ? "WHERE EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = projects.id AND project_teams.team_id = ?1)" : ""}
+       ORDER BY projects.name, projects.id`,
     )
-    .all() as Array<Record<string, any>>;
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
   write(
     join(base, "meta", "projects.json"),
     stableStringify(
@@ -497,9 +582,10 @@ export function exportBoard(
         archived: Boolean(project.archived_at),
         teams: db
           .query(
-            "SELECT teams.key FROM project_teams JOIN teams ON teams.id = project_teams.team_id WHERE project_id = ?1 ORDER BY teams.key",
+            `SELECT teams.key FROM project_teams JOIN teams ON teams.id = project_teams.team_id
+             WHERE project_id = ?1 ${teamFilter ? "AND project_teams.team_id = ?2" : ""} ORDER BY teams.key`,
           )
-          .values(project.id)
+          .values(...((teamFilter ? [project.id, teamFilter.id] : [project.id]) as never[]))
           .map((row) => row[0]),
         milestones: db
           .query(
@@ -525,7 +611,14 @@ export function exportBoard(
     )
     .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
   const savedViewLookups = savedViews.length
-    ? buildSavedViewLookups(db, lookups, context.teamKeys, context.identifiers, savedViews)
+    ? buildSavedViewLookups(
+        db,
+        lookups,
+        context.teamKeys,
+        context.identifiers,
+        savedViews,
+        teamFilter?.id,
+      )
     : null;
   const resolveSavedViewRef = (table: SavedViewRefTable, value: string): string | undefined =>
     savedViewLookups?.[table].get(value);
@@ -563,15 +656,28 @@ export function exportBoard(
        LEFT JOIN saved_views sv ON sv.id = f.saved_view_id
        LEFT JOIN actors sv_owners ON sv_owners.id = sv.owner_id
        LEFT JOIN teams sv_teams ON sv_teams.id = sv.team_id
-       ${teamFilter ? "WHERE f.project_id IS NOT NULL OR sv.team_id = ?1" : ""}
+       ${
+         teamFilter
+           ? "WHERE (f.project_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_teams fpt WHERE fpt.project_id = f.project_id AND fpt.team_id = ?1)) OR sv.team_id = ?1"
+           : ""
+       }
        ORDER BY actors.name, f.position, f.created_at, f.id`,
     )
     .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
   for (const favorite of favoriteRows) {
     if (!favorite.project_name) continue;
     const count = db
-      .query("SELECT count(*) AS count FROM projects WHERE name = ?1")
-      .get(favorite.project_name) as { count: number };
+      .query(
+        `SELECT count(*) AS count FROM projects
+         WHERE name = ?1 ${teamFilter ? "AND EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = projects.id AND project_teams.team_id = ?2)" : ""}`,
+      )
+      .get(
+        ...((teamFilter
+          ? [favorite.project_name, teamFilter.id]
+          : [favorite.project_name]) as never[]),
+      ) as {
+      count: number;
+    };
     if (count.count > 1) {
       throw new Error(
         `Cannot export favorites: ambiguous project reference "${favorite.project_name}"`,
@@ -601,9 +707,10 @@ export function exportBoard(
     .query(
       `SELECT c.*, teams.key AS team_key
        FROM cycles c JOIN teams ON teams.id = c.team_id
+       ${teamFilter ? "WHERE c.team_id = ?1" : ""}
        ORDER BY teams.key, c.number`,
     )
-    .all() as Array<Record<string, any>>;
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
   write(
     join(base, "meta", "cycles.json"),
     stableStringify(
@@ -625,9 +732,10 @@ export function exportBoard(
        FROM project_updates pu
        JOIN projects p ON p.id = pu.project_id
        JOIN actors a ON a.id = pu.author_id
+       ${teamFilter ? "WHERE EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = p.id AND project_teams.team_id = ?1)" : ""}
        ORDER BY pu.created_at, pu.id`,
     )
-    .all() as Array<Record<string, any>>;
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
   write(
     join(base, "meta", "project-updates.json"),
     stableStringify(
@@ -648,9 +756,15 @@ export function exportBoard(
       `SELECT i.*, owners.name AS owner_name
        FROM initiatives i
        LEFT JOIN actors owners ON owners.id = i.owner_id
+       ${
+         teamFilter
+           ? `WHERE EXISTS (SELECT 1 FROM initiative_teams selected_it WHERE selected_it.initiative_id = i.id AND selected_it.team_id = ?1)
+              OR EXISTS (SELECT 1 FROM initiative_projects selected_ip JOIN project_teams selected_pt ON selected_pt.project_id = selected_ip.project_id WHERE selected_ip.initiative_id = i.id AND selected_pt.team_id = ?1)`
+           : ""
+       }
        ORDER BY i.created_at, i.id`,
     )
-    .all() as Array<Record<string, any>>;
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
   write(
     join(base, "meta", "initiatives.json"),
     stableStringify(
@@ -666,18 +780,19 @@ export function exportBoard(
             `SELECT p.name FROM initiative_projects ip
              JOIN projects p ON p.id = ip.project_id
              WHERE ip.initiative_id = ?1
+             ${teamFilter ? "AND EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = p.id AND project_teams.team_id = ?2)" : ""}
              ORDER BY p.name`,
           )
-          .values(initiative.id)
+          .values(...((teamFilter ? [initiative.id, teamFilter.id] : [initiative.id]) as never[]))
           .map((row) => row[0] as string),
         teams: db
           .query(
             `SELECT t.key FROM initiative_teams it
              JOIN teams t ON t.id = it.team_id
-             WHERE it.initiative_id = ?1
+             WHERE it.initiative_id = ?1 ${teamFilter ? "AND it.team_id = ?2" : ""}
              ORDER BY t.key`,
           )
-          .values(initiative.id)
+          .values(...((teamFilter ? [initiative.id, teamFilter.id] : [initiative.id]) as never[]))
           .map((row) => row[0] as string),
       })),
     ),
@@ -694,9 +809,10 @@ export function exportBoard(
        JOIN teams ON teams.id = issues.team_id
        JOIN actors req ON req.id = r.requester_id
        JOIN actors rev ON rev.id = r.reviewer_id
+       ${teamFilter ? "WHERE issues.team_id = ?1" : ""}
        ORDER BY r.created_at, r.id`,
     )
-    .all() as Array<Record<string, any>>;
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
   write(
     join(base, "meta", "reviews.json"),
     stableStringify(
@@ -723,9 +839,10 @@ export function exportBoard(
        JOIN issues ON issues.id = a.issue_id
        JOIN teams ON teams.id = issues.team_id
        JOIN actors ON actors.id = r.actor_id
+       ${teamFilter ? "WHERE issues.team_id = ?1" : ""}
        ORDER BY teams.key, issues.number, actors.name, a.created_at, a.id`,
     )
-    .all() as Array<Record<string, any>>;
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
   const activityIndexByIssue = new Map<string, Map<string, number>>();
   for (const issue of db
     .query(
@@ -767,6 +884,9 @@ export function exportBoard(
 
   let events = 0;
   for (const issue of issues) {
+    // El snapshot no duplica cuerpos de comentarios, pero sí debe actualizar
+    // metadata (en particular updatedAt) cuando una actividad mueve el cursor
+    // incremental. makeWriter evita escrituras si el contenido no cambió.
     events += writeIssue(db, base, issue, context, write);
   }
 

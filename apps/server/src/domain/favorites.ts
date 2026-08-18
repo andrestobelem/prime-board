@@ -2,7 +2,7 @@
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
-import { canViewSavedView, type SavedViewRow } from "./saved-views.ts";
+import { canAccessSavedView, type SavedViewRow } from "./saved-views.ts";
 
 export interface FavoriteRow {
   id: string;
@@ -65,7 +65,7 @@ function assertProject(db: Database, id: string): void {
 
 function assertSavedView(db: Database, id: string, actorId: string): void {
   const row = db.query("SELECT * FROM saved_views WHERE id = ?1").get(id) as SavedViewRow | null;
-  if (!row || row.archived_at || !canViewSavedView(row, actorId)) {
+  if (!row || row.archived_at || !canAccessSavedView(db, row, actorId)) {
     throw apiError("NOT_FOUND", "Saved view not found");
   }
 }

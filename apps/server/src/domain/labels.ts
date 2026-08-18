@@ -84,16 +84,25 @@ export function updateLabel(
 }
 
 /** Borra la label y la quita de todos los issues que la tenían. */
-export function deleteLabel(db: Database, id: string): number {
+export function deleteLabel(db: Database, actorId: string, id: string): number {
   const label = db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow | null;
   if (!label) throw apiError("NOT_FOUND", "Label not found");
   let affected = 0;
   db.transaction(() => {
-    const used = db.query("SELECT count(*) AS n FROM issue_labels WHERE label_id = ?1").get(id) as {
-      n: number;
-    };
-    affected = used.n;
+    const issues = db
+      .query("SELECT issue_id FROM issue_labels WHERE label_id = ?1")
+      .values(id)
+      .map((row) => row[0] as string);
+    affected = issues.length;
     db.query("DELETE FROM issue_labels WHERE label_id = ?1").run(id);
+    const timestamp = now();
+    for (const issueId of issues) {
+      db.query("UPDATE issues SET updated_at = ?1 WHERE id = ?2").run(timestamp, issueId);
+      recordActivity(db, issueId, actorId, "unlabeled", {
+        label: label.name,
+        reason: "label_deleted",
+      });
+    }
     db.query("DELETE FROM labels WHERE id = ?1").run(id);
   })();
   return affected;

@@ -167,6 +167,28 @@ const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "
  * no puede quedarse sin estados, ni sin un estado `completed` (el board necesita
  * uno para cerrar trabajo y el progreso de milestones se calcula con él).
  */
+function preserveStateActivityReferences(db: Database, stateId: string, reference: string): void {
+  const activities = db
+    .query("SELECT id, payload FROM activity WHERE type IN ('state_changed', 'created')")
+    .all() as Array<{ id: string; payload: string }>;
+  for (const activity of activities) {
+    const payload = JSON.parse(activity.payload) as Record<string, unknown>;
+    let changed = false;
+    for (const field of ["from", "to", "stateId"]) {
+      if (payload[field] === stateId) {
+        payload[field] = reference;
+        changed = true;
+      }
+    }
+    if (changed) {
+      db.query("UPDATE activity SET payload = ?1 WHERE id = ?2").run(
+        JSON.stringify(payload),
+        activity.id,
+      );
+    }
+  }
+}
+
 export function deleteWorkflowState(
   db: Database,
   actorId: string,
@@ -206,6 +228,10 @@ export function deleteWorkflowState(
     }
   }
 
+  const team = db.query("SELECT key FROM teams WHERE id = ?1").get(state.team_id) as {
+    key: string;
+  };
+  const historicalReference = `${team.key}/${state.name}`;
   db.transaction(() => {
     if (target) {
       const issues = db
@@ -238,6 +264,10 @@ export function deleteWorkflowState(
         state.team_id,
       );
     }
+    // Keep historical events readable after the row disappears. The
+    // qualified key prevents a state with the same name in another team from
+    // being selected during a later rebuild.
+    preserveStateActivityReferences(db, id, historicalReference);
     db.query("DELETE FROM workflow_states WHERE id = ?1").run(id);
   })();
 
@@ -260,6 +290,16 @@ export function updateWorkflowState(
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
   if (input.type != null && !STATE_TYPES.includes(input.type)) {
     throw apiError("VALIDATION_FAILED", `Invalid state type: ${input.type}`);
+  }
+  if (input.type != null && input.type !== state.type && state.type === "completed") {
+    const remainingCompleted = db
+      .query(
+        "SELECT count(*) AS n FROM workflow_states WHERE team_id = ?1 AND type = 'completed' AND id != ?2",
+      )
+      .get(state.team_id, id) as { n: number };
+    if (remainingCompleted.n === 0) {
+      throw apiError("VALIDATION_FAILED", "A team must keep at least one completed state");
+    }
   }
   if (input.name != null) {
     const name = input.name.trim();

@@ -123,6 +123,8 @@ export function translateActivityRefs(
     if (ref.mode === "dense") {
       const value = result[readKey];
       if (writeKey !== readKey) delete result[readKey];
+      // Dense snapshots always expose a stable field; an unresolvable deleted
+      // resource is represented as null instead of leaking an internal UUID.
       result[writeKey] = typeof value === "string" ? (resolve(ref.table, value) ?? null) : null;
     } else {
       if (result[readKey] === undefined) continue;

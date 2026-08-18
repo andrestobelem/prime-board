@@ -125,10 +125,11 @@ export function updateReview(
   id: string,
   viewerId: string,
   input: { status?: string | null; reviewerId?: string | null },
+  allowAdmin = false,
 ): ReviewRow {
   const existing = getReview(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Review not found");
-  if (existing.reviewer_id !== viewerId && existing.requester_id !== viewerId) {
+  if (!allowAdmin && existing.reviewer_id !== viewerId && existing.requester_id !== viewerId) {
     throw apiError("NOT_FOUND", "Review not found");
   }
 
@@ -157,10 +158,15 @@ export function updateReview(
   return getReview(db, id)!;
 }
 
-export function deleteReview(db: Database, id: string, viewerId: string): boolean {
+export function deleteReview(
+  db: Database,
+  id: string,
+  viewerId: string,
+  allowAdmin = false,
+): boolean {
   const existing = getReview(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Review not found");
-  if (existing.requester_id !== viewerId && existing.reviewer_id !== viewerId) {
+  if (!allowAdmin && existing.requester_id !== viewerId && existing.reviewer_id !== viewerId) {
     throw apiError("NOT_FOUND", "Review not found");
   }
   db.query("DELETE FROM reviews WHERE id = ?1").run(id);

@@ -121,12 +121,19 @@ function validateParent(
   if (parent.team_id !== issue.team_id) {
     throw apiError("VALIDATION_FAILED", "Parent issue must belong to the same team");
   }
-  // Evita ciclos: sube por la cadena de padres.
+  // Evita ciclos: sube por la cadena de padres hasta llegar a la raíz.
+  // El conjunto visto también evita quedar en loop si una base ya contiene un
+  // ciclo creado por una versión anterior de la validación.
   let cursor: string | null = parentId;
-  for (let depth = 0; cursor && depth < 100; depth += 1) {
+  const seen = new Set<string>();
+  while (cursor) {
     if (cursor === issue.id) {
       throw apiError("VALIDATION_FAILED", "Parent assignment would create a cycle");
     }
+    if (seen.has(cursor)) {
+      throw apiError("VALIDATION_FAILED", "Parent chain already contains a cycle");
+    }
+    seen.add(cursor);
     const next = db.query("SELECT parent_id FROM issues WHERE id = ?1").get(cursor) as {
       parent_id: string | null;
     } | null;
@@ -452,9 +459,12 @@ export function archiveIssue(db: Database, actorId: string, ref: string): IssueR
   return getIssue(db, issue.id)!;
 }
 
-export function listChildren(db: Database, issueId: string): IssueRow[] {
+export function listChildren(db: Database, issueId: string, includeArchived = false): IssueRow[] {
+  const archivedClause = includeArchived ? "" : " AND issues.archived_at IS NULL";
   return db
-    .query(`${SELECT_ISSUE} WHERE issues.parent_id = ?1 ORDER BY issues.created_at`)
+    .query(
+      `${SELECT_ISSUE} WHERE issues.parent_id = ?1${archivedClause} ORDER BY issues.created_at`,
+    )
     .all(issueId) as IssueRow[];
 }
 
@@ -474,20 +484,45 @@ export interface IssuePage {
 }
 
 export function listIssues(db: Database, options: ListIssuesOptions): IssuePage {
+  if (!Number.isInteger(options.first) || options.first < 1 || options.first > 250) {
+    throw apiError("VALIDATION_FAILED", "first must be between 1 and 250");
+  }
+
+  const orderBy = options.orderBy ?? "CREATED_DESC";
+  const order = ORDER_COLUMNS[orderBy];
+  if (!order) throw apiError("VALIDATION_FAILED", "Invalid issue order");
+
+  const orderValue = (row: IssueRow): string =>
+    order.column === "issues.updated_at" ? row.updated_at : row.created_at;
   const params = new ParamSink();
   const filter = options.filter ?? {};
   const clauses = [buildIssueFilter(filter, params)];
   if (!filter.includeArchived) clauses.push("issues.archived_at IS NULL");
 
-  const order = ORDER_COLUMNS[options.orderBy ?? "CREATED_DESC"];
-  if (options.after) {
+  if (options.after !== undefined && options.after !== null) {
     const decoded = decodeCursor(options.after);
-    if (decoded) {
-      const comparator = order.direction === "DESC" ? "<" : ">";
-      clauses.push(
-        `(${order.column}, issues.id) ${comparator} (${params.add(decoded[0])}, ${params.add(decoded[1])})`,
-      );
+    if (!decoded || decoded.orderBy !== orderBy) {
+      throw apiError("VALIDATION_FAILED", "Invalid issue cursor");
     }
+
+    // El cursor es válido solo para una fila que todavía pertenece a esta
+    // conexión y conserva el valor con el que fue emitido. Así un cursor de
+    // otro filtro/orden no reinicia la consulta ni duplica la primera página.
+    const cursorParams = new ParamSink();
+    const cursorId = cursorParams.add(decoded.id);
+    const cursorClauses = [buildIssueFilter(filter, cursorParams)];
+    if (!filter.includeArchived) cursorClauses.push("issues.archived_at IS NULL");
+    const cursorRow = db
+      .query(`${SELECT_ISSUE} WHERE issues.id = ${cursorId} AND ${cursorClauses.join(" AND ")}`)
+      .get(...(cursorParams.values as never[])) as IssueRow | null;
+    if (!cursorRow || orderValue(cursorRow) !== decoded.orderValue) {
+      throw apiError("VALIDATION_FAILED", "Invalid issue cursor");
+    }
+
+    const comparator = order.direction === "DESC" ? "<" : ">";
+    clauses.push(
+      `(${order.column}, issues.id) ${comparator} (${params.add(decoded.orderValue)}, ${params.add(decoded.id)})`,
+    );
   }
 
   const rows = db
@@ -500,11 +535,9 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
 
   const page = rows.slice(0, options.first);
   const last = page[page.length - 1];
-  const orderValue = (row: IssueRow): string =>
-    order.column === "issues.updated_at" ? row.updated_at : row.created_at;
   return {
     rows: page,
     hasNextPage: rows.length > options.first,
-    endCursor: last ? encodeCursor(orderValue(last), last.id) : null,
+    endCursor: last ? encodeCursor(orderValue(last), last.id, orderBy) : null,
   };
 }

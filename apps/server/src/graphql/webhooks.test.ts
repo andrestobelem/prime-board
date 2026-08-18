@@ -112,6 +112,105 @@ describe("webhooks", () => {
     );
   });
 
+  it("entrega issue.updated al borrar una relación en ambos extremos", async () => {
+    received.length = 0;
+    const hook = await gql(
+      app,
+      `mutation($url: String!) {
+        webhookCreate(input: { url: $url, events: ["issue.updated"] }) { webhook { id } }
+      }`,
+      { url: `http://localhost:${receiver.port}/relations` },
+    );
+    const first = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Relation source" }) {
+        issue { id identifier }
+      } }`,
+    );
+    const second = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Relation target" }) {
+        issue { id identifier }
+      } }`,
+    );
+    const source = first.data!.issueCreate.issue;
+    const target = second.data!.issueCreate.issue;
+    received.length = 0;
+    const relation = await gql(
+      app,
+      `mutation($source: ID!, $target: ID!) {
+        issueRelationCreate(input: { issueId: $source, relatedIssueId: $target, type: RELATED }) {
+          relation { id }
+        }
+      }`,
+      { source: source.id, target: target.id },
+    );
+    await app.events.idle();
+    expect(received).toHaveLength(2);
+    const createdPayloads = received.map((delivery) => JSON.parse(delivery.body));
+    expect(createdPayloads.map((payload) => payload.data.identifier).sort()).toEqual(
+      [source.identifier, target.identifier].sort(),
+    );
+    received.length = 0;
+
+    await gql(app, `mutation($id: ID!) { issueRelationDelete(id: $id) { success } }`, {
+      id: relation.data!.issueRelationCreate.relation.id,
+    });
+    await app.events.idle();
+
+    expect(received).toHaveLength(2);
+    const payloads = received.map((delivery) => JSON.parse(delivery.body));
+    expect(payloads.map((payload) => payload.event)).toEqual(["issue.updated", "issue.updated"]);
+    expect(payloads.map((payload) => payload.data.identifier).sort()).toEqual(
+      [source.identifier, target.identifier].sort(),
+    );
+    for (const payload of payloads) {
+      expect(payload.changes.relations.from).toMatchObject({ type: "related" });
+      expect(payload.changes.relations.to).toBeNull();
+    }
+
+    await gql(app, `mutation($id: ID!) { webhookDelete(id: $id) { success } }`, {
+      id: hook.data!.webhookCreate.webhook.id,
+    });
+  });
+
+  it("entrega issue.updated al borrar un label usado por issues", async () => {
+    received.length = 0;
+    const hook = await gql(
+      app,
+      `mutation($url: String!) {
+        webhookCreate(input: { url: $url, events: ["issue.updated"] }) { webhook { id } }
+      }`,
+      { url: `http://localhost:${receiver.port}/label-delete` },
+    );
+    const label = await gql(
+      app,
+      `mutation { labelCreate(input: { name: "Webhook deleted label" }) { label { id } } }`,
+    );
+    const issue = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Webhook label issue" }) { issue { id identifier } } }`,
+    );
+    await gql(
+      app,
+      `mutation($id: ID!, $label: ID!) { issueUpdate(id: $id, input: { labelIds: [$label] }) { success } }`,
+      { id: issue.data!.issueCreate.issue.id, label: label.data!.labelCreate.label.id },
+    );
+    await app.events.idle();
+    received.length = 0;
+    await gql(app, `mutation($id: ID!) { labelDelete(id: $id) { success } }`, {
+      id: label.data!.labelCreate.label.id,
+    });
+    await app.events.idle();
+    expect(received).toHaveLength(1);
+    expect(JSON.parse(received[0]!.body).data.identifier).toBe(
+      issue.data!.issueCreate.issue.identifier,
+    );
+    await gql(app, `mutation($id: ID!) { webhookDelete(id: $id) { success } }`, {
+      id: hook.data!.webhookCreate.webhook.id,
+    });
+  });
+
   it("reintenta con backoff hasta entregar", async () => {
     received.length = 0;
     attempts = 0;

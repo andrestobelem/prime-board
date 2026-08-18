@@ -31,13 +31,14 @@ import { apiError, requireViewer } from "./errors.ts";
 import {
   assertCanManageActor,
   assertCanManageApiKey,
+  assertCanManageIssue,
   assertCanManageTeam,
   assertWorkspaceAdmin,
   isWorkspaceAdmin,
 } from "../auth/permissions.ts";
 import { withRepoSyncDispatch } from "./repo-sync-dispatch.ts";
 import { parseDateTime } from "../domain/datetime.ts";
-import { issueResolvers } from "./issue-resolvers.ts";
+import { issueEventData, issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
 import {
   createLabel,
@@ -50,6 +51,7 @@ import {
 import { createWebhook, deleteWebhook, listWebhooks, mapWebhook } from "../domain/webhooks.ts";
 import { getProject, listProjects, mapProject } from "../domain/projects.ts";
 import {
+  canAccessSavedView,
   createSavedView,
   deleteSavedView,
   duplicateSavedView,
@@ -58,7 +60,13 @@ import {
   mapSavedView,
   updateSavedView,
 } from "../domain/saved-views.ts";
-import { archiveInboxItem, listInboxActivity, markInboxRead } from "../domain/inbox.ts";
+import {
+  archiveInboxItem,
+  countUnreadInboxActivity,
+  listInboxActivity,
+  listInboxActivityPage,
+  markInboxRead,
+} from "../domain/inbox.ts";
 import {
   createFavorite,
   deleteFavorite,
@@ -67,7 +75,7 @@ import {
   reorderFavorite,
 } from "../domain/favorites.ts";
 import { mapActivity } from "../domain/activity.ts";
-import { getIssue, mapIssue } from "../domain/issues.ts";
+import { getIssue, getIssueByRef, mapIssue } from "../domain/issues.ts";
 import {
   carryOverCycle,
   createCycle,
@@ -101,6 +109,7 @@ import {
 import {
   createTeamMembership,
   deleteTeamMembership,
+  isTeamMember,
   listTeamMemberships,
   mapTeamMembership,
 } from "../domain/team-memberships.ts";
@@ -127,6 +136,18 @@ const JSONScalar = new GraphQLScalarType({
   serialize: (value) => value,
   parseValue: (value) => value,
 });
+
+function emitBulkIssueUpdates(
+  context: Context,
+  viewer: ReturnType<typeof requireViewer>,
+  issueIds: string[],
+  changes: Record<string, { from: unknown; to: unknown }>,
+): void {
+  for (const issueId of issueIds) {
+    const issue = getIssue(context.db, issueId);
+    if (issue) context.events.emit("issue.updated", viewer, issueEventData(issue), changes);
+  }
+}
 
 export const resolvers = {
   DateTime,
@@ -344,8 +365,7 @@ export const resolvers = {
     savedView: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       const row = getSavedView(context.db, args.id);
-      if (!row) return null;
-      if (row.scope === "personal" && row.owner_id !== viewer.id) return null;
+      if (!row || !canAccessSavedView(context.db, row, viewer.id)) return null;
       return mapSavedView(row);
     },
     favorites: (_parent: unknown, _args: unknown, context: Context) => {
@@ -367,6 +387,31 @@ export const resolvers = {
         isRead: Boolean(row.is_read),
         isArchived: Boolean(row.is_archived),
       }));
+    },
+    inboxPage: (
+      _parent: unknown,
+      args: { first?: number | null; after?: string | null; includeArchived?: boolean | null },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      const page = listInboxActivityPage(context.db, viewer.id, {
+        first: args.first ?? 50,
+        after: args.after,
+        includeArchived: Boolean(args.includeArchived),
+      });
+      return {
+        nodes: page.rows.map((row) => ({
+          ...mapActivity(row),
+          issueId: row.issue_id,
+          isRead: Boolean(row.is_read),
+          isArchived: Boolean(row.is_archived),
+        })),
+        pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+      };
+    },
+    inboxUnreadCount: (_parent: unknown, _args: unknown, context: Context) => {
+      const viewer = requireViewer(context);
+      return countUnreadInboxActivity(context.db, viewer.id);
     },
     cycles: (
       _parent: unknown,
@@ -394,20 +439,39 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
-      return listReviews(context.db, viewer.id, {
+      const rows = listReviews(context.db, viewer.id, {
         openOnly: Boolean(args.openOnly),
         first: args.first ?? 50,
         teamId: args.teamId,
         projectId: args.projectId,
         reviewerId: args.reviewerId,
         olderThanDays: args.olderThanDays,
-      }).map(mapReview);
+      });
+      // La cola se basa en requester/reviewer, pero una key revocada no debe
+      // conservar acceso a reviews del team.
+      return rows
+        .filter((row) => {
+          const issue = getIssue(context.db, row.issue_id);
+          return Boolean(
+            issue &&
+            (isWorkspaceAdmin(viewer) || isTeamMember(context.db, issue.team_id, viewer.id)),
+          );
+        })
+        .map(mapReview);
     },
     review: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       const row = getReview(context.db, args.id);
       if (!row) return null;
-      if (row.reviewer_id !== viewer.id && row.requester_id !== viewer.id) return null;
+      const issue = getIssue(context.db, row.issue_id);
+      if (
+        !issue ||
+        (!isWorkspaceAdmin(viewer) &&
+          (!isTeamMember(context.db, issue.team_id, viewer.id) ||
+            (row.reviewer_id !== viewer.id && row.requester_id !== viewer.id)))
+      ) {
+        return null;
+      }
       return mapReview(row);
     },
     initiatives: (
@@ -460,12 +524,16 @@ export const resolvers = {
       const viewer = requireViewer(context);
       return {
         success: true,
-        membership: mapTeamMembership(createTeamMembership(context.db, viewer.id, args.input)),
+        membership: mapTeamMembership(
+          createTeamMembership(context.db, viewer.id, args.input, isWorkspaceAdmin(viewer)),
+        ),
       };
     },
     teamMembershipDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
-      return { success: deleteTeamMembership(context.db, viewer.id, args.id) };
+      return {
+        success: deleteTeamMembership(context.db, viewer.id, args.id, isWorkspaceAdmin(viewer)),
+      };
     },
     actorCreate: (
       _parent: unknown,
@@ -550,7 +618,14 @@ export const resolvers = {
       const viewer = requireViewer(context);
       const existing = getWorkflowState(context.db, args.id);
       if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
+      const affected = context.db
+        .query("SELECT id FROM issues WHERE state_id = ?1")
+        .all(args.id)
+        .map((row) => (row as { id: string }).id);
       const moved = deleteWorkflowState(context.db, viewer.id, args.id, args.moveToStateId);
+      emitBulkIssueUpdates(context, viewer, affected, {
+        state: { from: args.id, to: args.moveToStateId ?? null },
+      });
       return { success: true, movedIssues: moved };
     },
     labelUpdate: (
@@ -574,7 +649,14 @@ export const resolvers = {
         if (existing.team_id == null) assertWorkspaceAdmin(viewer);
         else assertCanManageTeam(context.db, viewer, existing.team_id);
       }
-      const affected = deleteLabel(context.db, args.id);
+      const affectedIds = context.db
+        .query("SELECT issue_id AS id FROM issue_labels WHERE label_id = ?1")
+        .all(args.id)
+        .map((row) => (row as { id: string }).id);
+      const affected = deleteLabel(context.db, viewer.id, args.id);
+      emitBulkIssueUpdates(context, viewer, affectedIds, {
+        labels: { from: args.id, to: null },
+      });
       return { success: true, affectedIssues: affected };
     },
     workflowStateCreate: (
@@ -611,6 +693,9 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (args.input.scope.toLowerCase() === "team") {
+        assertCanManageIssue(context.db, viewer, args.input.teamId);
+      }
       const savedView = mapSavedView(createSavedView(context.db, viewer.id, args.input));
       return { success: true, savedView };
     },
@@ -708,7 +793,15 @@ export const resolvers = {
       const viewer = requireViewer(context);
       const existing = getCycle(context.db, args.id);
       if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
-      return { success: deleteCycle(context.db, viewer.id, args.id) };
+      const affected = context.db
+        .query("SELECT id FROM issues WHERE cycle_id = ?1")
+        .all(args.id)
+        .map((row) => (row as { id: string }).id);
+      const success = deleteCycle(context.db, viewer.id, args.id);
+      emitBulkIssueUpdates(context, viewer, affected, {
+        cycle: { from: args.id, to: null },
+      });
+      return { success };
     },
     cycleCarryOver: (
       _parent: unknown,
@@ -727,6 +820,8 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      const issue = getIssueByRef(context.db, args.input.issueId);
+      assertCanManageIssue(context.db, viewer, issue?.team_id);
       return { success: true, review: mapReview(createReview(context.db, viewer.id, args.input)) };
     },
     reviewUpdate: (
@@ -738,14 +833,26 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      const existing = getReview(context.db, args.id);
+      if (existing) {
+        const issue = getIssue(context.db, existing.issue_id);
+        assertCanManageIssue(context.db, viewer, issue?.team_id);
+      }
       return {
         success: true,
-        review: mapReview(updateReview(context.db, args.id, viewer.id, args.input)),
+        review: mapReview(
+          updateReview(context.db, args.id, viewer.id, args.input, isWorkspaceAdmin(viewer)),
+        ),
       };
     },
     reviewDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
-      return { success: deleteReview(context.db, args.id, viewer.id) };
+      const existing = getReview(context.db, args.id);
+      if (existing) {
+        const issue = getIssue(context.db, existing.issue_id);
+        assertCanManageIssue(context.db, viewer, issue?.team_id);
+      }
+      return { success: deleteReview(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)) };
     },
     initiativeCreate: (
       _parent: unknown,

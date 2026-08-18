@@ -234,4 +234,74 @@ describe("inbox y my issues", () => {
     expect(nodes.some((n) => n.title === "Mine A")).toBe(true);
     expect(nodes.some((n) => n.title === "Not mine")).toBe(false);
   });
+
+  it("conserva eventos derivados no leídos al desasignar el issue", async () => {
+    const agent = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "historical-inbox-agent", type: AGENT }) { actor { id } } }`,
+    );
+    const agentId = agent.data!.actorCreate.actor.id;
+    const key = (
+      await gql(
+        app,
+        `mutation($actorId: ID!) {
+          apiKeyCreate(input: { actorId: $actorId, name: "historical-inbox" }) { key }
+        }`,
+        { actorId: agentId },
+      )
+    ).data!.apiKeyCreate.key;
+    const states = await gql(app, `{ team(key: "PB") { states { id type } } }`);
+    const startedId = states.data!.team.states.find(
+      (state: { type: string }) => state.type === "STARTED",
+    ).id;
+    const completedId = states.data!.team.states.find(
+      (state: { type: string }) => state.type === "COMPLETED",
+    ).id;
+    const issue = await gql(
+      app,
+      `mutation($assigneeId: ID!, $stateId: ID!) {
+        issueCreate(input: {
+          teamKey: "PB", title: "Historical inbox target", assigneeId: $assigneeId, stateId: $stateId
+        }) { issue { id } }
+      }`,
+      { assigneeId: agentId, stateId: startedId },
+    );
+    const issueId = issue.data!.issueCreate.issue.id;
+    await gql(
+      app,
+      `mutation($id: ID!, $stateId: ID!) {
+        issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+      }`,
+      { id: issueId, stateId: completedId },
+    );
+    const activity = await gql(app, `query($id: ID!) { issue(id: $id) { activity { id type } } }`, {
+      id: issueId,
+    });
+    const stateEventId = activity.data!.issue.activity.find(
+      (event: { type: string }) => event.type === "state_changed",
+    ).id;
+
+    const before = await gql(app, `{ inbox { id type } }`, {}, key);
+    expect(before.errors).toBeUndefined();
+    expect(
+      (before.data!.inbox as Array<{ id: string; type: string }>).some(
+        (item) => item.id === stateEventId && item.type === "state_changed",
+      ),
+    ).toBe(true);
+
+    const unassigned = await gql(
+      app,
+      `mutation($id: ID!) { issueUpdate(id: $id, input: { assigneeId: null }) { success } }`,
+      { id: issueId },
+    );
+    expect(unassigned.errors).toBeUndefined();
+
+    const after = await gql(app, `{ inbox { id type } }`, {}, key);
+    expect(after.errors).toBeUndefined();
+    expect(
+      (after.data!.inbox as Array<{ id: string; type: string }>).some(
+        (item) => item.id === stateEventId && item.type === "state_changed",
+      ),
+    ).toBe(true);
+  });
 });

@@ -67,6 +67,51 @@ describe("comments", () => {
     );
     expect(missing.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
   });
+
+  it("actualiza updatedAt para que el comentario entre en la sincronización", async () => {
+    const created = await gql(
+      app,
+      `
+      mutation { issueCreate(input: { teamKey: "PB", title: "Comment sync" }) { issue { id updatedAt } } }
+    `,
+    );
+    const issueId = created.data!.issueCreate.issue.id;
+    const before = created.data!.issueCreate.issue.updatedAt;
+    await Bun.sleep(2);
+
+    const comment = await gql(
+      app,
+      `
+      mutation($id: ID!) { commentCreate(input: { issueId: $id, body: "sync me" }) { success } }
+    `,
+      { id: issueId },
+    );
+    expect(comment.errors).toBeUndefined();
+
+    const after = await gql(
+      app,
+      `query($id: ID!) {
+      issue(id: $id) { updatedAt comments { body } activity { type payload } }
+      issues(filter: { search: "Comment sync" }, orderBy: UPDATED_DESC) {
+        nodes { id updatedAt }
+      }
+    }`,
+      { id: issueId },
+    );
+    expect(after.data!.issue.updatedAt).not.toBe(before);
+    expect(after.data!.issue.updatedAt >= before).toBe(true);
+    expect(after.data!.issue.comments).toContainEqual({ body: "sync me" });
+    expect(
+      after.data!.issue.activity.find((event: any) => event.type === "commented"),
+    ).toMatchObject({
+      type: "commented",
+      payload: { body: "sync me" },
+    });
+    expect(after.data!.issues.nodes[0]).toMatchObject({
+      id: issueId,
+      updatedAt: after.data!.issue.updatedAt,
+    });
+  });
 });
 
 describe("activity", () => {

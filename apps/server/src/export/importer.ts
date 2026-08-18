@@ -26,6 +26,105 @@ export interface RebuildOptions {
 
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 
+/** Validate the declared team scope before rebuild can clear the destination. */
+function validatePartialScope(base: string, teamKey: string): void {
+  const teams = readJson(join(base, "meta", "teams.json")) as Array<Record<string, any>>;
+  if (teams.some((team) => team.key !== teamKey) || teams.length !== 1) {
+    throw new Error(`Partial export team scope ${teamKey} contains out-of-scope teams`);
+  }
+  const projects = readJson(join(base, "meta", "projects.json")) as Array<Record<string, any>>;
+  const projectNames = new Set(projects.map((project) => String(project.name)));
+  if (projects.some((project) => !(project.teams ?? []).includes(teamKey))) {
+    throw new Error(`Partial export ${teamKey} contains an out-of-scope project`);
+  }
+  const cyclesPath = join(base, "meta", "cycles.json");
+  if (existsSync(cyclesPath)) {
+    const cycles = readJson(cyclesPath) as Array<Record<string, any>>;
+    if (cycles.some((cycle) => cycle.team !== teamKey)) {
+      throw new Error(`Partial export ${teamKey} contains an out-of-scope cycle`);
+    }
+  }
+  const updatesPath = join(base, "meta", "project-updates.json");
+  if (existsSync(updatesPath)) {
+    const updates = readJson(updatesPath) as Array<Record<string, any>>;
+    if (updates.some((update) => !projectNames.has(String(update.project)))) {
+      throw new Error(`Partial export ${teamKey} contains an out-of-scope project update`);
+    }
+  }
+  const initiativesPath = join(base, "meta", "initiatives.json");
+  if (existsSync(initiativesPath)) {
+    const initiatives = readJson(initiativesPath) as Array<Record<string, any>>;
+    for (const initiative of initiatives) {
+      if ((initiative.teams ?? []).some((team: unknown) => team !== teamKey)) {
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope initiative team`);
+      }
+      if (
+        (initiative.projects ?? []).some((project: unknown) => !projectNames.has(String(project)))
+      ) {
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope initiative project`);
+      }
+    }
+  }
+  const issueIds = new Set(
+    readdirSync(join(base, "issues"))
+      .filter((file) => file.endsWith(".md"))
+      .map((file) => file.replace(/\.md$/, "")),
+  );
+  if ([...issueIds].some((identifier) => !identifier.startsWith(`${teamKey}-`))) {
+    throw new Error(`Partial export ${teamKey} contains an out-of-scope issue`);
+  }
+  const reviewsPath = join(base, "meta", "reviews.json");
+  if (existsSync(reviewsPath)) {
+    const reviews = readJson(reviewsPath) as Array<Record<string, any>>;
+    if (reviews.some((review) => !String(review.issue).startsWith(`${teamKey}-`))) {
+      throw new Error(`Partial export ${teamKey} contains an out-of-scope review`);
+    }
+  }
+  const inboxPath = join(base, "meta", "inbox-receipts.json");
+  if (existsSync(inboxPath)) {
+    const receipts = readJson(inboxPath) as Array<Record<string, any>>;
+    if (receipts.some((receipt) => !String(receipt.issue).startsWith(`${teamKey}-`))) {
+      throw new Error(`Partial export ${teamKey} contains an out-of-scope inbox receipt`);
+    }
+  }
+  const favoritesPath = join(base, "meta", "favorites.json");
+  if (existsSync(favoritesPath)) {
+    const savedViews = existsSync(join(base, "meta", "saved-views.json"))
+      ? (readJson(join(base, "meta", "saved-views.json")) as Array<Record<string, any>>)
+      : [];
+    const savedViewKeys = new Set(
+      savedViews
+        .filter((view) => view.scope === "team" && view.team === teamKey)
+        .map((view) =>
+          savedViewNaturalKey({
+            name: view.name,
+            scope: view.scope,
+            team: view.team ?? null,
+            owner: view.owner,
+          }),
+        ),
+    );
+    const favorites = readJson(favoritesPath) as Array<Record<string, any>>;
+    for (const favorite of favorites) {
+      if (favorite.project != null && !projectNames.has(String(favorite.project))) {
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope favorite project`);
+      }
+      if (favorite.savedView != null) {
+        const view = favorite.savedView as Record<string, any>;
+        const key = savedViewNaturalKey({
+          name: view.name,
+          scope: view.scope,
+          team: view.team ?? null,
+          owner: view.owner,
+        });
+        if (!savedViewKeys.has(key)) {
+          throw new Error(`Partial export ${teamKey} contains an out-of-scope favorite view`);
+        }
+      }
+    }
+  }
+}
+
 function savedViewNaturalKey(view: {
   name: string;
   scope: string;
@@ -82,6 +181,24 @@ export function rebuildFromRepo(
     } else {
       throw new Error(`Invalid export scope: ${String(scope)}`);
     }
+    if (typeof scope === "string" && scope.startsWith("team:")) {
+      validatePartialScope(base, scope.slice("team:".length));
+    }
+  }
+
+  // Reject ambiguous project keys before opening the destructive transaction.
+  // This is intentionally also checked for hand-edited snapshots, not only
+  // exports produced by exporter.ts.
+  const projectSnapshot = readJson(join(base, "meta", "projects.json")) as Array<
+    Record<string, any>
+  >;
+  const seenProjectNames = new Set<string>();
+  for (const project of projectSnapshot) {
+    const name = String(project.name ?? "");
+    if (seenProjectNames.has(name)) {
+      throw new Error(`Ambiguous project reference in repo: ${name}`);
+    }
+    seenProjectNames.add(name);
   }
 
   // 1. Credenciales locales. El id exportado es la identidad estable; el nombre
@@ -699,8 +816,26 @@ export function rebuildFromRepo(
       milestones: new Map<string, string>(),
       cycles: cycleIds,
     };
-    for (const [key, id] of stateIds) byName.states.set(key.split("/")[1]!, id);
-    for (const [key, id] of milestoneIds) byName.milestones.set(key.split("/")[1]!, id);
+    const stateNames = new Map<string, number>();
+    for (const key of stateIds.keys()) {
+      const name = key.slice(key.indexOf("/") + 1);
+      stateNames.set(name, (stateNames.get(name) ?? 0) + 1);
+    }
+    for (const [key, id] of stateIds) {
+      byName.states.set(key, id);
+      const name = key.slice(key.indexOf("/") + 1);
+      if (stateNames.get(name) === 1) byName.states.set(name, id);
+    }
+    const milestoneNames = new Map<string, number>();
+    for (const key of milestoneIds.keys()) {
+      const name = key.slice(key.indexOf("/") + 1);
+      milestoneNames.set(name, (milestoneNames.get(name) ?? 0) + 1);
+    }
+    for (const [key, id] of milestoneIds) {
+      byName.milestones.set(key, id);
+      const name = key.slice(key.indexOf("/") + 1);
+      if (milestoneNames.get(name) === 1) byName.milestones.set(name, id);
+    }
 
     // Qué campos son referencia y a qué tabla vive en un solo lugar (AT-187):
     // acá solo se resuelve clave natural→id con los mapas que este import ya

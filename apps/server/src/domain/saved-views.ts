@@ -1,6 +1,7 @@
 // Vistas guardadas: filtros/orden/agrupación/columnas reutilizables (PRB-201/208).
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
+import { isTeamMember } from "./team-memberships.ts";
 import { newId, now } from "../db/util.ts";
 
 export type SavedViewScope = "personal" | "team" | "workspace";
@@ -59,7 +60,15 @@ export function canViewSavedView(row: SavedViewRow, viewerId: string): boolean {
   return true;
 }
 
-const canSee = canViewSavedView;
+/** ACL completa: las vistas TEAM requieren membership vigente; admins bypass. */
+export function canAccessSavedView(db: Database, row: SavedViewRow, viewerId: string): boolean {
+  if (!canViewSavedView(row, viewerId)) return false;
+  if (row.scope !== "team") return true;
+  const workspaceRole = db
+    .query("SELECT workspace_role FROM actors WHERE id = ?1")
+    .get(viewerId) as { workspace_role: string } | null;
+  return workspaceRole?.workspace_role === "admin" || isTeamMember(db, row.team_id!, viewerId);
+}
 
 export function listSavedViews(
   db: Database,
@@ -70,7 +79,7 @@ export function listSavedViews(
   const rows = db.query("SELECT * FROM saved_views ORDER BY created_at").all() as SavedViewRow[];
   return rows.filter((row) => {
     if (!includeArchived && row.archived_at) return false;
-    if (!canSee(row, viewerId)) return false;
+    if (!canAccessSavedView(db, row, viewerId)) return false;
     if (teamId) {
       if (row.scope === "team") return row.team_id === teamId;
       return row.scope === "workspace" || row.scope === "personal";
@@ -166,7 +175,8 @@ export function updateSavedView(
 ): SavedViewRow {
   const existing = getSavedView(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Saved view not found");
-  if (!canSee(existing, viewerId)) throw apiError("NOT_FOUND", "Saved view not found");
+  if (!canAccessSavedView(db, existing, viewerId))
+    throw apiError("NOT_FOUND", "Saved view not found");
   if (existing.scope === "personal" && existing.owner_id !== viewerId) {
     throw apiError("NOT_FOUND", "Saved view not found");
   }
@@ -213,7 +223,8 @@ export function updateSavedView(
 export function duplicateSavedView(db: Database, id: string, viewerId: string): SavedViewRow {
   const existing = getSavedView(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Saved view not found");
-  if (!canSee(existing, viewerId)) throw apiError("NOT_FOUND", "Saved view not found");
+  if (!canAccessSavedView(db, existing, viewerId))
+    throw apiError("NOT_FOUND", "Saved view not found");
   return createSavedView(db, viewerId, {
     name: `${existing.name} (copy)`,
     scope: existing.scope,
@@ -228,7 +239,8 @@ export function duplicateSavedView(db: Database, id: string, viewerId: string): 
 export function deleteSavedView(db: Database, id: string, viewerId: string): boolean {
   const existing = getSavedView(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Saved view not found");
-  if (!canSee(existing, viewerId)) throw apiError("NOT_FOUND", "Saved view not found");
+  if (!canAccessSavedView(db, existing, viewerId))
+    throw apiError("NOT_FOUND", "Saved view not found");
   if (existing.scope === "personal" && existing.owner_id !== viewerId) {
     throw apiError("NOT_FOUND", "Saved view not found");
   }

@@ -57,6 +57,9 @@ export function createComment(
     db.query(
       "INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
     ).run(id, issue.id, author, body, timestamp);
+    // Los comentarios forman parte de la actividad observable del issue y deben
+    // mover el cursor de updatedAt para la sincronización incremental.
+    db.query("UPDATE issues SET updated_at = ?1 WHERE id = ?2").run(now(), issue.id);
     // El body va en el evento para que el log pueda reconstruir el comentario.
     recordActivity(
       db,

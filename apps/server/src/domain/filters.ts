@@ -200,18 +200,40 @@ export const ORDER_COLUMNS: Record<IssueOrder, { column: string; direction: "ASC
   UPDATED_DESC: { column: "issues.updated_at", direction: "DESC" },
 };
 
-export function encodeCursor(orderValue: string, id: string): string {
-  return Buffer.from(JSON.stringify([orderValue, id])).toString("base64url");
+export interface IssueCursor {
+  orderValue: string;
+  id: string;
+  orderBy: IssueOrder;
 }
 
-export function decodeCursor(cursor: string): [string, string] | null {
+export function encodeCursor(orderValue: string, id: string, orderBy: IssueOrder): string {
+  return Buffer.from(JSON.stringify([orderValue, id, orderBy])).toString("base64url");
+}
+
+export function decodeCursor(cursor: string): IssueCursor | null {
   try {
+    // Buffer acepta caracteres/base64 incompletos silenciosamente; exigir el
+    // round-trip evita que cursores truncados se conviertan en otra entrada.
+    if (Buffer.from(cursor, "base64url").toString("base64url") !== cursor) return null;
     const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString()) as unknown;
-    if (Array.isArray(parsed) && parsed.length === 2) {
-      return [String(parsed[0]), String(parsed[1])];
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 3 &&
+      typeof parsed[0] === "string" &&
+      typeof parsed[1] === "string" &&
+      typeof parsed[2] === "string" &&
+      parsed[0].length > 0 &&
+      parsed[1].length > 0 &&
+      parsed[2] in ORDER_COLUMNS
+    ) {
+      return {
+        orderValue: parsed[0],
+        id: parsed[1],
+        orderBy: parsed[2] as IssueOrder,
+      };
     }
   } catch {
-    // cursor inválido → se ignora
+    // El resolver convierte un cursor inválido en VALIDATION_FAILED.
   }
   return null;
 }

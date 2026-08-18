@@ -29,9 +29,10 @@ import {
   listRelations,
   mapRelation,
   type RelationType,
+  type StoredRelationType,
 } from "../domain/relations.ts";
 import { getTeam, listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
-import { assertCanManageIssue } from "../auth/permissions.ts";
+import { assertCanManageIssue, assertCanUseImportFields } from "../auth/permissions.ts";
 import type { Context } from "./context.ts";
 import { requireViewer } from "./errors.ts";
 
@@ -61,7 +62,7 @@ function assertRelationAccess(
 }
 
 /** Forma plana del issue para payloads de webhooks. */
-function issueEventData(row: IssueRow) {
+export function issueEventData(row: IssueRow) {
   return {
     id: row.id,
     identifier: identifierOf(row),
@@ -96,8 +97,8 @@ export const issueResolvers = {
       const parent = getIssue(context.db, issue._row.parent_id);
       return parent ? mapIssue(parent) : null;
     },
-    children: (issue: MappedIssue, _args: unknown, context: Context) =>
-      listChildren(context.db, issue.id).map(mapIssue),
+    children: (issue: MappedIssue, args: { includeArchived?: boolean | null }, context: Context) =>
+      listChildren(context.db, issue.id, Boolean(args.includeArchived)).map(mapIssue),
     labels: (issue: MappedIssue, _args: unknown, context: Context) =>
       listIssueLabels(context.db, issue.id).map(mapLabel),
     project: (issue: MappedIssue, _args: unknown, context: Context) =>
@@ -108,6 +109,7 @@ export const issueResolvers = {
         : null,
     cycle: (issue: MappedIssue, _args: unknown, context: Context) =>
       issue._row.cycle_id ? mapCycle(getCycle(context.db, issue._row.cycle_id)!) : null,
+    sortOrder: (issue: MappedIssue) => issue._row.sort_order,
     comments: (issue: MappedIssue, _args: unknown, context: Context) =>
       listComments(context.db, issue.id).map(mapComment),
     relations: (issue: MappedIssue, _args: unknown, context: Context) =>
@@ -180,10 +182,9 @@ export const issueResolvers = {
       context: Context,
     ) => {
       requireViewer(context);
-      const first = Math.min(Math.max(args.first ?? 50, 1), 250);
       const page = listIssues(context.db, {
         filter: args.filter,
-        first,
+        first: args.first ?? 50,
         after: args.after,
         orderBy: args.orderBy,
       });
@@ -197,6 +198,7 @@ export const issueResolvers = {
   Mutation: {
     issueCreate: (_parent: unknown, args: { input: IssueCreateInput }, context: Context) => {
       const viewer = requireViewer(context);
+      assertCanUseImportFields(viewer, args.input);
       const team = getTeam(context.db, { id: args.input.teamId, key: args.input.teamKey });
       assertCanManageIssue(context.db, viewer, team?.id);
       const row = createIssue(context.db, viewer.id, args.input);
@@ -235,10 +237,23 @@ export const issueResolvers = {
       assertIssueAccess(context, viewer, args.input.issueId);
       assertIssueAccess(context, viewer, args.input.relatedIssueId);
       const created = createRelation(context.db, viewer.id, args.input);
+      const inverse: Record<RelationType, RelationType> = {
+        blocks: "blocked_by",
+        blocked_by: "blocks",
+        related: "related",
+        duplicate_of: "duplicated_by",
+        duplicated_by: "duplicate_of",
+      };
       context.events.emit("issue.updated", viewer, issueEventData(created.issue), {
         relations: {
           from: null,
           to: { type: created.view.type, issue: identifierOf(created.relatedIssue) },
+        },
+      });
+      context.events.emit("issue.updated", viewer, issueEventData(created.relatedIssue), {
+        relations: {
+          from: null,
+          to: { type: inverse[created.view.type], issue: identifierOf(created.issue) },
         },
       });
       return { success: true, relation: mapRelation(created.view) };
@@ -247,14 +262,41 @@ export const issueResolvers = {
       const viewer = requireViewer(context);
       assertRelationAccess(context, viewer, args.id);
       const removed = deleteRelation(context.db, viewer.id, args.id);
+      const source = getIssue(context.db, removed.issueId)!;
+      const target = getIssue(context.db, removed.relatedId)!;
+      const inverse: Record<StoredRelationType, RelationType> = {
+        blocks: "blocked_by",
+        related: "related",
+        duplicate_of: "duplicated_by",
+      };
+      context.events.emit("issue.updated", viewer, issueEventData(source), {
+        relations: {
+          from: { type: removed.type, issue: identifierOf(target) },
+          to: null,
+        },
+      });
+      context.events.emit("issue.updated", viewer, issueEventData(target), {
+        relations: {
+          from: { type: inverse[removed.type], issue: identifierOf(source) },
+          to: null,
+        },
+      });
       return { success: true };
     },
     commentCreate: (
       _parent: unknown,
-      args: { input: { issueId: string; body: string } },
+      args: {
+        input: {
+          issueId: string;
+          body: string;
+          createdAt?: string | null;
+          authorId?: string | null;
+        };
+      },
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      assertCanUseImportFields(viewer, args.input);
       assertIssueAccess(context, viewer, args.input.issueId);
       const row = createComment(context.db, viewer.id, args.input);
       const issue = getIssue(context.db, row.issue_id)!;

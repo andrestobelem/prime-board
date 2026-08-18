@@ -85,8 +85,9 @@ function assertNoBlockingCycle(db: Database, source: IssueRow, target: IssueRow)
       for (let node: string | undefined = source.id; node; node = parents.get(node)) {
         path.push(node);
       }
-      const cycle = [source.id, target.id, ...path.reverse().slice(1)]
-        .map((id) => identifierOf(getIssue(db, id)!));
+      const cycle = [source.id, target.id, ...path.reverse().slice(1)].map((id) =>
+        identifierOf(getIssue(db, id)!),
+      );
       throw apiError(
         "VALIDATION_FAILED",
         `Relation would create a blocking cycle: ${cycle.join(" → ")}`,
@@ -138,13 +139,19 @@ export function createRelation(
   const [source, target] = invert ? [related, issue] : [issue, related];
 
   // 'related' es simétrica: el duplicado se detecta en cualquiera de las dos direcciones.
-  const existing = type === "related"
-    ? db.query(
-        `SELECT id FROM issue_relations WHERE type = 'related'
+  const existing =
+    type === "related"
+      ? db
+          .query(
+            `SELECT id FROM issue_relations WHERE type = 'related'
          AND ((issue_id = ?1 AND related_id = ?2) OR (issue_id = ?2 AND related_id = ?1))`,
-      ).get(source.id, target.id)
-    : db.query("SELECT id FROM issue_relations WHERE issue_id = ?1 AND related_id = ?2 AND type = ?3")
-        .get(source.id, target.id, type);
+          )
+          .get(source.id, target.id)
+      : db
+          .query(
+            "SELECT id FROM issue_relations WHERE issue_id = ?1 AND related_id = ?2 AND type = ?3",
+          )
+          .get(source.id, target.id, type);
   if (existing) {
     throw apiError(
       "VALIDATION_FAILED",
@@ -157,9 +164,15 @@ export function createRelation(
 
   const id = newId();
   db.transaction(() => {
+    const timestamp = now();
     db.query(
       "INSERT INTO issue_relations (id, issue_id, related_id, type, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-    ).run(id, source.id, target.id, type, now());
+    ).run(id, source.id, target.id, type, timestamp);
+    db.query("UPDATE issues SET updated_at = ?1 WHERE id IN (?2, ?3)").run(
+      timestamp,
+      source.id,
+      target.id,
+    );
     // El payload usa identificadores (claves naturales): sobreviven a un rebuild.
     recordActivity(db, source.id, actorId, "relation_added", {
       type,
@@ -183,13 +196,19 @@ export function deleteRelation(
   db: Database,
   actorId: string,
   id: string,
-): { issueId: string; relatedId: string } {
+): { issueId: string; relatedId: string; type: StoredRelationType } {
   const row = db.query("SELECT * FROM issue_relations WHERE id = ?1").get(id) as RelationRow | null;
   if (!row) throw apiError("NOT_FOUND", `Relation not found: ${id}`);
   const source = getIssueByRef(db, row.issue_id)!;
   const target = getIssueByRef(db, row.related_id)!;
   db.transaction(() => {
+    const timestamp = now();
     db.query("DELETE FROM issue_relations WHERE id = ?1").run(id);
+    db.query("UPDATE issues SET updated_at = ?1 WHERE id IN (?2, ?3)").run(
+      timestamp,
+      source.id,
+      target.id,
+    );
     recordActivity(db, source.id, actorId, "relation_removed", {
       type: row.type,
       issue: identifierOf(target),
@@ -199,5 +218,5 @@ export function deleteRelation(
       issue: identifierOf(source),
     });
   })();
-  return { issueId: row.issue_id, relatedId: row.related_id };
+  return { issueId: row.issue_id, relatedId: row.related_id, type: row.type };
 }

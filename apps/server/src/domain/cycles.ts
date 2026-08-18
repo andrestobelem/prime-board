@@ -51,10 +51,27 @@ export function listCycles(db: Database, teamId: string, includeArchived = false
 }
 
 function nextNumber(db: Database, teamId: string): number {
+  const team = db.query("SELECT key FROM teams WHERE id = ?1").get(teamId) as { key: string };
   const row = db
     .query("SELECT COALESCE(MAX(number), 0) AS n FROM cycles WHERE team_id = ?1")
     .get(teamId) as { n: number };
-  return row.n + 1;
+  let highest = row.n;
+  // Deleted cycles leave qualified tombstone references in Activity. Include
+  // those numbers in the sequence so a recreated cycle can never silently
+  // acquire the identity of an old historical cycle.
+  const prefix = `${team.key}/`;
+  const events = db
+    .query("SELECT payload FROM activity WHERE type = 'cycle_changed'")
+    .all() as Array<{ payload: string }>;
+  for (const event of events) {
+    const payload = JSON.parse(event.payload) as Record<string, unknown>;
+    for (const value of [payload.from, payload.to]) {
+      if (typeof value !== "string" || !value.startsWith(prefix)) continue;
+      const number = Number(value.slice(prefix.length));
+      if (Number.isInteger(number) && number > highest) highest = number;
+    }
+  }
+  return highest + 1;
 }
 
 function resolveState(state: string): CycleState {
@@ -184,7 +201,11 @@ export function deleteCycle(db: Database, actorId: string, id: string): boolean 
     // También canoniza eventos anteriores: una vez borrado el cycle, su UUID
     // ya no puede resolverse durante el export.
     preserveCycleActivityReferences(db, id, reference);
-    db.query("UPDATE issues SET cycle_id = NULL WHERE cycle_id = ?1").run(id);
+    const timestamp = now();
+    db.query("UPDATE issues SET cycle_id = NULL, updated_at = ?1 WHERE cycle_id = ?2").run(
+      timestamp,
+      id,
+    );
     for (const issue of affected) {
       // El cycle se elimina en esta misma transacción; conservar la clave estable
       // evita que el exportador dependa de una fila que ya no existirá.
