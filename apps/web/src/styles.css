@@ -1090,6 +1090,25 @@ kbd {
   letter-spacing: 0.8px;
   text-transform: uppercase;
 }
+.project-milestones-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px 6px;
+}
+.project-milestones-toolbar button {
+  margin-left: auto;
+}
+.milestone-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 3px;
+}
+.milestone-actions .icon-action {
+  font-size: 11px;
+  padding: 2px 5px;
+}
+
 .saved-view-editor {
   width: 100%;
   display: grid;

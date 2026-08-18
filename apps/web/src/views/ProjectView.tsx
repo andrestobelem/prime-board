@@ -5,7 +5,7 @@ import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.t
 import { navigate } from "../router.tsx";
 import { Avatar } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
-import { EntityModal } from "../components/EntityModal.tsx";
+import { ConfirmModal, EntityModal } from "../components/EntityModal.tsx";
 import { IssueList, IssueListLimitNotice, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
@@ -13,9 +13,11 @@ const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter, $after: String) {
   project(id: $id) {
     id name description state targetDate
     lead { id name type }
-    milestones { id name targetDate progress }
+    teams { id name }
+    milestones { id name description targetDate progress position }
     updates { id health body risks createdAt author { id name type } }
   }
+  actors { id name type }
   issues(filter: $filter, first: 250, after: $after) {
     nodes { ${ISSUE_LIST_FIELDS} }
     pageInfo { hasNextPage endCursor }
@@ -33,6 +35,11 @@ const STATE_COLORS: Record<string, string> = {
 
 export function ProjectView({ projectId }: { projectId: string }) {
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [editProjectOpen, setEditProjectOpen] = useState(false);
+  const [milestoneOpen, setMilestoneOpen] = useState(false);
+  const [milestoneTarget, setMilestoneTarget] = useState<any | null>(null);
+  const [milestoneDelete, setMilestoneDelete] = useState<any | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
   const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageInfo, setPageInfo] = useState({
@@ -48,7 +55,15 @@ export function ProjectView({ projectId }: { projectId: string }) {
       state: string;
       targetDate: string | null;
       lead: { id: string; name: string; type: string } | null;
-      milestones: Array<{ id: string; name: string; targetDate: string | null; progress: number }>;
+      teams: Array<{ id: string; name: string }>;
+      milestones: Array<{
+        id: string;
+        name: string;
+        description: string | null;
+        targetDate: string | null;
+        progress: number;
+        position: number;
+      }>;
       updates: Array<{
         id: string;
         health: string;
@@ -58,6 +73,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
         author: { id: string; name: string; type: string };
       }>;
     } | null;
+    actors: Array<{ id: string; name: string; type: string }>;
     issues: {
       nodes: IssueListItem[];
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -83,6 +99,72 @@ export function ProjectView({ projectId }: { projectId: string }) {
     } finally {
       setLoadingMore(false);
     }
+  }
+
+  async function updateProject(values: Record<string, string>) {
+    const name = values.name?.trim();
+    if (!name) throw new Error("Name is required");
+    await mutate(
+      `mutation($id: ID!, $input: ProjectUpdateInput!) { projectUpdate(id: $id, input: $input) { success } }`,
+      {
+        id: projectId,
+        input: {
+          name,
+          description: values.description ?? "",
+          state: values.state,
+          leadId: values.leadId || null,
+          targetDate: values.targetDate ? new Date(values.targetDate).toISOString() : null,
+        },
+      },
+    );
+    setEditProjectOpen(false);
+  }
+
+  async function saveMilestone(values: Record<string, string>) {
+    const name = values.name?.trim();
+    if (!name) throw new Error("Milestone name is required");
+    const input = {
+      name,
+      description: values.description ?? "",
+      targetDate: values.targetDate ? new Date(values.targetDate).toISOString() : null,
+    };
+    if (milestoneTarget) {
+      await mutate(
+        `mutation($id: ID!, $input: MilestoneUpdateInput!) { milestoneUpdate(id: $id, input: $input) { success } }`,
+        { id: milestoneTarget.id, input },
+      );
+    } else {
+      await mutate(
+        `mutation($input: MilestoneCreateInput!) { milestoneCreate(input: $input) { success } }`,
+        { input: { ...input, projectId } },
+      );
+    }
+    setMilestoneOpen(false);
+    setMilestoneTarget(null);
+  }
+
+  async function deleteMilestone() {
+    if (!milestoneDelete) return;
+    await mutate(`mutation($id: ID!) { milestoneDelete(id: $id) { success } }`, {
+      id: milestoneDelete.id,
+    });
+    setMilestoneDelete(null);
+  }
+
+  async function moveMilestone(milestone: any, direction: -1 | 1) {
+    const index = project?.milestones.findIndex((item: any) => item.id === milestone.id) ?? -1;
+    const target = project?.milestones[index + direction];
+    if (!target) return;
+    await Promise.all([
+      mutate(
+        `mutation($id: ID!, $input: MilestoneUpdateInput!) { milestoneUpdate(id: $id, input: $input) { success } }`,
+        { id: milestone.id, input: { position: target.position } },
+      ),
+      mutate(
+        `mutation($id: ID!, $input: MilestoneUpdateInput!) { milestoneUpdate(id: $id, input: $input) { success } }`,
+        { id: target.id, input: { position: milestone.position } },
+      ),
+    ]);
   }
 
   async function postUpdate(values: Record<string, string>) {
@@ -133,8 +215,11 @@ export function ProjectView({ projectId }: { projectId: string }) {
           <button
             className="btn secondary"
             style={{ marginLeft: "auto" }}
-            onClick={() => setUpdateOpen(true)}
+            onClick={() => setEditProjectOpen(true)}
           >
+            Edit overview
+          </button>
+          <button className="btn secondary" onClick={() => setUpdateOpen(true)}>
             Post update
           </button>
           <button
@@ -222,6 +307,39 @@ export function ProjectView({ projectId }: { projectId: string }) {
                   <div className="state-group-header" style={{ background: "var(--bg-sidebar)" }}>
                     <Icon name="milestone" title="Milestone" /> {milestone.name}
                     <span className="count">{Math.round(milestone.progress * 100)}%</span>
+                    <span className="milestone-actions">
+                      <button
+                        className="icon-action"
+                        aria-label={`Edit milestone ${milestone.name}`}
+                        onClick={() => {
+                          setMilestoneTarget(milestone);
+                          setMilestoneOpen(true);
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="icon-action"
+                        aria-label={`Move ${milestone.name} up`}
+                        onClick={() => void moveMilestone(milestone, -1)}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        className="icon-action"
+                        aria-label={`Move ${milestone.name} down`}
+                        onClick={() => void moveMilestone(milestone, 1)}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        className="icon-action danger"
+                        aria-label={`Delete milestone ${milestone.name}`}
+                        onClick={() => setMilestoneDelete(milestone)}
+                      >
+                        ×
+                      </button>
+                    </span>
                     {milestone.targetDate && (
                       <span className="count" style={{ marginLeft: "auto" }}>
                         {milestone.targetDate}
@@ -242,6 +360,86 @@ export function ProjectView({ projectId }: { projectId: string }) {
             </>
           );
         })()
+      )}
+      {editProjectOpen && (
+        <EntityModal
+          title="Edit project overview"
+          submitLabel="Save"
+          fields={[
+            { key: "name", label: "Name", value: project.name },
+            {
+              key: "description",
+              label: "Description",
+              type: "textarea",
+              value: project.description ?? "",
+            },
+            {
+              key: "state",
+              label: "State",
+              type: "select",
+              value: project.state,
+              options: ["BACKLOG", "PLANNED", "STARTED", "PAUSED", "COMPLETED", "CANCELED"].map(
+                (value) => ({ value, label: value.toLowerCase() }),
+              ),
+            },
+            {
+              key: "leadId",
+              label: "Lead",
+              type: "select",
+              value: project.lead?.id ?? "",
+              options: [
+                { value: "", label: "No lead" },
+                ...(result.data?.actors ?? []).map((actor) => ({
+                  value: actor.id,
+                  label: actor.name,
+                })),
+              ],
+            },
+            {
+              key: "targetDate",
+              label: "Target date",
+              type: "date",
+              value: project.targetDate?.slice(0, 10) ?? "",
+            },
+          ]}
+          onClose={() => setEditProjectOpen(false)}
+          onSubmit={updateProject}
+        />
+      )}
+      {milestoneOpen && (
+        <EntityModal
+          title={milestoneTarget ? "Edit milestone" : "New milestone"}
+          submitLabel="Save"
+          fields={[
+            { key: "name", label: "Name", value: milestoneTarget?.name ?? "" },
+            {
+              key: "description",
+              label: "Description",
+              type: "textarea",
+              value: milestoneTarget?.description ?? "",
+            },
+            {
+              key: "targetDate",
+              label: "Target date",
+              type: "date",
+              value: milestoneTarget?.targetDate?.slice(0, 10) ?? "",
+            },
+          ]}
+          onClose={() => {
+            setMilestoneOpen(false);
+            setMilestoneTarget(null);
+          }}
+          onSubmit={saveMilestone}
+        />
+      )}
+      {milestoneDelete && (
+        <ConfirmModal
+          title="Delete milestone"
+          message={`Delete milestone “${milestoneDelete.name}”? Issues will become unassigned.`}
+          confirmLabel="Delete"
+          onClose={() => setMilestoneDelete(null)}
+          onConfirm={deleteMilestone}
+        />
       )}
       {updateOpen && (
         <EntityModal
