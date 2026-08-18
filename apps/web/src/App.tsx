@@ -28,7 +28,7 @@ import { TeamView } from "./views/TeamView.tsx";
 import { TeamHomeView } from "./views/TeamHomeView.tsx";
 import { TeamsView } from "./views/TeamsView.tsx";
 import { ProjectsView } from "./views/ProjectsView.tsx";
-import { buildNavigation } from "./navigation.ts";
+import { buildNavigation, getTeamKeyForRoute } from "./navigation.ts";
 
 const SHELL_QUERY = `{
   workspace { id name }
@@ -39,7 +39,7 @@ const SHELL_QUERY = `{
   }
   initiatives { id name state }
   savedViews { id name scope team { id key } }
-  inbox(first: 50) { isRead }
+  inboxUnreadCount
   favorites {
     id position
     project { id name }
@@ -73,7 +73,7 @@ export interface ShellData {
     team: { id: string; key: string } | null;
   }>;
   favorites: SidebarFavorite[];
-  inbox: Array<{ isRead: boolean }>;
+  inboxUnreadCount: number;
 }
 
 function loadGroupBy(): GroupBy {
@@ -230,11 +230,10 @@ export function App() {
   const navigation = buildNavigation(teams, shell.data?.savedViews ?? []);
   const defaultTeam = teams[0]?.key;
   const currentTeamKey =
-    section === "team" || section === "board"
-      ? param
-      : section === "issue" && param
-        ? param.split("-")[0]
-        : defaultTeam;
+    getTeamKeyForRoute(
+      route,
+      teams.map((team) => ({ key: team.key, projects: team.projects, cycles: team.cycles })),
+    ) ?? defaultTeam;
 
   let topbar = null;
   let content = <div className="loading">Loading…</div>;
@@ -486,7 +485,7 @@ export function App() {
         }))}
         views={navigation.workspaceViews}
         favorites={favorites}
-        unreadInboxCount={(shell.data?.inbox ?? []).filter((item) => !item.isRead).length}
+        unreadInboxCount={shell.data?.inboxUnreadCount ?? 0}
         onToggleFavorite={toggleFavorite}
         onReorderFavorite={reorderFavorite}
         onLogout={logout}

@@ -1,8 +1,8 @@
 // Vista guardada (PRB-201): abre el filtro/orden/agrupación persistidos.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState, EmptyState } from "../components/AsyncState.tsx";
 import { ISSUE_COLUMNS, type IssueColumn, type IssueOrder } from "../components/DisplayOptions.tsx";
-import { GqlError, mutate, useQuery } from "../api.ts";
+import { gql, GqlError, mutate, useQuery } from "../api.ts";
 import { ConfirmModal } from "../components/EntityModal.tsx";
 import {
   IssueList,
@@ -11,6 +11,7 @@ import {
   type IssueListItem,
 } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
+import { appendUniqueById } from "../pagination.ts";
 
 interface SavedViewData {
   id: string;
@@ -30,8 +31,8 @@ const META_QUERY = `query($id: ID!) {
   }
 }`;
 
-const ISSUES_QUERY = `query($filter: IssueFilter, $orderBy: IssueOrder) {
-  issues(filter: $filter, first: 250, orderBy: $orderBy) {
+const ISSUES_QUERY = `query($filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
+  issues(filter: $filter, first: 250, after: $after, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} }
     pageInfo { hasNextPage endCursor }
   }
@@ -52,14 +53,58 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
   const meta = useQuery<{ savedView: SavedViewData | null }>(META_QUERY, { id: viewId });
   const view = meta.data?.savedView ?? null;
 
+  const listVariables = view
+    ? { filter: view.filter ?? {}, orderBy: view.orderBy }
+    : { filter: { search: "__no_view__" } };
+  const pageKey = JSON.stringify(listVariables);
+  const pageKeyRef = useRef(pageKey);
+  if (pageKeyRef.current !== pageKey) pageKeyRef.current = pageKey;
+  const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [pageInfo, setPageInfo] = useState({
+    hasNextPage: false,
+    endCursor: null as string | null,
+  });
   const list = useQuery<{
-    issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean } };
-  }>(
-    ISSUES_QUERY,
-    view
-      ? { filter: view.filter ?? {}, orderBy: view.orderBy }
-      : { filter: { search: "__no_view__" } },
-  );
+    issues: {
+      nodes: IssueListItem[];
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    };
+  }>(ISSUES_QUERY, listVariables);
+
+  useEffect(() => {
+    setExtraIssues([]);
+    setLoadingMore(false);
+    setPageError(null);
+    setPageInfo({ hasNextPage: false, endCursor: null });
+  }, [pageKey, list.data?.issues]);
+
+  useEffect(() => {
+    if (list.data?.issues.pageInfo) setPageInfo(list.data.issues.pageInfo);
+  }, [list.data?.issues.pageInfo]);
+
+  async function loadMore(): Promise<void> {
+    if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
+    const requestKey = pageKey;
+    setLoadingMore(true);
+    setPageError(null);
+    try {
+      const next = await gql<typeof list.data>(ISSUES_QUERY, {
+        ...listVariables,
+        after: pageInfo.endCursor,
+      });
+      if (pageKeyRef.current !== requestKey || !next) return;
+      setExtraIssues((current) => appendUniqueById(current, next.issues.nodes));
+      setPageInfo(next.issues.pageInfo);
+    } catch (err) {
+      if (pageKeyRef.current === requestKey) {
+        setPageError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (pageKeyRef.current === requestKey) setLoadingMore(false);
+    }
+  }
 
   async function saveMeta() {
     if (!view) return;
@@ -247,9 +292,21 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
         <ErrorState message={list.error.message} onRetry={list.refetch} />
       ) : (
         <>
-          <IssueListLimitNotice hasNextPage={list.data?.issues.pageInfo.hasNextPage ?? false} />
+          {pageError && (
+            <div className="error-banner" role="alert">
+              {pageError}{" "}
+              <button className="btn secondary" onClick={() => void loadMore()}>
+                Retry
+              </button>
+            </div>
+          )}
+          <IssueListLimitNotice
+            hasNextPage={pageInfo.hasNextPage}
+            loading={loadingMore}
+            onLoadMore={() => void loadMore()}
+          />
           <IssueList
-            issues={list.data?.issues.nodes ?? []}
+            issues={appendUniqueById(list.data?.issues.nodes ?? [], extraIssues)}
             groupBy={groupBy}
             visibleColumns={(view.columns ?? ["priority", "labels", "assignee"]) as IssueColumn[]}
           />

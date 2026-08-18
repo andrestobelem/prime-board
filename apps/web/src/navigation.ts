@@ -59,3 +59,29 @@ export function buildNavigation(
     })),
   };
 }
+
+export interface RouteTeamContext {
+  key: string;
+  projects?: Array<{ id: string }>;
+  cycles?: Array<{ id: string }>;
+}
+
+/** Returns the team represented by the current route for creation flows. */
+export function getTeamKeyForRoute(route: string[], teams: RouteTeamContext[]): string | undefined {
+  const [section, param] = route;
+  if (!param) return teams[0]?.key;
+  if (["team", "board", "triage", "team-settings"].includes(section ?? "")) return param;
+  if (section === "issue") return param.split("-")[0];
+  if (section === "cycle") {
+    return (
+      teams.find((team) => team.cycles?.some((cycle) => cycle.id === param))?.key ?? teams[0]?.key
+    );
+  }
+  if (section === "project" || section === "project-board") {
+    return (
+      teams.find((team) => team.projects?.some((project) => project.id === param))?.key ??
+      teams[0]?.key
+    );
+  }
+  return teams[0]?.key;
+}

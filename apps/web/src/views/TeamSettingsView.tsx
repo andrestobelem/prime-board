@@ -4,6 +4,7 @@ import { mutate, useQuery } from "../api.ts";
 import { LabelChip, StateIcon } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
+import { availableTeamActors } from "../team-memberships.ts";
 
 const QUERY = `query($key: String) {
   viewer { id workspaceRole }
@@ -12,13 +13,15 @@ const QUERY = `query($key: String) {
     defaultState { id }
     states { id name type color position }
     labels { id name color teamId }
-    memberships { actor { id } role }
+    memberships { id actor { id name type } role }
   }
+  actors { id name type }
 }`;
 
 const STATE_TYPES = ["TRIAGE", "BACKLOG", "UNSTARTED", "STARTED", "COMPLETED", "CANCELED"];
 
 type DeleteTarget = { id: string; kind: "state" | "label"; name: string };
+type MembershipTarget = { id: string; name: string };
 
 export function TeamSettingsView({ teamKey }: { teamKey: string }) {
   const result = useQuery<any>(QUERY, { key: teamKey });
@@ -30,17 +33,23 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [membershipActorId, setMembershipActorId] = useState("");
+  const [membershipRole, setMembershipRole] = useState("MEMBER");
+  const [membershipSaving, setMembershipSaving] = useState(false);
+  const [membershipDelete, setMembershipDelete] = useState<MembershipTarget | null>(null);
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
   if (result.error) return <div className="error-banner">{result.error.message}</div>;
   const team = result.data?.team;
   if (!team) return <div className="empty">Team {teamKey} not found.</div>;
   const viewer = result.data?.viewer;
+  const canManageWorkspaceLabels = viewer?.workspaceRole === "ADMIN";
   const canManage =
-    viewer?.workspaceRole === "ADMIN" ||
+    canManageWorkspaceLabels ||
     team.memberships.some(
       (membership: any) => membership.actor.id === viewer?.id && membership.role === "OWNER",
     );
+  const availableActors = availableTeamActors(result.data?.actors ?? [], team.memberships);
 
   async function runMutation(key: string, operation: () => Promise<unknown>): Promise<boolean> {
     setSaving(key);
@@ -53,6 +62,41 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
       return false;
     } finally {
       setSaving(null);
+    }
+  }
+
+  async function addMembership(): Promise<void> {
+    if (!membershipActorId || membershipSaving) return;
+    setMembershipSaving(true);
+    setError(null);
+    try {
+      await mutate(
+        `mutation($input: TeamMembershipCreateInput!) {
+          teamMembershipCreate(input: $input) { success }
+        }`,
+        { input: { teamId: team.id, actorId: membershipActorId, role: membershipRole } },
+      );
+      setMembershipActorId("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not update team membership.");
+    } finally {
+      setMembershipSaving(false);
+    }
+  }
+
+  async function removeMembership(): Promise<void> {
+    if (!membershipDelete || membershipSaving) return;
+    setMembershipSaving(true);
+    setError(null);
+    try {
+      await mutate(`mutation($id: ID!) { teamMembershipDelete(id: $id) { success } }`, {
+        id: membershipDelete.id,
+      });
+      setMembershipDelete(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not update team membership.");
+    } finally {
+      setMembershipSaving(false);
     }
   }
 
@@ -123,7 +167,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
         input: {
           name: labelName.trim(),
           color: labelColor,
-          teamId: labelScope === "team" ? team.id : null,
+          teamId: canManageWorkspaceLabels && labelScope === "workspace" ? null : team.id,
         },
       }),
     );
@@ -170,6 +214,74 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
           You can view these settings, but only a team owner or workspace admin can edit them.
         </div>
       )}
+
+      <section className="settings-panel" aria-labelledby="team-members-title">
+        <div className="settings-panel-header">
+          <div>
+            <h2 id="team-members-title">Team members</h2>
+            <p>Manage the actors who can work in this team.</p>
+          </div>
+          <span className="settings-count">{team.memberships.length} members</span>
+        </div>
+        <div className="settings-list">
+          {team.memberships.map((membership: any) => (
+            <div className="team-setting-row" key={membership.id}>
+              <div className="team-setting-identity">
+                <strong>{membership.actor.name}</strong>
+                <span className="settings-row-meta">{membership.role.toLowerCase()}</span>
+              </div>
+              {canManage && (
+                <button
+                  className="icon-action danger"
+                  aria-label={`Remove ${membership.actor.name}`}
+                  disabled={membershipSaving}
+                  onClick={() =>
+                    setMembershipDelete({ id: membership.id, name: membership.actor.name })
+                  }
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          ))}
+          {team.memberships.length === 0 && (
+            <div className="settings-empty">No team members yet.</div>
+          )}
+        </div>
+        {canManage && (
+          <div className="settings-create-row">
+            <select
+              aria-label="Actor to add"
+              value={membershipActorId}
+              disabled={membershipSaving || availableActors.length === 0}
+              onChange={(event) => setMembershipActorId(event.target.value)}
+            >
+              <option value="">Add an actor…</option>
+              {availableActors.map((actor: any) => (
+                <option key={actor.id} value={actor.id}>
+                  {actor.name}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Membership role"
+              value={membershipRole}
+              disabled={membershipSaving}
+              onChange={(event) => setMembershipRole(event.target.value)}
+            >
+              <option value="MEMBER">Member</option>
+              <option value="OWNER">Owner</option>
+            </select>
+            <button
+              className="btn"
+              disabled={!membershipActorId || membershipSaving}
+              onClick={() => void addMembership()}
+            >
+              Add member
+            </button>
+          </div>
+        )}
+      </section>
 
       <section className="settings-panel" aria-labelledby="workflow-states-title">
         <div className="settings-panel-header">
@@ -334,6 +446,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
           )}
           {team.labels.map((label: any) => {
             const labelSaving = saving === `label-${label.id}`;
+            const canManageLabel = canManage && (canManageWorkspaceLabels || Boolean(label.teamId));
             return (
               <div className="team-setting-row" key={label.id} aria-busy={labelSaving}>
                 <div className="team-setting-identity">
@@ -345,7 +458,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     className="settings-name-input"
                     aria-label={`Name for ${label.name}`}
                     defaultValue={label.name}
-                    disabled={!canManage || labelSaving}
+                    disabled={!canManageLabel || labelSaving}
                     onBlur={(event) => {
                       const next = event.target.value.trim();
                       if (next && next !== label.name) void updateLabel(label.id, { name: next });
@@ -356,14 +469,14 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     aria-label={`Color for ${label.name}`}
                     type="color"
                     value={label.color}
-                    disabled={!canManage || labelSaving}
+                    disabled={!canManageLabel || labelSaving}
                     onChange={(event) => void updateLabel(label.id, { color: event.target.value })}
                   />
                   <button
                     className="icon-action danger"
                     aria-label={`Delete ${label.name}`}
                     title="Delete label"
-                    disabled={!canManage || labelSaving}
+                    disabled={!canManageLabel || labelSaving}
                     onClick={() =>
                       setDeleteTarget({ id: label.id, kind: "label", name: label.name })
                     }
@@ -398,14 +511,18 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
               disabled={saving === "new-label"}
               onChange={(event) => setLabelColor(event.target.value)}
             />
-            <select
-              aria-label="New label scope"
-              value={labelScope}
-              onChange={(event) => setLabelScope(event.target.value)}
-            >
-              <option value="team">team</option>
-              <option value="workspace">workspace</option>
-            </select>
+            {canManageWorkspaceLabels ? (
+              <select
+                aria-label="New label scope"
+                value={labelScope}
+                onChange={(event) => setLabelScope(event.target.value)}
+              >
+                <option value="team">team</option>
+                <option value="workspace">workspace</option>
+              </select>
+            ) : (
+              <span className="settings-row-meta">team label</span>
+            )}
             <button
               className="btn"
               type="submit"
@@ -416,6 +533,16 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
           </form>
         )}
       </section>
+
+      {membershipDelete && (
+        <ConfirmModal
+          title="Remove team member"
+          message={`Remove “${membershipDelete.name}” from this team?`}
+          confirmLabel="Remove"
+          onClose={() => setMembershipDelete(null)}
+          onConfirm={removeMembership}
+        />
+      )}
 
       {deleteTarget && (
         <ConfirmModal

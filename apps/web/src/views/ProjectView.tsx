@@ -1,5 +1,5 @@
 // Vista de proyecto (AT-149): header con estado/lead/fecha y la lista de issues.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { gql, mutate, useQuery } from "../api.ts";
 import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.tsx";
 import { navigate } from "../router.tsx";
@@ -8,16 +8,22 @@ import { Icon } from "../components/icons.tsx";
 import { ConfirmModal, EntityModal } from "../components/EntityModal.tsx";
 import { IssueList, IssueListLimitNotice, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
+import { appendUniqueById } from "../pagination.ts";
+import { createRequestGate } from "../request-generation.ts";
+import { canManageProject } from "../permissions.ts";
+import { changedTeamIds, parseTeamIds, serializeTeamIds } from "../project-teams.ts";
 
 const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter, $after: String) {
+  viewer { id workspaceRole }
   project(id: $id) {
     id name description state targetDate
     lead { id name type }
-    teams { id name }
+    teams { id name memberships { actorId role } }
     milestones { id name description targetDate progress position }
     updates { id health body risks createdAt author { id name type } }
   }
   actors { id name type }
+  availableTeams: teams { id name }
   issues(filter: $filter, first: 250, after: $after) {
     nodes { ${ISSUE_LIST_FIELDS} }
     pageInfo { hasNextPage endCursor }
@@ -52,14 +58,19 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const [milestoneTarget, setMilestoneTarget] = useState<any | null>(null);
   const [milestoneDelete, setMilestoneDelete] = useState<any | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
   const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
   const [pageInfo, setPageInfo] = useState({
     hasNextPage: false,
     endCursor: null as string | null,
   });
+  const pageGate = useRef(createRequestGate());
+  const pageKey = JSON.stringify({ projectId });
 
   const result = useQuery<{
+    viewer: { id: string; workspaceRole: string };
     project: {
       id: string;
       name: string;
@@ -67,7 +78,11 @@ export function ProjectView({ projectId }: { projectId: string }) {
       state: string;
       targetDate: string | null;
       lead: { id: string; name: string; type: string } | null;
-      teams: Array<{ id: string; name: string }>;
+      teams: Array<{
+        id: string;
+        name: string;
+        memberships: Array<{ actorId: string; role: string }>;
+      }>;
       milestones: Array<{
         id: string;
         name: string;
@@ -86,6 +101,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
       }>;
     } | null;
     actors: Array<{ id: string; name: string; type: string }>;
+    availableTeams: Array<{ id: string; name: string }>;
     issues: {
       nodes: IssueListItem[];
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -93,12 +109,16 @@ export function ProjectView({ projectId }: { projectId: string }) {
   }>(PROJECT_QUERY, { id: projectId, filter: { project: { eq: projectId } } });
 
   useEffect(() => {
+    pageGate.current.next();
     setExtraIssues([]);
+    setLoadingMore(false);
+    setPageError(null);
     if (result.data?.issues.pageInfo) setPageInfo(result.data.issues.pageInfo);
-  }, [result.data]);
+  }, [pageKey, result.data]);
 
   async function loadMore(): Promise<void> {
     if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
+    const generation = pageGate.current.next();
     setLoadingMore(true);
     try {
       const next = await gql<any>(PROJECT_QUERY, {
@@ -106,33 +126,41 @@ export function ProjectView({ projectId }: { projectId: string }) {
         filter: { project: { eq: projectId } },
         after: pageInfo.endCursor,
       });
-      setExtraIssues((current) => [...current, ...next.issues.nodes]);
+      if (!pageGate.current.isCurrent(generation)) return;
+      setExtraIssues((current) => appendUniqueById(current, next.issues.nodes));
       setPageInfo(next.issues.pageInfo);
+    } catch (error) {
+      if (pageGate.current.isCurrent(generation)) {
+        setPageError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setLoadingMore(false);
+      if (pageGate.current.isCurrent(generation)) setLoadingMore(false);
     }
   }
 
   async function updateProject(values: Record<string, string>) {
+    if (!canManage) throw new Error("Project team membership is required.");
     const name = values.name?.trim();
     if (!name) throw new Error("Name is required");
+    const input: Record<string, unknown> = {
+      name,
+      description: values.description ?? "",
+      state: values.state,
+      leadId: values.leadId || null,
+      targetDate: values.targetDate ? new Date(values.targetDate).toISOString() : null,
+    };
+    const nextTeamIds = parseTeamIds(values.teamIds ?? "");
+    const teamIds = changedTeamIds(project?.teams.map((team) => team.id) ?? [], nextTeamIds);
+    if (teamIds) input.teamIds = teamIds;
     await mutate(
       `mutation($id: ID!, $input: ProjectUpdateInput!) { projectUpdate(id: $id, input: $input) { success } }`,
-      {
-        id: projectId,
-        input: {
-          name,
-          description: values.description ?? "",
-          state: values.state,
-          leadId: values.leadId || null,
-          targetDate: values.targetDate ? new Date(values.targetDate).toISOString() : null,
-        },
-      },
+      { id: projectId, input },
     );
     setEditProjectOpen(false);
   }
 
   async function saveMilestone(values: Record<string, string>) {
+    if (!canManage) throw new Error("Project team membership is required.");
     const name = values.name?.trim();
     if (!name) throw new Error("Milestone name is required");
     const input = {
@@ -156,7 +184,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
   }
 
   async function deleteMilestone() {
-    if (!milestoneDelete) return;
+    if (!canManage || !milestoneDelete) return;
     await mutate(`mutation($id: ID!) { milestoneDelete(id: $id) { success } }`, {
       id: milestoneDelete.id,
     });
@@ -164,6 +192,10 @@ export function ProjectView({ projectId }: { projectId: string }) {
   }
 
   async function moveMilestone(milestone: any, direction: -1 | 1) {
+    if (!canManage) {
+      setProjectError("Project team membership is required.");
+      return;
+    }
     const index = project?.milestones.findIndex((item: any) => item.id === milestone.id) ?? -1;
     const target = project?.milestones[index + direction];
     if (!target) return;
@@ -180,6 +212,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
   }
 
   async function postUpdate(values: Record<string, string>) {
+    if (!canManage) throw new Error("Project team membership is required.");
     const body = values.body?.trim();
     if (!body) throw new Error("Summary is required");
     await mutate(
@@ -210,6 +243,9 @@ export function ProjectView({ projectId }: { projectId: string }) {
   if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
   const project = result.data?.project;
   if (!project) return <EmptyState title="Project not found" />;
+  const canManage = Boolean(
+    result.data?.viewer && canManageProject(result.data.viewer, project.teams),
+  );
 
   const issues = [...result.data!.issues.nodes, ...extraIssues];
   const projectTargetDate = formatProjectDate(project.targetDate);
@@ -225,27 +261,40 @@ export function ProjectView({ projectId }: { projectId: string }) {
           >
             {project.state.toLowerCase()}
           </span>
-          <button
-            className="btn secondary"
-            style={{ marginLeft: "auto" }}
-            onClick={() => setEditProjectOpen(true)}
-          >
-            Edit overview
-          </button>
-          <button className="btn secondary" onClick={() => setUpdateOpen(true)}>
-            Post update
-          </button>
-          <button
-            className="btn secondary"
-            onClick={async () => {
-              await mutate(`mutation($id: ID!) { projectArchive(id: $id) { success } }`, {
-                id: project.id,
-              });
-              navigate("/");
-            }}
-          >
-            Archive
-          </button>
+          {canManage && (
+            <>
+              <button
+                className="btn secondary"
+                style={{ marginLeft: "auto" }}
+                onClick={() => setEditProjectOpen(true)}
+              >
+                Edit overview
+              </button>
+              <button className="btn secondary" onClick={() => setUpdateOpen(true)}>
+                Post update
+              </button>
+              <button
+                className="btn secondary"
+                disabled={archiveLoading}
+                onClick={async () => {
+                  setProjectError(null);
+                  setArchiveLoading(true);
+                  try {
+                    await mutate(`mutation($id: ID!) { projectArchive(id: $id) { success } }`, {
+                      id: project.id,
+                    });
+                    navigate("/");
+                  } catch (err) {
+                    setProjectError(err instanceof Error ? err.message : String(err));
+                  } finally {
+                    setArchiveLoading(false);
+                  }
+                }}
+              >
+                {archiveLoading ? "Archiving…" : "Archive"}
+              </button>
+            </>
+          )}
         </div>
         <div
           style={{
@@ -271,6 +320,16 @@ export function ProjectView({ projectId }: { projectId: string }) {
           </p>
         )}
       </div>
+      {projectError && (
+        <div className="error-banner" role="alert">
+          {projectError}
+        </div>
+      )}
+      {!canManage && (
+        <div className="pagination-notice" role="status">
+          Read-only project · membership in an associated team is required to edit it.
+        </div>
+      )}
       {project.updates.length > 0 && (
         <div style={{ borderBottom: "1px solid var(--border-subtle)" }}>
           <div className="section" style={{ padding: "8px 24px" }}>
@@ -303,6 +362,14 @@ export function ProjectView({ projectId }: { projectId: string }) {
           ))}
         </div>
       )}
+      {pageError && (
+        <div className="error-banner" role="alert">
+          {pageError}{" "}
+          <button className="btn secondary" onClick={() => void loadMore()}>
+            Retry
+          </button>
+        </div>
+      )}
       <IssueListLimitNotice
         hasNextPage={pageInfo.hasNextPage}
         loading={loadingMore}
@@ -320,39 +387,41 @@ export function ProjectView({ projectId }: { projectId: string }) {
                   <div className="state-group-header" style={{ background: "var(--bg-sidebar)" }}>
                     <Icon name="milestone" title="Milestone" /> {milestone.name}
                     <span className="count">{Math.round(milestone.progress * 100)}%</span>
-                    <span className="milestone-actions">
-                      <button
-                        className="icon-action"
-                        aria-label={`Edit milestone ${milestone.name}`}
-                        onClick={() => {
-                          setMilestoneTarget(milestone);
-                          setMilestoneOpen(true);
-                        }}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="icon-action"
-                        aria-label={`Move ${milestone.name} up`}
-                        onClick={() => void moveMilestone(milestone, -1)}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        className="icon-action"
-                        aria-label={`Move ${milestone.name} down`}
-                        onClick={() => void moveMilestone(milestone, 1)}
-                      >
-                        ↓
-                      </button>
-                      <button
-                        className="icon-action danger"
-                        aria-label={`Delete milestone ${milestone.name}`}
-                        onClick={() => setMilestoneDelete(milestone)}
-                      >
-                        ×
-                      </button>
-                    </span>
+                    {canManage && (
+                      <span className="milestone-actions">
+                        <button
+                          className="icon-action"
+                          aria-label={`Edit milestone ${milestone.name}`}
+                          onClick={() => {
+                            setMilestoneTarget(milestone);
+                            setMilestoneOpen(true);
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="icon-action"
+                          aria-label={`Move ${milestone.name} up`}
+                          onClick={() => void moveMilestone(milestone, -1)}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          className="icon-action"
+                          aria-label={`Move ${milestone.name} down`}
+                          onClick={() => void moveMilestone(milestone, 1)}
+                        >
+                          ↓
+                        </button>
+                        <button
+                          className="icon-action danger"
+                          aria-label={`Delete milestone ${milestone.name}`}
+                          onClick={() => setMilestoneDelete(milestone)}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    )}
                     {formatProjectDate(milestone.targetDate) && (
                       <span className="count" style={{ marginLeft: "auto" }}>
                         {formatProjectDate(milestone.targetDate)}
@@ -374,7 +443,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
           );
         })()
       )}
-      {editProjectOpen && (
+      {canManage && editProjectOpen && (
         <EntityModal
           title="Edit project overview"
           submitLabel="Save"
@@ -414,12 +483,23 @@ export function ProjectView({ projectId }: { projectId: string }) {
               type: "date",
               value: project.targetDate?.slice(0, 10) ?? "",
             },
+            {
+              key: "teamIds",
+              label: "Teams",
+              type: "select",
+              multiple: true,
+              value: serializeTeamIds(project.teams.map((team) => team.id)),
+              options: (result.data?.availableTeams ?? []).map((team) => ({
+                value: team.id,
+                label: team.name,
+              })),
+            },
           ]}
           onClose={() => setEditProjectOpen(false)}
           onSubmit={updateProject}
         />
       )}
-      {milestoneOpen && (
+      {canManage && milestoneOpen && (
         <EntityModal
           title={milestoneTarget ? "Edit milestone" : "New milestone"}
           submitLabel="Save"
@@ -445,7 +525,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
           onSubmit={saveMilestone}
         />
       )}
-      {milestoneDelete && (
+      {canManage && milestoneDelete && (
         <ConfirmModal
           title="Delete milestone"
           message={`Delete milestone “${milestoneDelete.name}”? Issues will become unassigned.`}
@@ -454,7 +534,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
           onConfirm={deleteMilestone}
         />
       )}
-      {updateOpen && (
+      {canManage && updateOpen && (
         <EntityModal
           title="Post project update"
           submitLabel="Post update"

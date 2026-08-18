@@ -1,17 +1,18 @@
 // Detalle de issue (AT-147): edición inline de título/descripción (markdown),
 // panel de propiedades, sub-issues, comentarios e historial de actividad.
-import { useEffect, useState } from "react";
-import { mutate, useQuery } from "../api.ts";
+import { useEffect, useRef, useState } from "react";
+import { gql, mutate, useQuery } from "../api.ts";
 import { Avatar, LabelChip, PRIORITY_NAMES, StateIcon } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
 import { renderMarkdown } from "../markdown.ts";
 import { Link, navigate } from "../router.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
+import { appendUniqueById } from "../pagination.ts";
 
-const ISSUE_NAV_QUERY = `query($teamId: ID) {
-  issues(filter: { team: { eq: $teamId } }, first: 250, orderBy: CREATED_DESC) {
-    nodes { identifier }
-    pageInfo { hasNextPage }
+const ISSUE_NAV_QUERY = `query($teamId: ID, $after: String) {
+  issues(filter: { team: { eq: $teamId } }, first: 250, after: $after, orderBy: CREATED_DESC) {
+    nodes { id identifier }
+    pageInfo { hasNextPage endCursor }
   }
 }`;
 
@@ -104,8 +105,69 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   const result = useQuery<any>(ISSUE_QUERY, { id: issueRef });
   const issue = result.data?.issue;
   const navigation = useQuery<any>(ISSUE_NAV_QUERY, { teamId: issue?.team.id ?? null });
-  const navigationIds: string[] =
-    navigation.data?.issues.nodes.map((item: any) => item.identifier) ?? [];
+  const navigationTeamId = issue?.team.id ?? null;
+  const [extraNavigation, setExtraNavigation] = useState<Array<{ id: string; identifier: string }>>(
+    [],
+  );
+  const [navigationPage, setNavigationPage] = useState({
+    hasNextPage: false,
+    endCursor: null as string | null,
+  });
+  const [navigationLoading, setNavigationLoading] = useState(false);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
+  const navigationKey = JSON.stringify({ teamId: navigationTeamId });
+  const navigationKeyRef = useRef(navigationKey);
+  if (navigationKeyRef.current !== navigationKey) navigationKeyRef.current = navigationKey;
+
+  useEffect(() => {
+    setExtraNavigation([]);
+    setNavigationLoading(false);
+    setNavigationPage({ hasNextPage: false, endCursor: null });
+    setNavigationError(null);
+  }, [navigationKey]);
+
+  useEffect(() => {
+    if (navigation.data?.issues.pageInfo) setNavigationPage(navigation.data.issues.pageInfo);
+  }, [navigation.data?.issues.pageInfo]);
+
+  const navigationItems = [...(navigation.data?.issues.nodes ?? []), ...extraNavigation];
+  const navigationIds: string[] = [
+    ...new Set(appendUniqueById([], navigationItems).map((item) => item.identifier)),
+  ];
+
+  async function loadNavigationPage(): Promise<void> {
+    if (
+      navigationLoading ||
+      !navigationPage.hasNextPage ||
+      !navigationPage.endCursor ||
+      !navigationTeamId
+    )
+      return;
+    const requestKey = navigationKey;
+    setNavigationLoading(true);
+    setNavigationError(null);
+    try {
+      const next = await gql<any>(ISSUE_NAV_QUERY, {
+        teamId: navigationTeamId,
+        after: navigationPage.endCursor,
+      });
+      if (navigationKeyRef.current !== requestKey) return;
+      setExtraNavigation((current) => appendUniqueById(current, next.issues.nodes));
+      setNavigationPage(next.issues.pageInfo);
+    } catch (err) {
+      if (navigationKeyRef.current === requestKey) {
+        setNavigationError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (navigationKeyRef.current === requestKey) setNavigationLoading(false);
+    }
+  }
+
+  // Load the complete navigation window so Previous/Next never dead-end at 250.
+  useEffect(() => {
+    if (!navigation.loading && navigationPage.hasNextPage) void loadNavigationPage();
+  }, [navigation.loading, navigationPage.hasNextPage, navigationPage.endCursor, navigationTeamId]);
+
   const navigationIndex = navigationIds.indexOf(issueRef);
   const previousIssue = navigationIndex > 0 ? navigationIds[navigationIndex - 1] : null;
   const nextIssue =
@@ -338,7 +400,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
               <button
                 className="issue-icon-button"
                 aria-label="Previous issue"
-                disabled={!previousIssue || navigation.loading}
+                disabled={!previousIssue || navigation.loading || navigationLoading}
                 onClick={() => previousIssue && navigate(`/issue/${previousIssue}`)}
               >
                 ‹
@@ -346,7 +408,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
               <button
                 className="issue-icon-button"
                 aria-label="Next issue"
-                disabled={!nextIssue || navigation.loading}
+                disabled={!nextIssue || navigation.loading || navigationLoading}
                 onClick={() => nextIssue && navigate(`/issue/${nextIssue}`)}
               >
                 ›
@@ -362,6 +424,14 @@ export function IssueView({ issueRef }: { issueRef: string }) {
           {saveError && (
             <div className="error-banner" role="alert">
               {saveError}
+            </div>
+          )}
+          {navigationError && (
+            <div className="error-banner" role="alert">
+              {navigationError}{" "}
+              <button className="btn secondary" onClick={() => void loadNavigationPage()}>
+                Retry
+              </button>
             </div>
           )}
           {saving && <span className="prop-status">Saving…</span>}

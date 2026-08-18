@@ -1,6 +1,6 @@
 // Board por estado con drag & drop nativo y update optimista (AT-146).
 // Sirve tanto para un team (#/board/KEY) como para un proyecto (#/project-board/ID, AT-182).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { gql, mutate, useQuery } from "../api.ts";
 import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.tsx";
 import { Avatar, LabelChip, PriorityIcon, StateIcon } from "../components/bits.tsx";
@@ -10,7 +10,10 @@ import {
   type IssueListItem,
 } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
+import { appendUniqueById } from "../pagination.ts";
+import { createRequestGate } from "../request-generation.ts";
 import { issueStateColumnKey, stateColumnKey } from "../board-grouping.ts";
+import { getVisibleBoardMetadata } from "../board-columns.ts";
 import { navigate } from "../router.tsx";
 import {
   BulkIssueActions,
@@ -106,27 +109,35 @@ export function BoardView({
   const [actionError, setActionError] = useState<string | null>(null);
   const [extraIssues, setExtraIssues] = useState<BoardCard[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
   const [pageInfo, setPageInfo] = useState({
     hasNextPage: false,
     endCursor: null as string | null,
   });
+  const pageGate = useRef(createRequestGate());
+  const pageKey = JSON.stringify({ scope, orderBy });
 
   useEffect(() => setLocal(null), [result.data]);
   useEffect(() => {
+    pageGate.current.next();
     setExtraIssues([]);
+    setLoadingMore(false);
+    setPageError(null);
     if (result.data?.issues?.pageInfo) setPageInfo(result.data.issues.pageInfo);
-  }, [result.data]);
+  }, [pageKey, result.data]);
 
   useEffect(() => {
-    const visible = new Set((result.data?.issues?.nodes ?? []).map((issue: BoardCard) => issue.id));
+    const visible = new Set(
+      [...(result.data?.issues?.nodes ?? []), ...extraIssues].map((issue: BoardCard) => issue.id),
+    );
     setSelectedIds((current) => new Set([...current].filter((id) => visible.has(id))));
     setFocusedId((current) => (current && visible.has(current) ? current : null));
-  }, [result.data]);
+  }, [extraIssues, result.data]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (isIssueShortcutTarget(event.target) || document.querySelector(".overlay")) return;
-      const visible = result.data?.issues?.nodes ?? [];
+      const visible = [...(result.data?.issues?.nodes ?? []), ...extraIssues];
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
         setSelectedIds(new Set(visible.map((issue: BoardCard) => issue.id)));
@@ -141,7 +152,7 @@ export function BoardView({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [focusedId, result.data, selectedIds]);
+  }, [extraIssues, focusedId, result.data, selectedIds]);
 
   if (result.loading && !result.data) return <LoadingState />;
   if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
@@ -172,6 +183,7 @@ export function BoardView({
 
   async function loadMore(): Promise<void> {
     if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
+    const generation = pageGate.current.next();
     setLoadingMore(true);
     try {
       const variables = isProject
@@ -188,10 +200,15 @@ export function BoardView({
             after: pageInfo.endCursor,
           };
       const next = await gql<any>(isProject ? PROJECT_BOARD_QUERY : TEAM_BOARD_QUERY, variables);
-      setExtraIssues((current) => [...current, ...next.issues.nodes]);
+      if (!pageGate.current.isCurrent(generation)) return;
+      setExtraIssues((current) => appendUniqueById(current, next.issues.nodes));
       setPageInfo(next.issues.pageInfo);
+    } catch (error) {
+      if (pageGate.current.isCurrent(generation)) {
+        setPageError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setLoadingMore(false);
+      if (pageGate.current.isCurrent(generation)) setLoadingMore(false);
     }
   }
 
@@ -407,6 +424,14 @@ export function BoardView({
           {actionError}
         </div>
       )}
+      {pageError && (
+        <div className="error-banner" role="alert">
+          {pageError}{" "}
+          <button className="btn secondary" onClick={() => void loadMore()}>
+            Retry
+          </button>
+        </div>
+      )}
       <IssueListLimitNotice
         hasNextPage={pageInfo.hasNextPage}
         loading={loadingMore}
@@ -485,6 +510,16 @@ export function BoardView({
                     )}
                     {visibleColumns.includes("labels") &&
                       issue.labels.map((label) => <LabelChip key={label.id} label={label} />)}
+                    {getVisibleBoardMetadata(issue, visibleColumns).project && (
+                      <span className="label-chip">
+                        {getVisibleBoardMetadata(issue, visibleColumns).project}
+                      </span>
+                    )}
+                    {getVisibleBoardMetadata(issue, visibleColumns).cycle && (
+                      <span className="label-chip">
+                        {getVisibleBoardMetadata(issue, visibleColumns).cycle}
+                      </span>
+                    )}
                     <span style={{ marginLeft: "auto" }}>
                       {visibleColumns.includes("assignee") && <Avatar actor={issue.assignee} />}
                     </span>

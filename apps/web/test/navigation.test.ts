@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildNavigation } from "../src/navigation.ts";
+import { buildNavigation, getTeamKeyForRoute } from "../src/navigation.ts";
 
 const teams = [
   { id: "one", projects: [{ id: "shared", name: "Shared", state: "started" }] },
@@ -33,5 +33,37 @@ describe("navegación por scope", () => {
       ["shared"],
       ["shared", "two-project"],
     ]);
+  });
+});
+
+describe("contexto de team para Quick Create", () => {
+  const routeTeams = [
+    {
+      key: "ONE",
+      projects: [{ id: "shared" }],
+      cycles: [{ id: "cycle-one" }],
+    },
+    {
+      key: "TWO",
+      projects: [{ id: "two-project" }],
+      cycles: [{ id: "cycle-two" }],
+    },
+  ];
+
+  it("conserva el team en rutas de team, triage y settings", () => {
+    expect(getTeamKeyForRoute(["triage", "TWO"], routeTeams)).toBe("TWO");
+    expect(getTeamKeyForRoute(["team-settings", "TWO"], routeTeams)).toBe("TWO");
+    expect(getTeamKeyForRoute(["team", "TWO", "home"], routeTeams)).toBe("TWO");
+  });
+
+  it("resuelve el team desde issue, cycle y project", () => {
+    expect(getTeamKeyForRoute(["issue", "TWO-42"], routeTeams)).toBe("TWO");
+    expect(getTeamKeyForRoute(["cycle", "cycle-two"], routeTeams)).toBe("TWO");
+    expect(getTeamKeyForRoute(["project", "two-project"], routeTeams)).toBe("TWO");
+  });
+
+  it("usa el primer team solo cuando la ruta no aporta contexto", () => {
+    expect(getTeamKeyForRoute(["inbox"], routeTeams)).toBe("ONE");
+    expect(getTeamKeyForRoute(["project", "missing"], routeTeams)).toBe("ONE");
   });
 });

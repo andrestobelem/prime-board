@@ -1,6 +1,6 @@
 // My issues: cola del actor autenticado con filtros de handoff.
-import { useState } from "react";
-import { useQuery } from "../api.ts";
+import { useEffect, useRef, useState } from "react";
+import { gql, useQuery } from "../api.ts";
 import { ErrorState, LoadingState } from "../components/AsyncState.tsx";
 import {
   IssueList,
@@ -9,10 +9,11 @@ import {
   type IssueListItem,
 } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
+import { appendUniqueById } from "../pagination.ts";
 
-const QUERY = `query($filter: IssueFilter) {
+const QUERY = `query($filter: IssueFilter, $after: String) {
   viewer { id name }
-  issues(filter: $filter, first: 250, orderBy: UPDATED_DESC) {
+  issues(filter: $filter, first: 250, after: $after, orderBy: UPDATED_DESC) {
     nodes { ${ISSUE_LIST_FIELDS} }
     pageInfo { hasNextPage endCursor }
   }
@@ -51,16 +52,59 @@ export function MyIssuesView({ groupBy = "state" }: { groupBy?: GroupBy }) {
   if (projectId) filter.project = { eq: projectId };
   if (priority) filter.priority = { eq: Number(priority) };
   if (search.trim()) filter.search = search.trim();
+  const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [pageInfo, setPageInfo] = useState({
+    hasNextPage: false,
+    endCursor: null as string | null,
+  });
+  const pageKey = JSON.stringify(filter);
+  const pageKeyRef = useRef(pageKey);
+  if (pageKeyRef.current !== pageKey) pageKeyRef.current = pageKey;
   const result = useQuery<{
     viewer: { id: string; name: string };
-    issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean } };
+    issues: {
+      nodes: IssueListItem[];
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    };
   }>(QUERY, { filter });
+
+  useEffect(() => {
+    setExtraIssues([]);
+    setLoadingMore(false);
+    setPageError(null);
+    setPageInfo({ hasNextPage: false, endCursor: null });
+  }, [pageKey, result.data?.issues]);
+
+  useEffect(() => {
+    if (result.data?.issues.pageInfo) setPageInfo(result.data.issues.pageInfo);
+  }, [result.data?.issues.pageInfo]);
+
+  async function loadMore(): Promise<void> {
+    if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
+    const requestKey = pageKey;
+    setLoadingMore(true);
+    setPageError(null);
+    try {
+      const next = await gql<typeof result.data>(QUERY, { filter, after: pageInfo.endCursor });
+      if (pageKeyRef.current !== requestKey || !next) return;
+      setExtraIssues((current) => appendUniqueById(current, next.issues.nodes));
+      setPageInfo(next.issues.pageInfo);
+    } catch (err) {
+      if (pageKeyRef.current === requestKey) {
+        setPageError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (pageKeyRef.current === requestKey) setLoadingMore(false);
+    }
+  }
 
   if (viewer.loading && !viewer.data) return <LoadingState />;
   if (viewer.error) return <ErrorState message={viewer.error.message} onRetry={viewer.refetch} />;
   if (result.loading && !result.data) return <LoadingState />;
   if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
-  const nodes = result.data?.issues.nodes ?? [];
+  const nodes = appendUniqueById(result.data?.issues.nodes ?? [], extraIssues);
   return (
     <div>
       <div className="my-issues-toolbar" aria-label="My issues filters">
@@ -116,7 +160,19 @@ export function MyIssuesView({ groupBy = "state" }: { groupBy?: GroupBy }) {
           ))}
         </select>
       </div>
-      <IssueListLimitNotice hasNextPage={result.data?.issues.pageInfo.hasNextPage ?? false} />
+      {pageError && (
+        <div className="error-banner" role="alert">
+          {pageError}{" "}
+          <button className="btn secondary" onClick={() => void loadMore()}>
+            Retry
+          </button>
+        </div>
+      )}
+      <IssueListLimitNotice
+        hasNextPage={pageInfo.hasNextPage}
+        loading={loadingMore}
+        onLoadMore={() => void loadMore()}
+      />
       {nodes.length === 0 ? (
         <div className="empty">No issues match this work queue.</div>
       ) : (

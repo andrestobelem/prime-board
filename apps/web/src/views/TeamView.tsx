@@ -13,6 +13,8 @@ import {
   type IssueListItem,
 } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
+import { appendUniqueById } from "../pagination.ts";
+import { createRequestGate } from "../request-generation.ts";
 import {
   activeIssueFilterCount,
   buildIssueFilter,
@@ -81,6 +83,7 @@ export function TeamView({
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
   const [pageInfo, setPageInfo] = useState({
     hasNextPage: false,
     endCursor: null as string | null,
@@ -101,6 +104,8 @@ export function TeamView({
     return triage ? { ...base, stateType: { eq: "TRIAGE" } } : base;
   }, [teamId, draft, triage]);
   const result = useQuery<TeamData>(TEAM_QUERY, { key: teamKey, teamId, filter, orderBy });
+  const pageGate = useRef(createRequestGate());
+  const pageKey = JSON.stringify({ teamKey, teamId, filter, orderBy });
   const visibleIds = useMemo(
     () => result.data?.issues.nodes.map((issue) => issue.id) ?? [],
     [result.data?.issues.nodes],
@@ -115,12 +120,16 @@ export function TeamView({
   }, [visibleIds]);
 
   useEffect(() => {
+    pageGate.current.next();
     setExtraIssues([]);
+    setLoadingMore(false);
+    setPageError(null);
     if (result.data?.issues.pageInfo) setPageInfo(result.data.issues.pageInfo);
-  }, [result.data]);
+  }, [pageKey, result.data]);
 
   async function loadMore(): Promise<void> {
     if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
+    const generation = pageGate.current.next();
     setLoadingMore(true);
     try {
       const next = await gql<TeamData>(TEAM_QUERY, {
@@ -130,10 +139,15 @@ export function TeamView({
         orderBy,
         after: pageInfo.endCursor,
       });
-      setExtraIssues((current) => [...current, ...next.issues.nodes]);
+      if (!pageGate.current.isCurrent(generation)) return;
+      setExtraIssues((current) => appendUniqueById(current, next.issues.nodes));
       setPageInfo(next.issues.pageInfo);
+    } catch (error) {
+      if (pageGate.current.isCurrent(generation)) {
+        setPageError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setLoadingMore(false);
+      if (pageGate.current.isCurrent(generation)) setLoadingMore(false);
     }
   }
 
@@ -247,6 +261,14 @@ export function TeamView({
         bulkLoading={bulkLoading}
       />
       {bulkError && <div className="error-banner">{bulkError}</div>}
+      {pageError && (
+        <div className="error-banner" role="alert">
+          {pageError}{" "}
+          <button className="btn secondary" onClick={() => void loadMore()}>
+            Retry
+          </button>
+        </div>
+      )}
       <IssueListLimitNotice
         hasNextPage={pageInfo.hasNextPage}
         loading={loadingMore}

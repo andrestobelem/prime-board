@@ -1,5 +1,6 @@
 // Cliente GraphQL de la UI. La UI consume exclusivamente /graphql (spec §9).
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createRequestGate } from "./request-generation.ts";
 
 export function getApiKey(): string {
   return localStorage.getItem("pb.apiKey") ?? "";
@@ -10,7 +11,10 @@ export function setApiKey(key: string): void {
 }
 
 export class GqlError extends Error {
-  constructor(message: string, readonly code?: string) {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
     super(message);
   }
 }
@@ -18,6 +22,7 @@ export class GqlError extends Error {
 export async function gql<T = any>(
   query: string,
   variables: Record<string, unknown> = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<T> {
   const response = await fetch("/graphql", {
     method: "POST",
@@ -26,6 +31,7 @@ export async function gql<T = any>(
       authorization: `Bearer ${getApiKey()}`,
     },
     body: JSON.stringify({ query, variables }),
+    signal: options.signal,
   });
   const payload = (await response.json()) as {
     data?: T;
@@ -60,23 +66,44 @@ export function useQuery<T = any>(
   const [error, setError] = useState<GqlError | null>(null);
   const [loading, setLoading] = useState(true);
   const key = JSON.stringify(variables);
+  const requestGate = useRef(createRequestGate());
+  const abortRef = useRef<AbortController | null>(null);
 
   const run = useCallback(() => {
-    gql<T>(query, JSON.parse(key))
+    const generation = requestGate.current.next();
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLoading(true);
+    gql<T>(query, JSON.parse(key), { signal: controller.signal })
       .then((result) => {
+        if (!requestGate.current.isCurrent(generation)) return;
         setData(result);
         setError(null);
       })
-      .catch((err: GqlError) => setError(err))
-      .finally(() => setLoading(false));
+      .catch((err: unknown) => {
+        if (
+          !requestGate.current.isCurrent(generation) ||
+          (err as { name?: string }).name === "AbortError"
+        )
+          return;
+        setError(err instanceof GqlError ? err : new GqlError(String(err)));
+      })
+      .finally(() => {
+        if (requestGate.current.isCurrent(generation)) setLoading(false);
+      });
   }, [query, key]);
 
   useEffect(() => {
-    setLoading(true);
+    // Variables changing means old data belongs to a different route/filter.
+    setData(null);
+    setError(null);
     run();
     listeners.add(run);
     return () => {
       listeners.delete(run);
+      requestGate.current.next();
+      abortRef.current?.abort();
     };
   }, [run]);
 

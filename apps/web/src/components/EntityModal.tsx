@@ -9,6 +9,7 @@ export interface EntityModalField {
   key: string;
   label: string;
   type?: "text" | "textarea" | "date" | "select";
+  multiple?: boolean;
   value?: string;
   placeholder?: string;
   options?: EntityModalOption[];
@@ -90,7 +91,19 @@ export function EntityModal({ title, fields, submitLabel, onClose, onSubmit }: E
                     onChange={(event) => setValue(event.target.value)}
                   />
                 ) : field.type === "select" ? (
-                  <select value={value} onChange={(event) => setValue(event.target.value)}>
+                  <select
+                    multiple={field.multiple}
+                    value={field.multiple ? value.split(",").filter(Boolean) : value}
+                    onChange={(event) =>
+                      setValue(
+                        field.multiple
+                          ? Array.from(event.target.selectedOptions, (option) => option.value).join(
+                              ",",
+                            )
+                          : event.target.value,
+                      )
+                    }
+                  >
                     {(field.options ?? []).map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
