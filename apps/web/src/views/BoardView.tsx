@@ -133,14 +133,15 @@ export function BoardView({
       } else if (event.key === "Escape") {
         setSelectedIds(new Set());
         setFocusedId(null);
-      } else if ((event.key === "x" || event.key === "X") && focusedId) {
+      } else if ((event.key === "x" || event.key === "X") && (focusedId || selectedIds.size)) {
         event.preventDefault();
-        void archiveIssue(focusedId);
+        if (event.shiftKey && selectedIds.size) void bulkArchive();
+        else if (focusedId) void archiveIssue(focusedId);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [focusedId, result.data]);
+  }, [focusedId, result.data, selectedIds]);
 
   if (result.loading && !result.data) return <LoadingState />;
   if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;

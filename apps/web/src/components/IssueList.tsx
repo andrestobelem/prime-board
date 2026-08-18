@@ -111,6 +111,7 @@ export function IssueList({
   actionOptions,
   onIssueAction,
   onArchiveIssue,
+  onArchiveSelection,
   visibleColumns = ["priority", "labels", "assignee"],
   emptyTitle = "No issues yet",
   emptyDescription = "Create an issue to start working.",
@@ -122,6 +123,7 @@ export function IssueList({
   actionOptions?: IssueActionOptions;
   onIssueAction?: (id: string, input: IssueActionInput) => Promise<void>;
   onArchiveIssue?: (id: string) => Promise<void>;
+  onArchiveSelection?: () => Promise<void>;
   visibleColumns?: IssueColumn[];
   emptyTitle?: string;
   emptyDescription?: string;
@@ -180,7 +182,10 @@ export function IssueList({
       }
       if ((event.key === "x" || event.key === "X") && !event.metaKey && !event.ctrlKey) {
         const focused = flat[focusRef.current];
-        if (focused && onArchiveIssue) {
+        if (event.shiftKey && selection?.selectedIds.size && onArchiveSelection) {
+          event.preventDefault();
+          void onArchiveSelection();
+        } else if (focused && onArchiveIssue) {
           event.preventDefault();
           void onArchiveIssue(focused.id);
         }

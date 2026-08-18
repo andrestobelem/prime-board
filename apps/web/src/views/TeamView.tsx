@@ -261,6 +261,7 @@ export function TeamView({
         visibleColumns={visibleColumns}
         onIssueAction={updateIssue}
         onArchiveIssue={archiveIssue}
+        onArchiveSelection={bulkArchive}
         emptyTitle={
           activeIssueFilterCount(draft) ? "No issues match these filters" : "No issues yet"
         }

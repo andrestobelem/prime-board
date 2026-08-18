@@ -382,13 +382,14 @@ export function App() {
         {project?.state && <span className="crumb">{project.state.toLowerCase()}</span>}
         <span className="right">
           {boardActive && (
-            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
-              {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
-                <option key={key} value={key}>
-                  Group by {GROUP_LABELS[key].toLowerCase()}
-                </option>
-              ))}
-            </select>
+            <DisplayOptions
+              groupBy={groupBy}
+              orderBy={orderBy}
+              columns={visibleColumns}
+              onGroupBy={setGroupBy}
+              onOrderBy={setOrderBy}
+              onColumns={setVisibleColumns}
+            />
           )}
           <span className="tabs">
             <Link to={`/project/${param}`}>
@@ -429,15 +430,6 @@ export function App() {
             </Link>
           )}
           {(section === "team" || section === "board") && (
-            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
-              {(Object.keys(GROUP_LABELS) as GroupBy[]).map((key) => (
-                <option key={key} value={key}>
-                  Group by {GROUP_LABELS[key].toLowerCase()}
-                </option>
-              ))}
-            </select>
-          )}
-          {(section === "team" || section === "board") && (
             <DisplayOptions
               groupBy={groupBy}
               orderBy={orderBy}
@@ -463,6 +455,8 @@ export function App() {
         <BoardView
           scope={{ kind: "team", teamKey: param, teamId: team?.id ?? null }}
           groupBy={groupBy}
+          orderBy={orderBy}
+          visibleColumns={visibleColumns}
         />
       ) : (
         <TeamView
