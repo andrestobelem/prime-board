@@ -1,6 +1,7 @@
 // Vista de team: lista agrupada por estado (AT-145). El board llega en AT-146.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { mutate, useQuery } from "../api.ts";
+import { gql, mutate, useQuery } from "../api.ts";
+import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.tsx";
 import { IssueFilterToolbar } from "../components/IssueFilterToolbar.tsx";
 import type { IssueActionInput, IssueActionOptions } from "../components/IssueActions.tsx";
 import type { IssueColumn, IssueOrder } from "../components/DisplayOptions.tsx";
@@ -13,13 +14,15 @@ import {
 } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import {
+  activeIssueFilterCount,
   buildIssueFilter,
+  EMPTY_ISSUE_FILTER,
   loadIssueFilter,
   saveIssueFilter,
   type IssueFilterDraft,
 } from "../issue-filter.ts";
 
-const TEAM_QUERY = `query($key: String, $teamId: ID, $filter: IssueFilter, $orderBy: IssueOrder) {
+const TEAM_QUERY = `query($key: String, $teamId: ID, $filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
   team(key: $key) {
     id key name
     states { id name type color position }
@@ -28,9 +31,9 @@ const TEAM_QUERY = `query($key: String, $teamId: ID, $filter: IssueFilter, $orde
   }
   actors { id name type }
   labels(team: $teamId) { id name color }
-  issues(filter: $filter, first: 250, orderBy: $orderBy) {
+  issues(filter: $filter, first: 250, after: $after, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} }
-    pageInfo { hasNextPage }
+    pageInfo { hasNextPage endCursor }
   }
 }`;
 
@@ -53,7 +56,7 @@ interface TeamData {
   } | null;
   actors: Array<{ id: string; name: string; type: string }>;
   labels: Array<{ id: string; name: string; color: string }>;
-  issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean } };
+  issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
 }
 
 export function TeamView({
@@ -76,6 +79,12 @@ export function TeamView({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pageInfo, setPageInfo] = useState({
+    hasNextPage: false,
+    endCursor: null as string | null,
+  });
 
   useEffect(() => {
     draftTeamKey.current = teamKey;
@@ -104,6 +113,29 @@ export function TeamView({
       return next.size === current.size ? current : next;
     });
   }, [visibleIds]);
+
+  useEffect(() => {
+    setExtraIssues([]);
+    if (result.data?.issues.pageInfo) setPageInfo(result.data.issues.pageInfo);
+  }, [result.data]);
+
+  async function loadMore(): Promise<void> {
+    if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
+    setLoadingMore(true);
+    try {
+      const next = await gql<TeamData>(TEAM_QUERY, {
+        key: teamKey,
+        teamId,
+        filter,
+        orderBy,
+        after: pageInfo.endCursor,
+      });
+      setExtraIssues((current) => [...current, ...next.issues.nodes]);
+      setPageInfo(next.issues.pageInfo);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   const actionOptions: IssueActionOptions = {
     states: result.data?.team?.states ?? [],
@@ -169,11 +201,11 @@ export function TeamView({
     if (!response.issueArchive.success) throw new Error(`Could not archive issue ${id}.`);
   }
 
-  if (result.loading && !result.data) return <div className="loading">Loading…</div>;
-  if (result.error) return <div className="error-banner">{result.error.message}</div>;
-  if (!result.data?.team) return <div className="empty">Team {teamKey} not found.</div>;
+  if (result.loading && !result.data) return <LoadingState />;
+  if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
+  if (!result.data?.team) return <EmptyState title={`Team ${teamKey} not found`} />;
 
-  const issues = result.data.issues.nodes;
+  const issues = [...result.data.issues.nodes, ...extraIssues];
   return (
     <>
       <IssueFilterToolbar
@@ -205,7 +237,11 @@ export function TeamView({
         bulkLoading={bulkLoading}
       />
       {bulkError && <div className="error-banner">{bulkError}</div>}
-      <IssueListLimitNotice hasNextPage={result.data.issues.pageInfo.hasNextPage} />
+      <IssueListLimitNotice
+        hasNextPage={pageInfo.hasNextPage}
+        loading={loadingMore}
+        onLoadMore={() => void loadMore()}
+      />
       <IssueList
         issues={issues}
         groupBy={groupBy}
@@ -225,6 +261,15 @@ export function TeamView({
         visibleColumns={visibleColumns}
         onIssueAction={updateIssue}
         onArchiveIssue={archiveIssue}
+        emptyTitle={
+          activeIssueFilterCount(draft) ? "No issues match these filters" : "No issues yet"
+        }
+        emptyDescription={
+          activeIssueFilterCount(draft)
+            ? "Try a broader query or clear the filters."
+            : "Create an issue to start working."
+        }
+        onClearEmpty={() => setDraft(EMPTY_ISSUE_FILTER)}
       />
     </>
   );

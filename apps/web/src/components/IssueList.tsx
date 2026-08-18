@@ -9,6 +9,7 @@ import {
   type IssueActionOptions,
 } from "./IssueActions.tsx";
 import { isIssueShortcutTarget } from "../issue-selection.ts";
+import { EmptyState } from "./AsyncState.tsx";
 import type { IssueColumn } from "./DisplayOptions.tsx";
 
 export interface IssueListItem {
@@ -44,11 +45,24 @@ function prioritySortKey(issue: IssueListItem): number {
 export type GroupBy = "state" | "milestone" | "assignee" | "priority";
 
 /** Hace explícito el límite de 250 elementos de la API en lugar de ocultarlos. */
-export function IssueListLimitNotice({ hasNextPage }: { hasNextPage: boolean }) {
+export function IssueListLimitNotice({
+  hasNextPage,
+  loading = false,
+  onLoadMore,
+}: {
+  hasNextPage: boolean;
+  loading?: boolean;
+  onLoadMore?: () => void;
+}) {
   if (!hasNextPage) return null;
   return (
     <div className="pagination-notice">
-      Showing the first 250 issues. Narrow the filter to see issues beyond this limit.
+      <span>More issues are available.</span>
+      {onLoadMore && (
+        <button className="btn secondary" onClick={onLoadMore} disabled={loading}>
+          {loading ? "Loading…" : "Load more"}
+        </button>
+      )}
     </div>
   );
 }
@@ -98,6 +112,9 @@ export function IssueList({
   onIssueAction,
   onArchiveIssue,
   visibleColumns = ["priority", "labels", "assignee"],
+  emptyTitle = "No issues yet",
+  emptyDescription = "Create an issue to start working.",
+  onClearEmpty,
 }: {
   issues: IssueListItem[];
   groupBy?: GroupBy;
@@ -106,6 +123,9 @@ export function IssueList({
   onIssueAction?: (id: string, input: IssueActionInput) => Promise<void>;
   onArchiveIssue?: (id: string) => Promise<void>;
   visibleColumns?: IssueColumn[];
+  emptyTitle?: string;
+  emptyDescription?: string;
+  onClearEmpty?: () => void;
 }) {
   const [focusIndex, setFocusIndex] = useState(-1);
   const focusRef = useRef(focusIndex);
@@ -187,9 +207,11 @@ export function IssueList({
 
   if (issues.length === 0) {
     return (
-      <div className="empty">
-        No issues here yet. Press <kbd>C</kbd> to create one.
-      </div>
+      <EmptyState
+        title={emptyTitle}
+        description={emptyDescription}
+        action={onClearEmpty ? { label: "Clear filters", onClick: onClearEmpty } : undefined}
+      />
     );
   }
 

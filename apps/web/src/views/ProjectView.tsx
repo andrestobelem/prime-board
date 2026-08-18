@@ -1,6 +1,7 @@
 // Vista de proyecto (AT-149): header con estado/lead/fecha y la lista de issues.
-import { useState } from "react";
-import { mutate, useQuery } from "../api.ts";
+import { useEffect, useState } from "react";
+import { gql, mutate, useQuery } from "../api.ts";
+import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.tsx";
 import { navigate } from "../router.tsx";
 import { Avatar } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
@@ -8,16 +9,16 @@ import { EntityModal } from "../components/EntityModal.tsx";
 import { IssueList, IssueListLimitNotice, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 
-const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter) {
+const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter, $after: String) {
   project(id: $id) {
     id name description state targetDate
     lead { id name type }
     milestones { id name targetDate progress }
     updates { id health body risks createdAt author { id name type } }
   }
-  issues(filter: $filter, first: 250) {
+  issues(filter: $filter, first: 250, after: $after) {
     nodes { ${ISSUE_LIST_FIELDS} }
-    pageInfo { hasNextPage }
+    pageInfo { hasNextPage endCursor }
   }
 }`;
 
@@ -32,6 +33,12 @@ const STATE_COLORS: Record<string, string> = {
 
 export function ProjectView({ projectId }: { projectId: string }) {
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pageInfo, setPageInfo] = useState({
+    hasNextPage: false,
+    endCursor: null as string | null,
+  });
 
   const result = useQuery<{
     project: {
@@ -51,8 +58,32 @@ export function ProjectView({ projectId }: { projectId: string }) {
         author: { id: string; name: string; type: string };
       }>;
     } | null;
-    issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean } };
+    issues: {
+      nodes: IssueListItem[];
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    };
   }>(PROJECT_QUERY, { id: projectId, filter: { project: { eq: projectId } } });
+
+  useEffect(() => {
+    setExtraIssues([]);
+    if (result.data?.issues.pageInfo) setPageInfo(result.data.issues.pageInfo);
+  }, [result.data]);
+
+  async function loadMore(): Promise<void> {
+    if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
+    setLoadingMore(true);
+    try {
+      const next = await gql<any>(PROJECT_QUERY, {
+        id: projectId,
+        filter: { project: { eq: projectId } },
+        after: pageInfo.endCursor,
+      });
+      setExtraIssues((current) => [...current, ...next.issues.nodes]);
+      setPageInfo(next.issues.pageInfo);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   async function postUpdate(values: Record<string, string>) {
     const body = values.body?.trim();
@@ -81,10 +112,12 @@ export function ProjectView({ projectId }: { projectId: string }) {
     orphans: issues.filter((issue: any) => !issue.milestone),
   });
 
-  if (result.loading && !result.data) return <div className="loading">Loading…</div>;
-  if (result.error) return <div className="error-banner">{result.error.message}</div>;
+  if (result.loading && !result.data) return <LoadingState />;
+  if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
   const project = result.data?.project;
-  if (!project) return <div className="empty">Project not found.</div>;
+  if (!project) return <EmptyState title="Project not found" />;
+
+  const issues = [...result.data!.issues.nodes, ...extraIssues];
 
   return (
     <div>
@@ -132,7 +165,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
             </span>
           )}
           {project.targetDate && <span>Target: {project.targetDate}</span>}
-          <span>{result.data!.issues.nodes.length} issues</span>
+          <span>{issues.length} issues</span>
         </div>
         {project.description && (
           <p style={{ color: "var(--text-muted)", margin: "10px 0 0", maxWidth: 640 }}>
@@ -172,12 +205,16 @@ export function ProjectView({ projectId }: { projectId: string }) {
           ))}
         </div>
       )}
-      <IssueListLimitNotice hasNextPage={result.data!.issues.pageInfo.hasNextPage} />
+      <IssueListLimitNotice
+        hasNextPage={pageInfo.hasNextPage}
+        loading={loadingMore}
+        onLoadMore={() => void loadMore()}
+      />
       {project.milestones.length === 0 ? (
-        <IssueList issues={result.data!.issues.nodes} />
+        <IssueList issues={issues} />
       ) : (
         (() => {
-          const { groups, orphans } = milestoneSections(project, result.data!.issues.nodes);
+          const { groups, orphans } = milestoneSections(project, issues);
           return (
             <>
               {groups.map(({ milestone, items }: any) => (

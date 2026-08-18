@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getApiKey, mutate, useQuery } from "./api.ts";
 import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueList.tsx";
 import { DisplayOptions, type IssueColumn, type IssueOrder } from "./components/DisplayOptions.tsx";
+import { ErrorState } from "./components/AsyncState.tsx";
 import { Palette } from "./components/Palette.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
 import { Icon } from "./components/icons.tsx";
@@ -233,7 +234,7 @@ export function App() {
   let content = <div className="loading">Loading…</div>;
 
   if (shell.error) {
-    content = <div className="error-banner">{shell.error.message}</div>;
+    content = <ErrorState message={shell.error.message} onRetry={shell.refetch} />;
   } else if (section === "teams") {
     topbar = <span className="title">Teams</span>;
     content = <TeamsView teams={teams} />;

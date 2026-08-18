@@ -1,7 +1,8 @@
 // Board por estado con drag & drop nativo y update optimista (AT-146).
 // Sirve tanto para un team (#/board/KEY) como para un proyecto (#/project-board/ID, AT-182).
 import { useEffect, useState } from "react";
-import { mutate, useQuery } from "../api.ts";
+import { gql, mutate, useQuery } from "../api.ts";
+import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.tsx";
 import { Avatar, LabelChip, PriorityIcon, StateIcon } from "../components/bits.tsx";
 import {
   IssueListLimitNotice,
@@ -21,7 +22,7 @@ import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-
 import { isIssueShortcutTarget } from "../issue-selection.ts";
 import type { IssueColumn, IssueOrder } from "../components/DisplayOptions.tsx";
 
-const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter, $orderBy: IssueOrder) {
+const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
   team(key: $key) {
     id key name
     states { id name type color position }
@@ -30,24 +31,24 @@ const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter, $orderBy: Is
     cycles { id name number }
   }
   actors { id name type }
-  issues(filter: $filter, first: 250, orderBy: $orderBy) {
+  issues(filter: $filter, first: 250, after: $after, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} }
-    pageInfo { hasNextPage }
+    pageInfo { hasNextPage endCursor }
   }
 }`;
 
 // El board de proyecto puede cruzar teams: cada issue trae su team para que el
 // drop por estado escriba el state id correcto de SU team.
-const PROJECT_BOARD_QUERY = `query($id: ID!, $filter: IssueFilter, $orderBy: IssueOrder) {
+const PROJECT_BOARD_QUERY = `query($id: ID!, $filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
   project(id: $id) {
     id name
     teams { id key states { id name type color position } labels { id name color } cycles { id name number } }
     milestones { id name }
   }
   actors { id name type }
-  issues(filter: $filter, first: 250, orderBy: $orderBy) {
+  issues(filter: $filter, first: 250, after: $after, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} team { id } }
-    pageInfo { hasNextPage }
+    pageInfo { hasNextPage endCursor }
   }
 }`;
 
@@ -103,8 +104,18 @@ export function BoardView({
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [extraIssues, setExtraIssues] = useState<BoardCard[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pageInfo, setPageInfo] = useState({
+    hasNextPage: false,
+    endCursor: null as string | null,
+  });
 
   useEffect(() => setLocal(null), [result.data]);
+  useEffect(() => {
+    setExtraIssues([]);
+    if (result.data?.issues?.pageInfo) setPageInfo(result.data.issues.pageInfo);
+  }, [result.data]);
 
   useEffect(() => {
     const visible = new Set((result.data?.issues?.nodes ?? []).map((issue: BoardCard) => issue.id));
@@ -131,20 +142,22 @@ export function BoardView({
     return () => window.removeEventListener("keydown", onKey);
   }, [focusedId, result.data]);
 
-  if (result.loading && !result.data) return <div className="loading">Loading…</div>;
-  if (result.error) return <div className="error-banner">{result.error.message}</div>;
+  if (result.loading && !result.data) return <LoadingState />;
+  if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
   const container = isProject ? result.data?.project : result.data?.team;
   if (!container) {
     return (
-      <div className="empty">
-        {isProject
-          ? "Project not found."
-          : `Team ${(scope as { teamKey: string }).teamKey} not found.`}
-      </div>
+      <EmptyState
+        title={
+          isProject
+            ? "Project not found."
+            : `Team ${(scope as { teamKey: string }).teamKey} not found.`
+        }
+      />
     );
   }
 
-  const issues: BoardCard[] = local ?? result.data.issues.nodes;
+  const issues: BoardCard[] = local ?? [...result.data.issues.nodes, ...extraIssues];
   const actors: Array<{ id: string; name: string; type: string }> = result.data.actors;
   const actionOptions: IssueActionOptions = {
     states: isProject ? [] : container.states,
@@ -155,6 +168,31 @@ export function BoardView({
       : container.projects.map((project: any) => ({ id: project.id, name: project.name })),
     cycles: isProject ? [] : container.cycles,
   };
+
+  async function loadMore(): Promise<void> {
+    if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
+    setLoadingMore(true);
+    try {
+      const variables = isProject
+        ? {
+            id: scope.projectId,
+            filter: { project: { eq: scope.projectId } },
+            orderBy,
+            after: pageInfo.endCursor,
+          }
+        : {
+            key: scope.teamKey,
+            filter: scope.teamId ? { team: { eq: scope.teamId } } : {},
+            orderBy,
+            after: pageInfo.endCursor,
+          };
+      const next = await gql<any>(isProject ? PROJECT_BOARD_QUERY : TEAM_BOARD_QUERY, variables);
+      setExtraIssues((current) => [...current, ...next.issues.nodes]);
+      setPageInfo(next.issues.pageInfo);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   async function bulkAction(input: IssueActionInput): Promise<void> {
     const ids = [...selectedIds];
@@ -368,7 +406,11 @@ export function BoardView({
           {actionError}
         </div>
       )}
-      <IssueListLimitNotice hasNextPage={result.data.issues.pageInfo.hasNextPage} />
+      <IssueListLimitNotice
+        hasNextPage={pageInfo.hasNextPage}
+        loading={loadingMore}
+        onLoadMore={() => void loadMore()}
+      />
       <div className="board">
         {columns.map((column) => {
           const cards = issues
