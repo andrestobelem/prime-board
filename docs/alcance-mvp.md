@@ -1,8 +1,6 @@
 # Alcance del MVP de prime-board
 
-> Ticket local: [AT-127](../.prime-board/issues/AT-127.md)
-> Insumo: [`relevamiento-linear.md`](relevamiento-linear.md) (AT-126).
-> La especificación técnica del MVP vive en [`specs/mvp.md`](specs/mvp.md) (AT-128).
+> La especificación técnica del MVP vive en [`specs/mvp.md`](specs/mvp.md).
 
 ## Decisiones estructurales
 
@@ -74,7 +72,7 @@ lista es accesible por GraphQL, y la UI/CLI/MCP son clientes de esa API.
 1. **Workspace único** — contenedor de configuración global. _Multi-workspace no aporta en single-tenant._
 2. **Teams** — nombre + clave corta (`AT`); dueños de workflow, labels propios y numeración de issues.
 3. **Actores: humanos y agentes** — miembros del workspace con `type: human | agent`. Los agentes son actores de primera clase: crean, comentan, se les asigna. _Es la razón de ser del producto._
-4. **Issues** — CRUD con título + descripción markdown, identificador legible (`AT-126`), estado, prioridad (escala fija de Linear), labels, assignee único, sub-issues (padre/hijo). _El corazón del clon._
+4. **Issues** — CRUD con título + descripción markdown, identificador legible (`TEAM-126`), estado, prioridad (escala fija de Linear), labels, assignee único, sub-issues (padre/hijo). _El corazón del clon._
 5. **Estados de workflow por team** — personalizables, con **tipo semántico** obligatorio (`triage | backlog | unstarted | started | completed | canceled`). _La semántica portable es lo que permite a un agente operar cualquier team sin configuración._
 6. **Labels** — de workspace y de team. _Metadato barato para rutear trabajo a agentes._
 7. **Comentarios** — markdown, en issues. _Canal principal humano↔agente._

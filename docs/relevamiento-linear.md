@@ -1,9 +1,8 @@
 # Relevamiento de funcionalidades de Linear
 
-> Ticket local: [AT-126](../.prime-board/issues/AT-126.md)
 > Objetivo: inventariar las funcionalidades de Linear candidatas a clonar en prime-board,
 > con una primera clasificación pensando en **agentes como usuarios principales**.
-> La decisión final de alcance se toma en AT-127.
+> La decisión final de alcance se documenta en [`alcance-mvp.md`](alcance-mvp.md).
 
 ## Criterio de clasificación
 
@@ -23,7 +22,7 @@ flujo (crear, consultar, actualizar, comentar, reaccionar a cambios) sin UI.
 | Funcionalidad | Descripción | Clasificación | Nota para agentes |
 |---|---|---|---|
 | Workspace | Contenedor raíz (org) con settings globales. | 🟢 | Alcanza con soportar un workspace único al inicio. |
-| Teams | Unidad de trabajo con clave corta (`AT`), estados y settings propios. | 🟢 | Los identificadores legibles (`AT-126`) salen de acá; clave para que los agentes referencien trabajo. |
+| Teams | Unidad de trabajo con clave corta (`AT`), estados y settings propios. | 🟢 | Los identificadores legibles salen de acá; clave para que los agentes referencien trabajo. |
 | Usuarios y roles | Miembros, admins, guests. | 🟢 (mínimo) | El giro de prime-board: los **agentes son actores de primera clase** (creador, asignado, comentarista), no un add-on. Roles finos pueden esperar. |
 | Sub-teams / jerarquía de equipos | Equipos anidados. | 🔴 | Complejidad organizacional que un board para agentes no necesita de entrada. |
 
@@ -32,7 +31,7 @@ flujo (crear, consultar, actualizar, comentar, reaccionar a cambios) sin UI.
 | Funcionalidad | Descripción | Clasificación | Nota para agentes |
 |---|---|---|---|
 | CRUD de issues | Título + descripción markdown, crear/editar/archivar. | 🟢 | El corazón del producto. Markdown es el formato natural de los agentes. |
-| Identificadores legibles | `AT-126`, únicos por team, estables. | 🟢 | Fundamental para referenciar trabajo en prompts, commits y branches. |
+| Identificadores legibles | `TEAM-126`, únicos por team, estables. | 🟢 | Fundamental para referenciar trabajo en prompts, commits y branches. |
 | Estados de workflow | Por team, personalizables, con **tipos** (triage, backlog, unstarted, started, completed, canceled). | 🟢 | Los tipos permiten semántica portable entre teams — clave para que un agente razone sin conocer cada workflow. |
 | Prioridades | Urgent / High / Medium / Low / None. | 🟢 | Escala fija y simple; los agentes la usan para ordenar su cola de trabajo. |
 | Labels | De workspace y de team, con grupos. | 🟢 | Metadato barato y muy usado para rutear trabajo a agentes (`agente:review`, `area:api`). |
@@ -89,7 +88,7 @@ flujo (crear, consultar, actualizar, comentar, reaccionar a cambios) sin UI.
 
 | Funcionalidad | Descripción | Clasificación | Nota para agentes |
 |---|---|---|---|
-| API completa | En Linear: GraphQL con paridad total (la UI la usa). | 🟢 | Principio a copiar: **todo lo que existe es accesible por API**. La forma (REST/GraphQL) se decide en AT-127/AT-128. |
+| API completa | En Linear: GraphQL con paridad total (la UI la usa). | 🟢 | Principio a copiar: **todo lo que existe es accesible por API**. La forma (REST/GraphQL) se define en la especificación técnica. |
 | MCP server | Tools sobre issues, proyectos, comentarios, etc. | 🟢 | Interfaz nativa de los agentes hoy; prime-board debería nacer con MCP. |
 | Webhooks / eventos | Notificación push de cambios. | 🟢 | Reemplaza al inbox humano: es como un agente se entera de que le asignaron algo. |
 | Autenticación (API keys / OAuth) | Actores identificables, apps con identidad propia. | 🟢 | Mínimo: API keys por actor (humano o agente). OAuth completo es 🟡. |

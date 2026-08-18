@@ -1,6 +1,6 @@
 # Investigación: el repo como fuente de verdad de los tickets
 
-> Ticket: PRB-153 (antes AT-153) · Investigación pedida por Andrés.
+> Ticket: PRB-153 · Investigación pedida por Andrés.
 > **Decisión de partida (no evaluada, dada):** el repo debía ser la fuente de verdad.
 > La pregunta era _cómo_ lograrlo sin perder queries rápidas, FTS ni escritura concurrente.
 > **Estado:** investigación histórica del MVP. El contrato vigente usa SQLite como fuente
@@ -45,7 +45,7 @@ cuando semánticamente los dos comentarios deberían coexistir.
 
 Un archivo por issue donde solo se agregan líneas: `created`, `state_changed`, `commented`…
 El estado actual se **deriva** replicando el log. Es, casualmente, lo que prime-board ya hace
-en la tabla `activity` (append-only desde AT-134): **el modelo de datos ya está listo para esto.**
+en la tabla `activity` (append-only desde las primeras versiones): **el modelo de datos ya está listo para esto.**
 
 ### 1.4 Estilo `git-bug` (objetos y refs de git, fuera del working tree)
 
@@ -154,7 +154,7 @@ a **datos de dominio**, no a credenciales.
    de label) en vez de UUID.
 6. **Numeración.** `next_issue_number` no puede vivir en la DB: dos branches asignarían el
    mismo número. Debe derivarse del log (`max(number) + 1`) y aceptar que un merge puede
-   requerir renumerar — ya tenemos `number` explícito en `issueCreate` (AT-32).
+   requerir renumerar — ya tenemos `number` explícito en `issueCreate`.
 
 ## 6. Plan sugerido (incremental, sin big bang)
 
@@ -177,13 +177,13 @@ Después de la fase 2 ya se puede borrar la DB sin perder nada — que es el 80%
 
 ---
 
-## Apéndice: lo que cambió al implementarlo (AT-156 → AT-159)
+## Apéndice: lo que cambió al implementarlo
 
 La recomendación se implementó completa. Cuatro cosas resultaron distintas de lo previsto:
 
 1. **El log no era autosuficiente.** La tabla `activity` era un historial para la UI:
    `created` solo guardaba `{title}` y `description_changed` guardaba `{}`. Hubo que
-   enriquecer los eventos (AT-165) antes de que el log pudiera ser fuente de verdad.
+   enriquecer los eventos antes de que el log pudiera ser fuente de verdad.
 2. **Nada de UUIDs, ni siquiera escondidos.** El `commentId` del evento `commented` se
    filtraba al repo y, como se regenera en cada rebuild, **rompía el determinismo**: dos
    rebuilds producían archivos distintos. Hoy hay un test que falla ante cualquier UUID.

@@ -1,7 +1,5 @@
 # Contrato de migración Linear → prime-board
 
-> Tickets: AT-187 y AT-192.
-
 ## Propósito
 
 La migración recibe un **Linear export** en JSON y produce un plan determinista para
@@ -85,7 +83,7 @@ pero nunca contiene hashes de API keys ni secretos de webhooks.
 
 ## Fuera de representación
 
-Antes del primer apply, AT-189 debe decidir la política de adjuntos, documentos, threads,
+Antes del primer apply, debe decidirse la política de adjuntos, documentos, threads,
 ciclos, due dates, estimaciones, status updates, iniciativas, suscripciones y metadatos
 de proyectos. Una conversión a markdown o enlace es una pérdida explícita, no un éxito
 silencioso.

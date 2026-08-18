@@ -1,7 +1,5 @@
 # Spec del MVP de prime-board
 
-> Ticket local: [AT-128](../../.prime-board/issues/AT-128.md)
-> Insumos: [`relevamiento-linear.md`](../relevamiento-linear.md) (AT-126) y [`alcance-mvp.md`](../alcance-mvp.md) (AT-127).
 > Convención: la prosa de este doc está en español; todo lo que es parte de la aplicación
 > (esquemas, tipos, comandos, nombres de campos) está en inglés.
 > **Alcance:** esta es la especificación histórica del MVP. Para el contrato vigente de
@@ -91,7 +89,7 @@ canal privado. GraphiQL habilitado en dev.
 
 - **Auth:** header `Authorization: Bearer pb_...`. Toda mutación registra al actor de la
   key como autor (en `activity`, `creatorId`, etc.).
-- **Identificadores:** las queries aceptan UUID o identificador legible (`AT-126`) donde
+- **Identificadores:** las queries aceptan UUID o identificador legible (`TEAM-126`) donde
   tenga sentido (`issue(id:)`).
 - **Paginación:** cursor-based (`first/after`), estilo Relay simplificado
   (`nodes`, `pageInfo { hasNextPage, endCursor }`).
@@ -104,7 +102,7 @@ canal privado. GraphiQL habilitado en dev.
 ```graphql
 type Issue {
   id: ID!
-  identifier: String!        # "AT-126"
+  identifier: String!        # "TEAM-126"
   title: String!
   description: String
   team: Team!
@@ -153,7 +151,7 @@ type Query {
   viewer: Actor!                       # actor de la API key
   teams: [Team!]!
   team(id: ID, key: String): Team
-  issue(id: ID!): Issue                # UUID o "AT-126"
+  issue(id: ID!): Issue                # UUID o "TEAM-126"
   issues(filter: IssueFilter, first: Int, after: String, orderBy: IssueOrder): IssueConnection!
   projects(filter: ProjectFilter): [Project!]!
   project(id: ID!): Project

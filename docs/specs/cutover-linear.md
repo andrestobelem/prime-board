@@ -1,7 +1,7 @@
 # Procedimiento de corte Linear → prime-board
 
-Este procedimiento se ejecuta solamente después de que AT-193 haya validado una captura
-completa de Linear. Hasta entonces, Linear sigue siendo la fuente operativa y no se deben
+Este procedimiento se ejecuta solamente después de validar una captura completa de
+Linear. Hasta entonces, Linear sigue siendo la fuente operativa y no se deben
 actualizar las instrucciones de agentes.
 
 ## Resultado ejecutado

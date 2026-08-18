@@ -1,6 +1,5 @@
 # Guía de uso para agentes
 
-> Ticket local: [AT-143](../.prime-board/issues/AT-143.md)
 > Cómo operar prime-board de punta a punta siendo un agente (o un humano con terminal).
 
 ## 1. Levantar el server
