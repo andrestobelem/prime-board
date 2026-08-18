@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { gqlRequest } from "../api.ts";
 import { loadConfig } from "../config.ts";
-import { UsageError } from "../errors.ts";
+import { ApiError, UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
 import { resolveAssignee, resolveTeam } from "../resolve.ts";
 
@@ -71,7 +71,7 @@ export async function reviewCommand(argv: string[]): Promise<void> {
       `query($id: ID!) { review(id: $id) { ${REVIEW_FIELDS} } }`,
       { id },
     );
-    if (!data.review) throw new UsageError(`Review not found: ${id}`);
+    if (!data.review) throw new ApiError(`Review not found: ${id}`, "NOT_FOUND");
     if (values.json) return printJson(data.review);
     console.log(`${data.review.issue.identifier}  [${data.review.status.toLowerCase()}]`);
     return;

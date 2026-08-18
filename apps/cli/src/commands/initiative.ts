@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { gqlRequest } from "../api.ts";
 import { loadConfig } from "../config.ts";
-import { UsageError } from "../errors.ts";
+import { ApiError, UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
 import { readBody, resolveTeam } from "../resolve.ts";
 
@@ -54,7 +54,7 @@ export async function initiativeCommand(argv: string[]): Promise<void> {
       `query($id: ID!) { initiative(id: $id) { ${INITIATIVE_FIELDS} } }`,
       { id },
     );
-    if (!data.initiative) throw new UsageError(`Initiative not found: ${id}`);
+    if (!data.initiative) throw new ApiError(`Initiative not found: ${id}`, "NOT_FOUND");
     if (values.json) return printJson(data.initiative);
     console.log(`${data.initiative.name}  [${data.initiative.state.toLowerCase()}]`);
     return;

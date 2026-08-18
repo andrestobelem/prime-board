@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { gqlRequest } from "../api.ts";
 import { loadConfig } from "../config.ts";
-import { UsageError } from "../errors.ts";
+import { ApiError, UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
 import { resolveTeam } from "../resolve.ts";
 
@@ -53,7 +53,7 @@ export async function cycleCommand(argv: string[]): Promise<void> {
       `query($id: ID!) { cycle(id: $id) { ${CYCLE_FIELDS} } }`,
       { id },
     );
-    if (!data.cycle) throw new UsageError(`Cycle not found: ${id}`);
+    if (!data.cycle) throw new ApiError(`Cycle not found: ${id}`, "NOT_FOUND");
     if (values.json) return printJson(data.cycle);
     console.log(`${data.cycle.name}  [${data.cycle.state.toLowerCase()}]`);
     console.log(`${data.cycle.startsAt} → ${data.cycle.endsAt}`);

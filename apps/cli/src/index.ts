@@ -3,6 +3,8 @@
 // Exit codes: 0 ok, 1 error de API, 2 error de uso.
 import { APP_VERSION } from "@prime-board/schema";
 import { authCommand } from "./commands/auth.ts";
+import { actorCommand } from "./commands/actor.ts";
+import { apiKeyCommand } from "./commands/api-key.ts";
 import { cycleCommand } from "./commands/cycle.ts";
 import { favoriteCommand } from "./commands/favorite.ts";
 import { inboxCommand } from "./commands/inbox.ts";
@@ -22,10 +24,12 @@ Usage: pb <command> [options]
 Commands:
   auth login --url <url> --key <api-key>   Save credentials
   auth status                              Show current viewer
-  issue list|view|create|update|comment    Work with issues
+  issue list|view|create|update|archive|comment Work with issues
   project list|view|create|archive|unarchive|milestone-*|update-*  Work with planning
   view list|create|update|duplicate|delete Saved views
-  team list                                List teams
+  team list|create|update|membership-*|workflow-state-*|label-* Manage teams
+  actor list|create|update                   Manage actors
+  api-key create|delete                      Manage API keys
   webhook list|create|delete               Manage webhooks
   cycle list|view|create|update|delete     Manage team cycles
   review list|view|create|update|delete    Manage reviews
@@ -43,6 +47,10 @@ async function main(): Promise<void> {
       return authCommand(rest);
     case "issue":
       return issueCommand(rest);
+    case "actor":
+      return actorCommand(rest);
+    case "api-key":
+      return apiKeyCommand(rest);
     case "cycle":
       return cycleCommand(rest);
     case "review":

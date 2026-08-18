@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { gqlRequest } from "../api.ts";
 import { loadConfig } from "../config.ts";
-import { UsageError } from "../errors.ts";
+import { ApiError, UsageError } from "../errors.ts";
 import { issueLine, printJson } from "../format.ts";
 import { readBody, resolveTeam, resolveViewerId } from "../resolve.ts";
 
@@ -94,7 +94,7 @@ export async function projectCommand(argv: string[]): Promise<void> {
     }`,
       { id },
     );
-    if (!data.project) throw new UsageError(`Project not found: ${id}`);
+    if (!data.project) throw new ApiError(`Project not found: ${id}`, "NOT_FOUND");
     if (values.json) return printJson(data.project);
     const project = data.project;
     console.log(`${project.name}  [${project.state.toLowerCase()}]`);
@@ -180,7 +180,7 @@ export async function projectCommand(argv: string[]): Promise<void> {
     }`,
       { id: projectId },
     );
-    if (!data.project) throw new UsageError(`Project not found: ${projectId}`);
+    if (!data.project) throw new ApiError(`Project not found: ${projectId}`, "NOT_FOUND");
     if (jsonOutput) return printJson(data.project.milestones);
     for (const milestone of data.project.milestones)
       console.log(`${milestone.id}  ${milestone.name}`);
@@ -276,7 +276,7 @@ export async function projectCommand(argv: string[]): Promise<void> {
     }`,
       { id: projectId },
     );
-    if (!data.project) throw new UsageError(`Project not found: ${projectId}`);
+    if (!data.project) throw new ApiError(`Project not found: ${projectId}`, "NOT_FOUND");
     if (jsonOutput) return printJson(data.project.updates);
     for (const update of data.project.updates)
       console.log(`${update.id}  [${update.health}]  ${update.body}`);

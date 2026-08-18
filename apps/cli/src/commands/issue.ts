@@ -7,8 +7,12 @@ import { issueLine, printJson, priorityFromName } from "../format.ts";
 import {
   readBody,
   resolveAssignee,
+  resolveActor,
+  resolveCycle,
   resolveIssue,
   resolveLabels,
+  resolveMilestone,
+  resolveProject,
   resolveState,
   resolveTeam,
 } from "../resolve.ts";
@@ -17,20 +21,27 @@ const ISSUE_FIELDS = `identifier title description priority
   state { id name type }
   assignee { id name type }
   creator { name type }
-  labels { name }
+  labels { id name }
   project { id name }
+  milestone { id name }
+  cycle { id number name }
   parent { identifier }
-  url branchName createdAt updatedAt`;
+  url branchName createdAt updatedAt archivedAt`;
 
 const USAGE = `Usage:
-  pb issue list [--team KEY] [--state NAME|TYPE] [--assignee me|ID] [--priority NAME]
-                [--project ID] [--search TEXT] [--unblocked] [--first N] [--json]
+  pb issue list [--team KEY] [--state NAME|TYPE] [--assignee me|ID] [--creator ID|NAME]
+                [--priority NAME] [--project ID|NAME] [--milestone ID|NAME] [--cycle ID|NAME]
+                [--parent REF] [--label NAME ...] [--filter JSON] [--search TEXT] [--unblocked]
+                [--include-archived] [--first N] [--after CURSOR]
+                [--order-by CREATED_ASC|CREATED_DESC|UPDATED_ASC|UPDATED_DESC] [--json]
   pb issue view <REF> [--json]
   pb issue create --team KEY --title TEXT [--description TEXT|-] [--priority NAME]
                   [--assignee me|ID] [--parent REF] [--project ID] [--label NAME ...] [--json]
-  pb issue update <REF> [--title TEXT] [--description TEXT|-] [--state NAME|TYPE]
+  pb issue update <REF> [--title TEXT] [--description TEXT|-|none] [--state NAME|TYPE]
                   [--priority NAME] [--assignee me|ID|none] [--parent REF|none]
-                  [--project ID|none] [--add-label NAME ...] [--remove-label NAME ...] [--json]
+                  [--project ID|none] [--milestone ID|none] [--cycle ID|NAME|none]
+                  [--sort-order NUMBER] [--add-label NAME ...] [--remove-label NAME ...] [--json]
+  pb issue archive <REF> [--json]
   pb issue comment <REF> [--body TEXT|-]
   pb issue link <REF> (--blocked-by REF | --blocks REF | --related REF | --duplicate-of REF)... [--json]
   pb issue unlink <REF> (--blocked-by REF | --blocks REF | --related REF | --duplicate-of REF)... [--json]`;
@@ -62,18 +73,38 @@ export async function issueCommand(argv: string[]): Promise<void> {
         team: { type: "string" },
         state: { type: "string" },
         assignee: { type: "string" },
+        creator: { type: "string" },
         priority: { type: "string" },
         project: { type: "string" },
+        milestone: { type: "string" },
+        cycle: { type: "string" },
+        parent: { type: "string" },
+        label: { type: "string", multiple: true },
+        filter: { type: "string" },
         search: { type: "string" },
         first: { type: "string" },
+        after: { type: "string" },
+        "order-by": { type: "string" },
+        "include-archived": { type: "boolean" },
         json: { type: "boolean" },
         unblocked: { type: "boolean" },
       },
     });
-    const filter: Record<string, unknown> = {};
+    let filter: Record<string, unknown> = {};
+    if (values.filter) {
+      try {
+        const parsed = JSON.parse(values.filter);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+        filter = parsed as Record<string, unknown>;
+      } catch {
+        throw new UsageError("--filter must be a JSON object");
+      }
+    }
     let states = null;
+    let teamId: string | undefined;
     if (values.team) {
       const team = await resolveTeam(config, values.team);
+      teamId = team.id;
       filter.team = { eq: team.id };
       states = team.states;
     }
@@ -83,20 +114,46 @@ export async function issueCommand(argv: string[]): Promise<void> {
       if (resolved.stateType) filter.stateType = { eq: resolved.stateType };
     }
     if (values.assignee) filter.assignee = { eq: await resolveAssignee(config, values.assignee) };
+    if (values.creator) filter.creator = { eq: await resolveActor(config, values.creator) };
     if (values.priority) filter.priority = { eq: priorityFromName(values.priority) };
-    if (values.project) filter.project = { eq: values.project };
+    let projectId: string | undefined;
+    if (values.project) {
+      projectId = await resolveProject(config, values.project);
+      filter.project = { eq: projectId };
+    }
+    if (values.milestone)
+      filter.milestone = { eq: await resolveMilestone(config, values.milestone, projectId) };
+    if (values.cycle) filter.cycle = { eq: await resolveCycle(config, values.cycle, teamId) };
+    if (values.parent) filter.parent = { eq: (await resolveIssue(config, values.parent)).id };
+    if (values.label?.length) {
+      if (!teamId && values.label.some((name) => !/^[0-9a-f-]{36}$/i.test(name))) {
+        throw new UsageError("--team is required to resolve labels by name");
+      }
+      const ids = teamId ? await resolveLabels(config, teamId, values.label) : values.label;
+      filter.labels = { includesAll: ids };
+    }
     if (values.search) filter.search = values.search;
-    if (values.unblocked) filter.unblocked = true;
+    if (values.unblocked !== undefined) filter.unblocked = values.unblocked;
+    if (values["include-archived"]) filter.includeArchived = true;
 
+    const first = values.first ? Number(values.first) : 50;
+    if (!Number.isInteger(first) || first < 1 || first > 250) {
+      throw new UsageError("--first must be an integer between 1 and 250");
+    }
+    const orderBy = values["order-by"]?.toUpperCase();
+    const validOrders = ["CREATED_ASC", "CREATED_DESC", "UPDATED_ASC", "UPDATED_DESC"];
+    if (orderBy && !validOrders.includes(orderBy)) {
+      throw new UsageError(`Invalid --order-by: ${values["order-by"]}`);
+    }
     const data = await gqlRequest(
       config,
-      `query($filter: IssueFilter, $first: Int) {
-      issues(filter: $filter, first: $first) {
+      `query($filter: IssueFilter, $first: Int, $after: String, $orderBy: IssueOrder) {
+      issues(filter: $filter, first: $first, after: $after, orderBy: $orderBy) {
         nodes { ${ISSUE_FIELDS} }
         pageInfo { hasNextPage endCursor }
       }
     }`,
-      { filter, first: values.first ? Number(values.first) : 50 },
+      { filter, first, after: values.after ?? null, orderBy: orderBy ?? null },
     );
     if (values.json) return printJson(data.issues);
     for (const issue of data.issues.nodes) console.log(issueLine(issue));
@@ -121,7 +178,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
     }`,
       { id: ref },
     );
-    if (!data.issue) throw new UsageError(`Issue not found: ${ref}`);
+    if (!data.issue) throw new ApiError(`Issue not found: ${ref}`, "NOT_FOUND");
     if (values.json) return printJson(data.issue);
     const issue = data.issue;
     console.log(issueLine(issue));
@@ -207,6 +264,8 @@ export async function issueCommand(argv: string[]): Promise<void> {
         parent: { type: "string" },
         project: { type: "string" },
         milestone: { type: "string" },
+        cycle: { type: "string" },
+        "sort-order": { type: "string" },
         "add-label": { type: "string", multiple: true },
         "remove-label": { type: "string", multiple: true },
         json: { type: "boolean" },
@@ -215,7 +274,9 @@ export async function issueCommand(argv: string[]): Promise<void> {
     const issue = await resolveIssue(config, ref);
     const input: Record<string, unknown> = {};
     if (values.title) input.title = values.title;
-    if (values.description) input.description = await readBody(values.description);
+    if (values.description !== undefined) {
+      input.description = values.description === "none" ? null : await readBody(values.description);
+    }
     if (values.state) {
       const resolved = resolveState(issue.team.states, values.state);
       if (resolved.stateType) {
@@ -235,8 +296,27 @@ export async function issueCommand(argv: string[]): Promise<void> {
       input.parentId =
         values.parent === "none" ? null : (await resolveIssue(config, values.parent)).id;
     }
-    if (values.project) input.projectId = values.project === "none" ? null : values.project;
-    if (values.milestone) input.milestoneId = values.milestone === "none" ? null : values.milestone;
+    let projectId: string | undefined;
+    if (values.project) {
+      projectId =
+        values.project === "none" ? undefined : await resolveProject(config, values.project);
+      input.projectId = values.project === "none" ? null : projectId;
+    }
+    if (values.milestone) {
+      input.milestoneId =
+        values.milestone === "none"
+          ? null
+          : await resolveMilestone(config, values.milestone, projectId ?? issue.project?.id);
+    }
+    if (values.cycle) {
+      input.cycleId =
+        values.cycle === "none" ? null : await resolveCycle(config, values.cycle, issue.team.id);
+    }
+    if (values["sort-order"] !== undefined) {
+      const sortOrder = Number(values["sort-order"]);
+      if (!Number.isFinite(sortOrder)) throw new UsageError("--sort-order must be a finite number");
+      input.sortOrder = sortOrder;
+    }
     if (values["add-label"]?.length) {
       input.addLabelIds = await resolveLabels(config, issue.team.id, values["add-label"]);
     }
@@ -255,6 +335,21 @@ export async function issueCommand(argv: string[]): Promise<void> {
     if (values.json) return printJson(data.issueUpdate.issue);
     console.log(`Updated ${data.issueUpdate.issue.identifier}`);
     console.log(issueLine(data.issueUpdate.issue));
+    return;
+  }
+
+  if (action === "archive") {
+    const ref = argv[1];
+    if (!ref) throw new UsageError(USAGE);
+    const { values } = parseArgs({ args: argv.slice(2), options: { json: { type: "boolean" } } });
+    const issue = await resolveIssue(config, ref);
+    const data = await gqlRequest(
+      config,
+      `mutation($id: ID!) { issueArchive(id: $id) { issue { id ${ISSUE_FIELDS} } } }`,
+      { id: issue.id },
+    );
+    if (values.json) return printJson(data.issueArchive.issue);
+    console.log(`Archived ${data.issueArchive.issue.identifier}`);
     return;
   }
 
@@ -302,7 +397,8 @@ export async function issueCommand(argv: string[]): Promise<void> {
         const other = await resolveIssue(config, request.other);
         const relation = current.issue.relations.find(
           (candidate: any) =>
-            candidate.type === request.type &&
+            (candidate.type === request.type ||
+              (request.type === "DUPLICATE_OF" && candidate.type === "DUPLICATED_BY")) &&
             candidate.relatedIssue.identifier === other.identifier,
         );
         if (!relation) {

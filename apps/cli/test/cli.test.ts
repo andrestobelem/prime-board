@@ -102,9 +102,66 @@ describe("pb issue", () => {
     expect(updated.code).toBe(0);
     expect(JSON.parse(updated.out).state.name).toBe("In Progress");
 
+    const reordered = pb(["issue", "update", "PB-1", "--sort-order", "12.5", "--json"]);
+    expect(reordered.code).toBe(0);
+
     const listed = pb(["issue", "list", "--team", "PB", "--state", "started", "--json"]);
     expect(listed.code).toBe(0);
     expect(JSON.parse(listed.out).nodes.map((n: any) => n.identifier)).toEqual(["PB-1"]);
+  });
+
+  it("asigna y muestra el cycle de un issue", () => {
+    const issue = pb(["issue", "create", "--team", "PB", "--title", "Cycle target", "--json"]);
+    expect(issue.code).toBe(0);
+    const issueId = JSON.parse(issue.out).identifier;
+    const cycle = pb([
+      "cycle",
+      "create",
+      "--team",
+      "PB",
+      "--name",
+      "CLI cycle",
+      "--starts-at",
+      "2026-01-01",
+      "--ends-at",
+      "2026-01-31",
+      "--json",
+    ]);
+    expect(cycle.code).toBe(0);
+    const cycleId = JSON.parse(cycle.out).id;
+    const updated = pb(["issue", "update", issueId, "--cycle", cycleId, "--json"]);
+    expect(updated.code).toBe(0);
+    expect(JSON.parse(updated.out).cycle.name).toBe("CLI cycle");
+
+    const cleared = pb(["issue", "update", issueId, "--cycle", "none", "--json"]);
+    expect(cleared.code).toBe(0);
+    expect(JSON.parse(cleared.out).cycle).toBeNull();
+  });
+
+  it("limpia explícitamente la descripción de un issue", () => {
+    const created = pb([
+      "issue",
+      "create",
+      "--team",
+      "PB",
+      "--title",
+      "Description clear",
+      "--description",
+      "initial description",
+      "--json",
+    ]);
+    expect(created.code).toBe(0);
+    const identifier = JSON.parse(created.out).identifier;
+    const cleared = pb(["issue", "update", identifier, "--description", "none", "--json"]);
+    expect(cleared.code).toBe(0);
+    expect(JSON.parse(cleared.out).description).toBeNull();
+  });
+
+  it("rechaza valores inválidos de --first en issue list", () => {
+    for (const value of ["oops", "0", "-1", "251"]) {
+      const result = pb(["issue", "list", "--first", value, "--json"]);
+      expect(result.code).toBe(2);
+    }
   });
 
   it("comenta leyendo el body de stdin", () => {
@@ -120,9 +177,113 @@ describe("pb issue", () => {
     expect(JSON.parse(found.out).nodes.length).toBe(1);
   });
 
+  it("recorre páginas y expresa filtros compuestos", () => {
+    const firstCreated = pb([
+      "issue",
+      "create",
+      "--team",
+      "PB",
+      "--title",
+      "Pagination first",
+      "--priority",
+      "high",
+      "--json",
+    ]);
+    const secondCreated = pb([
+      "issue",
+      "create",
+      "--team",
+      "PB",
+      "--title",
+      "Pagination second",
+      "--json",
+    ]);
+    expect(firstCreated.code).toBe(0);
+    expect(secondCreated.code).toBe(0);
+    const firstIdentifier = JSON.parse(firstCreated.out).identifier;
+    const secondIdentifier = JSON.parse(secondCreated.out).identifier;
+    const first = pb([
+      "issue",
+      "list",
+      "--team",
+      "PB",
+      "--search",
+      "Pagination",
+      "--first",
+      "1",
+      "--order-by",
+      "CREATED_ASC",
+      "--json",
+    ]);
+    expect(first.code).toBe(0);
+    const firstPage = JSON.parse(first.out);
+    expect(firstPage.nodes).toHaveLength(1);
+    expect(firstPage.pageInfo.endCursor).toBeTruthy();
+
+    const second = pb([
+      "issue",
+      "list",
+      "--team",
+      "PB",
+      "--search",
+      "Pagination",
+      "--first",
+      "1",
+      "--order-by",
+      "CREATED_ASC",
+      "--after",
+      firstPage.pageInfo.endCursor,
+      "--json",
+    ]);
+    expect(second.code).toBe(0);
+    const secondPage = JSON.parse(second.out);
+    expect(secondPage.nodes).toHaveLength(1);
+    expect(secondPage.nodes[0].identifier).not.toBe(firstPage.nodes[0].identifier);
+    expect([firstIdentifier, secondIdentifier]).toContain(firstPage.nodes[0].identifier);
+
+    const filtered = pb([
+      "issue",
+      "list",
+      "--team",
+      "PB",
+      "--filter",
+      JSON.stringify({ and: [{ priority: { eq: 2 } }, { creator: { null: false } }] }),
+      "--json",
+    ]);
+    expect(filtered.code).toBe(0);
+    expect(JSON.parse(filtered.out).nodes.map((issue: any) => issue.identifier)).toContain(
+      firstIdentifier,
+    );
+  });
+
+  it("archiva issues e idempotentemente devuelve la issue archivada", () => {
+    const created = pb([
+      "issue",
+      "create",
+      "--team",
+      "PB",
+      "--title",
+      "CLI archive target",
+      "--json",
+    ]);
+    expect(created.code).toBe(0);
+    const issue = JSON.parse(created.out);
+    const archived = pb(["issue", "archive", issue.identifier, "--json"]);
+    expect(archived.code).toBe(0);
+    expect(JSON.parse(archived.out).archivedAt).not.toBeNull();
+    const again = pb(["issue", "archive", issue.identifier, "--json"]);
+    expect(again.code).toBe(0);
+    expect(JSON.parse(again.out).archivedAt).toBe(JSON.parse(archived.out).archivedAt);
+  });
+
   it("devuelve exit code 1 en errores de API y 2 en errores de uso", () => {
     const apiError = pb(["issue", "view", "PB-99"]);
-    expect(apiError.code).toBe(2); // NOT_FOUND del CLI es UsageError con mensaje claro
+    expect(apiError.code).toBe(1);
+    expect(apiError.err).toContain("API error [NOT_FOUND]");
+    expect(pb(["project", "view", "missing-project"]).code).toBe(1);
+    expect(pb(["cycle", "view", "missing-cycle"]).code).toBe(1);
+    expect(pb(["review", "view", "missing-review"]).code).toBe(1);
+    expect(pb(["initiative", "view", "missing-initiative"]).code).toBe(1);
     const usage = pb(["issue", "unknown-action"]);
     expect(usage.code).toBe(2);
     const badPriority = pb([
@@ -171,6 +332,8 @@ describe("pb project / team / webhook", () => {
 
     // asocia un issue y lo ve en la vista del proyecto
     pb(["issue", "update", "PB-1", "--project", project.id]);
+    const byName = pb(["issue", "update", "PB-1", "--project", "Agent ops", "--json"]);
+    expect(byName.code).toBe(0);
     const view = pb(["project", "view", project.id, "--json"]);
     expect(JSON.parse(view.out).issues.nodes.map((n: any) => n.identifier)).toEqual(["PB-1"]);
   });
@@ -232,6 +395,18 @@ describe("pb project / team / webhook", () => {
     const milestones = pb(["project", "milestone-list", project.id, "--json"]);
     expect(milestones.code).toBe(0);
     expect(JSON.parse(milestones.out).map((item: any) => item.name)).toEqual(["Beta shipped"]);
+    const milestoneByName = pb([
+      "issue",
+      "update",
+      "PB-1",
+      "--project",
+      project.id,
+      "--milestone",
+      "Beta shipped",
+      "--json",
+    ]);
+    expect(milestoneByName.code).toBe(0);
+    expect(JSON.parse(milestoneByName.out).milestone.name).toBe("Beta shipped");
 
     const update = pb([
       "project",
@@ -255,10 +430,122 @@ describe("pb project / team / webhook", () => {
     expect(pb(["project", "milestone-delete", createdMilestone.id]).code).toBe(0);
   });
 
-  it("lista teams", () => {
+  it("lista teams y resuelve key o UUID sin ambigüedad", () => {
     const result = pb(["team", "list", "--json"]);
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.out).map((t: any) => t.key)).toEqual(["PB"]);
+    const teams = JSON.parse(result.out);
+    expect(teams.map((t: any) => t.key)).toEqual(["PB"]);
+    const byId = pb(["issue", "list", "--team", teams[0].id, "--json"]);
+    expect(byId.code).toBe(0);
+  });
+
+  it("administra teams, actors, memberships, estados, labels y API keys", () => {
+    const team = pb(["team", "create", "--name", "CLI admin team", "--key", "ADM", "--json"]);
+    expect(team.code).toBe(0);
+    const renamed = pb(["team", "update", "ADM", "--name", "CLI managed team", "--json"]);
+    expect(renamed.code).toBe(0);
+    expect(JSON.parse(renamed.out).name).toBe("CLI managed team");
+
+    const actor = pb([
+      "actor",
+      "create",
+      "--name",
+      "cli-managed-agent",
+      "--type",
+      "agent",
+      "--json",
+    ]);
+    expect(actor.code).toBe(0);
+    const actorId = JSON.parse(actor.out).id;
+    const updatedActor = pb([
+      "actor",
+      "update",
+      actorId,
+      "--email",
+      "agent@example.test",
+      "--json",
+    ]);
+    expect(updatedActor.code).toBe(0);
+    expect(JSON.parse(updatedActor.out).email).toBe("agent@example.test");
+
+    const key = pb([
+      "api-key",
+      "create",
+      "--actor",
+      actorId,
+      "--name",
+      "CLI managed key",
+      "--json",
+    ]);
+    expect(key.code).toBe(0);
+    const keyPayload = JSON.parse(key.out);
+    expect(keyPayload.key).toMatch(/^pb_/);
+    const protectedIssue = JSON.parse(
+      pb(["issue", "create", "--team", "PB", "--title", "CLI archive permission", "--json"]).out,
+    );
+    const forbidden = Bun.spawnSync(
+      ["bun", join(ROOT, "apps/cli/src/index.ts"), "issue", "archive", protectedIssue.identifier],
+      {
+        env: {
+          ...process.env,
+          PRIME_BOARD_URL: `http://localhost:${PORT}`,
+          PRIME_BOARD_API_KEY: keyPayload.key,
+        },
+      },
+    );
+    expect(forbidden.exitCode).toBe(1);
+    expect(forbidden.stderr.toString()).toContain("UNAUTHORIZED");
+
+    const membership = pb([
+      "team",
+      "membership-create",
+      "--team",
+      "ADM",
+      "--actor",
+      actorId,
+      "--role",
+      "member",
+      "--json",
+    ]);
+    expect(membership.code).toBe(0);
+    const membershipId = JSON.parse(membership.out).id;
+    const memberships = pb(["team", "membership-list", "ADM", "--json"]);
+    expect(JSON.parse(memberships.out).map((item: any) => item.actorId)).toContain(actorId);
+
+    const state = pb([
+      "team",
+      "workflow-state-create",
+      "--team",
+      "ADM",
+      "--name",
+      "QA",
+      "--type",
+      "started",
+      "--json",
+    ]);
+    expect(state.code).toBe(0);
+    const stateId = JSON.parse(state.out).id;
+    const renamedState = pb([
+      "team",
+      "workflow-state-update",
+      stateId,
+      "--name",
+      "QA Ready",
+      "--json",
+    ]);
+    expect(renamedState.code).toBe(0);
+    expect(JSON.parse(renamedState.out).name).toBe("QA Ready");
+
+    const label = pb(["team", "label-create", "--team", "ADM", "--name", "qa", "--json"]);
+    expect(label.code).toBe(0);
+    const labelId = JSON.parse(label.out).id;
+    const renamedLabel = pb(["team", "label-update", labelId, "--name", "qa-ready", "--json"]);
+    expect(renamedLabel.code).toBe(0);
+    expect(JSON.parse(renamedLabel.out).name).toBe("qa-ready");
+    expect(pb(["team", "label-delete", labelId, "--json"]).code).toBe(0);
+    expect(pb(["team", "workflow-state-delete", stateId, "--json"]).code).toBe(0);
+    expect(pb(["team", "membership-delete", membershipId, "--json"]).code).toBe(0);
+    expect(pb(["api-key", "delete", keyPayload.apiKey.id, "--json"]).code).toBe(0);
   });
 
   it("crea, lista y borra webhooks mostrando el secret una sola vez", () => {
@@ -389,6 +676,39 @@ describe("pb issue link / unlink (AT-179)", () => {
     const cycle = pb(["issue", "link", "PB-3", "--blocked-by", "PB-1"]);
     expect(cycle.code).toBe(1);
     expect(cycle.err).toContain("cycle");
+  });
+
+  it("unlink duplicate-of funciona desde ambos extremos", () => {
+    const a = JSON.parse(
+      pb(["issue", "create", "--team", "PB", "--title", "Duplicate source", "--json"]).out,
+    );
+    const b = JSON.parse(
+      pb(["issue", "create", "--team", "PB", "--title", "Duplicate target", "--json"]).out,
+    );
+    expect(pb(["issue", "link", a.identifier, "--duplicate-of", b.identifier]).code).toBe(0);
+
+    const fromInverse = pb([
+      "issue",
+      "unlink",
+      b.identifier,
+      "--duplicate-of",
+      a.identifier,
+      "--json",
+    ]);
+    expect(fromInverse.code).toBe(0);
+    expect(JSON.parse(fromInverse.out)).toEqual([]);
+
+    expect(pb(["issue", "link", a.identifier, "--duplicate-of", b.identifier]).code).toBe(0);
+    const fromCanonical = pb([
+      "issue",
+      "unlink",
+      a.identifier,
+      "--duplicate-of",
+      b.identifier,
+      "--json",
+    ]);
+    expect(fromCanonical.code).toBe(0);
+    expect(JSON.parse(fromCanonical.out)).toEqual([]);
   });
 
   it("unlink borra la relación y sin flags es error de uso", () => {
