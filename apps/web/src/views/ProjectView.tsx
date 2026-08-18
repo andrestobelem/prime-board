@@ -24,6 +24,18 @@ const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter, $after: String) {
   }
 }`;
 
+function formatProjectDate(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 const STATE_COLORS: Record<string, string> = {
   BACKLOG: "#8a8f98",
   PLANNED: "#8a8f98",
@@ -200,6 +212,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
   if (!project) return <EmptyState title="Project not found" />;
 
   const issues = [...result.data!.issues.nodes, ...extraIssues];
+  const projectTargetDate = formatProjectDate(project.targetDate);
 
   return (
     <div>
@@ -249,7 +262,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
               <Avatar actor={project.lead} /> Lead: {project.lead.name}
             </span>
           )}
-          {project.targetDate && <span>Target: {project.targetDate}</span>}
+          {projectTargetDate && <span>Target: {projectTargetDate}</span>}
           <span>{issues.length} issues</span>
         </div>
         {project.description && (
@@ -277,7 +290,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
                 <strong>{update.author.name}</strong>
                 <span className="label-chip">{update.health.toLowerCase().replace(/_/g, " ")}</span>
                 <span style={{ marginLeft: "auto", color: "var(--text-faint)", fontSize: 12 }}>
-                  {update.createdAt.slice(0, 10)}
+                  {formatProjectDate(update.createdAt)}
                 </span>
               </div>
               <div>{update.body}</div>
@@ -340,9 +353,9 @@ export function ProjectView({ projectId }: { projectId: string }) {
                         ×
                       </button>
                     </span>
-                    {milestone.targetDate && (
+                    {formatProjectDate(milestone.targetDate) && (
                       <span className="count" style={{ marginLeft: "auto" }}>
-                        {milestone.targetDate}
+                        {formatProjectDate(milestone.targetDate)}
                       </span>
                     )}
                   </div>
