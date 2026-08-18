@@ -7,4 +7,5 @@ export const ISSUE_LIST_FIELDS = `
   project { id name }
   milestone { id name }
   cycle { id name number }
+  parent { id identifier title }
 `;

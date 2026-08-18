@@ -9,6 +9,7 @@ import {
   type IssueActionOptions,
 } from "./IssueActions.tsx";
 import { isIssueShortcutTarget } from "../issue-selection.ts";
+import type { IssueColumn } from "./DisplayOptions.tsx";
 
 export interface IssueListItem {
   id: string;
@@ -21,6 +22,7 @@ export interface IssueListItem {
   milestone?: { id: string; name: string } | null;
   cycle?: { id: string; name: string; number?: number } | null;
   project?: { id: string; name: string } | null;
+  parent?: { id: string; identifier: string; title: string } | null;
 }
 
 export function isTypingTarget(event: KeyboardEvent): boolean {
@@ -95,6 +97,7 @@ export function IssueList({
   actionOptions,
   onIssueAction,
   onArchiveIssue,
+  visibleColumns = ["priority", "labels", "assignee"],
 }: {
   issues: IssueListItem[];
   groupBy?: GroupBy;
@@ -102,6 +105,7 @@ export function IssueList({
   actionOptions?: IssueActionOptions;
   onIssueAction?: (id: string, input: IssueActionInput) => Promise<void>;
   onArchiveIssue?: (id: string) => Promise<void>;
+  visibleColumns?: IssueColumn[];
 }) {
   const [focusIndex, setFocusIndex] = useState(-1);
   const focusRef = useRef(focusIndex);
@@ -222,14 +226,19 @@ export function IssueList({
                     onChange={() => selection.onToggle(issue.id)}
                   />
                 )}
-                <PriorityIcon priority={issue.priority} />
+                {visibleColumns.includes("priority") && <PriorityIcon priority={issue.priority} />}
                 <span className="identifier">{issue.identifier}</span>
                 <span className="title">{issue.title}</span>
                 <span className="right">
-                  {issue.labels.map((label) => (
-                    <LabelChip key={label.id} label={label} />
-                  ))}
-                  <Avatar actor={issue.assignee} />
+                  {visibleColumns.includes("labels") &&
+                    issue.labels.map((label) => <LabelChip key={label.id} label={label} />)}
+                  {visibleColumns.includes("project") && issue.project && (
+                    <span className="issue-property">{issue.project.name}</span>
+                  )}
+                  {visibleColumns.includes("cycle") && issue.cycle && (
+                    <span className="issue-property">{issue.cycle.name}</span>
+                  )}
+                  {visibleColumns.includes("assignee") && <Avatar actor={issue.assignee} />}
                   {actionOptions && onIssueAction && onArchiveIssue && (
                     <IssueActionMenu
                       options={actionOptions}

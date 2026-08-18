@@ -1051,6 +1051,53 @@ kbd {
   letter-spacing: 0.8px;
   text-transform: uppercase;
 }
+.display-options {
+  position: relative;
+}
+.display-options summary {
+  list-style: none;
+  cursor: pointer;
+}
+.display-options summary::-webkit-details-marker {
+  display: none;
+}
+.display-options-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  width: 220px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 30%);
+}
+.display-options-popover label,
+.display-options-popover fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.display-options-popover fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.display-options-popover legend {
+  padding: 0;
+}
+.display-option-check {
+  flex-direction: row !important;
+  align-items: center;
+  color: var(--text) !important;
+}
+
 .settings-readonly-banner {
   margin: 14px 0 2px;
   padding: 10px 12px;

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getApiKey, mutate, useQuery } from "./api.ts";
 import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueList.tsx";
+import { DisplayOptions, type IssueColumn, type IssueOrder } from "./components/DisplayOptions.tsx";
 import { Palette } from "./components/Palette.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
 import { Icon } from "./components/icons.tsx";
@@ -75,6 +76,25 @@ function loadGroupBy(): GroupBy {
     : "state";
 }
 
+const DEFAULT_COLUMNS: IssueColumn[] = ["priority", "labels", "assignee"];
+function loadOrderBy(): IssueOrder {
+  const value = localStorage.getItem("pb.order-by");
+  return value === "CREATED_ASC" ||
+    value === "CREATED_DESC" ||
+    value === "UPDATED_ASC" ||
+    value === "UPDATED_DESC"
+    ? value
+    : "UPDATED_DESC";
+}
+function loadColumns(): IssueColumn[] {
+  try {
+    const value = JSON.parse(localStorage.getItem("pb.visible-columns") ?? "null");
+    return Array.isArray(value) && value.length ? value : DEFAULT_COLUMNS;
+  } catch {
+    return DEFAULT_COLUMNS;
+  }
+}
+
 export function App() {
   const route = useRoute();
   const [hasKey, setHasKey] = useState(() => Boolean(getApiKey()));
@@ -85,10 +105,14 @@ export function App() {
   const [entityModal, setEntityModal] = useState<CreateModal | null>(null);
   const [favorites, setFavorites] = useState<SidebarFavorite[]>([]);
   const [groupBy, setGroupBy] = useState<GroupBy>(loadGroupBy);
+  const [orderBy, setOrderBy] = useState<IssueOrder>(loadOrderBy);
+  const [visibleColumns, setVisibleColumns] = useState<IssueColumn[]>(loadColumns);
 
   useEffect(() => {
     localStorage.setItem("pb.group-by", groupBy);
-  }, [groupBy]);
+    localStorage.setItem("pb.order-by", orderBy);
+    localStorage.setItem("pb.visible-columns", JSON.stringify(visibleColumns));
+  }, [groupBy, orderBy, visibleColumns]);
 
   useEffect(() => {
     if (shell.data) setFavorites(shell.data.favorites);
@@ -371,7 +395,12 @@ export function App() {
       </>
     );
     content = boardActive ? (
-      <BoardView scope={{ kind: "project", projectId: param }} groupBy={groupBy} />
+      <BoardView
+        scope={{ kind: "project", projectId: param }}
+        groupBy={groupBy}
+        orderBy={orderBy}
+        visibleColumns={visibleColumns}
+      />
     ) : (
       <ProjectView projectId={param} />
     );
@@ -401,6 +430,16 @@ export function App() {
               ))}
             </select>
           )}
+          {(section === "team" || section === "board") && (
+            <DisplayOptions
+              groupBy={groupBy}
+              orderBy={orderBy}
+              columns={visibleColumns}
+              onGroupBy={setGroupBy}
+              onOrderBy={setOrderBy}
+              onColumns={setVisibleColumns}
+            />
+          )}
           <span className="tabs">
             <Link to={`/team/${param}`}>
               <button className={section === "team" ? "active" : ""}>List</button>
@@ -419,7 +458,13 @@ export function App() {
           groupBy={groupBy}
         />
       ) : (
-        <TeamView teamKey={param} teamId={team?.id ?? null} groupBy={groupBy} />
+        <TeamView
+          teamKey={param}
+          teamId={team?.id ?? null}
+          groupBy={groupBy}
+          orderBy={orderBy}
+          visibleColumns={visibleColumns}
+        />
       );
   } else if (shell.data) {
     if (defaultTeam) {

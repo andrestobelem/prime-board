@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { mutate, useQuery } from "../api.ts";
 import { IssueFilterToolbar } from "../components/IssueFilterToolbar.tsx";
 import type { IssueActionInput, IssueActionOptions } from "../components/IssueActions.tsx";
+import type { IssueColumn, IssueOrder } from "../components/DisplayOptions.tsx";
 import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-actions.ts";
 import {
   IssueList,
@@ -18,16 +19,16 @@ import {
   type IssueFilterDraft,
 } from "../issue-filter.ts";
 
-const TEAM_QUERY = `query($key: String, $teamId: ID, $filter: IssueFilter) {
+const TEAM_QUERY = `query($key: String, $teamId: ID, $filter: IssueFilter, $orderBy: IssueOrder) {
   team(key: $key) {
     id key name
     states { id name type color position }
-    projects { id name }
+    projects { id name milestones { id name } }
     cycles { id name number }
   }
   actors { id name type }
   labels(team: $teamId) { id name color }
-  issues(filter: $filter, first: 250) {
+  issues(filter: $filter, first: 250, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} }
     pageInfo { hasNextPage }
   }
@@ -47,7 +48,7 @@ interface TeamData {
     key: string;
     name: string;
     states: TeamState[];
-    projects: Array<{ id: string; name: string }>;
+    projects: Array<{ id: string; name: string; milestones: Array<{ id: string; name: string }> }>;
     cycles: Array<{ id: string; name: string; number: number }>;
   } | null;
   actors: Array<{ id: string; name: string; type: string }>;
@@ -60,11 +61,15 @@ export function TeamView({
   teamId,
   groupBy = "state",
   triage = false,
+  orderBy = "UPDATED_DESC",
+  visibleColumns = ["priority", "labels", "assignee"] as IssueColumn[],
 }: {
   teamKey: string;
   teamId: string | null;
   groupBy?: GroupBy;
   triage?: boolean;
+  orderBy?: IssueOrder;
+  visibleColumns?: IssueColumn[];
 }) {
   const [draft, setDraft] = useState<IssueFilterDraft>(() => loadIssueFilter(teamKey));
   const draftTeamKey = useRef(teamKey);
@@ -86,7 +91,7 @@ export function TeamView({
     const base = buildIssueFilter(teamId, draft);
     return triage ? { ...base, stateType: { eq: "TRIAGE" } } : base;
   }, [teamId, draft, triage]);
-  const result = useQuery<TeamData>(TEAM_QUERY, { key: teamKey, teamId, filter });
+  const result = useQuery<TeamData>(TEAM_QUERY, { key: teamKey, teamId, filter, orderBy });
   const visibleIds = useMemo(
     () => result.data?.issues.nodes.map((issue) => issue.id) ?? [],
     [result.data?.issues.nodes],
@@ -176,6 +181,14 @@ export function TeamView({
         states={result.data.team.states}
         actors={result.data.actors}
         labels={result.data.labels}
+        projects={result.data.team.projects}
+        milestones={result.data.team.projects.flatMap((project) => project.milestones)}
+        cycles={result.data.team.cycles}
+        parents={issues.flatMap((issue) =>
+          issue.parent
+            ? [{ id: issue.parent.id, name: `${issue.parent.identifier} ${issue.parent.title}` }]
+            : [],
+        )}
         visibleCount={issues.length}
         selectedCount={selectedIds.size}
         onChange={setDraft}
@@ -209,6 +222,7 @@ export function TeamView({
           onClear: () => setSelectedIds(new Set()),
         }}
         actionOptions={actionOptions}
+        visibleColumns={visibleColumns}
         onIssueAction={updateIssue}
         onArchiveIssue={archiveIssue}
       />

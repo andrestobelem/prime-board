@@ -9,6 +9,7 @@ describe("issue filters", () => {
   it("combines team and selected criteria for the API", () => {
     expect(
       buildIssueFilter("team-1", {
+        ...EMPTY_ISSUE_FILTER,
         search: "  cycle  ",
         stateId: "state-1",
         assigneeId: "actor-1",
@@ -33,6 +34,28 @@ describe("issue filters", () => {
         assigneeId: "__none__",
       }),
     ).toEqual({ team: { eq: "team-1" }, state: { null: true }, assignee: { null: true } });
+  });
+
+  it("supports the API's extended queue filters", () => {
+    expect(
+      buildIssueFilter("team-1", {
+        ...EMPTY_ISSUE_FILTER,
+        projectId: "project-1",
+        milestoneId: "__none__",
+        cycleId: "cycle-1",
+        parentId: "parent-1",
+        creatorId: "actor-1",
+        unblocked: "true",
+      }),
+    ).toEqual({
+      team: { eq: "team-1" },
+      project: { eq: "project-1" },
+      milestone: { null: true },
+      cycle: { eq: "cycle-1" },
+      parent: { eq: "parent-1" },
+      creator: { eq: "actor-1" },
+      unblocked: true,
+    });
   });
 
   it("counts active criteria and ignores whitespace-only search", () => {

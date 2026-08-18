@@ -19,8 +19,9 @@ import {
 } from "../components/IssueActions.tsx";
 import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-actions.ts";
 import { isIssueShortcutTarget } from "../issue-selection.ts";
+import type { IssueColumn, IssueOrder } from "../components/DisplayOptions.tsx";
 
-const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter) {
+const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter, $orderBy: IssueOrder) {
   team(key: $key) {
     id key name
     states { id name type color position }
@@ -29,7 +30,7 @@ const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter) {
     cycles { id name number }
   }
   actors { id name type }
-  issues(filter: $filter, first: 250) {
+  issues(filter: $filter, first: 250, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} }
     pageInfo { hasNextPage }
   }
@@ -37,14 +38,14 @@ const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter) {
 
 // El board de proyecto puede cruzar teams: cada issue trae su team para que el
 // drop por estado escriba el state id correcto de SU team.
-const PROJECT_BOARD_QUERY = `query($id: ID!, $filter: IssueFilter) {
+const PROJECT_BOARD_QUERY = `query($id: ID!, $filter: IssueFilter, $orderBy: IssueOrder) {
   project(id: $id) {
     id name
     teams { id key states { id name type color position } labels { id name color } cycles { id name number } }
     milestones { id name }
   }
   actors { id name type }
-  issues(filter: $filter, first: 250) {
+  issues(filter: $filter, first: 250, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} team { id } }
     pageInfo { hasNextPage }
   }
@@ -76,13 +77,23 @@ interface Column {
 export type BoardScope =
   { kind: "team"; teamKey: string; teamId: string | null } | { kind: "project"; projectId: string };
 
-export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; groupBy?: GroupBy }) {
+export function BoardView({
+  scope,
+  groupBy = "state",
+  orderBy = "UPDATED_DESC",
+  visibleColumns = ["priority", "labels", "assignee"],
+}: {
+  scope: BoardScope;
+  groupBy?: GroupBy;
+  orderBy?: IssueOrder;
+  visibleColumns?: IssueColumn[];
+}) {
   const isProject = scope.kind === "project";
   const result = useQuery<any>(
     isProject ? PROJECT_BOARD_QUERY : TEAM_BOARD_QUERY,
     isProject
-      ? { id: scope.projectId, filter: { project: { eq: scope.projectId } } }
-      : { key: scope.teamKey, filter: scope.teamId ? { team: { eq: scope.teamId } } : {} },
+      ? { id: scope.projectId, filter: { project: { eq: scope.projectId } }, orderBy }
+      : { key: scope.teamKey, filter: scope.teamId ? { team: { eq: scope.teamId } } : {}, orderBy },
   );
   // Copia local para el update optimista del drag & drop.
   const [local, setLocal] = useState<BoardCard[] | null>(null);
@@ -426,12 +437,13 @@ export function BoardView({ scope, groupBy = "state" }: { scope: BoardScope; gro
                   </span>
                   <span className="card-title">{issue.title}</span>
                   <span className="card-footer">
-                    <PriorityIcon priority={issue.priority} />
-                    {issue.labels.map((label) => (
-                      <LabelChip key={label.id} label={label} />
-                    ))}
+                    {visibleColumns.includes("priority") && (
+                      <PriorityIcon priority={issue.priority} />
+                    )}
+                    {visibleColumns.includes("labels") &&
+                      issue.labels.map((label) => <LabelChip key={label.id} label={label} />)}
                     <span style={{ marginLeft: "auto" }}>
-                      <Avatar actor={issue.assignee} />
+                      {visibleColumns.includes("assignee") && <Avatar actor={issue.assignee} />}
                     </span>
                   </span>
                 </div>

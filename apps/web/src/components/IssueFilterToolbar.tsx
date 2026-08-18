@@ -28,11 +28,20 @@ interface LabelOption {
   color: string;
 }
 
+interface NamedOption {
+  id: string;
+  name: string;
+}
+
 export function IssueFilterToolbar({
   draft,
   states,
   actors,
   labels,
+  projects = [],
+  milestones = [],
+  cycles = [],
+  parents = [],
   visibleCount,
   selectedCount,
   onChange,
@@ -48,6 +57,10 @@ export function IssueFilterToolbar({
   states: StateOption[];
   actors: ActorOption[];
   labels: LabelOption[];
+  projects?: NamedOption[];
+  milestones?: NamedOption[];
+  cycles?: NamedOption[];
+  parents?: NamedOption[];
   visibleCount: number;
   selectedCount: number;
   onChange: (draft: IssueFilterDraft) => void;
@@ -181,6 +194,91 @@ export function IssueFilterToolbar({
                   {label.name}
                 </option>
               ))}
+            </select>
+          </label>
+          <label>
+            Project
+            <select
+              value={draft.projectId}
+              onChange={(event) => update("projectId", event.target.value)}
+            >
+              <option value="">Any project</option>
+              <option value="__none__">No project</option>
+              {projects.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Milestone
+            <select
+              value={draft.milestoneId}
+              onChange={(event) => update("milestoneId", event.target.value)}
+            >
+              <option value="">Any milestone</option>
+              <option value="__none__">No milestone</option>
+              {milestones.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Cycle
+            <select
+              value={draft.cycleId}
+              onChange={(event) => update("cycleId", event.target.value)}
+            >
+              <option value="">Any cycle</option>
+              <option value="__none__">No cycle</option>
+              {cycles.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Parent
+            <select
+              value={draft.parentId}
+              onChange={(event) => update("parentId", event.target.value)}
+            >
+              <option value="">Any parent</option>
+              <option value="__none__">No parent</option>
+              {parents.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Creator
+            <select
+              value={draft.creatorId}
+              onChange={(event) => update("creatorId", event.target.value)}
+            >
+              <option value="">Anyone</option>
+              {actors.map((actor) => (
+                <option key={actor.id} value={actor.id}>
+                  {actor.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Blockers
+            <select
+              value={draft.unblocked}
+              onChange={(event) => update("unblocked", event.target.value)}
+            >
+              <option value="">Any blocker state</option>
+              <option value="true">Unblocked only</option>
+              <option value="false">Blocked only</option>
             </select>
           </label>
           {activeCount > 0 && (

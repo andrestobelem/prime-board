@@ -4,6 +4,12 @@ export interface IssueFilterDraft {
   assigneeId: string;
   priority: string;
   labelId: string;
+  projectId: string;
+  milestoneId: string;
+  cycleId: string;
+  parentId: string;
+  creatorId: string;
+  unblocked: string;
 }
 
 export const EMPTY_ISSUE_FILTER: IssueFilterDraft = {
@@ -12,6 +18,12 @@ export const EMPTY_ISSUE_FILTER: IssueFilterDraft = {
   assigneeId: "",
   priority: "",
   labelId: "",
+  projectId: "",
+  milestoneId: "",
+  cycleId: "",
+  parentId: "",
+  creatorId: "",
+  unblocked: "",
 };
 
 export function buildIssueFilter(
@@ -29,6 +41,16 @@ export function buildIssueFilter(
   }
   if (draft.priority) filter.priority = { eq: Number(draft.priority) };
   if (draft.labelId) filter.labels = { includes: draft.labelId };
+  for (const [key, value] of [
+    ["project", draft.projectId],
+    ["milestone", draft.milestoneId],
+    ["cycle", draft.cycleId],
+    ["parent", draft.parentId],
+    ["creator", draft.creatorId],
+  ] as const) {
+    if (value) filter[key] = value === "__none__" ? { null: true } : { eq: value };
+  }
+  if (draft.unblocked) filter.unblocked = draft.unblocked === "true";
   return filter;
 }
 
@@ -39,6 +61,12 @@ export function activeIssueFilterCount(draft: IssueFilterDraft): number {
     draft.assigneeId,
     draft.priority,
     draft.labelId,
+    draft.projectId,
+    draft.milestoneId,
+    draft.cycleId,
+    draft.parentId,
+    draft.creatorId,
+    draft.unblocked,
   ].filter(Boolean).length;
 }
 
