@@ -1,6 +1,6 @@
 # Spec del MVP de prime-board
 
-> Ticket: [AT-128](https://linear.app/andrestobelem/issue/AT-128/escribir-la-spec-del-mvp-en-docs)
+> Ticket local: [AT-128](../../.prime-board/issues/AT-128.md)
 > Insumos: [`relevamiento-linear.md`](../relevamiento-linear.md) (AT-126) y [`alcance-mvp.md`](../alcance-mvp.md) (AT-127).
 > Convención: la prosa de este doc está en español; todo lo que es parte de la aplicación
 > (esquemas, tipos, comandos, nombres de campos) está en inglés.

@@ -1,6 +1,6 @@
 # Guía de uso para agentes
 
-> Ticket: [AT-143](https://linear.app/andrestobelem/issue/AT-143/guia-de-uso-para-agentes-y-seeds-de-demo)
+> Ticket local: [AT-143](../.prime-board/issues/AT-143.md)
 > Cómo operar prime-board de punta a punta siendo un agente (o un humano con terminal).
 
 ## 1. Levantar el server

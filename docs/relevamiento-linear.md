@@ -1,6 +1,6 @@
 # Relevamiento de funcionalidades de Linear
 
-> Ticket: [AT-126](https://linear.app/andrestobelem/issue/AT-126/relevar-funcionalidades-core-de-linear)
+> Ticket local: [AT-126](../.prime-board/issues/AT-126.md)
 > Objetivo: inventariar las funcionalidades de Linear candidatas a clonar en prime-board,
 > con una primera clasificación pensando en **agentes como usuarios principales**.
 > La decisión final de alcance se toma en AT-127.

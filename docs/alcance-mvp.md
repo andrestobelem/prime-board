@@ -1,6 +1,6 @@
 # Alcance del MVP de prime-board
 
-> Ticket: [AT-127](https://linear.app/andrestobelem/issue/AT-127/definir-el-alcance-del-mvp-de-prime-board)
+> Ticket local: [AT-127](../.prime-board/issues/AT-127.md)
 > Insumo: [`relevamiento-linear.md`](relevamiento-linear.md) (AT-126).
 > La especificación técnica del MVP vive en [`specs/mvp.md`](specs/mvp.md) (AT-128).
 
