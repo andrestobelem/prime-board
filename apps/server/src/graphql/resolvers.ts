@@ -604,6 +604,7 @@ export const resolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
       const team = mapTeam(createTeam(context.db, args.input, viewer.id));
       return { success: true, team };
     },

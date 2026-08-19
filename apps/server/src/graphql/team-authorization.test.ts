@@ -397,6 +397,31 @@ describe("autorización de configuración de teams", () => {
     expect(deleted.errors).toBeUndefined();
   });
 
+  it("restringe la creación de teams al workspace admin", async () => {
+    const denied = await gql(
+      app,
+      `mutation { teamCreate(input: { name: "Member team", key: "MEM" }) { success } }`,
+      {},
+      setup.memberKey,
+    );
+    expect(denied.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+    const absent = await gql(
+      app,
+      `{ team(key: "MEM", includeArchived: true) { id } }`,
+      {},
+      setup.memberKey,
+    );
+    expect(absent.data!.team).toBeNull();
+
+    const created = await gql(
+      app,
+      `mutation { teamCreate(input: { name: "Admin team", key: "ADM" }) { success team { key } } }`,
+    );
+    expect(created.errors).toBeUndefined();
+    expect(created.data!.teamCreate.team.key).toBe("ADM");
+  });
+
   it("permite al workspace admin gestionar memberships sin pertenecer al team", async () => {
     const actor = await gql(
       app,
