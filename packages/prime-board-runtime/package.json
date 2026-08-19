@@ -14,5 +14,6 @@
   "scripts": {
     "build": "bun ../../scripts/build-runtime.ts",
     "prepack": "bun run build"
-  }
+  },
+  "license": "MIT"
 }
