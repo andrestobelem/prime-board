@@ -75,6 +75,7 @@ describe("MCP Streamable HTTP auth and protocol", () => {
       body,
     });
     expect(invalid.status).toBe(401);
+    expect((await invalid.json()).error.code).toBe("UNAUTHORIZED");
   });
 
   it("returns a stateful MCP session and binds subsequent requests to its key", async () => {
@@ -113,6 +114,75 @@ describe("MCP Streamable HTTP auth and protocol", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" }),
     });
     expect(hijack.status).toBe(401);
+  });
+
+  it("revalidates an existing session before dispatch after key revocation", async () => {
+    let revoked = false;
+    const revalidationHandler = createMcpHttpHandler(
+      { url: SESSION.url },
+      {
+        createSession: async ({ apiKey }) => {
+          if (apiKey !== SESSION.apiKey || revoked) throw new Error("UNAUTHORIZED: revoked key");
+          return SESSION;
+        },
+        createServer: () => {
+          const server = new McpServer({ name: "revalidation-test", version: "0.0.1" });
+          server.registerTool(
+            "echo",
+            { description: "Echo a message", inputSchema: { message: z.string() } },
+            async ({ message }) => ({ content: [{ type: "text", text: message }] }),
+          );
+          return server;
+        },
+      },
+    );
+    const revalidationServer = Bun.serve({ port: 0, fetch: revalidationHandler.fetch });
+    const url = `${revalidationServer.url}mcp`;
+    const headers = {
+      authorization: `Bearer ${SESSION.apiKey}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    };
+
+    try {
+      const initialize = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "revalidation-test", version: "0.0.1" },
+          },
+        }),
+      });
+      const sessionId = initialize.headers.get("mcp-session-id");
+      expect(initialize.status).toBe(200);
+      expect(sessionId).toBeTruthy();
+      await initialize.text();
+
+      const initialized = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, "mcp-session-id": sessionId! },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      });
+      expect([200, 202]).toContain(initialized.status);
+      revoked = true;
+
+      const listed = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, "mcp-session-id": sessionId! },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+      });
+      expect(listed.status).toBe(401);
+      expect((await listed.json()).error.code).toBe("UNAUTHORIZED");
+    } finally {
+      revalidationServer.stop(true);
+      await revalidationHandler.close();
+    }
   });
 
   it("supports initialize, tools/list and tools/call through the official client transport", async () => {
@@ -255,6 +325,9 @@ describe("MCP HTTP config", () => {
     );
     expect(() => loadMcpHttpConfig({ PRIME_BOARD_MCP_PATH: "mcp" })).toThrow(
       "PRIME_BOARD_MCP_PATH",
+    );
+    expect(() => loadMcpHttpConfig({ PRIME_BOARD_MCP_HOST: "0.0.0.0" })).toThrow(
+      "PRIME_BOARD_MCP_HOST",
     );
   });
 });

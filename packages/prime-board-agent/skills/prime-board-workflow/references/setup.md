@@ -22,15 +22,17 @@ eval "$(bun scripts/prime-board-project.ts --project /ruta/al/proyecto --print-e
 La admin key se imprime una sola vez durante el primer inicio. Crea un Actor y una API key
 normal, y exporta esta última como `PRIME_BOARD_API_KEY`.
 
-## 2. Instalar la skill en el proyecto objetivo
+## 2. Instalar el package en el proyecto objetivo
+
+Desde el checkout de prime-board, instala el package en la configuración local de Prime Agent:
 
 ```bash
-mkdir -p /ruta/al/proyecto/.agents/skills
-cp -R /ruta/a/prime-board/.agents/skills/prime-board-workflow \
-  /ruta/al/proyecto/.agents/skills/prime-board-workflow
+prime-agent package install /ruta/a/prime-board/packages/prime-board-agent --local
 ```
 
-Las convenciones del proyecto siguen teniendo autoridad en su `AGENTS.md`.
+La instalación descubre la extensión y la skill declaradas en `package.json.pi`; no hace falta
+copiar manualmente desde `.agents/skills`. Las convenciones del proyecto siguen teniendo
+autoridad en su `AGENTS.md`.
 
 ## 3. Configurar el CLI
 

@@ -42,7 +42,7 @@ function jsonError(status: number, message: string, code = -32000): Response {
 }
 
 function unauthorized(message = "Unauthorized"): Response {
-  return new Response(JSON.stringify({ error: message }), {
+  return new Response(JSON.stringify({ error: { code: "UNAUTHORIZED", message } }), {
     status: 401,
     headers: {
       ...JSON_HEADERS,
@@ -144,6 +144,15 @@ export function createMcpHttpHandler(
       // El ID de sesión no es una credencial. Exigimos la misma API key en cada
       // request para que una sesión MCP filtrada no pueda repetirse anónimamente.
       if (session.apiKey !== apiKey) return unauthorized("API key does not match the MCP session");
+      try {
+        // Revalidate on every request so revocation/expiry takes effect before
+        // notifications, tools/list, or tools/call reach the MCP transport.
+        await authenticatedSession(apiKey);
+      } catch (error) {
+        if (isAuthError(error)) return unauthorized("Invalid or inactive API key");
+        console.error("Failed to revalidate MCP HTTP session:", error);
+        return jsonError(502, "Unable to revalidate MCP session", -32603);
+      }
     } else {
       try {
         session = await createTransport(apiKey);
@@ -186,9 +195,13 @@ export function loadMcpHttpConfig(
   }
   const path = env.PRIME_BOARD_MCP_PATH ?? "/mcp";
   if (!path.startsWith("/")) throw new Error("PRIME_BOARD_MCP_PATH must start with `/`");
+  const hostname = env.PRIME_BOARD_MCP_HOST ?? "127.0.0.1";
+  if (hostname !== "127.0.0.1") {
+    throw new Error("PRIME_BOARD_MCP_HOST must be 127.0.0.1 for a local MCP server");
+  }
   return {
     url: env.PRIME_BOARD_URL ?? "http://localhost:3333",
-    hostname: env.PRIME_BOARD_MCP_HOST ?? "127.0.0.1",
+    hostname,
     port,
     path: path === "/" ? "/" : path.replace(/\/$/, ""),
   };

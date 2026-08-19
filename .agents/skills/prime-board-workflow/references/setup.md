@@ -52,9 +52,9 @@ Inicia el transporte local en otra terminal. El servidor MCP no lee una API key 
 valida el Bearer enviado por cada cliente.
 
 ```bash
-PRIME_BOARD_URL=http://localhost:3333 \\
-PRIME_BOARD_MCP_HOST=127.0.0.1 \\
-PRIME_BOARD_MCP_PORT=3334 \\
+PRIME_BOARD_URL=http://localhost:3333 \
+PRIME_BOARD_MCP_HOST=127.0.0.1 \
+PRIME_BOARD_MCP_PORT=3334 \
 bun "$PRIME_BOARD_ROOT/apps/mcp/src/http.ts"
 ```
 
