@@ -1,6 +1,6 @@
 # Lectura de issues en PostgreSQL
 
-- **Tickets:** PRB-434, PRB-435
+- **Tickets:** PRB-434, PRB-435, PRB-436
 - **Implementación:** `apps/server/src/domain/postgres-issues.ts`, `apps/server/src/domain/filters.ts`
 
 ## Alcance
@@ -26,6 +26,13 @@ SQLite. Los campos anidados de labels, projects, milestones, cycles, comments,
 relations y activity mantienen el mismo límite explícito hasta que sus dominios
 sean migrados.
 
+Las mutaciones core `issueCreate`, `issueUpdate` e `issueArchive` también
+usan transacciones PostgreSQL: la numeración automática toma un lock lógico
+sobre el Team, y los cambios de issue y actividad se confirman o revierten
+juntos. Projects, labels, milestones, cycles y relaciones siguen fallando de
+forma explícita hasta sus migraciones.
+
 La validación reproducible está en `scripts/validate-postgres-actors.ts` e
-incluye lectura directa por identificador, paginación, children, archivado,
-visibilidad privada y búsquedas por prefijo, frase, acento y entrada inválida.
+incluye creación, actualización, archivado, lectura directa por identificador,
+paginación, children, visibilidad privada y búsquedas por prefijo, frase,
+acento y entrada inválida.

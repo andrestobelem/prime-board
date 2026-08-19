@@ -60,6 +60,9 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:actorReactivate",
   "mutation:actorRevoke",
   "mutation:actorLeave",
+  "mutation:issueCreate",
+  "mutation:issueUpdate",
+  "mutation:issueArchive",
   "mutation:apiKeyCreate",
   "mutation:apiKeyDelete",
   "mutation:apiKeyRotate",
@@ -291,6 +294,7 @@ function operationTeamIds(
       return row?.team_id ? [row.team_id] : null;
     }
     case "issueCreate": {
+      if (context.persistence) return [];
       const direct = input.teamId ?? input.teamKey;
       return [
         ...(direct ? [teamForRef(context, direct) ?? "__missing__"] : []),
@@ -298,6 +302,7 @@ function operationTeamIds(
       ];
     }
     case "issueUpdate": {
+      if (context.persistence) return [];
       const current = teamIdsForIssue(context, args.id);
       const target = input.projectId ? teamIdsForProject(context, input.projectId) : [];
       const parent = input.parentId ? teamIdsForIssue(context, input.parentId) : [];
@@ -306,6 +311,7 @@ function operationTeamIds(
       return [...new Set([...current, ...target, ...parent, ...cycle, ...milestone])];
     }
     case "issueArchive":
+      if (context.persistence) return [];
       return teamIdsForIssue(context, args.id);
     case "commentCreate":
       return teamIdsForIssue(context, input.issueId);

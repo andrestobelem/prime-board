@@ -36,7 +36,7 @@ export function mapPostgresActor(row: ActorRow) {
 }
 
 export async function getPostgresActor(
-  persistence: Persistence,
+  persistence: Persistence | PersistenceTransaction,
   id: string,
 ): Promise<ActorRow | null> {
   return persistence.one<ActorRow>("SELECT * FROM actors WHERE id = $1", [id]);

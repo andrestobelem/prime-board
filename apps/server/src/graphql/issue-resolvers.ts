@@ -60,6 +60,9 @@ import {
   getPostgresIssueByRef,
   listPostgresChildren,
   listPostgresIssues,
+  createPostgresIssue,
+  updatePostgresIssue,
+  archivePostgresIssue,
 } from "../domain/postgres-issues.ts";
 import { getPostgresActor, mapPostgresActor } from "../domain/postgres-actors.ts";
 import {
@@ -510,9 +513,20 @@ export const issueResolvers = {
   },
 
   Mutation: {
-    issueCreate: (_parent: unknown, args: { input: IssueCreateInput }, context: Context) => {
+    issueCreate: async (_parent: unknown, args: { input: IssueCreateInput }, context: Context) => {
       const viewer = requireViewer(context);
       assertCanUseImportFields(viewer, args.input);
+      if (context.persistence) {
+        const team = args.input.teamId
+          ? await getPostgresTeam(context.persistence, { id: args.input.teamId })
+          : await getPostgresTeam(context.persistence, { key: args.input.teamKey });
+        if (team && !apiKeyTeamsWithinLimit(context.auth, [team.id])) {
+          throw apiError("NOT_FOUND", "Team resource not found");
+        }
+        const row = await createPostgresIssue(context.persistence, viewer, args.input);
+        context.events.emit("issue.created", viewer, issueEventData(row));
+        return { success: true, issue: mapIssue(row) };
+      }
       const team = requireTeam(context, { id: args.input.teamId, key: args.input.teamKey });
       assertCanManageIssue(context.db, viewer, team.id);
       if (args.input.assigneeId) {
@@ -529,12 +543,31 @@ export const issueResolvers = {
       context.events.emit("issue.created", viewer, issueEventData(row));
       return { success: true, issue: mapIssue(row) };
     },
-    issueUpdate: (
+    issueUpdate: async (
       _parent: unknown,
       args: { id: string; input: IssueUpdateInput },
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const existing = await getPostgresIssueByRef(context.persistence, args.id);
+        if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+          throw apiError("NOT_FOUND", "Issue resource not found");
+        }
+        const { row, changes } = await updatePostgresIssue(
+          context.persistence,
+          viewer,
+          args.id,
+          args.input,
+        );
+        if (changes.length > 0) {
+          const changeMap = Object.fromEntries(
+            changes.map((change) => [change.field, { from: change.from, to: change.to }]),
+          );
+          context.events.emit("issue.updated", viewer, issueEventData(row), changeMap);
+        }
+        return { success: true, issue: mapIssue(row) };
+      }
       const currentIssue = assertIssueAccess(context, viewer, args.id);
       if (args.input.assigneeId) {
         requireActor(context, args.input.assigneeId);
@@ -559,8 +592,17 @@ export const issueResolvers = {
       }
       return { success: true, issue: mapIssue(row) };
     },
-    issueArchive: (_parent: unknown, args: { id: string }, context: Context) => {
+    issueArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const existing = await getPostgresIssueByRef(context.persistence, args.id);
+        if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+          throw apiError("NOT_FOUND", "Issue resource not found");
+        }
+        const row = await archivePostgresIssue(context.persistence, viewer, args.id);
+        context.events.emit("issue.archived", viewer, issueEventData(row));
+        return { success: true, issue: mapIssue(row) };
+      }
       assertIssueAccess(context, viewer, args.id);
       const row = archiveIssue(context.db, viewer.id, args.id);
       context.events.emit("issue.archived", viewer, issueEventData(row));

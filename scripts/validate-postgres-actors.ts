@@ -823,24 +823,43 @@ try {
   );
   const stateId = createdState.data?.workflowStateCreate.workflowState.id;
   const issueCreatedAt = new Date(Date.now() - 2000).toISOString();
-  const issueIds = [newId(), newId(), newId(), newId()];
-  await persistence.execute(
-    `INSERT INTO issues
-     (id, team_id, number, title, description, state_id, priority, assignee_id, parent_id,
-      project_id, creator_id, sort_order, created_at, updated_at, archived_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, NULL, $7, NULL, $8, 0, $9, $9, $10)`,
-    [
-      issueIds[0],
-      createdTeamId,
-      1,
-      "First PostgreSQL issue — Definición",
-      null,
-      initialStateId,
-      null,
-      adminId,
-      issueCreatedAt,
-      null,
-    ],
+  const createdIssue = await graphql(
+    base,
+    `
+      mutation ($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+          success
+          issue {
+            id
+            identifier
+            title
+          }
+        }
+      }
+    `,
+    {
+      input: {
+        teamId: createdTeamId,
+        title: "First PostgreSQL issue — Definición",
+        createdAt: issueCreatedAt,
+      },
+    },
+  );
+  const issueIds = [createdIssue.data?.issueCreate.issue.id, newId(), newId(), newId()];
+  const updatedIssue = await graphql(
+    base,
+    `
+      mutation ($id: ID!, $input: IssueUpdateInput!) {
+        issueUpdate(id: $id, input: $input) {
+          success
+          issue {
+            title
+            priority
+          }
+        }
+      }
+    `,
+    { id: issueIds[0], input: { title: "First PostgreSQL issue — Definición", priority: 2 } },
   );
   await persistence.execute(
     `INSERT INTO issues
@@ -872,7 +891,7 @@ try {
       initialStateId,
       adminId,
       new Date().toISOString(),
-      new Date().toISOString(),
+      null,
     ],
   );
   await persistence.execute(
@@ -891,6 +910,20 @@ try {
       adminId,
       new Date(Date.now() + 1000).toISOString(),
     ],
+  );
+  const archivedIssue = await graphql(
+    base,
+    `
+      mutation ($id: ID!) {
+        issueArchive(id: $id) {
+          success
+          issue {
+            archivedAt
+          }
+        }
+      }
+    `,
+    { id: issueIds[2] },
   );
   const outsiderIssue = await graphql(
     base,
@@ -1147,6 +1180,10 @@ try {
     `,
     { id: createdTeamId },
   );
+  await persistence.execute(
+    "DELETE FROM activity WHERE issue_id IN (SELECT id FROM issues WHERE team_id = $1)",
+    [createdTeamId],
+  );
   await persistence.execute("DELETE FROM issues WHERE team_id = $1", [createdTeamId]);
   const deletedTeam = await graphql(
     base,
@@ -1160,8 +1197,15 @@ try {
     { id: createdTeamId, confirmation: teamKey },
   );
   report.issues =
+    !createdIssue.errors &&
+    createdIssue.data?.issueCreate.issue.identifier === "PGT-1" &&
+    !updatedIssue.errors &&
+    !archivedIssue.errors &&
     !issuePageOne.errors &&
     !issuePageTwo.errors &&
+    !createdIssue.errors &&
+    !updatedIssue.errors &&
+    !archivedIssue.errors &&
     !outsiderIssue.errors &&
     !memberIssue.errors &&
     !outsiderIssues.errors &&
