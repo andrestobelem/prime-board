@@ -39,6 +39,17 @@ import {
   updatePostgresWorkspace,
 } from "../domain/postgres-actors.ts";
 import {
+  acceptPostgresActorInvitation,
+  createPostgresActorInvitation,
+  createPostgresApiKey,
+  deletePostgresApiKey,
+  getPostgresApiKey,
+  listPostgresActorInvitations,
+  postgresApiKeyMetadata,
+  revokePostgresActorInvitation,
+  rotatePostgresApiKey,
+} from "../domain/postgres-credentials.ts";
+import {
   archiveTeam,
   assertTeamActive,
   createTeam,
@@ -407,8 +418,13 @@ export const resolvers = {
   },
 
   ApiKey: {
-    actor: (apiKey: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(lookupActor(context, apiKey.actorId)!),
+    actor: async (apiKey: { actorId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, apiKey.actorId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, apiKey.actorId)!);
+    },
   },
 
   Actor: {
@@ -423,10 +439,21 @@ export const resolvers = {
   },
 
   ActorInvitation: {
-    invitedBy: (invitation: { invitedById: string }, _args: unknown, context: Context) =>
-      mapActor(lookupActor(context, invitation.invitedById)!),
-    actor: (invitation: { actorId: string | null }, _args: unknown, context: Context) =>
-      invitation.actorId ? mapActor(lookupActor(context, invitation.actorId)!) : null,
+    invitedBy: async (invitation: { invitedById: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, invitation.invitedById);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, invitation.invitedById)!);
+    },
+    actor: async (invitation: { actorId: string | null }, _args: unknown, context: Context) => {
+      if (!invitation.actorId) return null;
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, invitation.actorId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, invitation.actorId)!);
+    },
   },
 
   Query: withApiKeyScopes(
@@ -478,13 +505,18 @@ export const resolvers = {
         }
         return listActorsInWorkspace(context, args.type).map(mapActor);
       },
-      actorInvitations: (
+      actorInvitations: async (
         _parent: unknown,
         args: { includeRevoked?: boolean | null },
         context: Context,
       ) => {
         const viewer = requireViewer(context);
         assertWorkspaceAdmin(viewer);
+        if (context.persistence) {
+          return (
+            await listPostgresActorInvitations(context.persistence, Boolean(args.includeRevoked))
+          ).map(mapActorInvitation);
+        }
         return listActorInvitations(context.db, Boolean(args.includeRevoked)).map(
           mapActorInvitation,
         );
@@ -848,7 +880,7 @@ export const resolvers = {
           const actor = mapActor(updateActor(context.db, args.id, args.input));
           return { success: true, actor };
         },
-        actorInvite: (
+        actorInvite: async (
           _parent: unknown,
           args: {
             input: {
@@ -863,14 +895,39 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            const result = await createPostgresActorInvitation(
+              context.persistence,
+              viewer.id,
+              args.input,
+            );
+            return {
+              success: true,
+              invitation: mapActorInvitation(result.row),
+              token: result.token,
+            };
+          }
           const result = createActorInvitation(context.db, viewer.id, args.input);
           return { success: true, invitation: mapActorInvitation(result.row), token: result.token };
         },
-        actorInvitationAccept: (
+        actorInvitationAccept: async (
           _parent: unknown,
           args: { token: string; input: { name?: string | null; type?: string | null } },
           context: Context,
         ) => {
+          if (context.persistence) {
+            const result = await acceptPostgresActorInvitation(
+              context.persistence,
+              args.token,
+              args.input,
+            );
+            return {
+              success: true,
+              invitation: mapActorInvitation(result.invitation),
+              actor: mapPostgresActor(result.actor),
+              key: result.key,
+            };
+          }
           const result = acceptActorInvitation(context.db, args.token, args.input);
           return {
             success: true,
@@ -879,9 +936,17 @@ export const resolvers = {
             key: result.key,
           };
         },
-        actorInvitationRevoke: (_parent: unknown, args: { id: string }, context: Context) => {
+        actorInvitationRevoke: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            return {
+              success: true,
+              invitation: mapActorInvitation(
+                await revokePostgresActorInvitation(context.persistence, args.id),
+              ),
+            };
+          }
           return {
             success: true,
             invitation: mapActorInvitation(revokeActorInvitation(context.db, args.id)),
@@ -938,7 +1003,7 @@ export const resolvers = {
           }
           return { success: true, actor: mapActor(leaveActor(context.db, actorId)) };
         },
-        apiKeyCreate: (
+        apiKeyCreate: async (
           _parent: unknown,
           args: {
             input: {
@@ -953,6 +1018,19 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           assertApiKeyScope(context, "write");
+          if (context.persistence) {
+            const target = await getPostgresActor(context.persistence, args.input.actorId);
+            if (!target) throw apiError("NOT_FOUND", "Actor not found");
+            assertCanManageActor(viewer, args.input.actorId);
+            if (viewer.id !== target.id) {
+              assertApiKeyScope(context, "admin");
+              assertUnrestrictedApiKey(context);
+            }
+            const metadata = await postgresApiKeyMetadata(context.persistence, args.input);
+            assertChildApiKey(context, target, args.input, metadata);
+            const result = await createPostgresApiKey(context.persistence, args.input);
+            return { success: true, apiKey: mapPostgresApiKey(result.row), key: result.key };
+          }
           const target = requireActor(context, args.input.actorId);
           assertCanManageActor(viewer, args.input.actorId);
           if (viewer.id !== target.id) {
@@ -964,9 +1042,21 @@ export const resolvers = {
           const { row, key } = createApiKey(context.db, { ...args.input, ...metadata });
           return { success: true, apiKey: mapApiKey(row, context.db), key };
         },
-        apiKeyDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+        apiKeyDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           assertApiKeyScope(context, "write");
+          if (context.persistence) {
+            const key = await getPostgresApiKey(context.persistence, args.id);
+            if (!key) throw apiError("NOT_FOUND", "API key not found");
+            if (key.actor_id !== viewer.id && !isWorkspaceAdmin(viewer)) {
+              throw apiError("UNAUTHORIZED", "You can only manage your own API keys");
+            }
+            if (key.actor_id !== viewer.id) {
+              assertApiKeyScope(context, "admin");
+              assertUnrestrictedApiKey(context);
+            }
+            return { success: await deletePostgresApiKey(context.persistence, args.id) };
+          }
           const key = getApiKey(context.db, args.id);
           assertCanManageApiKey(context.db, viewer, args.id);
           if (key && key.actor_id !== viewer.id) {
@@ -975,7 +1065,7 @@ export const resolvers = {
           }
           return { success: deleteApiKey(context.db, args.id) };
         },
-        apiKeyRotate: (
+        apiKeyRotate: async (
           _parent: unknown,
           args: {
             id: string;
@@ -990,6 +1080,31 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           assertApiKeyScope(context, "write");
+          if (context.persistence) {
+            const existing = await getPostgresApiKey(context.persistence, args.id);
+            if (!existing) throw apiError("NOT_FOUND", "API key not found");
+            if (existing.actor_id !== viewer.id) {
+              assertApiKeyScope(context, "admin");
+              assertUnrestrictedApiKey(context);
+            }
+            const target = await getPostgresActor(context.persistence, existing.actor_id);
+            if (!target) throw apiError("NOT_FOUND", "Actor not found");
+            assertCanManageActor(viewer, existing.actor_id);
+            const existingView = (
+              await listPostgresApiKeys(context.persistence, existing.actor_id)
+            ).find((row) => row.id === existing.id);
+            const metadata = await postgresApiKeyMetadata(context.persistence, {
+              ...args.input,
+              scopes: args.input.scopes === undefined ? existingView?.scopes : args.input.scopes,
+              teamIds:
+                args.input.teamIds === undefined ? existingView?.teamIds : args.input.teamIds,
+              expiresAt:
+                args.input.expiresAt === undefined ? existing.expires_at : args.input.expiresAt,
+            });
+            assertChildApiKey(context, target, args.input, metadata);
+            const result = await rotatePostgresApiKey(context.persistence, args.id, args.input);
+            return { success: true, apiKey: mapPostgresApiKey(result.row), key: result.key };
+          }
           const existing = getApiKey(context.db, args.id);
           assertCanManageApiKey(context.db, viewer, args.id);
           if (!existing) throw apiError("NOT_FOUND", "API key not found");

@@ -28,19 +28,26 @@ const ADMIN_MUTATIONS = new Set([
 const KEY_MUTATIONS = new Set(["apiKeyCreate", "apiKeyDelete", "apiKeyRotate"]);
 const SAFE_MUTATIONS = new Set(["actorUpdate", "actorLeave", ...KEY_MUTATIONS]);
 
-// PRB-430 migra primero el singleton Workspace y los actores. Las demás
+// PRB-430/431 migran primero Workspace, actores y credenciales. Las demás
 // operaciones no deben caer silenciosamente en el SQLite efímero del seam.
 const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:viewer",
   "query:workspace",
   "query:actors",
+  "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:actorCreate",
   "mutation:actorUpdate",
+  "mutation:actorInvite",
+  "mutation:actorInvitationAccept",
+  "mutation:actorInvitationRevoke",
   "mutation:actorSuspend",
   "mutation:actorReactivate",
   "mutation:actorRevoke",
   "mutation:actorLeave",
+  "mutation:apiKeyCreate",
+  "mutation:apiKeyDelete",
+  "mutation:apiKeyRotate",
 ]);
 
 type Resolver = (...args: any[]) => any;

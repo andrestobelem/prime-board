@@ -52,7 +52,7 @@ async function graphql(
 let adminKey = "";
 try {
   await migratePostgres(sql);
-  persistence = createPostgresPersistence(sql, { close: false });
+  persistence = createPostgresPersistence(sql);
   const seeded = await bootstrapPostgres(persistence);
   adminKey = seeded.adminApiKey ?? "";
   if (!adminKey) throw new Error("Validation requires a fresh PostgreSQL database");
@@ -144,6 +144,249 @@ try {
     `,
     { input: { name: "Denied Agent", type: "AGENT" } },
     memberKey,
+  );
+  const adminId = before.data?.actors.find((actor: { name: string }) => actor.name === "admin")?.id;
+  const teamId = (await persistence.one<{ id: string }>("SELECT id FROM teams LIMIT 1"))?.id;
+  const expiredKey = generateApiKey();
+  await persistence.execute(
+    `INSERT INTO api_keys (id, actor_id, name, hash, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      newId(),
+      adminId,
+      "expired validation key",
+      hashApiKey(expiredKey),
+      now(),
+      new Date(Date.now() - 1000).toISOString(),
+    ],
+  );
+  const expiredViewer = await graphql(
+    base,
+    `
+      {
+        viewer {
+          id
+        }
+      }
+    `,
+    undefined,
+    expiredKey,
+  );
+  const keyCreated = await graphql(
+    base,
+    `
+      mutation ($input: ApiKeyCreateInput!) {
+        apiKeyCreate(input: $input) {
+          success
+          apiKey {
+            id
+            scopes
+            teamIds
+          }
+          key
+        }
+      }
+    `,
+    {
+      input: {
+        actorId: adminId,
+        name: "rotation validation",
+        scopes: ["READ", "WRITE"],
+        teamIds: [teamId],
+      },
+    },
+  );
+  const issuedKey = keyCreated.data?.apiKeyCreate.key;
+  const issuedKeyId = keyCreated.data?.apiKeyCreate.apiKey.id;
+  const issuedViewer = await graphql(
+    base,
+    `
+      {
+        viewer {
+          id
+        }
+      }
+    `,
+    undefined,
+    issuedKey,
+  );
+  const rotatedKey = await graphql(
+    base,
+    `
+      mutation ($id: ID!, $input: ApiKeyRotateInput!) {
+        apiKeyRotate(id: $id, input: $input) {
+          success
+          apiKey {
+            id
+            scopes
+            teamIds
+          }
+          key
+        }
+      }
+    `,
+    { id: issuedKeyId, input: { name: "rotated validation" } },
+    issuedKey,
+  );
+  const replacementKey = rotatedKey.data?.apiKeyRotate.key;
+  const oldKeyViewer = await graphql(
+    base,
+    `
+      {
+        viewer {
+          id
+        }
+      }
+    `,
+    undefined,
+    issuedKey,
+  );
+  const replacementViewer = await graphql(
+    base,
+    `
+      {
+        viewer {
+          id
+        }
+      }
+    `,
+    undefined,
+    replacementKey,
+  );
+  const deletedKey = await graphql(
+    base,
+    `
+      mutation ($id: ID!) {
+        apiKeyDelete(id: $id) {
+          success
+        }
+      }
+    `,
+    { id: rotatedKey.data?.apiKeyRotate.apiKey.id },
+    replacementKey,
+  );
+  const deletedKeyViewer = await graphql(
+    base,
+    `
+      {
+        viewer {
+          id
+        }
+      }
+    `,
+    undefined,
+    replacementKey,
+  );
+  const invited = await graphql(
+    base,
+    `
+      mutation ($input: ActorInviteInput!) {
+        actorInvite(input: $input) {
+          success
+          invitation {
+            id
+            status
+            email
+          }
+          token
+        }
+      }
+    `,
+    { input: { email: "concurrent@example.test", name: "Concurrent Agent", type: "AGENT" } },
+  );
+  const inviteToken = invited.data?.actorInvite.token;
+  const inviteAccepts = await Promise.all([
+    graphql(
+      base,
+      `
+        mutation ($token: String!, $input: ActorInvitationAcceptInput!) {
+          actorInvitationAccept(token: $token, input: $input) {
+            success
+            actor {
+              id
+              name
+            }
+            key
+          }
+        }
+      `,
+      { token: inviteToken, input: { name: "Concurrent Agent", type: "AGENT" } },
+    ),
+    graphql(
+      base,
+      `
+        mutation ($token: String!, $input: ActorInvitationAcceptInput!) {
+          actorInvitationAccept(token: $token, input: $input) {
+            success
+            actor {
+              id
+              name
+            }
+            key
+          }
+        }
+      `,
+      { token: inviteToken, input: { name: "Concurrent Agent", type: "AGENT" } },
+    ),
+  ]);
+  const accepted = inviteAccepts.filter(
+    (result) => !result.errors && result.data?.actorInvitationAccept,
+  );
+  const acceptedKey =
+    accepted.length === 1 ? accepted[0]?.data?.actorInvitationAccept.key : undefined;
+  const acceptedViewer = acceptedKey
+    ? await graphql(
+        base,
+        `
+          {
+            viewer {
+              id
+            }
+          }
+        `,
+        undefined,
+        acceptedKey,
+      )
+    : { data: undefined, errors: [{ message: "missing accepted key" }] };
+  const duplicateInvites = await Promise.all([
+    graphql(
+      base,
+      `
+        mutation ($input: ActorInviteInput!) {
+          actorInvite(input: $input) {
+            success
+            invitation {
+              id
+            }
+          }
+        }
+      `,
+      { input: { email: "duplicate@example.test", name: "Duplicate A", type: "HUMAN" } },
+    ),
+    graphql(
+      base,
+      `
+        mutation ($input: ActorInviteInput!) {
+          actorInvite(input: $input) {
+            success
+            invitation {
+              id
+            }
+          }
+        }
+      `,
+      { input: { email: "duplicate@example.test", name: "Duplicate B", type: "HUMAN" } },
+    ),
+  ]);
+  const invitedActors = await graphql(
+    base,
+    `
+      {
+        actors {
+          id
+          name
+        }
+      }
+    `,
   );
   const updated = await graphql(
     base,
@@ -253,6 +496,26 @@ try {
     created.data?.actorCreate.actor.status === "ACTIVE" &&
     suspended.data?.actorSuspend.actor.status === "SUSPENDED" &&
     reactivated.data?.actorReactivate.actor.status === "ACTIVE";
+  report.credentials =
+    !keyCreated.errors &&
+    issuedViewer.data?.viewer.id === adminId &&
+    expiredViewer.errors?.[0]?.extensions?.code === "UNAUTHORIZED" &&
+    rotatedKey.data?.apiKeyRotate.apiKey.scopes.join(",") === "READ,WRITE" &&
+    rotatedKey.data?.apiKeyRotate.apiKey.teamIds?.[0] === teamId &&
+    oldKeyViewer.errors?.[0]?.extensions?.code === "UNAUTHORIZED" &&
+    replacementViewer.data?.viewer.id === adminId &&
+    deletedKey.data?.apiKeyDelete.success === true &&
+    deletedKeyViewer.errors?.[0]?.extensions?.code === "UNAUTHORIZED";
+  const duplicateSuccesses = duplicateInvites.filter((result) => !result.errors);
+  report.invitations =
+    !invited.errors &&
+    accepted.length === 1 &&
+    acceptedViewer.data?.viewer.id === accepted[0]?.data?.actorInvitationAccept.actor.id &&
+    invitedActors.data?.actors.filter(
+      (actor: { name: string }) => actor.name === "Concurrent Agent",
+    ).length === 1 &&
+    duplicateSuccesses.length === 1 &&
+    duplicateInvites.some((result) => result.errors?.[0]?.extensions?.code === "VALIDATION_FAILED");
   const finalWorkspace = await graphql(
     base,
     `

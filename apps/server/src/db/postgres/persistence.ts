@@ -19,6 +19,9 @@ function withPersistenceError<T>(
 ): Promise<T> {
   return action().catch((cause) => {
     if (cause instanceof PersistenceError) throw cause;
+    // Domain/API errors raised inside a transaction must retain their public
+    // error code; query/driver failures are already wrapped by the operations.
+    if (cause instanceof Error && "extensions" in cause) throw cause;
     throw new PersistenceError(operation, cause);
   });
 }
