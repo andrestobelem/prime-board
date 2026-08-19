@@ -34,5 +34,6 @@
     "typebox": {
       "optional": true
     }
-  }
+  },
+  "license": "MIT"
 }
