@@ -1,13 +1,14 @@
+import { getUiStorageKey } from "./ui-context.ts";
 // Manejo de tema (AT-150): dark / light / system, persistido en localStorage.
 // El index.html aplica el tema resuelto ANTES de cargar el bundle (sin FOUC);
 // acá vive la lógica para cambiarlo en runtime y seguir al sistema operativo.
 export type ThemePreference = "dark" | "light" | "system";
 
-const STORAGE_KEY = "pb.theme";
+const STORAGE_KEY = "theme";
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 
 export function getThemePreference(): ThemePreference {
-  const stored = localStorage.getItem(STORAGE_KEY);
+  const stored = localStorage.getItem(getUiStorageKey(STORAGE_KEY));
   return stored === "dark" || stored === "light" ? stored : "system";
 }
 
@@ -21,7 +22,7 @@ export function applyTheme(preference: ThemePreference): void {
 }
 
 export function setThemePreference(preference: ThemePreference): void {
-  localStorage.setItem(STORAGE_KEY, preference);
+  localStorage.setItem(getUiStorageKey(STORAGE_KEY), preference);
   applyTheme(preference);
 }
 

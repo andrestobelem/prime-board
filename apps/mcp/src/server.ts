@@ -3,7 +3,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { APP_VERSION } from "@prime-board/schema";
-import { gqlRequest, type McpConfig } from "./api.ts";
+import { gqlRequest, type McpConfig, type McpSession } from "./api.ts";
 import {
   resolveActor,
   resolveCycle,
@@ -27,7 +27,9 @@ function json(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
 }
 
-export function createServer(config: McpConfig): McpServer {
+export function createServer(config: McpConfig | McpSession): McpServer {
+  // Una instancia MCP es una sesión fija: ninguna tool puede cambiar credencial o contexto.
+  const sessionConfig: McpConfig = Object.freeze({ url: config.url, apiKey: config.apiKey });
   const server = new McpServer({ name: "prime-board", version: APP_VERSION });
 
   server.registerTool(
@@ -38,7 +40,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async () => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         "{ workspace { id name urlKey } viewer { id name type } }",
       );
       return json(data);
@@ -54,7 +56,7 @@ export function createServer(config: McpConfig): McpServer {
     async ({ name }) => {
       if (!name.trim()) throw new Error("VALIDATION_FAILED: `name` cannot be empty");
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: WorkspaceUpdateInput!) {
           workspaceUpdate(input: $input) { workspace { id name urlKey createdAt } }
         }`,
@@ -74,7 +76,7 @@ export function createServer(config: McpConfig): McpServer {
       json(
         (
           await gqlRequest(
-            config,
+            sessionConfig,
             "query($includeArchived: Boolean) { teams(includeArchived: $includeArchived) { id key name description archivedAt } }",
             { includeArchived: Boolean(includeArchived) },
           )
@@ -91,7 +93,8 @@ export function createServer(config: McpConfig): McpServer {
         includeArchived: z.boolean().optional(),
       },
     },
-    async ({ team, includeArchived }) => json(await resolveTeam(config, team, includeArchived)),
+    async ({ team, includeArchived }) =>
+      json(await resolveTeam(sessionConfig, team, includeArchived)),
   );
 
   for (const [toolName, archived, description] of [
@@ -105,10 +108,10 @@ export function createServer(config: McpConfig): McpServer {
         inputSchema: { team: z.string().describe("Team key or ID") },
       },
       async ({ team }) => {
-        const resolved = await resolveTeam(config, team, !archived);
+        const resolved = await resolveTeam(sessionConfig, team, !archived);
         const mutation = archived ? "teamArchive" : "teamUnarchive";
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!) { ${mutation}(id: $id) { team { id key name description createdAt archivedAt } } }`,
           { id: resolved.id },
         );
@@ -128,9 +131,9 @@ export function createServer(config: McpConfig): McpServer {
       },
     },
     async ({ team, confirmation }) => {
-      const resolved = await resolveTeam(config, team, true);
+      const resolved = await resolveTeam(sessionConfig, team, true);
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!, $confirmation: String!) {
           teamDelete(id: $id, confirmation: $confirmation) { success }
         }`,
@@ -162,7 +165,7 @@ export function createServer(config: McpConfig): McpServer {
         if (args.description !== undefined) input.description = args.description;
         if (args.defaultState !== undefined) input.defaultStateId = args.defaultState;
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: TeamUpdateInput!) {
         teamUpdate(id: $id, input: $input) { team { id key name description createdAt archivedAt states { id name type color position } } }
       }`,
@@ -173,7 +176,7 @@ export function createServer(config: McpConfig): McpServer {
       if (!args.name || !args.key)
         throw new Error("VALIDATION_FAILED: `name` and `key` are required to create a team");
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: TeamCreateInput!) {
       teamCreate(input: $input) { team { id key name description createdAt archivedAt states { id name type color position } } }
     }`,
@@ -196,9 +199,9 @@ export function createServer(config: McpConfig): McpServer {
       inputSchema: { team: z.string().describe("Team key or ID") },
     },
     async ({ team }) => {
-      const teamId = (await resolveTeam(config, team)).id;
+      const teamId = (await resolveTeam(sessionConfig, team)).id;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($teamId: ID!) { teamMemberships(teamId: $teamId) {
       id teamId actorId role createdAt team { id key name } actor { id name email type workspaceRole }
     } }`,
@@ -221,14 +224,14 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ team, actor, role }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: TeamMembershipCreateInput!) { teamMembershipCreate(input: $input) {
       membership { id teamId actorId role createdAt team { id key name } actor { id name email type workspaceRole } }
     } }`,
         {
           input: {
-            teamId: (await resolveTeam(config, team)).id,
-            actorId: await resolveActor(config, actor),
+            teamId: (await resolveTeam(sessionConfig, team)).id,
+            actorId: await resolveActor(sessionConfig, actor),
             ...(role === undefined ? {} : { role: role.toUpperCase() }),
           },
         },
@@ -242,7 +245,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "Delete a team membership by ID.", inputSchema: { id: z.string() } },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { teamMembershipDelete(id: $id) { success } }`,
         { id },
       );
@@ -256,7 +259,7 @@ export function createServer(config: McpConfig): McpServer {
       description: "List workflow states of a team.",
       inputSchema: { team: z.string().describe("Team key or ID") },
     },
-    async ({ team }) => json((await resolveTeam(config, team)).states),
+    async ({ team }) => json((await resolveTeam(sessionConfig, team)).states),
   );
 
   server.registerTool(
@@ -285,7 +288,7 @@ export function createServer(config: McpConfig): McpServer {
         if (!Object.keys(input).length)
           throw new Error("VALIDATION_FAILED: provide at least one field to update");
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: WorkflowStateUpdateInput!) { workflowStateUpdate(id: $id, input: $input) {
         workflowState { id name type color position }
       } }`,
@@ -298,14 +301,14 @@ export function createServer(config: McpConfig): McpServer {
           "VALIDATION_FAILED: `team`, `name` and `type` are required to create a workflow state",
         );
       const input: Record<string, unknown> = {
-        teamId: (await resolveTeam(config, args.team)).id,
+        teamId: (await resolveTeam(sessionConfig, args.team)).id,
         name: args.name,
         type: args.type.toUpperCase(),
       };
       if (args.color !== undefined) input.color = args.color;
       if (args.position !== undefined) input.position = args.position;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: WorkflowStateCreateInput!) { workflowStateCreate(input: $input) {
       workflowState { id name type color position }
     } }`,
@@ -323,7 +326,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id, moveTo }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!, $moveToStateId: ID) { workflowStateDelete(id: $id, moveToStateId: $moveToStateId) { success movedIssues } }`,
         { id, moveToStateId: moveTo ?? null },
       );
@@ -339,7 +342,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ type }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($type: ActorType) {
       actors(type: $type) { id name email type }
     }`,
@@ -369,7 +372,7 @@ export function createServer(config: McpConfig): McpServer {
         if (args.name !== undefined) input.name = args.name;
         if (args.email !== undefined) input.email = args.email;
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: ActorUpdateInput!) { actorUpdate(id: $id, input: $input) {
         actor { id name email type workspaceRole createdAt }
       } }`,
@@ -380,7 +383,7 @@ export function createServer(config: McpConfig): McpServer {
       if (!args.name || !args.type)
         throw new Error("VALIDATION_FAILED: `name` and `type` are required to create an actor");
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: ActorCreateInput!) { actorCreate(input: $input) {
       actor { id name email type workspaceRole createdAt }
     } }`,
@@ -407,11 +410,11 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ actor, name }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: ApiKeyCreateInput!) { apiKeyCreate(input: $input) {
       apiKey { id name createdAt lastUsedAt actor { id name type } } key
     } }`,
-        { input: { actorId: await resolveActor(config, actor), name } },
+        { input: { actorId: await resolveActor(sessionConfig, actor), name } },
       );
       return json(data.apiKeyCreate);
     },
@@ -422,7 +425,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "Delete an API key by ID.", inputSchema: { id: z.string() } },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { apiKeyDelete(id: $id) { success } }`,
         { id },
       );
@@ -437,9 +440,9 @@ export function createServer(config: McpConfig): McpServer {
       inputSchema: { team: z.string().optional().describe("Team key or ID") },
     },
     async ({ team }) => {
-      const teamId = team ? (await resolveTeam(config, team)).id : null;
+      const teamId = team ? (await resolveTeam(sessionConfig, team)).id : null;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($team: ID) { labels(team: $team) { id name color teamId } }`,
         {
           team: teamId,
@@ -468,7 +471,7 @@ export function createServer(config: McpConfig): McpServer {
         if (!Object.keys(input).length)
           throw new Error("VALIDATION_FAILED: provide at least one field to update");
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: LabelUpdateInput!) { labelUpdate(id: $id, input: $input) {
         label { id name color teamId }
       } }`,
@@ -479,9 +482,9 @@ export function createServer(config: McpConfig): McpServer {
       if (!args.name) throw new Error("VALIDATION_FAILED: `name` is required to create a label");
       const input: Record<string, unknown> = { name: args.name };
       if (args.color !== undefined) input.color = args.color;
-      if (args.team !== undefined) input.teamId = (await resolveTeam(config, args.team)).id;
+      if (args.team !== undefined) input.teamId = (await resolveTeam(sessionConfig, args.team)).id;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: LabelCreateInput!) { labelCreate(input: $input) { label { id name color teamId } } }`,
         { input },
       );
@@ -494,7 +497,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "Delete a label by ID.", inputSchema: { id: z.string() } },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { labelDelete(id: $id) { success affectedIssues } }`,
         { id },
       );
@@ -541,30 +544,31 @@ export function createServer(config: McpConfig): McpServer {
       let states = null;
       let teamId: string | undefined;
       if (args.team) {
-        const team = await resolveTeam(config, args.team, Boolean(args.includeArchived));
+        const team = await resolveTeam(sessionConfig, args.team, Boolean(args.includeArchived));
         teamId = team.id;
         filter.team = { eq: team.id };
         states = team.states;
       }
       if (args.state) Object.assign(filter, resolveStateFilter(states, args.state));
-      if (args.assignee) filter.assignee = { eq: await resolveActor(config, args.assignee) };
-      if (args.creator) filter.creator = { eq: await resolveActor(config, args.creator) };
-      if (args.project) filter.project = { eq: await resolveProject(config, args.project) };
-      if (args.milestone) filter.milestone = { eq: await resolveMilestone(config, args.milestone) };
-      if (args.cycle) filter.cycle = { eq: await resolveCycle(config, args.cycle, teamId) };
-      if (args.parent) filter.parent = { eq: await resolveIssueId(config, args.parent) };
+      if (args.assignee) filter.assignee = { eq: await resolveActor(sessionConfig, args.assignee) };
+      if (args.creator) filter.creator = { eq: await resolveActor(sessionConfig, args.creator) };
+      if (args.project) filter.project = { eq: await resolveProject(sessionConfig, args.project) };
+      if (args.milestone)
+        filter.milestone = { eq: await resolveMilestone(sessionConfig, args.milestone) };
+      if (args.cycle) filter.cycle = { eq: await resolveCycle(sessionConfig, args.cycle, teamId) };
+      if (args.parent) filter.parent = { eq: await resolveIssueId(sessionConfig, args.parent) };
       if (args.labels?.length) {
         const hasLabelName = args.labels.some((label) => !UUID_RE.test(label));
         if (!teamId && hasLabelName)
           throw new Error("VALIDATION_FAILED: team is required to resolve labels by name");
-        const labelIds = await resolveLabelIds(config, teamId, args.labels);
+        const labelIds = await resolveLabelIds(sessionConfig, teamId, args.labels);
         filter.labels = { includesAll: labelIds };
       }
       if (args.query) filter.search = args.query;
       if (args.includeArchived !== undefined) filter.includeArchived = args.includeArchived;
       if (args.unblocked !== undefined) filter.unblocked = args.unblocked;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($filter: IssueFilter, $first: Int, $after: String, $orderBy: IssueOrder) {
       issues(filter: $filter, first: $first, after: $after, orderBy: $orderBy) {
         nodes { ${ISSUE_FIELDS} }
@@ -591,7 +595,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($id: ID!) {
       issue(id: $id) {
         ${ISSUE_FIELDS}
@@ -658,10 +662,11 @@ export function createServer(config: McpConfig): McpServer {
       if (args.priority !== undefined) input.priority = resolvePriority(args.priority);
       if (args.assignee !== undefined) {
         input.assigneeId =
-          args.assignee === null ? null : await resolveActor(config, args.assignee);
+          args.assignee === null ? null : await resolveActor(sessionConfig, args.assignee);
       }
       if (args.project !== undefined) {
-        input.projectId = args.project === null ? null : await resolveProject(config, args.project);
+        input.projectId =
+          args.project === null ? null : await resolveProject(sessionConfig, args.project);
       }
       // Milestones are resolved after the issue/project context is known.
       if (args.cycle !== undefined || args.sortOrder !== undefined) {
@@ -670,7 +675,7 @@ export function createServer(config: McpConfig): McpServer {
             "VALIDATION_FAILED: cycle and sortOrder are only supported when updating an issue",
           );
         const cycleTeam = await gqlRequest(
-          config,
+          sessionConfig,
           `query($id: ID!) { issue(id: $id) { team { id } } }`,
           { id: args.id },
         );
@@ -679,7 +684,7 @@ export function createServer(config: McpConfig): McpServer {
           input.cycleId =
             args.cycle === null
               ? null
-              : await resolveCycle(config, args.cycle, cycleTeam.issue.team.id);
+              : await resolveCycle(sessionConfig, args.cycle, cycleTeam.issue.team.id);
         }
         if (args.sortOrder !== undefined) input.sortOrder = args.sortOrder;
       }
@@ -687,7 +692,7 @@ export function createServer(config: McpConfig): McpServer {
       if (args.id) {
         // Update: resuelve team para estados/labels/parent.
         const existing = await gqlRequest(
-          config,
+          sessionConfig,
           `query($id: ID!) {
         issue(id: $id) {
           id project { id name }
@@ -703,7 +708,7 @@ export function createServer(config: McpConfig): McpServer {
             args.milestone === null
               ? null
               : await resolveMilestone(
-                  config,
+                  sessionConfig,
                   args.milestone,
                   typeof input.projectId === "string"
                     ? input.projectId
@@ -720,16 +725,21 @@ export function createServer(config: McpConfig): McpServer {
           if (args.parent === null) {
             input.parentId = null;
           } else {
-            const parent = await gqlRequest(config, `query($id: ID!) { issue(id: $id) { id } }`, {
-              id: args.parent,
-            });
+            const parent = await gqlRequest(
+              sessionConfig,
+              `query($id: ID!) { issue(id: $id) { id } }`,
+              {
+                id: args.parent,
+              },
+            );
             if (!parent.issue) throw new Error(`NOT_FOUND: Parent issue not found: ${args.parent}`);
             input.parentId = parent.issue.id;
           }
         }
-        if (args.labels) input.labelIds = await resolveLabelIds(config, team.id, args.labels);
+        if (args.labels)
+          input.labelIds = await resolveLabelIds(sessionConfig, team.id, args.labels);
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: IssueUpdateInput!) {
         issueUpdate(id: $id, input: $input) { issue { ${ISSUE_FIELDS} } }
       }`,
@@ -741,7 +751,7 @@ export function createServer(config: McpConfig): McpServer {
       if (!args.team || !args.title) {
         throw new Error("VALIDATION_FAILED: `team` and `title` are required to create an issue");
       }
-      const team = await resolveTeam(config, args.team);
+      const team = await resolveTeam(sessionConfig, args.team);
       input.teamId = team.id;
       if (args.number !== undefined) input.number = args.number;
       if (args.state) {
@@ -751,9 +761,13 @@ export function createServer(config: McpConfig): McpServer {
           team.states.find((s: any) => s.type.toLowerCase() === args.state!.toLowerCase())?.id;
       }
       if (args.parent) {
-        const parent = await gqlRequest(config, `query($id: ID!) { issue(id: $id) { id } }`, {
-          id: args.parent,
-        });
+        const parent = await gqlRequest(
+          sessionConfig,
+          `query($id: ID!) { issue(id: $id) { id } }`,
+          {
+            id: args.parent,
+          },
+        );
         if (!parent.issue) throw new Error(`NOT_FOUND: Parent issue not found: ${args.parent}`);
         input.parentId = parent.issue.id;
       }
@@ -762,16 +776,16 @@ export function createServer(config: McpConfig): McpServer {
           args.milestone === null
             ? null
             : await resolveMilestone(
-                config,
+                sessionConfig,
                 args.milestone,
                 typeof input.projectId === "string" ? input.projectId : undefined,
               );
       }
       if (args.labels?.length) {
-        input.labelIds = await resolveLabelIds(config, team.id, args.labels);
+        input.labelIds = await resolveLabelIds(sessionConfig, team.id, args.labels);
       }
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: IssueCreateInput!) {
       issueCreate(input: $input) { issue { id ${ISSUE_FIELDS} } }
     }`,
@@ -788,12 +802,16 @@ export function createServer(config: McpConfig): McpServer {
       inputSchema: { id: z.string().describe("Issue ID or identifier (e.g. PB-1)") },
     },
     async ({ id }) => {
-      const existing = await gqlRequest(config, `query($id: ID!) { issue(id: $id) { id } }`, {
-        id,
-      });
+      const existing = await gqlRequest(
+        sessionConfig,
+        `query($id: ID!) { issue(id: $id) { id } }`,
+        {
+          id,
+        },
+      );
       if (!existing.issue) throw new Error(`NOT_FOUND: Issue not found: ${id}`);
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { issueArchive(id: $id) { issue { ${ISSUE_FIELDS} archivedAt } } }`,
         { id: existing.issue.id },
       );
@@ -811,9 +829,9 @@ export function createServer(config: McpConfig): McpServer {
       },
     },
     async ({ team, includeArchived }) => {
-      const teamId = (await resolveTeam(config, team, Boolean(includeArchived))).id;
+      const teamId = (await resolveTeam(sessionConfig, team, Boolean(includeArchived))).id;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($teamId: ID!, $includeArchived: Boolean) {
       cycles(teamId: $teamId, includeArchived: $includeArchived) {
         id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt
@@ -831,7 +849,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "Retrieve a cycle by ID.", inputSchema: { id: z.string() } },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($id: ID!) { cycle(id: $id) {
           id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt
           team { id key name }
@@ -866,7 +884,7 @@ export function createServer(config: McpConfig): McpServer {
         if (args.state !== undefined) input.state = args.state.toUpperCase();
         if (args.archived !== undefined) input.archived = args.archived;
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: CycleUpdateInput!) { cycleUpdate(id: $id, input: $input) {
             cycle { id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt team { id key name } }
           } }`,
@@ -880,14 +898,14 @@ export function createServer(config: McpConfig): McpServer {
         );
       }
       const input: Record<string, unknown> = {
-        teamId: (await resolveTeam(config, args.team)).id,
+        teamId: (await resolveTeam(sessionConfig, args.team)).id,
         name: args.name,
         startsAt: args.startsAt,
         endsAt: args.endsAt,
       };
       if (args.state !== undefined) input.state = args.state.toUpperCase();
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: CycleCreateInput!) { cycleCreate(input: $input) {
           cycle { id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt team { id key name } }
         } }`,
@@ -902,7 +920,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "Delete a cycle by ID.", inputSchema: { id: z.string() } },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { cycleDelete(id: $id) { success } }`,
         { id },
       );
@@ -918,7 +936,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ from, to }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($from: ID!, $to: ID!) { cycleCarryOver(fromCycleId: $from, toCycleId: $to) { success movedIssues } }`,
         { from, to },
       );
@@ -941,7 +959,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ openOnly, first, team, project, reviewer, olderThanDays }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($openOnly: Boolean, $first: Int, $teamId: ID, $projectId: ID, $reviewerId: ID, $olderThanDays: Int) {
       reviews(openOnly: $openOnly, first: $first, teamId: $teamId, projectId: $projectId, reviewerId: $reviewerId, olderThanDays: $olderThanDays) {
         id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type }
@@ -950,9 +968,9 @@ export function createServer(config: McpConfig): McpServer {
         {
           openOnly: Boolean(openOnly),
           first: first ?? 50,
-          teamId: team ? (await resolveTeam(config, team)).id : null,
+          teamId: team ? (await resolveTeam(sessionConfig, team)).id : null,
           projectId: project ?? null,
-          reviewerId: reviewer ? await resolveActor(config, reviewer) : null,
+          reviewerId: reviewer ? await resolveActor(sessionConfig, reviewer) : null,
           olderThanDays: olderThanDays ?? null,
         },
       );
@@ -968,7 +986,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($id: ID!) { review(id: $id) {
         id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type }
       } }`,
@@ -995,9 +1013,9 @@ export function createServer(config: McpConfig): McpServer {
         const input: Record<string, unknown> = {};
         if (args.status !== undefined) input.status = args.status.toUpperCase();
         if (args.reviewer !== undefined)
-          input.reviewerId = await resolveActor(config, args.reviewer);
+          input.reviewerId = await resolveActor(sessionConfig, args.reviewer);
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: ReviewUpdateInput!) { reviewUpdate(id: $id, input: $input) {
           review { id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type } }
         } }`,
@@ -1010,11 +1028,16 @@ export function createServer(config: McpConfig): McpServer {
           "VALIDATION_FAILED: `issue` and `reviewer` are required to create a review",
         );
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: ReviewCreateInput!) { reviewCreate(input: $input) {
         review { id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type } }
       } }`,
-        { input: { issueId: args.issue, reviewerId: await resolveActor(config, args.reviewer) } },
+        {
+          input: {
+            issueId: args.issue,
+            reviewerId: await resolveActor(sessionConfig, args.reviewer),
+          },
+        },
       );
       return json(data.reviewCreate.review);
     },
@@ -1028,7 +1051,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { reviewDelete(id: $id) { success } }`,
         { id },
       );
@@ -1044,7 +1067,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ includeArchived }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($includeArchived: Boolean) { initiatives(includeArchived: $includeArchived) {
         id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
       } }`,
@@ -1062,7 +1085,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($id: ID!) { initiative(id: $id) {
         id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
       } }`,
@@ -1097,12 +1120,12 @@ export function createServer(config: McpConfig): McpServer {
       if (args.projects !== undefined) input.projectIds = args.projects;
       if (args.teams !== undefined)
         input.teamIds = await Promise.all(
-          args.teams.map(async (team) => (await resolveTeam(config, team)).id),
+          args.teams.map(async (team) => (await resolveTeam(sessionConfig, team)).id),
         );
       if (args.archived !== undefined) input.archived = args.archived;
       if (args.id) {
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: InitiativeUpdateInput!) { initiativeUpdate(id: $id, input: $input) { initiative {
           id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
         } } }`,
@@ -1113,7 +1136,7 @@ export function createServer(config: McpConfig): McpServer {
       if (!args.name)
         throw new Error("VALIDATION_FAILED: `name` is required to create an initiative");
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: InitiativeCreateInput!) { initiativeCreate(input: $input) { initiative {
         id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
       } } }`,
@@ -1128,7 +1151,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "Delete an initiative by ID.", inputSchema: { id: z.string() } },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { initiativeDelete(id: $id) { success } }`,
         { id },
       );
@@ -1144,7 +1167,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ first, includeArchived }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($first: Int, $includeArchived: Boolean) { inbox(first: $first, includeArchived: $includeArchived) {
         id type payload createdAt isRead isArchived actor { id name type } issue { id identifier title }
       } }`,
@@ -1159,7 +1182,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "Mark an inbox item as read.", inputSchema: { id: z.string() } },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { inboxMarkRead(id: $id) { inboxItem {
         id type payload createdAt isRead isArchived actor { id name type } issue { id identifier title }
       } } }`,
@@ -1174,7 +1197,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "Archive an inbox item.", inputSchema: { id: z.string() } },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { inboxArchive(id: $id) { inboxItem {
         id type payload createdAt isRead isArchived actor { id name type } issue { id identifier title }
       } } }`,
@@ -1189,7 +1212,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "List private favorites of the authenticated actor.", inputSchema: {} },
     async () => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `{ favorites {
         id position project { id name archivedAt } savedView { id name scope archivedAt }
       } }`,
@@ -1209,7 +1232,7 @@ export function createServer(config: McpConfig): McpServer {
         throw new Error("VALIDATION_FAILED: exactly one of `project` or `savedView` is required");
       const input = project ? { projectId: project } : { savedViewId: savedView };
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: FavoriteCreateInput!) { favoriteCreate(input: $input) { favorite {
         id position project { id name archivedAt } savedView { id name scope archivedAt }
       } } }`,
@@ -1224,7 +1247,7 @@ export function createServer(config: McpConfig): McpServer {
     { description: "Delete a private favorite by ID.", inputSchema: { id: z.string() } },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { favoriteDelete(id: $id) { success } }`,
         { id },
       );
@@ -1240,7 +1263,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id, position }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!, $position: Int!) { favoriteReorder(id: $id, position: $position) { favorite {
         id position project { id name archivedAt } savedView { id name scope archivedAt }
       } } }`,
@@ -1266,7 +1289,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ issue, relatedIssue, type }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: IssueRelationCreateInput!) {
       issueRelationCreate(input: $input) {
         relation { id type relatedIssue { identifier title } }
@@ -1292,13 +1315,13 @@ export function createServer(config: McpConfig): McpServer {
     async ({ issue, relatedIssue, type }) => {
       const [source, other] = await Promise.all([
         gqlRequest(
-          config,
+          sessionConfig,
           `query($id: ID!) {
         issue(id: $id) { identifier relations { id type relatedIssue { identifier } } }
       }`,
           { id: issue },
         ),
-        gqlRequest(config, `query($id: ID!) { issue(id: $id) { identifier } }`, {
+        gqlRequest(sessionConfig, `query($id: ID!) { issue(id: $id) { identifier } }`, {
           id: relatedIssue,
         }),
       ]);
@@ -1318,7 +1341,7 @@ export function createServer(config: McpConfig): McpServer {
       }
       for (const relation of matches) {
         await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!) { issueRelationDelete(id: $id) { success } }`,
           { id: relation.id },
         );
@@ -1335,7 +1358,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ issue }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($id: ID!) {
       issue(id: $id) { comments { id body actor { name type } createdAt } }
     }`,
@@ -1354,7 +1377,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ issue, body }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: CommentCreateInput!) {
       commentCreate(input: $input) {
         comment { id body actor { name type } issue { identifier } createdAt }
@@ -1379,9 +1402,9 @@ export function createServer(config: McpConfig): McpServer {
       },
     },
     async ({ state, team, includeArchived }) => {
-      const teamId = team ? (await resolveTeam(config, team)).id : null;
+      const teamId = team ? (await resolveTeam(sessionConfig, team)).id : null;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($state: ProjectState, $team: ID, $includeArchived: Boolean) {
       projects(state: $state, team: $team, includeArchived: $includeArchived) {
         id name description state targetDate archivedAt lead { id name } teams { key }
@@ -1405,7 +1428,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($id: ID!) {
       project(id: $id) {
         id name description state targetDate archivedAt lead { id name }
@@ -1442,18 +1465,18 @@ export function createServer(config: McpConfig): McpServer {
       const input: Record<string, unknown> = {};
       if (args.teams !== undefined) {
         input.teamIds = await Promise.all(
-          args.teams.map(async (ref: string) => (await resolveTeam(config, ref)).id),
+          args.teams.map(async (ref: string) => (await resolveTeam(sessionConfig, ref)).id),
         );
       }
       if (args.name !== undefined) input.name = args.name;
       if (args.description !== undefined) input.description = args.description;
       if (args.state !== undefined) input.state = args.state.toUpperCase();
-      if (args.lead !== undefined) input.leadId = await resolveActor(config, args.lead);
+      if (args.lead !== undefined) input.leadId = await resolveActor(sessionConfig, args.lead);
       if (args.targetDate !== undefined) input.targetDate = args.targetDate;
 
       if (args.id) {
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: ProjectUpdateInput!) {
         projectUpdate(id: $id, input: $input) {
           project { id name description state targetDate lead { id name } }
@@ -1465,7 +1488,7 @@ export function createServer(config: McpConfig): McpServer {
       }
       if (!args.name) throw new Error("VALIDATION_FAILED: `name` is required to create a project");
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: ProjectCreateInput!) {
       projectCreate(input: $input) {
         project { id name description state targetDate lead { id name } }
@@ -1485,7 +1508,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) {
       projectArchive(id: $id) { project { id name state archivedAt } }
     }`,
@@ -1503,7 +1526,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) {
       projectUnarchive(id: $id) { project { id name state archivedAt } }
     }`,
@@ -1521,7 +1544,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ project }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($id: ID!) {
       project(id: $id) { milestones { id name description targetDate position createdAt project { id name } } }
     }`,
@@ -1553,7 +1576,7 @@ export function createServer(config: McpConfig): McpServer {
         if (args.targetDate !== undefined) input.targetDate = args.targetDate;
         if (args.position !== undefined) input.position = args.position;
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: MilestoneUpdateInput!) {
         milestoneUpdate(id: $id, input: $input) {
           milestone { id name description targetDate position createdAt project { id name } }
@@ -1573,7 +1596,7 @@ export function createServer(config: McpConfig): McpServer {
       if (args.targetDate !== undefined) input.targetDate = args.targetDate;
       if (args.position !== undefined) input.position = args.position;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: MilestoneCreateInput!) {
       milestoneCreate(input: $input) {
         milestone { id name description targetDate position createdAt project { id name } }
@@ -1593,7 +1616,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { milestoneDelete(id: $id) { success orphanedIssues } }`,
         { id },
       );
@@ -1609,7 +1632,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ project }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($id: ID!) {
       project(id: $id) {
         updates { id health body risks createdAt updatedAt project { id name } author { id name type } }
@@ -1635,7 +1658,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ project, health, body, risks }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: ProjectUpdateCreateInput!) {
       projectUpdateCreate(input: $input) {
         projectUpdate { id health body risks createdAt updatedAt project { id name } author { id name type } }
@@ -1662,7 +1685,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { projectUpdateDelete(id: $id) { success } }`,
         { id },
       );
@@ -1677,7 +1700,10 @@ export function createServer(config: McpConfig): McpServer {
       inputSchema: {},
     },
     async () => {
-      const data = await gqlRequest(config, `{ webhooks { id url events enabled createdAt } }`);
+      const data = await gqlRequest(
+        sessionConfig,
+        `{ webhooks { id url events enabled createdAt } }`,
+      );
       return json(data.webhooks);
     },
   );
@@ -1694,7 +1720,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ url, events, secret }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: WebhookCreateInput!) { webhookCreate(input: $input) {
           webhook { id url events enabled createdAt } secret
         } }`,
@@ -1718,7 +1744,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { webhookDelete(id: $id) { success } }`,
         { id },
       );
@@ -1736,9 +1762,9 @@ export function createServer(config: McpConfig): McpServer {
       },
     },
     async ({ team, includeArchived }) => {
-      const teamId = team ? (await resolveTeam(config, team)).id : null;
+      const teamId = team ? (await resolveTeam(sessionConfig, team)).id : null;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `query($teamId: ID, $includeArchived: Boolean) {
       savedViews(teamId: $teamId, includeArchived: $includeArchived) {
         id name scope orderBy groupBy columns archivedAt
@@ -1777,7 +1803,7 @@ export function createServer(config: McpConfig): McpServer {
         if (args.archived !== undefined) input.archived = args.archived;
         if (args.filter !== undefined) input.filter = args.filter;
         const data = await gqlRequest(
-          config,
+          sessionConfig,
           `mutation($id: ID!, $input: SavedViewUpdateInput!) {
         savedViewUpdate(id: $id, input: $input) {
           savedView { id name scope orderBy groupBy columns archivedAt }
@@ -1797,12 +1823,12 @@ export function createServer(config: McpConfig): McpServer {
         scope: args.scope.toUpperCase(),
         filter: args.filter ?? {},
       };
-      if (args.team) input.teamId = (await resolveTeam(config, args.team)).id;
+      if (args.team) input.teamId = (await resolveTeam(sessionConfig, args.team)).id;
       if (args.orderBy) input.orderBy = args.orderBy.toUpperCase();
       if (args.groupBy) input.groupBy = args.groupBy;
       if (args.columns) input.columns = args.columns;
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($input: SavedViewCreateInput!) {
       savedViewCreate(input: $input) {
         savedView { id name scope orderBy groupBy columns archivedAt }
@@ -1823,7 +1849,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) { savedViewDuplicate(id: $id) {
           savedView { id name scope filter orderBy groupBy columns archivedAt team { id key } owner { id name } }
         } }`,
@@ -1841,7 +1867,7 @@ export function createServer(config: McpConfig): McpServer {
     },
     async ({ id }) => {
       const data = await gqlRequest(
-        config,
+        sessionConfig,
         `mutation($id: ID!) {
       savedViewDelete(id: $id) { success }
     }`,

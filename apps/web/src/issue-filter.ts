@@ -1,3 +1,5 @@
+import { getUiStorageKey } from "./ui-context.ts";
+
 export interface IssueFilterDraft {
   search: string;
   stateId: string;
@@ -72,7 +74,7 @@ export function activeIssueFilterCount(draft: IssueFilterDraft): number {
 
 export function loadIssueFilter(teamKey: string): IssueFilterDraft {
   try {
-    const raw = localStorage.getItem(`pb.issue-filter.${teamKey}`);
+    const raw = localStorage.getItem(getUiStorageKey(`issue-filter.${teamKey}`));
     if (!raw) return EMPTY_ISSUE_FILTER;
     return { ...EMPTY_ISSUE_FILTER, ...(JSON.parse(raw) as Partial<IssueFilterDraft>) };
   } catch {
@@ -82,7 +84,7 @@ export function loadIssueFilter(teamKey: string): IssueFilterDraft {
 
 export function saveIssueFilter(teamKey: string, draft: IssueFilterDraft): void {
   try {
-    localStorage.setItem(`pb.issue-filter.${teamKey}`, JSON.stringify(draft));
+    localStorage.setItem(getUiStorageKey(`issue-filter.${teamKey}`), JSON.stringify(draft));
   } catch {
     // La persistencia es una mejora; la consulta actual sigue funcionando sin storage.
   }

@@ -45,12 +45,15 @@ export async function resolveViewerId(config: CliConfig): Promise<string> {
 export async function resolveActor(config: CliConfig, value: string): Promise<string> {
   if (value === "me") return resolveViewerId(config);
   const data = await gqlRequest(config, `{ actors { id name } }`);
-  const actor = data.actors.find(
+  const matches = data.actors.filter(
     (candidate: { id: string; name: string }) =>
       candidate.id === value || candidate.name.toLowerCase() === value.toLowerCase(),
   );
-  if (!actor) throw new ApiError(`Actor not found: ${value}`, "NOT_FOUND");
-  return actor.id;
+  if (!matches.length) throw new ApiError(`Actor not found: ${value}`, "NOT_FOUND");
+  if (matches.length > 1) {
+    throw new ApiError(`Actor name is ambiguous: ${value}; use its ID`, "VALIDATION_FAILED");
+  }
+  return matches[0].id;
 }
 
 export async function resolveAssignee(config: CliConfig, value: string): Promise<string | null> {
@@ -138,12 +141,15 @@ export async function resolveCycle(
     `query($teamId: ID!) { cycles(teamId: $teamId) { id number name } }`,
     { teamId },
   );
-  const cycle = data.cycles.find(
+  const cycles = data.cycles.filter(
     (candidate: any) =>
       candidate.name.toLowerCase() === ref.toLowerCase() || String(candidate.number) === ref,
   );
-  if (!cycle) throw new ApiError(`Cycle not found: ${ref}`, "NOT_FOUND");
-  return cycle.id;
+  if (!cycles.length) throw new ApiError(`Cycle not found: ${ref}`, "NOT_FOUND");
+  if (cycles.length > 1) {
+    throw new ApiError(`Cycle reference is ambiguous: ${ref}; use its ID`, "VALIDATION_FAILED");
+  }
+  return cycles[0].id;
 }
 
 export async function resolveLabels(

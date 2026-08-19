@@ -1,13 +1,39 @@
 // Cliente GraphQL de la UI. La UI consume exclusivamente /graphql (spec §9).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRequestGate } from "./request-generation.ts";
+import {
+  clearUiStateWithoutCredential,
+  prepareCredentialChange,
+  setEffectiveWorkspaceContext,
+  type EffectiveWorkspaceContext,
+} from "./ui-context.ts";
 
 export function getApiKey(): string {
+  clearUiStateWithoutCredential();
   return localStorage.getItem("pb.apiKey") ?? "";
 }
 
+let credentialGeneration = 0;
+
+export function getCredentialGeneration(): number {
+  return credentialGeneration;
+}
+
 export function setApiKey(key: string): void {
-  localStorage.setItem("pb.apiKey", key);
+  const next = key.trim();
+  const previous = localStorage.getItem("pb.apiKey") ?? "";
+  if (previous !== next) {
+    credentialGeneration += 1;
+    prepareCredentialChange(previous, next);
+  }
+  if (next) localStorage.setItem("pb.apiKey", next);
+  else localStorage.removeItem("pb.apiKey");
+  if (previous !== next) notifyDataChanged();
+}
+
+/** Stores the server-resolved Workspace + viewer identity after credential validation. */
+export function setApiContext(context: EffectiveWorkspaceContext): void {
+  setEffectiveWorkspaceContext(context);
 }
 
 export class GqlError extends Error {
@@ -31,6 +57,7 @@ export async function gql<T = any>(
       authorization: `Bearer ${getApiKey()}`,
     },
     body: JSON.stringify({ query, variables }),
+    cache: "no-store",
     signal: options.signal,
   });
   const payload = (await response.json()) as {
@@ -40,6 +67,17 @@ export async function gql<T = any>(
   if (payload.errors?.length) {
     const first = payload.errors[0]!;
     throw new GqlError(first.message, first.extensions?.code);
+  }
+  const resolved = payload.data as any;
+  if (resolved?.viewer?.id && resolved?.workspace?.id) {
+    setApiContext({
+      workspaceId: resolved.workspace.id,
+      workspaceName: resolved.workspace.name,
+      workspaceUrlKey: resolved.workspace.urlKey,
+      actorId: resolved.viewer.id,
+      actorName: resolved.viewer.name,
+      actorType: resolved.viewer.type,
+    });
   }
   return payload.data as T;
 }
@@ -67,30 +105,48 @@ export function useQuery<T = any>(
   const [loading, setLoading] = useState(true);
   const key = JSON.stringify(variables);
   const requestGate = useRef(createRequestGate());
+  const authGeneration = useRef(getCredentialGeneration());
   const abortRef = useRef<AbortController | null>(null);
 
   const run = useCallback(() => {
     const generation = requestGate.current.next();
+    const requestAuthGeneration = getCredentialGeneration();
+    if (requestAuthGeneration !== authGeneration.current) {
+      // No deben quedar visibles issues, favoritos o Inbox obsoletos mientras carga la nueva key.
+      setData(null);
+      setError(null);
+    }
+    authGeneration.current = requestAuthGeneration;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
     setLoading(true);
     gql<T>(query, JSON.parse(key), { signal: controller.signal })
       .then((result) => {
-        if (!requestGate.current.isCurrent(generation)) return;
+        if (
+          !requestGate.current.isCurrent(generation) ||
+          authGeneration.current !== getCredentialGeneration() ||
+          requestAuthGeneration !== getCredentialGeneration()
+        )
+          return;
         setData(result);
         setError(null);
       })
       .catch((err: unknown) => {
         if (
           !requestGate.current.isCurrent(generation) ||
+          requestAuthGeneration !== getCredentialGeneration() ||
           (err as { name?: string }).name === "AbortError"
         )
           return;
         setError(err instanceof GqlError ? err : new GqlError(String(err)));
       })
       .finally(() => {
-        if (requestGate.current.isCurrent(generation)) setLoading(false);
+        if (
+          requestGate.current.isCurrent(generation) &&
+          requestAuthGeneration === getCredentialGeneration()
+        )
+          setLoading(false);
       });
   }, [query, key]);
 

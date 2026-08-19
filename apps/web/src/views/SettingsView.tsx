@@ -1,6 +1,6 @@
 // Settings: la API key se pega una vez y queda en localStorage (spec §9).
 import { useCallback, useEffect, useState } from "react";
-import { getApiKey, gql, mutate, setApiKey } from "../api.ts";
+import { getApiKey, gql, mutate, setApiContext, setApiKey } from "../api.ts";
 import {
   clearStagedOnboardingKey,
   getStagedOnboardingKey,
@@ -100,9 +100,18 @@ export function SettingsView() {
     }
     setApiKey(nextKey);
     try {
-      const data = await gql<{ viewer: { name: string; type: string } }>(
-        "{ viewer { name type } }",
-      );
+      const data = await gql<{
+        viewer: { id: string; name: string; type: string };
+        workspace: { id: string; name: string; urlKey: string };
+      }>("{ viewer { id name type } workspace { id name urlKey } }");
+      setApiContext({
+        workspaceId: data.workspace.id,
+        workspaceName: data.workspace.name,
+        workspaceUrlKey: data.workspace.urlKey,
+        actorId: data.viewer.id,
+        actorName: data.viewer.name,
+        actorType: data.viewer.type,
+      });
       setStatus(`Connected as ${data.viewer.name} (${data.viewer.type.toLowerCase()})`);
       setTimeout(() => {
         window.location.hash = "#/";

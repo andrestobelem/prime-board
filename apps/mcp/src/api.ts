@@ -1,7 +1,21 @@
-// Cliente GraphQL del MCP server: habla con prime-board vía HTTP (spec §8).
+// Cliente GraphQL del MCP server: una sesión stdio fija a un contexto efectivo.
+export interface EffectiveWorkspaceContext {
+  workspaceId: string;
+  workspaceName: string;
+  workspaceUrlKey: string;
+  actorId: string;
+  actorName: string;
+  actorType: string;
+}
+
 export interface McpConfig {
   url: string;
   apiKey: string;
+}
+
+/** Credencial y endpoint quedan congelados al crear la sesión MCP. */
+export interface McpSession extends McpConfig {
+  readonly context: EffectiveWorkspaceContext;
 }
 
 export function loadMcpConfig(env: Record<string, string | undefined> = process.env): McpConfig {
@@ -35,4 +49,30 @@ export async function gqlRequest(
     throw new Error(`${first.extensions?.code ?? "ERROR"}: ${first.message}`);
   }
   return payload.data ?? {};
+}
+
+const SESSION_IDENTITY_QUERY = `{
+  viewer { id name type }
+  workspace { id name urlKey }
+}`;
+
+/**
+ * Resuelve una sola vez la identidad devuelta por el endpoint single-workspace.
+ * No recibe workspaceId de inputs ni expone una operación de selección.
+ */
+export async function createMcpSession(config: McpConfig): Promise<McpSession> {
+  const fixedConfig = Object.freeze({ url: config.url, apiKey: config.apiKey });
+  const data = await gqlRequest(fixedConfig, SESSION_IDENTITY_QUERY);
+  if (!data.viewer?.id || !data.workspace?.id) {
+    throw new Error("The server did not return an effective Workspace context");
+  }
+  const context: EffectiveWorkspaceContext = Object.freeze({
+    workspaceId: data.workspace.id,
+    workspaceName: data.workspace.name,
+    workspaceUrlKey: data.workspace.urlKey,
+    actorId: data.viewer.id,
+    actorName: data.viewer.name,
+    actorType: data.viewer.type,
+  });
+  return Object.freeze({ ...fixedConfig, context });
 }

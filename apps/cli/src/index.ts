@@ -23,7 +23,8 @@ const HELP = `pb ${APP_VERSION} — prime-board CLI
 Usage: pb <command> [options]
 
 Commands:
-  auth login --url <url> --key <api-key>   Save credentials
+  auth login --url <url> --key <api-key> [--profile NAME]   Save credentials
+  auth profiles|use <profile>                 Manage credential profiles
   auth status                              Show current viewer
   issue list|view|create|update|archive|comment Work with issues
   project list|view|create|archive|unarchive|milestone-*|update-*  Work with planning
@@ -40,10 +41,20 @@ Commands:
   workspace view|update                   View or rename the workspace
 
 Run \`pb <command>\` without arguments for detailed usage.
-Environment: PRIME_BOARD_URL, PRIME_BOARD_API_KEY override the saved config.`;
+Environment: PRIME_BOARD_URL, PRIME_BOARD_API_KEY, PRIME_BOARD_PROFILE override the saved config.`;
 
 async function main(): Promise<void> {
-  const [command, ...rest] = process.argv.slice(2);
+  // El flag global de perfil se acepta antes o después del comando. Solo selecciona un
+  // perfil de credenciales; el servidor sigue resolviendo el Workspace efectivo.
+  const args = [...process.argv.slice(2)];
+  const profileIndex = args[0] === "auth" ? -1 : args.indexOf("--profile");
+  if (profileIndex >= 0) {
+    const profile = args[profileIndex + 1];
+    if (!profile || profile.startsWith("-")) throw new UsageError("--profile requires a name");
+    process.env.PRIME_BOARD_PROFILE = profile;
+    args.splice(profileIndex, 2);
+  }
+  const [command, ...rest] = args;
   switch (command) {
     case "auth":
       return authCommand(rest);

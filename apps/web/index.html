@@ -8,7 +8,27 @@
     <script>
       // Aplica el tema resuelto antes de cargar el bundle para evitar flash (FOUC).
       (function () {
-        var stored = localStorage.getItem("pb.theme");
+        var context = null;
+        try {
+          context = JSON.parse(localStorage.getItem("pb.ui.context") || "null");
+        } catch (_) {}
+        var key = localStorage.getItem("pb.apiKey") || "";
+        var identity =
+          context && context.workspaceId && context.actorId
+            ? context.workspaceId + ":" + context.actorId
+            : key;
+        var hash = 2166136261;
+        for (var index = 0; index < identity.length; index += 1) {
+          hash ^= identity.charCodeAt(index);
+          hash = Math.imul(hash, 16777619);
+        }
+        var namespace =
+          context && context.workspaceId && context.actorId
+            ? "workspace-" + (hash >>> 0).toString(36)
+            : key
+              ? "credential-" + (hash >>> 0).toString(36)
+              : "anonymous";
+        var stored = localStorage.getItem("pb.ui." + namespace + ".theme");
         var preference = stored === "dark" || stored === "light" ? stored : "system";
         var dark =
           preference === "dark" ||

@@ -43,9 +43,12 @@ export async function resolveActor(config: McpConfig, ref: string): Promise<stri
   }
   if (UUID_RE.test(ref)) return ref;
   const data = await gqlRequest(config, "{ actors { id name } }");
-  const actor = data.actors.find((a: any) => a.name.toLowerCase() === ref.toLowerCase());
-  if (!actor) throw new Error(`NOT_FOUND: Actor not found: ${ref}`);
-  return actor.id;
+  const actors = data.actors.filter((a: any) => a.name.toLowerCase() === ref.toLowerCase());
+  if (!actors.length) throw new Error(`NOT_FOUND: Actor not found: ${ref}`);
+  if (actors.length > 1) {
+    throw new Error(`VALIDATION_FAILED: Actor name is ambiguous: ${ref}; use its ID`);
+  }
+  return actors[0].id;
 }
 
 export async function resolveProject(config: McpConfig, ref: string): Promise<string> {
@@ -121,12 +124,15 @@ export async function resolveCycle(
       teamId,
     },
   );
-  const cycle = data.cycles.find(
+  const cycles = data.cycles.filter(
     (candidate: any) =>
       candidate.name.toLowerCase() === ref.toLowerCase() || String(candidate.number) === ref,
   );
-  if (!cycle) throw new Error(`NOT_FOUND: Cycle not found: ${ref}`);
-  return cycle.id;
+  if (!cycles.length) throw new Error(`NOT_FOUND: Cycle not found: ${ref}`);
+  if (cycles.length > 1) {
+    throw new Error(`VALIDATION_FAILED: Cycle reference is ambiguous: ${ref}; use its ID`);
+  }
+  return cycles[0].id;
 }
 
 export async function resolveIssueId(config: McpConfig, ref: string): Promise<string> {
