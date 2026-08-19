@@ -524,3 +524,74 @@ locales describen el código de este repositorio.
   — red, volumen nombrado, secretos montados y healthcheck.
 - [SQLite Online Backup API](https://www.sqlite.org/backup.html) — copia consistente
   antes de leer el archivo fuente en WAL.
+
+## Addendum: rediseño del CDC para conservar el repo como fuente de verdad
+
+**Decisión posterior:** para la topología PostgreSQL objetivo, el repo deja de ser una réplica
+pasiva. El Log append-only de `.prime-board/` es la fuente canónica del estado compartido; los
+`.md`, `meta/*.json` y PostgreSQL son proyecciones derivadas. La decisión está registrada en
+[ADR-0017](../adr/0017-event-log-repo-source-postgresql.md).
+
+### Flujo canónico
+
+```text
+comando GraphQL/CLI/MCP
+        │
+        ▼
+validar + generar evento
+        │
+        ▼
+append Log + commit Git       ← autoridad
+        │
+        ├──► reducer → Issue Markdown/meta
+        └──► projector idempotente → PostgreSQL
+```
+
+El PostgreSQL objetivo no debe recibir escrituras de negocio directas. Su función es servir
+consultas, autorización y proyecciones operativas; un checkpoint permite reanudar el projector y
+un replay permite reconstruirlo desde cero. Un fallo de PostgreSQL no invalida un evento ya
+commiteado: deja la proyección atrasada y debe ser visible como lag, no como una mutación perdida.
+
+### Qué significa “CDC” aquí
+
+No se usará el WAL de PostgreSQL como CDC canónico. El WAL puede servir para recuperación del
+motor, pero capturarlo para producir Markdown invertiría la autoridad: primero existiría un
+cambio en la DB y después una réplica eventual en Git. El mecanismo de cambio de dominio será el
+Log versionado del repo. `Activity` pasa a ser una proyección legible del evento; no es el evento
+canónico completo.
+
+Cada evento debe tener, como mínimo, `schemaVersion`, `eventId`, agregado y clave estable, tipo,
+actor, `occurredAt`, causalidad/opcional parent y payload autosuficiente. El `eventId` debe ser
+idempotente en PostgreSQL. Para merges entre branches, los Logs usan `merge=union`, un reloj
+lógico y desempate determinista por `eventId`; los snapshots se regeneran después del merge.
+
+### Direcciones de conversión
+
+| Operación                | Dirección                                              | Semántica                                                                                                                    |
+| ------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Export histórico inicial | SQLite → Log → Markdown/meta                           | Convierte el estado legado y Activity existente en eventos canónicos; no debe cargar directamente PostgreSQL como autoridad. |
+| Proyección normal        | Log → PostgreSQL                                       | Reduce eventos idempotentemente, actualiza checkpoint e índices derivados.                                                   |
+| Reconstrucción           | Log → PostgreSQL + Markdown/meta                       | Borra/recrea proyecciones tras validar alcance y versión del Log.                                                            |
+| Import explícito         | Markdown editado → comandos/eventos → Log → PostgreSQL | Nunca escribe DB directamente; rechaza cambios ambiguos y conserva historial.                                                |
+| Backup PostgreSQL        | PostgreSQL → dump                                      | Es backup operativo, no una fuente para regenerar el dominio después del cutover.                                            |
+
+Los secrets de API keys y webhooks, y las proyecciones personales de Favorites/Inbox Receipts,
+permanecen fuera del Log. La migración debe tener una provisión separada para preservarlos o
+rotarlos.
+
+### Impacto en el plan PostgreSQL
+
+- El “data pump” ya no es `SQLite → PostgreSQL`: es una importación histórica `SQLite → Log`,
+  seguida de `Log → PostgreSQL`.
+- Export/import y repo sync dejan de ser una réplica de PostgreSQL y pasan a ser el reducer y el
+  projector del estado canónico.
+- La numeración de Issues debe resolverse antes de permitir creación concurrente desde branches:
+  `TEAM-123` es inmutable y no puede colisionar después de un merge.
+- La respuesta GraphQL debe distinguir evento durable de proyección atrasada y definir si espera al
+  projector o devuelve un estado pendiente.
+- La suite debe probar replay determinista, idempotencia, merge union, conflicto del mismo campo,
+  corrupción/truncado de Log y recuperación desde checkpoint.
+
+Esta decisión reemplaza el camino de carga directa recomendado en el cuerpo anterior de esta
+investigación para la arquitectura objetivo; la carga directa solo queda como herramienta de
+comparación/backup durante el cutover, no como autoridad final.

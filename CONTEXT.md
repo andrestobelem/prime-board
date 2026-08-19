@@ -193,10 +193,10 @@ la pertenencia del recurso favorito.
 _Avoid_: Bookmark, shortcut
 
 **Activity**:
-Evento append-only asociado a una Issue que registra un cambio observable, su Actor y su momento.
-Alimenta el historial, el Inbox y la réplica del repositorio; no es por sí solo el estado operativo
-actual de la Issue.
-_Avoid_: Audit log, changelog
+Proyección legible de un evento de dominio observable asociado a una Issue, con su Actor y momento.
+Alimenta el historial, el Inbox y los snapshots Markdown; el Log canónico conserva el evento que la
+origina y Activity no es por sí sola la fuente de verdad ni el estado actual.
+_Avoid_: Audit log, changelog, CDC del WAL
 
 **Comment**:
 Texto que un Actor agrega a una Issue. El contenido pertenece a la conversación de la Issue y
@@ -222,24 +222,26 @@ _Avoid_: Callback, notification
 ## Registro y réplica
 
 **Operational State**:
-Estado vigente del Workspace que la API consulta y modifica. Es la referencia para resolver
-permisos, filtros y relaciones actuales.
-_Avoid_: Snapshot, cache
+Proyección vigente del Workspace que la API consulta para permisos, filtros y relaciones actuales.
+En la topología PostgreSQL objetivo es reconstruible desde el Repository Source; el runtime SQLite
+actual conserva la autoridad operativa hasta completar el cutover.
+_Avoid_: Source of truth, cache
 
-**Repository Replica**:
-Representación versionada y legible del Operational State, sus Activities y metadatos. Se genera
-para revisión, recuperación y colaboración; no se edita manualmente ni sustituye al estado
-operativo sin un rebuild explícito.
-_Avoid_: Backup, dump
+**Repository Source**:
+Estado compartido y versionado del dominio. Su Log append-only es la autoridad canónica para la
+topología PostgreSQL objetivo; los snapshots Markdown y el Operational State se derivan de él.
+Los secretos y las proyecciones personales no forman parte de esta fuente.
+_Avoid_: Repository Replica, backup, dump
 
 **Log**:
-Serie versionada de Activities de una Issue dentro de la Repository Replica
-(`.prime-board/log/AT-172.jsonl`). Conserva el historial exportado y puede participar en un rebuild,
-pero la API sigue siendo la autoridad operativa.
-_Avoid_: Journal, source of truth
+Serie versionada de eventos de dominio append-only dentro del Repository Source
+(`.prime-board/log/AT-172.jsonl`). Cada evento tiene identidad, tipo, actor, momento y payload
+suficiente para que un reducer reconstruya el estado de su agregado; los merges se resuelven de
+forma determinista y PostgreSQL puede reproyectarse desde cero.
+_Avoid_: Activity, CDC del WAL, source of truth aislado del Repository Source
 
 **Issue Markdown**:
-Representación derivada y legible de una Issue dentro de la Repository Replica
-(`.prime-board/issues/AT-172.md`). Se regenera desde el estado operativo y sus referencias; nunca
-se edita a mano.
-_Avoid_: Snapshot, dump
+Representación derivada y legible de una Issue dentro del Repository Source
+(`.prime-board/issues/AT-172.md`). Se regenera desde el Log y puede alimentar un importador
+explícito que emita eventos; no escribe directamente en PostgreSQL ni se edita como autoridad.
+_Avoid_: Snapshot editable, dump
