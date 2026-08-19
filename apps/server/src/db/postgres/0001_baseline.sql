@@ -438,6 +438,9 @@ CREATE TRIGGER issues_search_vector_trigger
 BEFORE INSERT OR UPDATE OF title, description ON issues
 FOR EACH ROW EXECUTE FUNCTION prime_board_update_issue_search_vector();
 
+CREATE INDEX idx_project_teams_team ON project_teams(team_id, project_id);
+CREATE INDEX idx_issue_labels_label ON issue_labels(label_id, issue_id);
+CREATE INDEX idx_issue_relations_issue ON issue_relations(issue_id, type, related_id);
 CREATE INDEX idx_issues_team_state ON issues(team_id, state_id);
 CREATE INDEX idx_issues_assignee ON issues(assignee_id);
 CREATE INDEX idx_issues_project ON issues(project_id);

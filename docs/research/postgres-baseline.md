@@ -32,8 +32,11 @@ FTS5 de SQLite.
 `issues.search_vector` es un `tsvector` derivado mediante un trigger PostgreSQL
 sobre `title` y `description`, con índice GIN. Usa la configuración `simple`
 como equivalencia inicial; el parser de consultas y equivalencia de prefijos,
-acentos y frases quedan para la migración del módulo de búsqueda. No se importan
-filas de FTS5: el vector se reconstruye desde el contenido de `issues`.
+acentos y frases quedan para la migración del módulo de búsqueda. Al combinar
+ambas columnas, una frase podría cruzar el límite `title`/`description`; la
+paridad estricta por columna debe resolverse en ese módulo y no se declara como
+criterio de este DDL. No se importan filas de FTS5: el vector se reconstruye
+desde el contenido de `issues`.
 
 ## Ejecución
 
