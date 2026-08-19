@@ -6,6 +6,9 @@ import { bootstrap } from "./db/seed.ts";
 import { createApp } from "./server.ts";
 
 const config = loadConfig();
+if (config.persistenceBackend !== "sqlite") {
+  throw new Error("Configured persistence backend is not available yet");
+}
 const db = openDatabase(config.dbPath);
 
 const result = bootstrap(db);

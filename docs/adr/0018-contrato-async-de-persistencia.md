@@ -35,8 +35,10 @@ propagan después del rollback.
 
 `createSqlitePersistence()` de `db/sqlite-persistence.ts` adapta la conexión SQLite existente envolviendo sus
 operaciones síncronas en Promises y usando `BEGIN`/`COMMIT`/`ROLLBACK` explícitos para
-poder esperar callbacks async. Los módulos actuales siguen usando la API síncrona; la
-migración incremental de dominios a este seam queda para PRB-424 y los tickets
+poder esperar callbacks async. `openPersistence()` en `db/backend.ts` selecciona este
+adaptador por defecto y deja PostgreSQL como backend reservado, fallando explícitamente
+hasta que exista su implementación. Los módulos actuales siguen usando la API
+síncrona; la migración incremental de dominios a este seam queda para los tickets
 posteriores. El adaptador PostgreSQL deberá reservar una conexión dedicada por
 transacción y normalizar su `rowCount`/`RETURNING` al mismo resultado.
 
