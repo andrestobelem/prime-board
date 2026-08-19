@@ -129,27 +129,61 @@ describe("MCP Streamable HTTP auth and protocol", () => {
     await client.close();
   });
 
-  it("keeps concurrent MCP sessions isolated", async () => {
+  it("keeps concurrent MCP sessions isolated by credential and context", async () => {
+    const otherSession: McpSession = Object.freeze({
+      ...SESSION,
+      apiKey: "pb_other",
+      context: Object.freeze({ ...SESSION.context, actorId: "actor-2", actorName: "other-agent" }),
+    });
+    const sessions = new Map([
+      [SESSION.apiKey, SESSION],
+      [otherSession.apiKey, otherSession],
+    ]);
+    const isolatedHandler = createMcpHttpHandler(
+      { url: SESSION.url },
+      {
+        createSession: async ({ apiKey }) => {
+          const session = sessions.get(apiKey);
+          if (!session) throw new Error("UNAUTHORIZED: invalid key");
+          return session;
+        },
+        createServer: (session) => {
+          const server = new McpServer({ name: "isolated-test", version: "0.0.1" });
+          server.registerTool(
+            "identity",
+            { description: "Report the bound credential", inputSchema: {} },
+            async () => ({ content: [{ type: "text", text: session.apiKey }] }),
+          );
+          return server;
+        },
+      },
+    );
+    const isolatedServer = Bun.serve({ port: 0, fetch: isolatedHandler.fetch });
     const first = new Client({ name: "first-client", version: "0.0.1" });
     const second = new Client({ name: "second-client", version: "0.0.1" });
-    const firstTransport = new StreamableHTTPClientTransport(new URL(`${httpServer.url}mcp`), {
+    const firstTransport = new StreamableHTTPClientTransport(new URL(`${isolatedServer.url}mcp`), {
       requestInit: { headers: { authorization: `Bearer ${SESSION.apiKey}` } },
     });
-    const secondTransport = new StreamableHTTPClientTransport(new URL(`${httpServer.url}mcp`), {
-      requestInit: { headers: { authorization: `Bearer ${SESSION.apiKey}` } },
+    const secondTransport = new StreamableHTTPClientTransport(new URL(`${isolatedServer.url}mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${otherSession.apiKey}` } },
     });
 
-    await Promise.all([first.connect(firstTransport), second.connect(secondTransport)]);
-    expect(firstTransport.sessionId).toBeTruthy();
-    expect(secondTransport.sessionId).toBeTruthy();
-    expect(firstTransport.sessionId).not.toBe(secondTransport.sessionId);
-    const [firstResult, secondResult] = await Promise.all([
-      first.callTool({ name: "echo", arguments: { message: "first" } }),
-      second.callTool({ name: "echo", arguments: { message: "second" } }),
-    ]);
-    expect(firstResult.content).toEqual([{ type: "text", text: "first" }]);
-    expect(secondResult.content).toEqual([{ type: "text", text: "second" }]);
-    await Promise.all([first.close(), second.close()]);
+    try {
+      await Promise.all([first.connect(firstTransport), second.connect(secondTransport)]);
+      expect(firstTransport.sessionId).toBeTruthy();
+      expect(secondTransport.sessionId).toBeTruthy();
+      expect(firstTransport.sessionId).not.toBe(secondTransport.sessionId);
+      const [firstResult, secondResult] = await Promise.all([
+        first.callTool({ name: "identity", arguments: {} }),
+        second.callTool({ name: "identity", arguments: {} }),
+      ]);
+      expect(firstResult.content).toEqual([{ type: "text", text: SESSION.apiKey }]);
+      expect(secondResult.content).toEqual([{ type: "text", text: otherSession.apiKey }]);
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+      isolatedServer.stop(true);
+      await isolatedHandler.close();
+    }
   });
 
   it("routes calls to the existing GraphQL-backed MCP handlers", async () => {
@@ -186,6 +220,10 @@ describe("MCP Streamable HTTP auth and protocol", () => {
     });
     try {
       await client.connect(transport);
+      const tools = await client.listTools();
+      expect(tools.tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["list_issues", "save_issue", "save_comment", "get_workspace"]),
+      );
       const result = await client.callTool({ name: "get_workspace", arguments: {} });
       const content = result.content as Array<{ text?: string }>;
       expect(JSON.parse(content[0]?.text ?? "")).toEqual({
