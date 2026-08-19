@@ -4,10 +4,15 @@ import {
   createActor,
   updateActor,
   createApiKey,
+  rotateApiKey,
   deleteApiKey,
   listApiKeys,
+  getApiKey,
   mapActor,
   mapApiKey,
+  apiKeyMetadata,
+  listApiKeyScopes,
+  listApiKeyTeamIds,
   createActorInvitation,
   listActorInvitations,
   mapActorInvitation,
@@ -57,12 +62,17 @@ import { apiError, requireViewer } from "./errors.ts";
 import {
   assertCanManageActor,
   assertCanManageApiKey,
+  assertApiKeyScope,
+  apiKeyTeamsWithinLimit,
+  assertChildApiKey,
+  assertUnrestrictedApiKey,
   assertCanManageIssue,
   assertCanManageTeam,
   assertWorkspaceAdmin,
   isWorkspaceAdmin,
 } from "../auth/permissions.ts";
 import { withRepoSyncDispatch } from "./repo-sync-dispatch.ts";
+import { withApiKeyScopes } from "../auth/scope-dispatch.ts";
 import { parseDateTime } from "../domain/datetime.ts";
 import { issueEventData, issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
@@ -75,7 +85,7 @@ import {
   updateLabel,
 } from "../domain/labels.ts";
 import { createWebhook, deleteWebhook, mapWebhook } from "../domain/webhooks.ts";
-import { listProjects, mapProject } from "../domain/projects.ts";
+import { listProjectTeamIds, listProjects, mapProject } from "../domain/projects.ts";
 import {
   canAccessSavedView,
   createSavedView,
@@ -182,6 +192,7 @@ export const resolvers = {
   ActorType: { HUMAN: "human", AGENT: "agent" },
   ActorWorkspaceRole: { ADMIN: "admin", MEMBER: "member" },
   ActorStatus: { ACTIVE: "active", SUSPENDED: "suspended", LEFT: "left" },
+  ApiKeyScope: { READ: "read", WRITE: "write", ADMIN: "admin" },
   ActorInvitationStatus: {
     PENDING: "pending",
     ACCEPTED: "accepted",
@@ -246,7 +257,11 @@ export const resolvers = {
     labels: (team: { id: string }, _args: unknown, context: Context) =>
       listLabels(context.db, team.id).map(mapLabel),
     projects: (team: { id: string }, _args: unknown, context: Context) =>
-      listProjects(context.db, null, team.id).map(mapProject),
+      listProjects(context.db, null, team.id)
+        .filter((project) =>
+          apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, project.id)),
+        )
+        .map(mapProject),
     cycles: (team: { id: string }, _args: unknown, context: Context) =>
       listCycles(context.db, team.id).map(mapCycle),
     memberships: (team: { id: string }, _args: unknown, context: Context) =>
@@ -343,7 +358,7 @@ export const resolvers = {
     apiKeys: (actor: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
       if (!isWorkspaceAdmin(viewer) && viewer.id !== actor.id) return [];
-      return listApiKeys(context.db, actor.id).map(mapApiKey);
+      return listApiKeys(context.db, actor.id).map((row) => mapApiKey(row, context.db));
     },
   },
 
@@ -354,7 +369,8 @@ export const resolvers = {
       invitation.actorId ? mapActor(lookupActor(context, invitation.actorId)!) : null,
   },
 
-  Query: {
+  Query: withApiKeyScopes(
+    {
     ...issueResolvers.Query,
     ...projectResolvers.Query,
     viewer: (_parent: unknown, _args: unknown, context: Context) =>
@@ -396,7 +412,9 @@ export const resolvers = {
     ) => {
       const viewer = requireViewer(context);
       assertWorkspaceAdmin(viewer);
-      return listActorInvitations(context.db, Boolean(args.includeRevoked)).map(mapActorInvitation);
+        return listActorInvitations(context.db, Boolean(args.includeRevoked)).map(
+          mapActorInvitation,
+        );
     },
     teamMemberships: (_parent: unknown, args: { teamId: string }, context: Context) => {
       requireViewer(context);
@@ -419,7 +437,9 @@ export const resolvers = {
     },
     webhooks: (_parent: unknown, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
-      return listWebhooksInWorkspace(context, viewer.id, isWorkspaceAdmin(viewer)).map(mapWebhook);
+        return listWebhooksInWorkspace(context, viewer.id, isWorkspaceAdmin(viewer)).map(
+          mapWebhook,
+        );
     },
     savedViews: (
       _parent: unknown,
@@ -585,11 +605,15 @@ export const resolvers = {
       return canViewInitiative(context.db, row.id, viewer.id) ? mapInitiative(row) : null;
     },
   },
+    "query",
+  ),
 
   // El resolver map entero pasa por el despacho de sync (AT-191): cualquier
   // mutation nueva que no llame a mano a repo?.sync()/syncIssue() igual queda
   // sincronizada, salvo que esté en SYNC_EXCLUDED_MUTATIONS.
-  Mutation: withRepoSyncDispatch({
+  Mutation: withRepoSyncDispatch(
+    withApiKeyScopes(
+      {
     ...issueResolvers.Mutation,
     ...projectResolvers.Mutation,
     teamArchive: (_parent: unknown, args: { id: string }, context: Context) => {
@@ -620,7 +644,11 @@ export const resolvers = {
       });
       return { success: true };
     },
-    workspaceUpdate: (_parent: unknown, args: { input: { name: string } }, context: Context) => {
+        workspaceUpdate: (
+          _parent: unknown,
+          args: { input: { name: string } },
+          context: Context,
+        ) => {
       const viewer = requireViewer(context);
       assertWorkspaceAdmin(viewer);
       return {
@@ -753,25 +781,86 @@ export const resolvers = {
     actorLeave: (_parent: unknown, args: { id?: string | null }, context: Context) => {
       const viewer = requireViewer(context);
       const actorId = args.id ?? viewer.id;
-      if (actorId !== viewer.id) throw apiError("UNAUTHORIZED", "You can only leave as yourself");
+          if (actorId !== viewer.id)
+            throw apiError("UNAUTHORIZED", "You can only leave as yourself");
       return { success: true, actor: mapActor(leaveActor(context.db, actorId)) };
     },
     apiKeyCreate: (
       _parent: unknown,
-      args: { input: { actorId: string; name: string } },
+          args: {
+            input: {
+              actorId: string;
+              name: string;
+              scopes?: string[] | null;
+              teamIds?: string[] | null;
+              expiresAt?: string | null;
+            };
+          },
       context: Context,
     ) => {
       const viewer = requireViewer(context);
-      requireActor(context, args.input.actorId);
+          assertApiKeyScope(context, "write");
+          const target = requireActor(context, args.input.actorId);
       assertCanManageActor(viewer, args.input.actorId);
-      const { row, key } = createApiKey(context.db, args.input);
-      return { success: true, apiKey: mapApiKey(row), key };
+          if (viewer.id !== target.id) {
+            assertApiKeyScope(context, "admin");
+            assertUnrestrictedApiKey(context);
+          }
+          const metadata = apiKeyMetadata(context.db, args.input);
+          assertChildApiKey(context, target, args.input, metadata);
+          const { row, key } = createApiKey(context.db, { ...args.input, ...metadata });
+          return { success: true, apiKey: mapApiKey(row, context.db), key };
     },
     apiKeyDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+          assertApiKeyScope(context, "write");
+          const key = getApiKey(context.db, args.id);
       assertCanManageApiKey(context.db, viewer, args.id);
+          if (key && key.actor_id !== viewer.id) {
+            assertApiKeyScope(context, "admin");
+            assertUnrestrictedApiKey(context);
+          }
       return { success: deleteApiKey(context.db, args.id) };
     },
+        apiKeyRotate: (
+          _parent: unknown,
+          args: {
+            id: string;
+            input: {
+              name?: string | null;
+              scopes?: string[] | null;
+              teamIds?: string[] | null;
+              expiresAt?: string | null;
+            };
+          },
+          context: Context,
+        ) => {
+          const viewer = requireViewer(context);
+          assertApiKeyScope(context, "write");
+          const existing = getApiKey(context.db, args.id);
+          assertCanManageApiKey(context.db, viewer, args.id);
+          if (!existing) throw apiError("NOT_FOUND", "API key not found");
+          if (existing.actor_id !== viewer.id) {
+            assertApiKeyScope(context, "admin");
+            assertUnrestrictedApiKey(context);
+          }
+          const target = requireActor(context, existing.actor_id);
+          const metadata = apiKeyMetadata(context.db, {
+            scopes:
+              args.input.scopes === undefined
+                ? listApiKeyScopes(context.db, args.id)
+                : args.input.scopes,
+            teamIds:
+              args.input.teamIds === undefined
+                ? listApiKeyTeamIds(context.db, args.id)
+                : args.input.teamIds,
+            expiresAt:
+              args.input.expiresAt === undefined ? existing.expires_at : args.input.expiresAt,
+          });
+          assertChildApiKey(context, target, args.input, metadata);
+          const { row, key } = rotateApiKey(context.db, args.id, { ...args.input, ...metadata });
+          return { success: true, apiKey: mapApiKey(row, context.db), key };
+        },
     webhookCreate: (
       _parent: unknown,
       args: { input: { url: string; secret?: string | null; events?: string[] | null } },
@@ -920,7 +1009,9 @@ export const resolvers = {
       const viewer = requireViewer(context);
       const existing = getSavedView(context.db, args.id);
       if (existing?.team_id) assertTeamActive(context.db, existing.team_id);
-      const savedView = mapSavedView(updateSavedView(context.db, args.id, viewer.id, args.input));
+          const savedView = mapSavedView(
+            updateSavedView(context.db, args.id, viewer.id, args.input),
+          );
       return { success: true, savedView };
     },
     savedViewDuplicate: (_parent: unknown, args: { id: string }, context: Context) => {
@@ -1021,7 +1112,12 @@ export const resolvers = {
       const viewer = requireViewer(context);
       const fromCycle = getCycle(context.db, args.fromCycleId);
       if (fromCycle) assertCanManageTeam(context.db, viewer, fromCycle.team_id);
-      const movedIssues = carryOverCycle(context.db, viewer.id, args.fromCycleId, args.toCycleId);
+          const movedIssues = carryOverCycle(
+            context.db,
+            viewer.id,
+            args.fromCycleId,
+            args.toCycleId,
+          );
       return { success: true, movedIssues };
     },
     reviewCreate: (
@@ -1033,7 +1129,10 @@ export const resolvers = {
       const issue = requireIssue(context, args.input.issueId);
       assertCanManageIssue(context.db, viewer, issue.team_id);
       if (args.input.reviewerId) requireActor(context, args.input.reviewerId);
-      return { success: true, review: mapReview(createReview(context.db, viewer.id, args.input)) };
+          return {
+            success: true,
+            review: mapReview(createReview(context.db, viewer.id, args.input)),
+          };
     },
     reviewUpdate: (
       _parent: unknown,
@@ -1063,7 +1162,9 @@ export const resolvers = {
         const issue = lookupIssueById(context, existing.issue_id);
         assertCanManageIssue(context.db, viewer, issue?.team_id);
       }
-      return { success: deleteReview(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)) };
+          return {
+            success: deleteReview(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)),
+          };
     },
     initiativeCreate: (
       _parent: unknown,
@@ -1137,5 +1238,8 @@ export const resolvers = {
         },
       };
     },
-  }),
+      },
+      "mutation",
+    ),
+  ),
 };

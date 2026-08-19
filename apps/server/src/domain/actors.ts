@@ -86,6 +86,9 @@ export function updateActor(
   return getActor(db, id)!;
 }
 
+export type ApiKeyScope = "read" | "write" | "admin";
+export const API_KEY_SCOPES: readonly ApiKeyScope[] = ["read", "write", "admin"];
+
 export interface ApiKeyRow {
   id: string;
   actor_id: string;
@@ -93,10 +96,34 @@ export interface ApiKeyRow {
   hash: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  expires_at: string | null;
+  rotated_from_id: string | null;
   created_at: string;
 }
 
-export function mapApiKey(row: ApiKeyRow) {
+export interface ApiKeyMetadata {
+  scopes: ApiKeyScope[];
+  teamIds: string[];
+}
+
+export function listApiKeyScopes(db: Database, keyId: string): ApiKeyScope[] {
+  const scopes = db
+    .query(
+      "SELECT scope FROM api_key_scopes WHERE api_key_id = ?1 ORDER BY CASE scope WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 END",
+    )
+    .all(keyId)
+    .map((row) => (row as { scope: ApiKeyScope }).scope);
+  return scopes.length ? scopes : [...API_KEY_SCOPES];
+}
+
+export function listApiKeyTeamIds(db: Database, keyId: string): string[] {
+  return db
+    .query("SELECT team_id FROM api_key_team_limits WHERE api_key_id = ?1 ORDER BY team_id")
+    .all(keyId)
+    .map((row) => (row as { team_id: string }).team_id);
+}
+
+export function mapApiKey(row: ApiKeyRow, db?: Database) {
   return {
     id: row.id,
     name: row.name,
@@ -104,6 +131,10 @@ export function mapApiKey(row: ApiKeyRow) {
     createdAt: row.created_at,
     lastUsedAt: row.last_used_at,
     revokedAt: row.revoked_at,
+    expiresAt: row.expires_at,
+    rotatedFromId: row.rotated_from_id,
+    scopes: db ? listApiKeyScopes(db, row.id) : [],
+    teamIds: db ? listApiKeyTeamIds(db, row.id) : [],
   };
 }
 
@@ -133,10 +164,76 @@ export function deleteApiKey(db: Database, id: string): boolean {
   return true;
 }
 
+function normalizeApiKeyScopes(scopes: readonly string[] | null | undefined): ApiKeyScope[] {
+  const values =
+    scopes == null || scopes.length === 0
+      ? [...API_KEY_SCOPES]
+      : scopes.map((scope) => scope.toLowerCase());
+  const unique = [...new Set(values)];
+  if (unique.some((scope) => !API_KEY_SCOPES.includes(scope as ApiKeyScope))) {
+    throw apiError("VALIDATION_FAILED", "API key scopes must be READ, WRITE or ADMIN");
+  }
+  return API_KEY_SCOPES.filter((scope) => unique.includes(scope));
+}
+
+function normalizeApiKeyTeamIds(
+  db: Database,
+  teamIds: readonly string[] | null | undefined,
+): string[] {
+  if (teamIds == null || teamIds.length === 0) return [];
+  const unique = [...new Set(teamIds)];
+  for (const teamId of unique) {
+    if (!db.query("SELECT id FROM teams WHERE id = ?1").get(teamId)) {
+      throw apiError("NOT_FOUND", `Team not found: ${teamId}`);
+    }
+  }
+  return unique.sort();
+}
+
+function normalizeApiKeyExpiry(expiresAt: string | null | undefined): string | null {
+  if (expiresAt == null) return null;
+  const timestamp = Date.parse(expiresAt);
+  if (!Number.isFinite(timestamp) || timestamp <= Date.now()) {
+    throw apiError("VALIDATION_FAILED", "API key expiration must be a valid future ISO-8601 date");
+  }
+  return new Date(timestamp).toISOString();
+}
+
+export function apiKeyMetadata(
+  db: Database,
+  input: {
+    scopes?: readonly string[] | null;
+    teamIds?: readonly string[] | null;
+    expiresAt?: string | null;
+  },
+): { scopes: ApiKeyScope[]; teamIds: string[]; expiresAt: string | null } {
+  return {
+    scopes: normalizeApiKeyScopes(input.scopes),
+    teamIds: normalizeApiKeyTeamIds(db, input.teamIds),
+    expiresAt: normalizeApiKeyExpiry(input.expiresAt),
+  };
+}
+
+function insertApiKeyMetadata(db: Database, keyId: string, metadata: ApiKeyMetadata): void {
+  const scopeInsert = db.query("INSERT INTO api_key_scopes (api_key_id, scope) VALUES (?1, ?2)");
+  for (const scope of metadata.scopes) scopeInsert.run(keyId, scope);
+  const teamInsert = db.query(
+    "INSERT INTO api_key_team_limits (api_key_id, team_id) VALUES (?1, ?2)",
+  );
+  for (const teamId of metadata.teamIds) teamInsert.run(keyId, teamId);
+}
+
 /** Crea una key para un actor. Devuelve la key en claro UNA sola vez. */
 export function createApiKey(
   db: Database,
-  input: { actorId: string; name: string },
+  input: {
+    actorId: string;
+    name: string;
+    scopes?: readonly string[] | null;
+    teamIds?: readonly string[] | null;
+    expiresAt?: string | null;
+    rotatedFromId?: string | null;
+  },
 ): { row: ApiKeyRow; key: string } {
   const actor = getActor(db, input.actorId);
   if (!actor) throw apiError("NOT_FOUND", "Actor not found");
@@ -144,14 +241,73 @@ export function createApiKey(
     throw apiError("UNAUTHORIZED", "Only active actors can receive API keys");
   }
   if (!input.name.trim()) throw apiError("VALIDATION_FAILED", "API key name cannot be empty");
-
+  const metadata = apiKeyMetadata(db, input);
   const key = generateApiKey();
   const id = newId();
-  db.query(
-    "INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-  ).run(id, input.actorId, input.name.trim(), hashApiKey(key), now());
-  const row = db.query("SELECT * FROM api_keys WHERE id = ?1").get(id) as ApiKeyRow;
-  return { row, key };
+  const createdAt = now();
+  let row: ApiKeyRow;
+  db.transaction(() => {
+    db.query(
+      "INSERT INTO api_keys (id, actor_id, name, hash, expires_at, rotated_from_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    ).run(
+      id,
+      input.actorId,
+      input.name.trim(),
+      hashApiKey(key),
+      metadata.expiresAt,
+      input.rotatedFromId ?? null,
+      createdAt,
+    );
+    insertApiKeyMetadata(db, id, metadata);
+    row = db.query("SELECT * FROM api_keys WHERE id = ?1").get(id) as ApiKeyRow;
+  })();
+  return { row: row!, key };
+}
+
+/** Rota una key atómicamente: la vieja queda revocada y la nueva se entrega una vez. */
+export function rotateApiKey(
+  db: Database,
+  id: string,
+  input: {
+    name?: string | null;
+    scopes?: readonly string[] | null;
+    teamIds?: readonly string[] | null;
+    expiresAt?: string | null;
+  },
+): { row: ApiKeyRow; key: string } {
+  const existing = getApiKey(db, id);
+  if (!existing) throw apiError("NOT_FOUND", "API key not found");
+  if (existing.revoked_at) throw apiError("VALIDATION_FAILED", "API key is already revoked");
+  const metadata = apiKeyMetadata(db, {
+    scopes: input.scopes === undefined ? listApiKeyScopes(db, id) : input.scopes,
+    teamIds: input.teamIds === undefined ? listApiKeyTeamIds(db, id) : input.teamIds,
+    expiresAt: input.expiresAt === undefined ? existing.expires_at : input.expiresAt,
+  });
+  const key = generateApiKey();
+  const replacementId = newId();
+  const timestamp = now();
+  db.transaction(() => {
+    db.query(
+      "INSERT INTO api_keys (id, actor_id, name, hash, expires_at, rotated_from_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    ).run(
+      replacementId,
+      existing.actor_id,
+      input.name?.trim() || existing.name,
+      hashApiKey(key),
+      metadata.expiresAt,
+      existing.id,
+      timestamp,
+    );
+    insertApiKeyMetadata(db, replacementId, metadata);
+    const revoked = db
+      .query("UPDATE api_keys SET revoked_at = ?1 WHERE id = ?2 AND revoked_at IS NULL")
+      .run(timestamp, id);
+    if (revoked.changes !== 1) throw apiError("VALIDATION_FAILED", "API key is already revoked");
+  })();
+  return {
+    row: db.query("SELECT * FROM api_keys WHERE id = ?1").get(replacementId) as ApiKeyRow,
+    key,
+  };
 }
 
 export type ActorInvitationStatus = "pending" | "accepted" | "revoked" | "expired";

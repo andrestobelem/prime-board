@@ -125,6 +125,12 @@ export const typeDefs = /* GraphQL */ `
     membership: TeamMembership!
   }
 
+  enum ApiKeyScope {
+    READ
+    WRITE
+    ADMIN
+  }
+
   type ApiKey {
     id: ID!
     name: String!
@@ -132,6 +138,13 @@ export const typeDefs = /* GraphQL */ `
     createdAt: DateTime!
     lastUsedAt: DateTime
     revokedAt: DateTime
+    expiresAt: DateTime
+    rotatedFromId: ID
+    scopes: [ApiKeyScope!]!
+    """
+    Team IDs allowed by this key; empty means every Team.
+    """
+    teamIds: [ID!]!
   }
 
   type ActorInvitation {
@@ -577,6 +590,16 @@ export const typeDefs = /* GraphQL */ `
   input ApiKeyCreateInput {
     actorId: ID!
     name: String!
+    scopes: [ApiKeyScope!]
+    teamIds: [ID!]
+    expiresAt: DateTime
+  }
+
+  input ApiKeyRotateInput {
+    name: String
+    scopes: [ApiKeyScope!]
+    teamIds: [ID!]
+    expiresAt: DateTime
   }
 
   input WorkflowStateCreateInput {
@@ -1044,6 +1067,7 @@ export const typeDefs = /* GraphQL */ `
     actorRevoke(id: ID!): ActorPayload!
     actorLeave(id: ID): ActorPayload!
     apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyPayload!
+    apiKeyRotate(id: ID!, input: ApiKeyRotateInput!): ApiKeyPayload!
     apiKeyDelete(id: ID!): DeletePayload!
     workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
     workflowStateUpdate(id: ID!, input: WorkflowStateUpdateInput!): WorkflowStatePayload!

@@ -9,6 +9,16 @@ interface KeyInfo {
   name: string;
   createdAt: string;
   lastUsedAt: string | null;
+  revokedAt: string | null;
+  expiresAt: string | null;
+  scopes: string[];
+  teamIds: string[];
+}
+
+interface TeamOption {
+  id: string;
+  key: string;
+  name: string;
 }
 
 interface Member {
@@ -30,13 +40,15 @@ function isHistoricalAgent(member: Member): boolean {
 
 const MEMBERS_QUERY = `{
   viewer { id workspaceRole }
-  actors { id name email type status createdAt apiKeys { id name createdAt lastUsedAt } }
+  actors { id name email type status createdAt apiKeys { id name createdAt lastUsedAt revokedAt expiresAt scopes teamIds } }
+  teams { id key name }
 }`;
 
 export function MembersView() {
   const result = useQuery<{
     viewer: { id: string; workspaceRole: string };
     actors: Member[];
+    teams: TeamOption[];
   }>(MEMBERS_QUERY);
   const viewer = result.data?.viewer;
   const canManageWorkspace = viewer?.workspaceRole === "ADMIN";
@@ -57,6 +69,9 @@ export function MembersView() {
   const [editEmail, setEditEmail] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [keyScopes, setKeyScopes] = useState("READ,WRITE,ADMIN");
+  const [keyTeams, setKeyTeams] = useState("");
+  const [keyExpiresAt, setKeyExpiresAt] = useState("");
 
   async function createActor() {
     if (!name.trim()) return;
@@ -92,11 +107,23 @@ export function MembersView() {
   }
 
   async function createKey(member: Member) {
+    const input: Record<string, unknown> = {
+      actorId: member.id,
+      name: `${member.name} key`,
+      scopes: keyScopes
+        .split(",")
+        .map((scope) => scope.trim().toUpperCase())
+        .filter(Boolean),
+    };
+    if (keyTeams.trim())
+      input.teamIds = keyTeams
+        .split(",")
+        .map((team) => team.trim())
+        .filter(Boolean);
+    if (keyExpiresAt.trim()) input.expiresAt = keyExpiresAt.trim();
     const data = await mutate<{ apiKeyCreate: { key: string } }>(
-      `
-      mutation($input: ApiKeyCreateInput!) { apiKeyCreate(input: $input) { key } }
-    `,
-      { input: { actorId: member.id, name: `${member.name} key` } },
+      `mutation($input: ApiKeyCreateInput!) { apiKeyCreate(input: $input) { key } }`,
+      { input },
     );
     setFreshKey({ actor: member.name, key: data.apiKeyCreate.key });
     setCopied(false);
@@ -104,6 +131,17 @@ export function MembersView() {
 
   async function revokeKey(id: string) {
     await mutate(`mutation($id: ID!) { apiKeyDelete(id: $id) { success } }`, { id });
+  }
+
+  async function rotateKey(key: KeyInfo) {
+    const input: Record<string, unknown> = {};
+    if (keyExpiresAt.trim()) input.expiresAt = keyExpiresAt.trim();
+    const data = await mutate<{ apiKeyRotate: { key: string } }>(
+      `mutation($id: ID!, $input: ApiKeyRotateInput!) { apiKeyRotate(id: $id, input: $input) { key } }`,
+      { id: key.id, input },
+    );
+    setFreshKey({ actor: "rotated key", key: data.apiKeyRotate.key });
+    setCopied(false);
   }
 
   async function changeAccess(member: Member, action: "suspend" | "reactivate" | "revoke") {
@@ -218,6 +256,59 @@ export function MembersView() {
         </div>
       )}
 
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+        <label>
+          API key scopes{" "}
+          <input
+            value={keyScopes}
+            onChange={(event) => setKeyScopes(event.target.value)}
+            placeholder="READ,WRITE,ADMIN"
+          />
+        </label>
+        <label>
+          Team IDs{" "}
+          <input
+            value={keyTeams}
+            onChange={(event) => setKeyTeams(event.target.value)}
+            placeholder="optional, comma-separated"
+          />
+        </label>
+        {(result.data?.teams ?? []).map((team) => {
+          const selected = keyTeams
+            .split(",")
+            .map((value) => value.trim())
+            .includes(team.id);
+          return (
+            <label key={team.id}>
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={(event) => {
+                  const current = keyTeams
+                    .split(",")
+                    .map((value) => value.trim())
+                    .filter(Boolean);
+                  setKeyTeams(
+                    event.target.checked
+                      ? [...new Set([...current, team.id])].join(",")
+                      : current.filter((id) => id !== team.id).join(","),
+                  );
+                }}
+              />{" "}
+              {team.key}
+            </label>
+          );
+        })}
+        <label>
+          Expires at{" "}
+          <input
+            value={keyExpiresAt}
+            onChange={(event) => setKeyExpiresAt(event.target.value)}
+            placeholder="optional ISO-8601"
+          />
+        </label>
+      </div>
+
       {(result.data?.actors ?? []).map((member) => {
         const historical = isHistoricalAgent(member);
         const canManageMember = canManageWorkspace || member.id === viewer?.id;
@@ -302,7 +393,17 @@ export function MembersView() {
                     <code>{key.name}</code>
                     <span style={{ color: "var(--text-faint)" }}>
                       {key.lastUsedAt ? `last used ${key.lastUsedAt.slice(0, 10)}` : "never used"}
+                      {` · scopes ${key.scopes.join(",")}`}
+                      {` · teams ${key.teamIds.length ? key.teamIds.join(",") : "all"}`}
+                      {key.expiresAt
+                        ? ` · expires ${key.expiresAt.slice(0, 10)}`
+                        : " · never expires"}
                     </span>
+                    {canManageMember && (
+                      <button style={{ color: "var(--text-muted)" }} onClick={() => rotateKey(key)}>
+                        Rotate
+                      </button>
+                    )}
                     {canManageMember && (
                       <button
                         style={{ color: "var(--danger)", marginLeft: "auto" }}

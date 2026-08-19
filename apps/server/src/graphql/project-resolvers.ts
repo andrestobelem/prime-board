@@ -43,38 +43,52 @@ import {
   assertCanCreateProject,
   assertCanManageProject,
   assertCanManageProjectTeams,
+  apiKeyTeamsWithinLimit,
 } from "../auth/permissions.ts";
 
 type MappedProject = ReturnType<typeof mapProject>;
+
+function projectTeamsAllowed(context: Context, projectId: string): boolean {
+  return apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, projectId));
+}
 
 export const projectResolvers = {
   Project: {
     lead: (project: MappedProject, _args: unknown, context: Context) =>
       project.leadId ? mapActor(lookupActor(context, project.leadId)!) : null,
     milestones: (project: MappedProject, _args: unknown, context: Context) =>
-      listMilestones(context.db, project.id).map(mapMilestone),
+      projectTeamsAllowed(context, project.id)
+        ? listMilestones(context.db, project.id).map(mapMilestone)
+        : [],
     teams: (project: MappedProject, _args: unknown, context: Context) =>
-      listProjectTeamIds(context.db, project.id).map((teamId) =>
-        mapTeam(lookupTeam(context, { id: teamId })!),
-      ),
+      listProjectTeamIds(context.db, project.id)
+        .filter((teamId) => apiKeyTeamsWithinLimit(context.auth, [teamId]))
+        .map((teamId) => mapTeam(lookupTeam(context, { id: teamId })!)),
     issues: (
       project: MappedProject,
       args: { first?: number; after?: string | null },
       context: Context,
     ) => {
       const first = Math.min(Math.max(args.first ?? 50, 1), 250);
+      if (!projectTeamsAllowed(context, project.id)) {
+        return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      }
       const page = listIssuesInWorkspace(context, {
         filter: { project: { eq: project.id } },
         first,
         after: args.after,
       });
       return {
-        nodes: page.rows.map(mapIssue),
+        nodes: page.rows
+          .filter((issue) => apiKeyTeamsWithinLimit(context.auth, [issue.team_id]))
+          .map(mapIssue),
         pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
       };
     },
     updates: (project: MappedProject, _args: unknown, context: Context) =>
-      listProjectUpdates(context.db, project.id).map(mapProjectUpdate),
+      projectTeamsAllowed(context, project.id)
+        ? listProjectUpdates(context.db, project.id).map(mapProjectUpdate)
+        : [],
   },
 
   ProjectStatusUpdate: {
@@ -91,8 +105,10 @@ export const projectResolvers = {
   },
 
   Milestone: {
-    project: (milestone: { projectId: string }, _args: unknown, context: Context) =>
-      mapProject(lookupProject(context, milestone.projectId)!),
+    project: (milestone: { projectId: string }, _args: unknown, context: Context) => {
+      const project = lookupProject(context, milestone.projectId);
+      return project && projectTeamsAllowed(context, project.id) ? mapProject(project) : null;
+    },
     issues: (
       milestone: { id: string },
       args: { first?: number; after?: string | null },
@@ -104,7 +120,9 @@ export const projectResolvers = {
         after: args.after,
       });
       return {
-        nodes: page.rows.map(mapIssue),
+        nodes: page.rows
+          .filter((issue) => apiKeyTeamsWithinLimit(context.auth, [issue.team_id]))
+          .map(mapIssue),
         pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
       };
     },

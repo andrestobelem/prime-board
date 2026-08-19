@@ -51,9 +51,16 @@ export function bootstrap(db: Database): BootstrapResult {
       "INSERT INTO actors (id, name, type, workspace_role, created_at, updated_at) VALUES (?1, ?2, ?3, 'admin', ?4, ?5)",
     ).run(adminId, "admin", "human", timestamp, timestamp);
 
+    const bootstrapKeyId = newId();
     db.query(
       "INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-    ).run(newId(), adminId, "admin bootstrap key", hashApiKey(apiKey), timestamp);
+    ).run(bootstrapKeyId, adminId, "admin bootstrap key", hashApiKey(apiKey), timestamp);
+    for (const scope of ["read", "write", "admin"]) {
+      db.query("INSERT INTO api_key_scopes (api_key_id, scope) VALUES (?1, ?2)").run(
+        bootstrapKeyId,
+        scope,
+      );
+    }
     db.query(
       "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES (?1, ?2, ?3, 'owner', ?4)",
     ).run(newId(), teamId, adminId, timestamp);

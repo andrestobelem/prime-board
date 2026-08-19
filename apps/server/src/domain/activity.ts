@@ -35,6 +35,9 @@ export function mapActivity(row: ActivityRow) {
     id: row.id,
     type: row.type,
     actorId: row.actor_id,
+    // Uso interno: permite que el resolver de payload aplique el límite Team
+    // de la issue fuente sin exponer un campo adicional en GraphQL.
+    _issueId: row.issue_id,
     payload: JSON.parse(row.payload),
     createdAt: row.created_at,
   };

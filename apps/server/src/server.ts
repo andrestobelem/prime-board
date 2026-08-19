@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { createSchema, createYoga } from "graphql-yoga";
 import { APP_NAME, APP_VERSION, typeDefs } from "@prime-board/schema";
-import { resolveViewer } from "./auth/viewer.ts";
+import { resolveAuth } from "./auth/viewer.ts";
 import type { Config } from "./config.ts";
 import type { Context } from "./graphql/context.ts";
 import { resolvers } from "./graphql/resolvers.ts";
@@ -31,14 +31,18 @@ export function createApp({ db, config, webhookOptions }: AppDeps) {
     // Un TrackedRepoSync fresco por request (AT-191): dos requests concurrentes
     // no se pisan el rastreo de "¿ya sincronizó?" — delega en el mismo `repo`
     // singleton, así que la escritura en sí sigue siendo una sola por mutation.
-    context: ({ request }): Context => ({
-      db,
-      config,
-      workspace: resolveWorkspaceContext(db),
-      viewer: resolveViewer(db, request.headers.get("authorization")),
-      events,
-      repo: repo ? trackedRepoSync(repo) : null,
-    }),
+    context: ({ request }): Context => {
+      const auth = resolveAuth(db, request.headers.get("authorization"));
+      return {
+        db,
+        config,
+        workspace: resolveWorkspaceContext(db),
+        viewer: auth?.actor ?? null,
+        auth,
+        events,
+        repo: repo ? trackedRepoSync(repo) : null,
+      };
+    },
   });
 
   const server = Bun.serve({

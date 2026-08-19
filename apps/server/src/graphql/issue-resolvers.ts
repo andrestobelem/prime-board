@@ -5,6 +5,7 @@ import {
   archiveIssue,
   createIssue,
   identifierOf,
+  getIssueByRef,
   mapIssue,
   slugify,
   updateIssue,
@@ -13,11 +14,11 @@ import {
   type IssueUpdateInput,
 } from "../domain/issues.ts";
 import { listActivity, mapActivity } from "../domain/activity.ts";
-import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
+import { ACTIVITY_REFS, translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
 import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getMilestone, mapMilestone } from "../domain/milestones.ts";
-import { mapProject } from "../domain/projects.ts";
+import { listProjectTeamIds, mapProject } from "../domain/projects.ts";
 import { getCycle, mapCycle } from "../domain/cycles.ts";
 import {
   createRelation,
@@ -27,7 +28,11 @@ import {
   type StoredRelationType,
 } from "../domain/relations.ts";
 import { listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
-import { assertCanManageIssue, assertCanUseImportFields } from "../auth/permissions.ts";
+import {
+  assertCanManageIssue,
+  assertCanUseImportFields,
+  apiKeyTeamsWithinLimit,
+} from "../auth/permissions.ts";
 import type { Context } from "./context.ts";
 import {
   lookupActor,
@@ -47,6 +52,80 @@ import {
 import { requireViewer } from "./errors.ts";
 
 type MappedIssue = ReturnType<typeof mapIssue>;
+
+/** Teams de una referencia del historial, para no traducir nombres fuera del allowlist. */
+function activityReferenceTeams(context: Context, table: RefTable, value: string): string[] | null {
+  if (table === "actors") return [];
+  if (table === "issues") {
+    const issue = getIssueByRef(context.db, value);
+    return issue ? [issue.team_id] : null;
+  }
+  if (table === "teams") {
+    const team = context.db.query("SELECT id FROM teams WHERE id = ?1 OR key = ?1").get(value) as {
+      id: string;
+    } | null;
+    return team ? [team.id] : null;
+  }
+  if (table === "states") {
+    const state = context.db
+      .query("SELECT team_id FROM workflow_states WHERE id = ?1")
+      .get(value) as { team_id: string } | null;
+    return state ? [state.team_id] : null;
+  }
+  if (table === "cycles") {
+    const cycle = context.db.query("SELECT team_id FROM cycles WHERE id = ?1").get(value) as {
+      team_id: string;
+    } | null;
+    return cycle ? [cycle.team_id] : null;
+  }
+  if (table === "projects") {
+    if (!context.db.query("SELECT id FROM projects WHERE id = ?1").get(value)) return null;
+    return listProjectTeamIds(context.db, value);
+  }
+  if (table === "milestones") {
+    const milestone = getMilestone(context.db, value);
+    return milestone ? listProjectTeamIds(context.db, milestone.project_id) : null;
+  }
+  return null;
+}
+
+function sanitizeActivityPayload(
+  activity: { _issueId?: string; type: string; payload: unknown },
+  context: Context,
+): Record<string, unknown> {
+  const payload =
+    activity.payload && typeof activity.payload === "object" && !Array.isArray(activity.payload)
+      ? { ...(activity.payload as Record<string, unknown>) }
+      : {};
+  // Las credenciales sin allowlist ya tienen la visibilidad completa del
+  // Workspace y conservan el comportamiento histórico ante tombstones.
+  if (!context.auth?.teamIds) return payload;
+  const source = activity._issueId ? lookupIssueById(context, activity._issueId) : null;
+  const refs = ACTIVITY_REFS[activity.type as keyof typeof ACTIVITY_REFS] ?? [];
+  for (const ref of refs) {
+    const value = payload[ref.field];
+    if (typeof value !== "string") continue;
+    const teams = activityReferenceTeams(context, ref.table, value);
+    if (!source || !teams || !apiKeyTeamsWithinLimit(context.auth, [source.team_id, ...teams])) {
+      if (ref.mode === "dense") payload[ref.field] = null;
+      else delete payload[ref.field];
+    }
+  }
+  // relation_added/relation_removed guardan la otra issue como clave natural,
+  // fuera de ACTIVITY_REFS. Nunca conservamos una clave no permitida.
+  if (activity.type === "relation_added" || activity.type === "relation_removed") {
+    const value = payload.issue;
+    const related = typeof value === "string" ? getIssueByRef(context.db, value) : null;
+    if (
+      !source ||
+      !related ||
+      !apiKeyTeamsWithinLimit(context.auth, [source.team_id, related.team_id])
+    ) {
+      delete payload.issue;
+    }
+  }
+  return payload;
+}
 
 function assertIssueAccess(
   context: Context,
@@ -102,25 +181,66 @@ export const issueResolvers = {
     parent: (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.parent_id) return null;
       const parent = lookupIssueById(context, issue._row.parent_id);
-      return parent ? mapIssue(parent) : null;
+      return parent && apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, parent.team_id])
+        ? mapIssue(parent)
+        : null;
     },
     children: (issue: MappedIssue, args: { includeArchived?: boolean | null }, context: Context) =>
-      listChildrenInWorkspace(context, issue.id, Boolean(args.includeArchived)).map(mapIssue),
+      listChildrenInWorkspace(context, issue.id, Boolean(args.includeArchived))
+        .filter((child) =>
+          apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, child.team_id]),
+        )
+        .map(mapIssue),
     labels: (issue: MappedIssue, _args: unknown, context: Context) =>
-      listIssueLabels(context.db, issue.id).map(mapLabel),
-    project: (issue: MappedIssue, _args: unknown, context: Context) =>
-      issue._row.project_id ? mapProject(lookupProject(context, issue._row.project_id)!) : null,
-    milestone: (issue: MappedIssue, _args: unknown, context: Context) =>
-      issue._row.milestone_id
-        ? mapMilestone(getMilestone(context.db, issue._row.milestone_id)!)
-        : null,
-    cycle: (issue: MappedIssue, _args: unknown, context: Context) =>
-      issue._row.cycle_id ? mapCycle(getCycle(context.db, issue._row.cycle_id)!) : null,
+      listIssueLabels(context.db, issue.id)
+        .filter(
+          (label) =>
+            label.team_id === null ||
+            apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, label.team_id]),
+        )
+        .map(mapLabel),
+    project: (issue: MappedIssue, _args: unknown, context: Context) => {
+      if (!issue._row.project_id) return null;
+      const project = lookupProject(context, issue._row.project_id);
+      if (
+        !project ||
+        !apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, project.id))
+      )
+        return null;
+      return mapProject(project);
+    },
+    milestone: (issue: MappedIssue, _args: unknown, context: Context) => {
+      if (!issue._row.milestone_id) return null;
+      const milestone = getMilestone(context.db, issue._row.milestone_id);
+      if (
+        !milestone ||
+        !apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, milestone.project_id))
+      )
+        return null;
+      return mapMilestone(milestone);
+    },
+    cycle: (issue: MappedIssue, _args: unknown, context: Context) => {
+      if (!issue._row.cycle_id) return null;
+      const cycle = getCycle(context.db, issue._row.cycle_id);
+      return cycle && apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, cycle.team_id])
+        ? mapCycle(cycle)
+        : null;
+    },
     sortOrder: (issue: MappedIssue) => issue._row.sort_order,
     comments: (issue: MappedIssue, _args: unknown, context: Context) =>
       listComments(context.db, issue.id).map(mapComment),
     relations: (issue: MappedIssue, _args: unknown, context: Context) =>
-      listRelationsInWorkspace(context, issue.id).map(mapRelation),
+      listRelationsInWorkspace(context, issue.id)
+        .map((relation) => {
+          const related = lookupIssueById(context, relation.relatedId);
+          if (
+            !related ||
+            !apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, related.team_id])
+          )
+            return null;
+          return { ...mapRelation(relation), _sourceTeamId: issue._row.team_id };
+        })
+        .filter(Boolean),
     activity: (issue: MappedIssue, _args: unknown, context: Context) =>
       listActivity(context.db, issue.id).map(mapActivity),
     url: (issue: MappedIssue, _args: unknown, context: Context) =>
@@ -135,8 +255,20 @@ export const issueResolvers = {
   },
 
   IssueRelation: {
-    relatedIssue: (relation: { _relatedId: string }, _args: unknown, context: Context) =>
-      mapIssue(lookupIssueById(context, relation._relatedId)!),
+    relatedIssue: (
+      relation: { _relatedId: string; _sourceTeamId?: string },
+      _args: unknown,
+      context: Context,
+    ) => {
+      const related = lookupIssueById(context, relation._relatedId);
+      if (!related) return null;
+      if (
+        relation._sourceTeamId &&
+        !apiKeyTeamsWithinLimit(context.auth, [relation._sourceTeamId, related.team_id])
+      )
+        return null;
+      return mapIssue(related);
+    },
   },
 
   Comment: {
@@ -154,7 +286,7 @@ export const issueResolvers = {
     // exporter/importer, solo cambia el resolve — acá consulta la DB en vivo
     // en vez de un lookup pre-armado, porque no hay un export de por medio.
     payload: (
-      activity: { type: string; payload: Record<string, unknown> },
+      activity: { _issueId?: string; type: string; payload: Record<string, unknown> },
       _args: unknown,
       context: Context,
     ) => {
@@ -173,7 +305,11 @@ export const issueResolvers = {
       };
       const resolve = (table: RefTable, value: string): string | undefined =>
         (context.db.query(queries[table]).get(value) as { name: string } | null)?.name;
-      return translateActivityRefs(activity.type, activity.payload, resolve);
+      return translateActivityRefs(
+        activity.type,
+        sanitizeActivityPayload(activity, context),
+        resolve,
+      );
     },
   },
 
@@ -270,7 +406,10 @@ export const issueResolvers = {
           to: { type: inverse[created.view.type], issue: identifierOf(created.issue) },
         },
       });
-      return { success: true, relation: mapRelation(created.view) };
+      return {
+        success: true,
+        relation: { ...mapRelation(created.view), _sourceTeamId: created.issue.team_id },
+      };
     },
     issueRelationDelete: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);

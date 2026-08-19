@@ -530,6 +530,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
     },
   );
 
+  const API_KEY_FIELDS = `id name createdAt lastUsedAt revokedAt expiresAt scopes teamIds actor { id name type }`;
   server.registerTool(
     "save_api_key",
     {
@@ -537,17 +538,83 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       inputSchema: {
         actor: z.string().describe('Actor ID, name or "me"'),
         name: z.string(),
+        scopes: z.array(z.enum(["READ", "WRITE", "ADMIN"])).optional(),
+        teams: z.array(z.string()).optional().describe("Team keys or IDs"),
+        expiresAt: z.string().optional().describe("ISO-8601 expiration"),
       },
     },
-    async ({ actor, name }) => {
+    async ({ actor, name, scopes, teams, expiresAt }) => {
+      const input: Record<string, unknown> = {
+        actorId: await resolveActor(sessionConfig, actor),
+        name,
+      };
+      if (scopes) input.scopes = scopes;
+      if (teams)
+        input.teamIds = await Promise.all(
+          teams.map(async (team) => (await resolveTeam(sessionConfig, team)).id),
+        );
+      if (expiresAt !== undefined) input.expiresAt = expiresAt;
       const data = await gqlRequest(
         sessionConfig,
         `mutation($input: ApiKeyCreateInput!) { apiKeyCreate(input: $input) {
-      apiKey { id name createdAt lastUsedAt actor { id name type } } key
+      apiKey { ${API_KEY_FIELDS} } key
     } }`,
-        { input: { actorId: await resolveActor(sessionConfig, actor), name } },
+        { input },
       );
       return json(data.apiKeyCreate);
+    },
+  );
+
+  server.registerTool(
+    "list_api_keys",
+    {
+      description: "List API keys for an actor. Secrets and hashes are never returned.",
+      inputSchema: { actor: z.string().optional().describe('Actor ID, name or "me"') },
+    },
+    async ({ actor }) => {
+      const actorId = actor
+        ? await resolveActor(sessionConfig, actor)
+        : (await gqlRequest(sessionConfig, "{ viewer { id } }")).viewer.id;
+      const data = await gqlRequest(
+        sessionConfig,
+        `{ actors { id apiKeys { ${API_KEY_FIELDS} } } }`,
+      );
+      return json(
+        data.actors.find((candidate: { id: string }) => candidate.id === actorId)?.apiKeys ?? [],
+      );
+    },
+  );
+
+  server.registerTool(
+    "rotate_api_key",
+    {
+      description:
+        "Atomically revoke an API key and create its replacement. The secret is returned only once.",
+      inputSchema: {
+        id: z.string(),
+        name: z.string().optional(),
+        scopes: z.array(z.enum(["READ", "WRITE", "ADMIN"])).optional(),
+        teams: z.array(z.string()).optional().describe("Team keys or IDs"),
+        expiresAt: z.string().optional(),
+      },
+    },
+    async ({ id, name, scopes, teams, expiresAt }) => {
+      const input: Record<string, unknown> = {};
+      if (name !== undefined) input.name = name;
+      if (scopes) input.scopes = scopes;
+      if (teams)
+        input.teamIds = await Promise.all(
+          teams.map(async (team) => (await resolveTeam(sessionConfig, team)).id),
+        );
+      if (expiresAt !== undefined) input.expiresAt = expiresAt;
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($id: ID!, $input: ApiKeyRotateInput!) {
+        apiKeyRotate(id: $id, input: $input) { apiKey { ${API_KEY_FIELDS} } key }
+      }`,
+        { id, input },
+      );
+      return json(data.apiKeyRotate);
     },
   );
 

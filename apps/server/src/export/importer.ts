@@ -229,12 +229,38 @@ export function rebuildFromRepo(
 
   // 1. Credenciales locales. El id exportado es la identidad estable; el nombre
   // queda como fallback para repos antiguos que todavía no lo incluían.
-  const keys = db
+  let keys = db
     .query(
-      "SELECT api_keys.actor_id, api_keys.name, api_keys.hash, api_keys.last_used_at, api_keys.revoked_at, api_keys.created_at, actors.name AS actor_name " +
+      "SELECT api_keys.id, api_keys.actor_id, api_keys.name, api_keys.hash, api_keys.last_used_at, api_keys.revoked_at, api_keys.created_at, api_keys.expires_at, api_keys.rotated_from_id, actors.name AS actor_name " +
         "FROM api_keys JOIN actors ON actors.id = api_keys.actor_id",
     )
     .all() as Array<Record<string, string | null>>;
+  // Los límites y scopes son metadata local de la credencial: se leen antes de
+  // limpiar la base, pero nunca forman parte del export (y por tanto nunca
+  // pueden filtrar hashes ni secretos).
+  const keyScopes = new Map<string, string[]>();
+  for (const row of db.query("SELECT api_key_id, scope FROM api_key_scopes").all() as Array<{
+    api_key_id: string;
+    scope: string;
+  }>) {
+    const keyId = row.api_key_id;
+    const scope = row.scope;
+    const current = keyScopes.get(keyId) ?? [];
+    current.push(scope);
+    keyScopes.set(keyId, current);
+  }
+  const keyTeamKeys = new Map<string, string[]>();
+  for (const row of db
+    .query(
+      "SELECT api_key_id, teams.key AS team_key FROM api_key_team_limits JOIN teams ON teams.id = api_key_team_limits.team_id",
+    )
+    .all() as Array<{ api_key_id: string; team_key: string }>) {
+    const keyId = row.api_key_id;
+    const teamKey = row.team_key;
+    const current = keyTeamKeys.get(keyId) ?? [];
+    current.push(teamKey);
+    keyTeamKeys.set(keyId, current);
+  }
   const actors = readJson(join(base, "meta", "actors.json")) as Array<Record<string, any>>;
   const actorsBySourceId = new Map<string, Record<string, any>>();
   const actorsByName = new Map<string, Record<string, any>>();
@@ -251,6 +277,46 @@ export function rebuildFromRepo(
         throw new Error(`Duplicate actor id in repo: ${sourceId}`);
       }
       actorsBySourceId.set(sourceId, actor);
+    }
+  }
+  // El export del repo omite intencionalmente los hashes. Si esta DB no tiene una
+  // copia local de una key, conserva su metadata no secreta como credencial redacted
+  // inutilizable, para que el rebuild no ensanche scopes, expiración o rotación.
+  const exportedKeysPath = join(base, "meta", "api-keys.json");
+  if (existsSync(exportedKeysPath) && keys.length === 0) {
+    const knownIds = new Set(keys.map((key) => String(key.id)));
+    for (const metadataKey of readJson(exportedKeysPath) as Array<Record<string, any>>) {
+      const sourceId = String(metadataKey.id ?? "");
+      if (!sourceId || knownIds.has(sourceId)) continue;
+      const actorId = metadataKey.actorId == null ? null : String(metadataKey.actorId);
+      const actor = actorId
+        ? actorsBySourceId.get(actorId)
+        : actorsByName.get(String(metadataKey.actor ?? ""));
+      if (!actor)
+        throw new Error(
+          `Cannot preserve API key ${metadataKey.name ?? "<unnamed>"}: actor disappeared`,
+        );
+      keys.push({
+        id: sourceId,
+        actor_id: actorId,
+        actor_name: String(metadataKey.actor ?? actor.name),
+        name: String(metadataKey.name ?? ""),
+        hash: `redacted:${sourceId}`,
+        last_used_at: metadataKey.lastUsedAt == null ? null : String(metadataKey.lastUsedAt),
+        revoked_at: metadataKey.revokedAt == null ? null : String(metadataKey.revokedAt),
+        created_at: String(metadataKey.createdAt ?? now()),
+        expires_at: metadataKey.expiresAt == null ? null : String(metadataKey.expiresAt),
+        rotated_from_id:
+          metadataKey.rotatedFromId == null ? null : String(metadataKey.rotatedFromId),
+      });
+      keyScopes.set(
+        sourceId,
+        Array.isArray(metadataKey.scopes) ? metadataKey.scopes.map(String) : [],
+      );
+      keyTeamKeys.set(
+        sourceId,
+        Array.isArray(metadataKey.teamIds) ? metadataKey.teamIds.map(String) : [],
+      );
     }
   }
   const keyTargets = keys.map((key) => {
@@ -962,6 +1028,8 @@ export function rebuildFromRepo(
     }
 
     // 10. Restaurar credenciales locales por identidad estable, con fallback legado.
+    const rebuiltKeyIds = new Map<string, string>();
+    for (const { key } of keyTargets) rebuiltKeyIds.set(String(key.id), String(key.id));
     for (const { key, actor } of keyTargets) {
       const actorId =
         (actor.id != null ? actorIdsBySourceId.get(String(actor.id)) : undefined) ??
@@ -969,17 +1037,42 @@ export function rebuildFromRepo(
       if (!actorId) {
         throw new Error(`Cannot restore API key ${key.name ?? "<unnamed>"}: actor disappeared`);
       }
+      const keyId = rebuiltKeyIds.get(String(key.id));
+      if (!keyId)
+        throw new Error(`Cannot restore API key ${key.name ?? "<unnamed>"}: missing identity`);
+      const rotatedFrom = key.rotated_from_id
+        ? (rebuiltKeyIds.get(String(key.rotated_from_id)) ?? null)
+        : null;
       db.query(
-        "INSERT INTO api_keys (id, actor_id, name, hash, last_used_at, revoked_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO api_keys (id, actor_id, name, hash, last_used_at, revoked_at, created_at, expires_at, rotated_from_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
       ).run(
-        newId(),
+        keyId,
         actorId,
         key.name as string,
         key.hash as string,
         (key.last_used_at ?? null) as string | null,
         (key.revoked_at ?? null) as string | null,
         key.created_at as string,
+        (key.expires_at ?? null) as string | null,
+        rotatedFrom,
       );
+      for (const scope of keyScopes.get(String(key.id)) ?? []) {
+        db.query("INSERT INTO api_key_scopes (api_key_id, scope) VALUES (?1, ?2)").run(
+          keyId,
+          scope,
+        );
+      }
+      for (const teamKey of keyTeamKeys.get(String(key.id)) ?? []) {
+        const teamId = teamIds.get(teamKey);
+        if (!teamId)
+          throw new Error(
+            `Cannot restore API key ${key.name ?? "<unnamed>"}: team limit ${teamKey} is outside this export`,
+          );
+        db.query("INSERT INTO api_key_team_limits (api_key_id, team_id) VALUES (?1, ?2)").run(
+          keyId,
+          teamId,
+        );
+      }
       result.preservedKeys += 1;
     }
     for (const hook of webhooks) {

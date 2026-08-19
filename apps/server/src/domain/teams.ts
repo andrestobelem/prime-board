@@ -109,6 +109,10 @@ export function deleteTeam(db: Database, id: string, confirmation: string): Team
       ["labels", "SELECT count(*) AS count FROM labels WHERE team_id = ?1"],
       ["saved views", "SELECT count(*) AS count FROM saved_views WHERE team_id = ?1"],
       ["initiatives", "SELECT count(*) AS count FROM initiative_teams WHERE team_id = ?1"],
+      [
+        "API key allowlists",
+        "SELECT count(*) AS count FROM api_key_team_limits WHERE team_id = ?1",
+      ],
     ];
     const blockers = dependencies
       .map(([resource, query]) => {

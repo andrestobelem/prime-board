@@ -520,6 +520,60 @@ export function exportBoard(
     .all() as Array<Record<string, unknown>>;
   write(join(base, "meta", "actors.json"), stableStringify(actors));
 
+  // La metadata de API keys es segura para replicar: no contiene plaintext, hashes
+  // ni secretos como los de webhooks. El rebuild conserva la metadata mientras
+  // las credenciales ausentes de la DB local permanecen inutilizables hasta rotarlas.
+  const keyScopes = new Map<string, string[]>();
+  for (const row of db
+    .query("SELECT api_key_id, scope FROM api_key_scopes ORDER BY scope")
+    .all() as Array<{ api_key_id: string; scope: string }>) {
+    const scopes = keyScopes.get(row.api_key_id) ?? [];
+    scopes.push(row.scope);
+    keyScopes.set(row.api_key_id, scopes);
+  }
+  const keyTeams = new Map<string, string[]>();
+  for (const row of db
+    .query(
+      "SELECT api_key_id, teams.key AS team_key FROM api_key_team_limits JOIN teams ON teams.id = api_key_team_limits.team_id ORDER BY teams.key",
+    )
+    .all() as Array<{ api_key_id: string; team_key: string }>) {
+    const teamsForKey = keyTeams.get(row.api_key_id) ?? [];
+    teamsForKey.push(row.team_key);
+    keyTeams.set(row.api_key_id, teamsForKey);
+  }
+  const apiKeys = db
+    .query(
+      "SELECT api_keys.id, api_keys.actor_id, actors.name AS actor_name, api_keys.name, api_keys.last_used_at, api_keys.revoked_at, api_keys.created_at, api_keys.expires_at, api_keys.rotated_from_id FROM api_keys JOIN actors ON actors.id = api_keys.actor_id ORDER BY api_keys.id",
+    )
+    .all() as Array<Record<string, string | null>>;
+  write(
+    join(base, "meta", "api-keys.json"),
+    stableStringify(
+      apiKeys
+        .filter((key) => {
+          const limitedTo = keyTeams.get(String(key.id)) ?? [];
+          return (
+            !teamFilter ||
+            limitedTo.length === 0 ||
+            limitedTo.every((team) => team === options.teamKey?.toUpperCase())
+          );
+        })
+        .map((key) => ({
+          id: key.id,
+          actorId: key.actor_id,
+          actor: key.actor_name,
+          name: key.name,
+          createdAt: key.created_at,
+          lastUsedAt: key.last_used_at,
+          revokedAt: key.revoked_at,
+          expiresAt: key.expires_at,
+          rotatedFromId: key.rotated_from_id,
+          scopes: keyScopes.get(String(key.id)) ?? [],
+          teamIds: keyTeams.get(String(key.id)) ?? [],
+        })),
+    ),
+  );
+
   const teams = db
     .query(
       `SELECT id, key, name, description, default_state_id, archived_at FROM teams ${teamFilter ? "WHERE id = ?1" : ""} ORDER BY key`,

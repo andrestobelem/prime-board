@@ -1,6 +1,8 @@
 // Políticas de autorización del workspace (PRB-235).
 import type { Database } from "bun:sqlite";
-import type { ActorRow } from "./viewer.ts";
+import type { ActorRow, AuthContext } from "./viewer.ts";
+import type { ApiKeyScope } from "../domain/actors.ts";
+import type { Context } from "../graphql/context.ts";
 import { getApiKey } from "../domain/actors.ts";
 import { assertTeamActive, getTeam } from "../domain/teams.ts";
 import { getProject, listProjectTeamIds } from "../domain/projects.ts";
@@ -123,5 +125,81 @@ export function assertCanManageProjectTeams(
   if (isWorkspaceAdmin(viewer)) return;
   if (teamIds.some((teamId) => !isTeamMember(db, teamId, viewer.id))) {
     throw apiError("UNAUTHORIZED", "Project team membership is required");
+  }
+}
+
+const SCOPE_LEVEL: Record<ApiKeyScope, number> = { read: 1, write: 2, admin: 3 };
+
+/** La jerarquía permite que ADMIN incluya WRITE y READ, y WRITE incluya READ. */
+export function hasApiKeyScope(auth: AuthContext | null, required: ApiKeyScope): boolean {
+  if (!auth) return false;
+  const requiredLevel = SCOPE_LEVEL[required] ?? 0;
+  return auth.scopes.some((scope) => (SCOPE_LEVEL[scope] ?? 0) >= requiredLevel);
+}
+
+export function assertApiKeyScope(context: Context, required: ApiKeyScope): void {
+  if (!context.auth || !hasApiKeyScope(context.auth, required)) {
+    throw apiError("UNAUTHORIZED", `API key scope ${required.toUpperCase()} is required`);
+  }
+}
+
+/** Un límite vacío/null representa todos los Teams por compatibilidad. */
+export function hasApiKeyTeamLimit(auth: AuthContext | null): boolean {
+  return Boolean(auth?.teamIds);
+}
+
+export function apiKeyTeamsWithinLimit(
+  auth: AuthContext | null,
+  teamIds: readonly string[],
+): boolean {
+  if (!auth?.teamIds) return true;
+  const allowed = new Set(auth.teamIds);
+  return teamIds.every((teamId) => allowed.has(teamId));
+}
+
+export function assertApiKeyTeams(context: Context, teamIds: readonly string[]): void {
+  if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) {
+    throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+  }
+}
+
+export function assertUnrestrictedApiKey(context: Context): void {
+  if (hasApiKeyTeamLimit(context.auth)) {
+    throw apiError("UNAUTHORIZED", "This operation requires an unrestricted API key");
+  }
+}
+
+export function scopesWithin(
+  parent: readonly ApiKeyScope[],
+  child: readonly ApiKeyScope[],
+): boolean {
+  const parentLevel = parent.reduce((level, scope) => Math.max(level, SCOPE_LEVEL[scope] ?? 0), 0);
+  return child.every((scope) => (SCOPE_LEVEL[scope] ?? 0) <= parentLevel);
+}
+
+export function teamIdsWithin(parent: string[] | null, child: string[] | null): boolean {
+  if (!parent) return true;
+  if (!child) return false;
+  const allowed = new Set(parent);
+  return child.every((teamId) => allowed.has(teamId));
+}
+
+export function assertChildApiKey(
+  context: Context,
+  target: ActorRow,
+  input: { scopes?: readonly string[] | null; teamIds?: readonly string[] | null },
+  normalized: { scopes: ApiKeyScope[]; teamIds: string[] },
+): void {
+  // ADMIN in a member's key is only a declared upper bound: the existing
+  // actor role checks still reject every workspace-admin operation.
+  if (context.auth && context.viewer?.id === target.id) {
+    if (!scopesWithin(context.auth.scopes, normalized.scopes)) {
+      throw apiError("UNAUTHORIZED", "A key cannot mint scopes beyond its own capabilities");
+    }
+    if (
+      !teamIdsWithin(context.auth.teamIds, normalized.teamIds.length ? normalized.teamIds : null)
+    ) {
+      throw apiError("UNAUTHORIZED", "A key cannot mint access beyond its Team limits");
+    }
   }
 }
