@@ -50,6 +50,25 @@ import {
   rotatePostgresApiKey,
 } from "../domain/postgres-credentials.ts";
 import {
+  archivePostgresTeam,
+  assertPostgresTeamActive,
+  canDiscoverPostgresTeam,
+  createPostgresTeam,
+  createPostgresWorkflowState,
+  deletePostgresTeam,
+  deletePostgresWorkflowState,
+  getPostgresDefaultState,
+  getPostgresTeam,
+  getPostgresWorkflowState,
+  isPostgresTeamOwner,
+  listPostgresTeamStates,
+  listPostgresTeams,
+  mapPostgresTeam,
+  mapPostgresWorkflowState,
+  updatePostgresTeam,
+  updatePostgresWorkflowState,
+} from "../domain/postgres-teams.ts";
+import {
   archiveTeam,
   assertTeamActive,
   createTeam,
@@ -287,30 +306,79 @@ export const resolvers = {
   },
 
   Team: {
-    states: (team: { id: string }, _args: unknown, context: Context) =>
-      canAccessTeam(context.db, requireViewer(context), team.id)
+    states: async (team: { id: string }, _args: unknown, context: Context) => {
+      const viewer = requireViewer(context);
+      if (context.persistence) {
+        const row = await getPostgresTeam(context.persistence, { id: team.id });
+        return row && (await canDiscoverPostgresTeam(context.persistence, viewer, row))
+          ? (await listPostgresTeamStates(context.persistence, team.id)).map(
+              mapPostgresWorkflowState,
+            )
+          : [];
+      }
+      return canAccessTeam(context.db, viewer, team.id)
         ? listTeamStates(context.db, team.id).map(mapWorkflowState)
-        : [],
-    defaultState: (team: { _row: TeamRow }, _args: unknown, context: Context) =>
-      canAccessTeam(context.db, requireViewer(context), team._row.id)
+        : [];
+    },
+    defaultState: async (
+      team: { _row: TeamRow; id?: string },
+      _args: unknown,
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      if (context.persistence) {
+        const row = await getPostgresTeam(context.persistence, { id: team._row?.id ?? team.id });
+        return row && (await canDiscoverPostgresTeam(context.persistence, viewer, row))
+          ? mapPostgresWorkflowState(await getPostgresDefaultState(context.persistence, row))
+          : null;
+      }
+      return canAccessTeam(context.db, viewer, team._row.id)
         ? mapWorkflowState(getDefaultState(context.db, team._row))
-        : null,
-    labels: (team: { id: string }, _args: unknown, context: Context) =>
-      canAccessTeam(context.db, requireViewer(context), team.id)
+        : null;
+    },
+    labels: (team: { id: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        throw apiError(
+          "VALIDATION_FAILED",
+          "Team labels are not yet available with PostgreSQL persistence",
+        );
+      }
+      return canAccessTeam(context.db, requireViewer(context), team.id)
         ? listLabels(context.db, team.id).map(mapLabel)
-        : [],
-    projects: (team: { id: string }, _args: unknown, context: Context) =>
-      listProjects(context.db, null, team.id)
+        : [];
+    },
+    projects: (team: { id: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        throw apiError(
+          "VALIDATION_FAILED",
+          "Team projects are not yet available with PostgreSQL persistence",
+        );
+      }
+      return listProjects(context.db, null, team.id)
         .filter((project) => canAccessProject(context.db, requireViewer(context), project.id))
         .filter((project) =>
           apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, project.id)),
         )
-        .map(mapProject),
-    cycles: (team: { id: string }, _args: unknown, context: Context) =>
-      canAccessTeam(context.db, requireViewer(context), team.id)
+        .map(mapProject);
+    },
+    cycles: (team: { id: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        throw apiError(
+          "VALIDATION_FAILED",
+          "Team cycles are not yet available with PostgreSQL persistence",
+        );
+      }
+      return canAccessTeam(context.db, requireViewer(context), team.id)
         ? listCycles(context.db, team.id).map(mapCycle)
-        : [],
+        : [];
+    },
     memberships: (team: { id: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        throw apiError(
+          "VALIDATION_FAILED",
+          "Team memberships are not yet available with PostgreSQL persistence",
+        );
+      }
       const viewer = requireViewer(context);
       return isWorkspaceAdmin(viewer) || isTeamMember(context.db, team.id, viewer.id)
         ? listTeamMemberships(context.db, team.id).map(mapTeamMembership)
@@ -476,8 +544,24 @@ export const resolvers = {
         if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
         return mapWorkspace(row);
       },
-      teams: (_parent: unknown, args: { includeArchived?: boolean | null }, context: Context) => {
+      teams: async (
+        _parent: unknown,
+        args: { includeArchived?: boolean | null },
+        context: Context,
+      ) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const rows = await listPostgresTeams(context.persistence, Boolean(args.includeArchived));
+          return (
+            await Promise.all(
+              rows.map(async (team) =>
+                (await canDiscoverPostgresTeam(context.persistence!, viewer, team))
+                  ? mapPostgresTeam(team)
+                  : null,
+              ),
+            )
+          ).filter((team): team is ReturnType<typeof mapPostgresTeam> => team !== null);
+        }
         assertActiveWorkspace(context);
         const rows = context.db
           .query(
@@ -488,12 +572,21 @@ export const resolvers = {
           .filter((team) => canDiscoverTeam(context.db, viewer, team.id))
           .map(mapTeam);
       },
-      team: (
+      team: async (
         _parent: unknown,
         args: { id?: string; key?: string; includeArchived?: boolean | null },
         context: Context,
       ) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const row = await getPostgresTeam(context.persistence, args);
+          if (row?.archived_at && !args.includeArchived) return null;
+          return row &&
+            (await canDiscoverPostgresTeam(context.persistence, viewer, row)) &&
+            apiKeyTeamsWithinLimit(context.auth, [row.id])
+            ? mapPostgresTeam(row)
+            : null;
+        }
         const row = lookupTeam(context, args);
         if (row?.archived_at && !args.includeArchived) return null;
         return row && canDiscoverTeam(context.db, viewer, row.id) ? mapTeam(row) : null;
@@ -729,25 +822,41 @@ export const resolvers = {
       {
         ...issueResolvers.Mutation,
         ...projectResolvers.Mutation,
-        teamArchive: (_parent: unknown, args: { id: string }, context: Context) => {
+        teamArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            return {
+              success: true,
+              team: mapPostgresTeam(await archivePostgresTeam(context.persistence, args.id, true)),
+            };
+          }
           requireTeam(context, { id: args.id });
           return { success: true, team: mapTeam(archiveTeam(context.db, args.id, true)) };
         },
-        teamUnarchive: (_parent: unknown, args: { id: string }, context: Context) => {
+        teamUnarchive: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            return {
+              success: true,
+              team: mapPostgresTeam(await archivePostgresTeam(context.persistence, args.id, false)),
+            };
+          }
           requireTeam(context, { id: args.id });
           return { success: true, team: mapTeam(archiveTeam(context.db, args.id, false)) };
         },
-        teamDelete: (
+        teamDelete: async (
           _parent: unknown,
           args: { id: string; confirmation: string },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            await deletePostgresTeam(context.persistence, args.id, args.confirmation);
+            return { success: true };
+          }
           requireTeam(context, { id: args.id });
           const teamOwnerIds = (
             context.db
@@ -794,7 +903,7 @@ export const resolvers = {
             ),
           };
         },
-        teamCreate: (
+        teamCreate: async (
           _parent: unknown,
           args: {
             input: {
@@ -809,15 +918,38 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            const team = mapPostgresTeam(
+              await createPostgresTeam(context.persistence, args.input, viewer.id),
+            );
+            return { success: true, team };
+          }
           const team = mapTeam(createTeam(context.db, args.input, viewer.id));
           return { success: true, team };
         },
-        teamUpdate: (
+        teamUpdate: async (
           _parent: unknown,
           args: { id: string; input: TeamUpdateInput },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const team = await getPostgresTeam(context.persistence, { id: args.id });
+            if (!team) throw apiError("NOT_FOUND", "Team not found");
+            if (
+              !isWorkspaceAdmin(viewer) &&
+              !(await isPostgresTeamOwner(context.persistence, args.id, viewer.id))
+            ) {
+              throw apiError("UNAUTHORIZED", "Team owner permission is required");
+            }
+            await assertPostgresTeamActive(context.persistence, args.id);
+            return {
+              success: true,
+              team: mapPostgresTeam(
+                await updatePostgresTeam(context.persistence, args.id, args.input),
+              ),
+            };
+          }
           assertCanManageTeam(context.db, viewer, args.id);
           requireTeam(context, { id: args.id });
           const team = mapTeam(updateTeam(context.db, args.id, args.input));
@@ -1191,23 +1323,64 @@ export const resolvers = {
           const label = mapLabel(createLabel(context.db, args.input));
           return { success: true, label };
         },
-        workflowStateUpdate: (
+        workflowStateUpdate: async (
           _parent: unknown,
           args: { id: string; input: Parameters<typeof updateWorkflowState>[2] },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresWorkflowState(context.persistence, args.id);
+            if (!existing) throw apiError("NOT_FOUND", "Workflow state not found");
+            if (!apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("UNAUTHORIZED", "API key is not allowed for this Team");
+            }
+            if (
+              !isWorkspaceAdmin(viewer) &&
+              !(await isPostgresTeamOwner(context.persistence, existing.team_id, viewer.id))
+            ) {
+              throw apiError("UNAUTHORIZED", "Team owner permission is required");
+            }
+            await assertPostgresTeamActive(context.persistence, existing.team_id);
+            return {
+              success: true,
+              workflowState: mapPostgresWorkflowState(
+                await updatePostgresWorkflowState(context.persistence, args.id, args.input),
+              ),
+            };
+          }
           const existing = getWorkflowState(context.db, args.id);
           if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
           const state = mapWorkflowState(updateWorkflowState(context.db, args.id, args.input));
           return { success: true, workflowState: state };
         },
-        workflowStateDelete: (
+        workflowStateDelete: async (
           _parent: unknown,
           args: { id: string; moveToStateId?: string | null },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresWorkflowState(context.persistence, args.id);
+            if (!existing) throw apiError("NOT_FOUND", "Workflow state not found");
+            if (!apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("UNAUTHORIZED", "API key is not allowed for this Team");
+            }
+            if (
+              !isWorkspaceAdmin(viewer) &&
+              !(await isPostgresTeamOwner(context.persistence, existing.team_id, viewer.id))
+            ) {
+              throw apiError("UNAUTHORIZED", "Team owner permission is required");
+            }
+            await assertPostgresTeamActive(context.persistence, existing.team_id);
+            const movedIssues = await deletePostgresWorkflowState(
+              context.persistence,
+              viewer.id,
+              args.id,
+              args.moveToStateId,
+            );
+            return { success: true, movedIssues };
+          }
           const existing = getWorkflowState(context.db, args.id);
           if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
           const affected = context.db
@@ -1251,7 +1424,7 @@ export const resolvers = {
           });
           return { success: true, affectedIssues: affected };
         },
-        workflowStateCreate: (
+        workflowStateCreate: async (
           _parent: unknown,
           args: {
             input: {
@@ -1265,6 +1438,23 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const team = await getPostgresTeam(context.persistence, { id: args.input.teamId });
+            if (!team) throw apiError("NOT_FOUND", "Team not found");
+            if (
+              !isWorkspaceAdmin(viewer) &&
+              !(await isPostgresTeamOwner(context.persistence, team.id, viewer.id))
+            ) {
+              throw apiError("UNAUTHORIZED", "Team owner permission is required");
+            }
+            await assertPostgresTeamActive(context.persistence, team.id);
+            return {
+              success: true,
+              workflowState: mapPostgresWorkflowState(
+                await createPostgresWorkflowState(context.persistence, args.input),
+              ),
+            };
+          }
           assertCanManageTeam(context.db, viewer, args.input.teamId);
           const workflowState = mapWorkflowState(createWorkflowState(context.db, args.input));
           return { success: true, workflowState };

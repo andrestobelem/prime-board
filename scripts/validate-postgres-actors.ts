@@ -607,6 +607,228 @@ try {
     ).length === 1 &&
     replacedExpiredInvite.data?.actorInvite.success === true &&
     replacedExpiredInvite.data?.actorInvite.invitation.status === "PENDING";
+  const teamsBefore = await graphql(
+    base,
+    `
+      {
+        teams {
+          id
+          key
+          name
+          visibility
+          accessPolicy
+          states {
+            id
+            name
+            type
+            position
+          }
+          defaultState {
+            id
+          }
+        }
+      }
+    `,
+  );
+  const createdTeam = await graphql(
+    base,
+    `
+      mutation ($input: TeamCreateInput!) {
+        teamCreate(input: $input) {
+          success
+          team {
+            id
+            key
+            name
+            visibility
+            accessPolicy
+            states {
+              id
+              name
+              type
+              position
+            }
+            defaultState {
+              id
+            }
+          }
+        }
+      }
+    `,
+    {
+      input: {
+        name: "Postgres Team",
+        key: "PGT",
+        visibility: "PRIVATE",
+        accessPolicy: "TEAM_MEMBERS",
+      },
+    },
+  );
+  const createdTeamId = createdTeam.data?.teamCreate.team.id;
+  const teamKey = createdTeam.data?.teamCreate.team.key;
+  const memberPrivateTeams = await graphql(
+    base,
+    `
+      {
+        teams {
+          id
+        }
+      }
+    `,
+    undefined,
+    acceptedKey,
+  );
+  const unsupportedNested = await graphql(
+    base,
+    `
+      query ($id: ID!) {
+        team(id: $id) {
+          labels {
+            id
+          }
+        }
+      }
+    `,
+    { id: createdTeamId },
+  );
+  const initialStateId = createdTeam.data?.teamCreate.team.defaultState.id;
+  const createdState = await graphql(
+    base,
+    `
+      mutation ($input: WorkflowStateCreateInput!) {
+        workflowStateCreate(input: $input) {
+          success
+          workflowState {
+            id
+            name
+            type
+            position
+          }
+        }
+      }
+    `,
+    { input: { teamId: createdTeamId, name: "Review", type: "STARTED", color: "#abc123" } },
+  );
+  const stateId = createdState.data?.workflowStateCreate.workflowState.id;
+  const updatedState = await graphql(
+    base,
+    `
+      mutation ($id: ID!, $input: WorkflowStateUpdateInput!) {
+        workflowStateUpdate(id: $id, input: $input) {
+          success
+          workflowState {
+            id
+            name
+            position
+          }
+        }
+      }
+    `,
+    { id: stateId, input: { name: "QA", position: 10 } },
+  );
+  const updatedTeam = await graphql(
+    base,
+    `
+      mutation ($id: ID!, $input: TeamUpdateInput!) {
+        teamUpdate(id: $id, input: $input) {
+          success
+          team {
+            id
+            name
+            visibility
+            accessPolicy
+            defaultState {
+              id
+            }
+          }
+        }
+      }
+    `,
+    {
+      id: createdTeamId,
+      input: { name: "Postgres Team Updated", defaultStateId: stateId },
+    },
+  );
+  const deletedState = await graphql(
+    base,
+    `
+      mutation ($id: ID!, $move: ID) {
+        workflowStateDelete(id: $id, moveToStateId: $move) {
+          success
+          movedIssues
+        }
+      }
+    `,
+    { id: stateId, move: initialStateId },
+  );
+  const archivedTeam = await graphql(
+    base,
+    `
+      mutation ($id: ID!) {
+        teamArchive(id: $id) {
+          success
+          team {
+            id
+            archivedAt
+          }
+        }
+      }
+    `,
+    { id: createdTeamId },
+  );
+  const archivedVisible = await graphql(
+    base,
+    `
+      query ($id: ID!) {
+        team(id: $id, includeArchived: true) {
+          id
+          archivedAt
+        }
+      }
+    `,
+    { id: createdTeamId },
+  );
+  const unarchivedTeam = await graphql(
+    base,
+    `
+      mutation ($id: ID!) {
+        teamUnarchive(id: $id) {
+          success
+          team {
+            id
+            archivedAt
+          }
+        }
+      }
+    `,
+    { id: createdTeamId },
+  );
+  const deletedTeam = await graphql(
+    base,
+    `
+      mutation ($id: ID!, $confirmation: String!) {
+        teamDelete(id: $id, confirmation: $confirmation) {
+          success
+        }
+      }
+    `,
+    { id: createdTeamId, confirmation: teamKey },
+  );
+  report.teams =
+    !teamsBefore.errors &&
+    !createdTeam.errors &&
+    createdTeam.data?.teamCreate.team.defaultState.id === initialStateId &&
+    !memberPrivateTeams.errors &&
+    !memberPrivateTeams.data?.teams.some((team: { id: string }) => team.id === createdTeamId) &&
+    unsupportedNested.errors?.[0]?.extensions?.code === "VALIDATION_FAILED" &&
+    !createdState.errors &&
+    updatedState.data?.workflowStateUpdate.workflowState.name === "QA" &&
+    updatedTeam.data?.teamUpdate.team.defaultState.id === stateId &&
+    deletedState.data?.workflowStateDelete.movedIssues === 0 &&
+    archivedTeam.data?.teamArchive.team.archivedAt !== null &&
+    archivedVisible.data?.team.archivedAt !== null &&
+    unarchivedTeam.data?.teamUnarchive.team.archivedAt === null &&
+    deletedTeam.data?.teamDelete.success === true;
   const finalWorkspace = await graphql(
     base,
     `

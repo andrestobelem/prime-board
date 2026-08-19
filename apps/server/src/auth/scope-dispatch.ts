@@ -34,8 +34,18 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:viewer",
   "query:workspace",
   "query:actors",
+  "query:teams",
+  "query:team",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
+  "mutation:teamArchive",
+  "mutation:teamUnarchive",
+  "mutation:teamDelete",
+  "mutation:teamCreate",
+  "mutation:teamUpdate",
+  "mutation:workflowStateCreate",
+  "mutation:workflowStateUpdate",
+  "mutation:workflowStateDelete",
   "mutation:actorCreate",
   "mutation:actorUpdate",
   "mutation:actorInvite",
@@ -198,6 +208,9 @@ function operationTeamIds(
     case "teams":
       return [];
     case "team":
+      // PostgreSQL team lookup happens asynchronously in the resolver; it
+      // applies the key allowlist after resolving the Team.
+      if (context.persistence) return [];
       return [teamForRef(context, args.id ?? args.key) ?? "__missing__"];
     case "teamMemberships":
     case "cycles":
@@ -252,6 +265,7 @@ function operationTeamIds(
       return [scalar(input.teamId) ?? "__missing__"];
     case "workflowStateUpdate":
     case "workflowStateDelete": {
+      if (context.persistence) return [];
       const row = context.db
         .query("SELECT team_id FROM workflow_states WHERE id = ?1")
         .get(scalar(args.id)) as { team_id: string } | null;
@@ -433,32 +447,35 @@ function wrapResolverMap(map: ResolverMap, kind: "query" | "mutation"): Resolver
         }
         if (!KEY_MUTATIONS.has(field)) assertOperationTeams(context, field, resolverArgs, kind);
         const result = resolver(...args);
-        if (
-          kind === "query" &&
-          field === "teams" &&
-          Array.isArray(result) &&
-          context.auth?.teamIds
-        ) {
+        const filterAsync = (value: unknown, filter: (items: unknown[]) => unknown[]): unknown => {
+          if (Array.isArray(value)) return filter(value);
+          if (value && typeof (value as Promise<unknown>).then === "function") {
+            return (value as Promise<unknown>).then((resolved) =>
+              Array.isArray(resolved) ? filter(resolved) : resolved,
+            );
+          }
+          return value;
+        };
+        if (kind === "query" && field === "teams" && context.auth?.teamIds) {
           const allowed = new Set(context.auth.teamIds);
-          return result.filter((team) => {
-            const row = (team as { id?: string }).id;
-            return row ? allowed.has(row) : false;
-          });
+          return filterAsync(result, (items) =>
+            items.filter((team) => {
+              const row = (team as { id?: string }).id;
+              return row ? allowed.has(row) : false;
+            }),
+          );
         }
         // Un proyecto puede abarcar varios Teams. Seleccionar un Team permitido no alcanza:
         // ocultamos el proyecto salvo que todos sus Teams estén permitidos.
-        if (
-          kind === "query" &&
-          field === "projects" &&
-          Array.isArray(result) &&
-          context.auth?.teamIds
-        ) {
-          return result.filter((project) => {
-            const id = (project as { id?: string }).id;
-            return id
-              ? apiKeyTeamsWithinLimit(context.auth, teamIdsForProject(context, id))
-              : false;
-          });
+        if (kind === "query" && field === "projects" && context.auth?.teamIds) {
+          return filterAsync(result, (items) =>
+            items.filter((project) => {
+              const id = (project as { id?: string }).id;
+              return id
+                ? apiKeyTeamsWithinLimit(context.auth, teamIdsForProject(context, id))
+                : false;
+            }),
+          );
         }
         return result;
       },
