@@ -58,6 +58,25 @@
         "vite": "^8.2.1",
       },
     },
+    "packages/prime-board-agent": {
+      "name": "@prime-board/agent",
+      "version": "0.1.0",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*",
+      },
+      "optionalPeers": [
+        "@earendil-works/pi-coding-agent",
+        "typebox",
+      ],
+    },
+    "packages/prime-board-runtime": {
+      "name": "@prime-board/runtime",
+      "version": "0.1.0",
+      "bin": {
+        "prime-board": "dist/cli.js",
+      },
+    },
     "packages/schema": {
       "name": "@prime-board/schema",
     },
@@ -113,9 +132,13 @@
 
     "@oxc-project/types": ["@oxc-project/types@0.144.0", "", {}, "sha512-nuhZIOLuI6TFQ32I/WnUx+SCPY7SdSKwgnFHydAuoS1+Z4BRcaP+RRJmGzl9lw+0OFF7UmaESf7KQRXaNLHypg=="],
 
+    "@prime-board/agent": ["@prime-board/agent@workspace:packages/prime-board-agent"],
+
     "@prime-board/cli": ["@prime-board/cli@workspace:apps/cli"],
 
     "@prime-board/mcp": ["@prime-board/mcp@workspace:apps/mcp"],
+
+    "@prime-board/runtime": ["@prime-board/runtime@workspace:packages/prime-board-runtime"],
 
     "@prime-board/schema": ["@prime-board/schema@workspace:packages/schema"],
 

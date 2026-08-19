@@ -1,0 +1,38 @@
+{
+  "name": "@prime-board/agent",
+  "version": "0.1.0",
+  "description": "Prime Board resources for Prime Agent",
+  "keywords": [
+    "prime-agent-package",
+    "pi-package",
+    "pi-extension",
+    "prime-board"
+  ],
+  "type": "module",
+  "files": [
+    "extensions",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  }
+}
