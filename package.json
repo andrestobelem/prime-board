@@ -14,7 +14,8 @@
     "export": "bun run --cwd apps/server export",
     "rebuild": "bun run --cwd apps/server rebuild",
     "prepare": "husky",
-    "import:linear": "bun run --cwd apps/server import:linear"
+    "import:linear": "bun run --cwd apps/server import:linear",
+    "build:runtime": "bun scripts/build-runtime.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
