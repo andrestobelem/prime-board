@@ -28,6 +28,21 @@ const ADMIN_MUTATIONS = new Set([
 const KEY_MUTATIONS = new Set(["apiKeyCreate", "apiKeyDelete", "apiKeyRotate"]);
 const SAFE_MUTATIONS = new Set(["actorUpdate", "actorLeave", ...KEY_MUTATIONS]);
 
+// PRB-430 migra primero el singleton Workspace y los actores. Las demás
+// operaciones no deben caer silenciosamente en el SQLite efímero del seam.
+const POSTGRES_SUPPORTED_OPERATIONS = new Set([
+  "query:viewer",
+  "query:workspace",
+  "query:actors",
+  "mutation:workspaceUpdate",
+  "mutation:actorCreate",
+  "mutation:actorUpdate",
+  "mutation:actorSuspend",
+  "mutation:actorReactivate",
+  "mutation:actorRevoke",
+  "mutation:actorLeave",
+]);
+
 type Resolver = (...args: any[]) => any;
 type ResolverMap = Record<string, Resolver>;
 
@@ -399,6 +414,9 @@ function wrapResolverMap(map: ResolverMap, kind: "query" | "mutation"): Resolver
       (...args: unknown[]) => {
         const context = args[2] as Context;
         const resolverArgs = (args[1] ?? {}) as Record<string, unknown>;
+        if (context.persistence && !POSTGRES_SUPPORTED_OPERATIONS.has(`${kind}:${field}`)) {
+          throw apiError("VALIDATION_FAILED", "This operation is not migrated to PostgreSQL yet");
+        }
         if (kind === "mutation" && field === "actorInvitationAccept") return resolver(...args);
         if (kind === "mutation" && ADMIN_MUTATIONS.has(field)) {
           assertApiKeyScope(context, "admin");

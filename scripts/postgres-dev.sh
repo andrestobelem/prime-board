@@ -147,6 +147,11 @@ baseline() {
   fi
   podman exec --user postgres --interactive "$PB_PG_CONTAINER" psql \
     --username="$PB_PG_USER" --dbname="$PB_PG_DB" --set ON_ERROR_STOP=1 --single-transaction < "$source"
+  local checksum
+  checksum="$(shasum -a 256 "$source" | awk '{print $1}')"
+  podman exec --user postgres "$PB_PG_CONTAINER" psql \
+    --username="$PB_PG_USER" --dbname="$PB_PG_DB" --set ON_ERROR_STOP=1 \
+    --command "INSERT INTO schema_migrations (version, name, checksum) VALUES (1, 'baseline', '${checksum}')"
   podman exec --user postgres "$PB_PG_CONTAINER" psql \
     --username="$PB_PG_USER" --dbname="$PB_PG_DB" --tuples-only --no-align \
     --command "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"

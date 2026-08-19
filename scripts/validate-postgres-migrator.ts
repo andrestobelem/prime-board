@@ -4,6 +4,7 @@
  */
 import {
   migratePostgres,
+  POSTGRES_MIGRATIONS,
   type PostgresMigration,
 } from "../apps/server/src/db/postgres/migrator.ts";
 
@@ -31,8 +32,8 @@ try {
   await first`DELETE FROM schema_migrations WHERE version >= ${version}`;
 
   await Promise.all([
-    migratePostgres(first, [migration], lockKey),
-    migratePostgres(second, [migration], lockKey),
+    migratePostgres(first, [...POSTGRES_MIGRATIONS, migration], lockKey),
+    migratePostgres(second, [...POSTGRES_MIGRATIONS, migration], lockKey),
   ]);
   const applied =
     await first`SELECT count(*)::int AS count FROM schema_migrations WHERE version = ${version}`;
@@ -46,7 +47,7 @@ try {
   try {
     await migratePostgres(
       first,
-      [{ version, name: "validation-edited", sql: `${migration.sql} ` }],
+      [...POSTGRES_MIGRATIONS, { version, name: "validation-edited", sql: `${migration.sql} ` }],
       lockKey,
     );
     report.checksum = false;
@@ -59,6 +60,7 @@ try {
     await migratePostgres(
       first,
       [
+        ...POSTGRES_MIGRATIONS,
         {
           version: failedVersion,
           name: "failed",

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import baseline from "./0001_baseline.sql" with { type: "text" };
+import workspaceSingleton from "./0002_workspace_singleton.sql" with { type: "text" };
 
 export interface PostgresMigration {
   readonly version: number;
@@ -9,6 +10,7 @@ export interface PostgresMigration {
 
 export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
   { version: 1, name: "baseline", sql: baseline },
+  { version: 2, name: "workspace_singleton", sql: workspaceSingleton },
 ];
 
 interface AppliedMigration {

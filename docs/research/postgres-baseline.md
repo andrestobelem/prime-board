@@ -48,7 +48,7 @@ scripts/postgres-dev.sh baseline
 scripts/postgres-dev.sh check
 ```
 
-`baseline` aplica el SQL con `ON_ERROR_STOP=1` y `--single-transaction` dentro de una base vacía y
+`baseline` aplica el SQL con `ON_ERROR_STOP=1` y `--single-transaction` dentro de una base vacía, registra la versión 1 con su SHA-256 y
 reporta el número de tablas públicas. No recibe ni imprime credenciales.
 
 ## Verificación realizada

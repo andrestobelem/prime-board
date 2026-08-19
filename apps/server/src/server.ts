@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createSchema, createYoga } from "graphql-yoga";
 import { APP_NAME, APP_VERSION, typeDefs } from "@prime-board/schema";
 import { resolveAuth } from "./auth/viewer.ts";
+import { resolvePostgresAuth } from "./auth/postgres-viewer.ts";
 import type { Config } from "./config.ts";
 import type { Context } from "./graphql/context.ts";
 import { resolvers } from "./graphql/resolvers.ts";
@@ -11,16 +12,20 @@ import { createRepoSync } from "./export/repo-sync.ts";
 import { trackedRepoSync } from "./graphql/repo-sync-dispatch.ts";
 import { WebhookDispatcher, type DispatcherOptions } from "./webhooks/dispatcher.ts";
 import { resolveWorkspaceContext } from "./domain/workspace-context.ts";
+import { getPostgresWorkspace } from "./domain/postgres-actors.ts";
+import type { Persistence } from "./db/persistence.ts";
 
 export interface AppDeps {
   db: Database;
   config: Config;
   webhookOptions?: DispatcherOptions;
+  /** Persistence for domains migrated incrementally to PostgreSQL. */
+  persistence?: Persistence;
 }
 
-export function createApp({ db, config, webhookOptions }: AppDeps) {
+export function createApp({ db, config, webhookOptions, persistence }: AppDeps) {
   const events = new WebhookDispatcher(db, webhookOptions ?? { log: console.error });
-  const repo = createRepoSync(db, config.repoRoot);
+  const repo = persistence ? null : createRepoSync(db, config.repoRoot);
   const yoga = createYoga({
     schema: createSchema<Context>({ typeDefs, resolvers }),
     graphqlEndpoint: "/graphql",
@@ -31,16 +36,27 @@ export function createApp({ db, config, webhookOptions }: AppDeps) {
     // Un TrackedRepoSync fresco por request (AT-191): dos requests concurrentes
     // no se pisan el rastreo de "¿ya sincronizó?" — delega en el mismo `repo`
     // singleton, así que la escritura en sí sigue siendo una sola por mutation.
-    context: ({ request }): Context => {
-      const auth = resolveAuth(db, request.headers.get("authorization"));
+    context: async ({ request }): Promise<Context> => {
+      const auth = persistence
+        ? await resolvePostgresAuth(persistence, request.headers.get("authorization"))
+        : resolveAuth(db, request.headers.get("authorization"));
+      const workspace = persistence
+        ? await getPostgresWorkspace(persistence)
+        : resolveWorkspaceContext(db);
+      if (!workspace) throw new Error("Workspace is not initialized");
       return {
         db,
         config,
-        workspace: resolveWorkspaceContext(db),
+        workspace: {
+          workspaceId: persistence
+            ? (workspace as { id: string }).id
+            : (workspace as { workspaceId: string }).workspaceId,
+        },
         viewer: auth?.actor ?? null,
         auth,
         events,
         repo: repo ? trackedRepoSync(repo) : null,
+        persistence,
       };
     },
   });

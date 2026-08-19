@@ -37,7 +37,7 @@ describe("persistence backend selection", () => {
       "Unsupported persistence backend: mysql",
     );
     expect(() => openPersistence({ backend: "postgres", path: ":memory:" })).toThrow(
-      "PostgreSQL persistence backend is not available yet",
+      "PostgreSQL persistence backend requires a connection URL",
     );
   });
 });

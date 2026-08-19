@@ -24,6 +24,21 @@ import {
   revokeActor,
 } from "../domain/actors.ts";
 import {
+  createPostgresActor,
+  getPostgresActor,
+  getPostgresWorkspace,
+  listPostgresActors,
+  listPostgresApiKeys,
+  leavePostgresActor,
+  mapPostgresActor,
+  mapPostgresApiKey,
+  reactivatePostgresActor,
+  revokePostgresActor,
+  suspendPostgresActor,
+  updatePostgresActor,
+  updatePostgresWorkspace,
+} from "../domain/postgres-actors.ts";
+import {
   archiveTeam,
   assertTeamActive,
   createTeam,
@@ -397,9 +412,12 @@ export const resolvers = {
   },
 
   Actor: {
-    apiKeys: (actor: { id: string }, _args: unknown, context: Context) => {
+    apiKeys: async (actor: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
       if (!isWorkspaceAdmin(viewer) && viewer.id !== actor.id) return [];
+      if (context.persistence) {
+        return (await listPostgresApiKeys(context.persistence, actor.id)).map(mapPostgresApiKey);
+      }
       return listApiKeys(context.db, actor.id).map((row) => mapApiKey(row, context.db));
     },
   },
@@ -417,8 +435,16 @@ export const resolvers = {
       ...projectResolvers.Query,
       viewer: (_parent: unknown, _args: unknown, context: Context) =>
         mapActor(requireViewer(context)),
-      workspace: (_parent: unknown, _args: unknown, context: Context) => {
+      workspace: async (_parent: unknown, _args: unknown, context: Context) => {
         requireViewer(context);
+        if (context.persistence) {
+          const row = await getPostgresWorkspace(
+            context.persistence,
+            context.workspace.workspaceId,
+          );
+          if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
+          return { id: row.id, name: row.name, urlKey: row.url_key, createdAt: row.created_at };
+        }
         const row = getWorkspace(context.db, context.workspace.workspaceId);
         if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
         return mapWorkspace(row);
@@ -445,8 +471,11 @@ export const resolvers = {
         if (row?.archived_at && !args.includeArchived) return null;
         return row && canDiscoverTeam(context.db, viewer, row.id) ? mapTeam(row) : null;
       },
-      actors: (_parent: unknown, args: { type?: string }, context: Context) => {
+      actors: async (_parent: unknown, args: { type?: string }, context: Context) => {
         requireViewer(context);
+        if (context.persistence) {
+          return (await listPostgresActors(context.persistence, args.type)).map(mapPostgresActor);
+        }
         return listActorsInWorkspace(context, args.type).map(mapActor);
       },
       actorInvitations: (
@@ -703,13 +732,29 @@ export const resolvers = {
           });
           return { success: true };
         },
-        workspaceUpdate: (
+        workspaceUpdate: async (
           _parent: unknown,
           args: { input: { name: string } },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            const row = await updatePostgresWorkspace(
+              context.persistence,
+              args.input,
+              context.workspace.workspaceId,
+            );
+            return {
+              success: true,
+              workspace: {
+                id: row.id,
+                name: row.name,
+                urlKey: row.url_key,
+                createdAt: row.created_at,
+              },
+            };
+          }
           return {
             success: true,
             workspace: mapWorkspace(
@@ -767,24 +812,39 @@ export const resolvers = {
             success: deleteTeamMembership(context.db, viewer.id, args.id, isWorkspaceAdmin(viewer)),
           };
         },
-        actorCreate: (
+        actorCreate: async (
           _parent: unknown,
           args: { input: { name: string; type: string; email?: string | null } },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            const actor = mapPostgresActor(
+              await createPostgresActor(context.persistence, args.input),
+            );
+            return { success: true, actor };
+          }
           const actor = mapActor(createActor(context.db, args.input));
           return { success: true, actor };
         },
-        actorUpdate: (
+        actorUpdate: async (
           _parent: unknown,
           args: { id: string; input: { name?: string | null; email?: string | null } },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
-          requireActor(context, args.id);
           assertCanManageActor(viewer, args.id);
+          if (context.persistence) {
+            if (!(await getPostgresActor(context.persistence, args.id))) {
+              throw apiError("NOT_FOUND", "Actor not found");
+            }
+            const actor = mapPostgresActor(
+              await updatePostgresActor(context.persistence, args.id, args.input),
+            );
+            return { success: true, actor };
+          }
+          requireActor(context, args.id);
           const actor = mapActor(updateActor(context.db, args.id, args.input));
           return { success: true, actor };
         },
@@ -827,29 +887,55 @@ export const resolvers = {
             invitation: mapActorInvitation(revokeActorInvitation(context.db, args.id)),
           };
         },
-        actorSuspend: (_parent: unknown, args: { id: string }, context: Context) => {
+        actorSuspend: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            return {
+              success: true,
+              actor: mapPostgresActor(
+                await suspendPostgresActor(context.persistence, args.id, viewer.id),
+              ),
+            };
+          }
           requireActor(context, args.id);
           return { success: true, actor: mapActor(suspendActor(context.db, args.id, viewer.id)) };
         },
-        actorReactivate: (_parent: unknown, args: { id: string }, context: Context) => {
+        actorReactivate: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            return {
+              success: true,
+              actor: mapPostgresActor(await reactivatePostgresActor(context.persistence, args.id)),
+            };
+          }
           requireActor(context, args.id);
           return { success: true, actor: mapActor(reactivateActor(context.db, args.id)) };
         },
-        actorRevoke: (_parent: unknown, args: { id: string }, context: Context) => {
+        actorRevoke: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
+          if (context.persistence) {
+            return {
+              success: true,
+              actor: mapPostgresActor(await revokePostgresActor(context.persistence, args.id)),
+            };
+          }
           requireActor(context, args.id);
           return { success: true, actor: mapActor(revokeActor(context.db, args.id)) };
         },
-        actorLeave: (_parent: unknown, args: { id?: string | null }, context: Context) => {
+        actorLeave: async (_parent: unknown, args: { id?: string | null }, context: Context) => {
           const viewer = requireViewer(context);
           const actorId = args.id ?? viewer.id;
           if (actorId !== viewer.id)
             throw apiError("UNAUTHORIZED", "You can only leave as yourself");
+          if (context.persistence) {
+            return {
+              success: true,
+              actor: mapPostgresActor(await leavePostgresActor(context.persistence, actorId)),
+            };
+          }
           return { success: true, actor: mapActor(leaveActor(context.db, actorId)) };
         },
         apiKeyCreate: (

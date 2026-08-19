@@ -5,6 +5,7 @@ import type { ActorRow, AuthContext } from "../auth/viewer.ts";
 import type { TrackedRepoSync } from "./repo-sync-dispatch.ts";
 import type { WebhookDispatcher } from "../webhooks/dispatcher.ts";
 import type { WorkspaceContext } from "../domain/workspace-context.ts";
+import type { Persistence } from "../db/persistence.ts";
 
 export interface Context {
   db: Database;
@@ -22,4 +23,6 @@ export interface Context {
    * despacho automático de Mutation sepa si hace falta un sync de respaldo.
    */
   repo: TrackedRepoSync | null;
+  /** Persistencia async usada por los dominios ya migrados a PostgreSQL. */
+  persistence?: Persistence;
 }

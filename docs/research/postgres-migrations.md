@@ -10,7 +10,8 @@ migraciones, abre una transacción, toma `pg_advisory_xact_lock` con la clave de
 la instalación y crea `schema_migrations` si aún no existe. Cada fila conserva
 `version`, `name`, SHA-256 de los SQL y `applied_at`.
 
-El baseline PostgreSQL se ejecuta como la migración `0001/baseline`; los SQL
+El baseline PostgreSQL se ejecuta como la migración `0001/baseline`; el refuerzo
+`0002/workspace_singleton` garantiza la fila única y los SQL
 futuros deben vivir bajo el namespace PostgreSQL y nunca reutilizar los archivos
 SQLite. El runner usa `unsafe(...).simple()` únicamente para SQL versionado y
 controlado por el repositorio, no para entrada de usuario.
