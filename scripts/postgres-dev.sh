@@ -14,7 +14,7 @@ PB_PG_IMAGE="${PB_PG_IMAGE:-docker.io/library/postgres:17}"
 
 usage() {
   cat >&2 <<'EOF'
-Uso: scripts/postgres-dev.sh <up|status|check|backup|restore|down>
+Uso: scripts/postgres-dev.sh <up|status|check|baseline|backup|restore|down>
 
 Variables opcionales: PB_PG_CONTAINER, PB_PG_NETWORK, PB_PG_VOLUME,
 PB_PG_SECRET, PB_PG_DB, PB_PG_USER, PB_PG_PORT, PB_PG_IMAGE.
@@ -137,6 +137,22 @@ check() {
   fi
 }
 
+baseline() {
+  ensure_podman
+  wait_ready
+  local source="${PB_PG_BASELINE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../apps/server/src/db/postgres" && pwd)/0001_baseline.sql}"
+  if [[ ! -f "$source" ]]; then
+    echo "No existe el baseline PostgreSQL: ${source}" >&2
+    exit 2
+  fi
+  podman exec --user postgres --interactive "$PB_PG_CONTAINER" psql \
+    --username="$PB_PG_USER" --dbname="$PB_PG_DB" --set ON_ERROR_STOP=1 < "$source"
+  podman exec --user postgres "$PB_PG_CONTAINER" psql \
+    --username="$PB_PG_USER" --dbname="$PB_PG_DB" --tuples-only --no-align \
+    --command "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+  echo "PostgreSQL baseline aplicado: ${source}"
+}
+
 backup() {
   ensure_podman
   wait_ready
@@ -178,6 +194,7 @@ case "$command" in
   up) up ;;
   status) status ;;
   check) check ;;
+  baseline) baseline ;;
   backup) backup ;;
   restore) restore ;;
   down) down ;;
