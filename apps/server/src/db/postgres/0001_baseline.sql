@@ -2,9 +2,7 @@
 -- Las fechas e IDs se mantienen como TEXT para conservar el formato de la réplica.
 -- Los campos JSON conservan su representación TEXT actual y la búsqueda usa un tsvector derivado.
 -- Se usa la configuración built-in simple; no se requiere la extensión unaccent en el baseline.
-BEGIN;
-
-CREATE TABLE schema_migrations (
+CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
   checksum TEXT NOT NULL,
@@ -478,4 +476,3 @@ CREATE UNIQUE INDEX idx_favorites_actor_saved_view
 CREATE UNIQUE INDEX idx_actor_invitations_pending_email
   ON actor_invitations(lower(email)) WHERE status = 'pending' AND email IS NOT NULL;
 
-COMMIT;

@@ -146,7 +146,7 @@ baseline() {
     exit 2
   fi
   podman exec --user postgres --interactive "$PB_PG_CONTAINER" psql \
-    --username="$PB_PG_USER" --dbname="$PB_PG_DB" --set ON_ERROR_STOP=1 < "$source"
+    --username="$PB_PG_USER" --dbname="$PB_PG_DB" --set ON_ERROR_STOP=1 --single-transaction < "$source"
   podman exec --user postgres "$PB_PG_CONTAINER" psql \
     --username="$PB_PG_USER" --dbname="$PB_PG_DB" --tuples-only --no-align \
     --command "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
