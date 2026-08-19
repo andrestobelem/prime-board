@@ -37,6 +37,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:teams",
   "query:team",
   "query:teamMemberships",
+  "query:issue",
+  "query:issues",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:teamArchive",
@@ -221,8 +223,10 @@ function operationTeamIds(
     case "cycle":
       return teamIdsForCycle(context, args.id);
     case "issue":
+      if (context.persistence) return [];
       return teamIdsForIssue(context, args.id);
     case "issues":
+      if (context.persistence) return [];
       return issueFilterTeams(context, args.filter);
     case "project":
       return teamIdsForProject(context, args.id);

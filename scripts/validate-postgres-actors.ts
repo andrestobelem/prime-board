@@ -822,6 +822,213 @@ try {
     { input: { teamId: createdTeamId, name: "Review", type: "STARTED", color: "#abc123" } },
   );
   const stateId = createdState.data?.workflowStateCreate.workflowState.id;
+  const issueCreatedAt = new Date(Date.now() - 2000).toISOString();
+  const issueIds = [newId(), newId(), newId(), newId()];
+  await persistence.execute(
+    `INSERT INTO issues
+     (id, team_id, number, title, description, state_id, priority, assignee_id, parent_id,
+      project_id, creator_id, sort_order, created_at, updated_at, archived_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, NULL, $7, NULL, $8, 0, $9, $9, $10)`,
+    [
+      issueIds[0],
+      createdTeamId,
+      1,
+      "First PostgreSQL issue",
+      null,
+      initialStateId,
+      null,
+      adminId,
+      issueCreatedAt,
+      null,
+    ],
+  );
+  await persistence.execute(
+    `INSERT INTO issues
+     (id, team_id, number, title, description, state_id, priority, assignee_id, parent_id,
+      project_id, creator_id, sort_order, created_at, updated_at, archived_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, NULL, NULL, NULL, $7, 0, $8, $8, NULL)`,
+    [
+      issueIds[1],
+      createdTeamId,
+      2,
+      "Second PostgreSQL issue",
+      null,
+      initialStateId,
+      adminId,
+      new Date(Date.now() - 1000).toISOString(),
+    ],
+  );
+  await persistence.execute(
+    `INSERT INTO issues
+     (id, team_id, number, title, description, state_id, priority, assignee_id, parent_id,
+      project_id, creator_id, sort_order, created_at, updated_at, archived_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, NULL, NULL, NULL, $7, 0, $8, $8, $9)`,
+    [
+      issueIds[2],
+      createdTeamId,
+      3,
+      "Archived PostgreSQL issue",
+      null,
+      initialStateId,
+      adminId,
+      new Date().toISOString(),
+      new Date().toISOString(),
+    ],
+  );
+  await persistence.execute(
+    `INSERT INTO issues
+     (id, team_id, number, title, description, state_id, priority, assignee_id, parent_id,
+      project_id, creator_id, sort_order, created_at, updated_at, archived_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, NULL, $7, NULL, $8, 0, $9, $9, NULL)`,
+    [
+      issueIds[3],
+      createdTeamId,
+      4,
+      "Child PostgreSQL issue",
+      null,
+      initialStateId,
+      issueIds[0],
+      adminId,
+      new Date(Date.now() + 1000).toISOString(),
+    ],
+  );
+  const outsiderIssue = await graphql(
+    base,
+    `
+      query {
+        issue(id: "PGT-1") {
+          id
+        }
+      }
+    `,
+    undefined,
+    outsiderKey,
+  );
+  const memberIssue = await graphql(
+    base,
+    `
+      query {
+        issue(id: "PGT-1") {
+          identifier
+        }
+      }
+    `,
+    undefined,
+    acceptedKey,
+  );
+  const outsiderIssues = await graphql(
+    base,
+    `
+      query {
+        issues {
+          nodes {
+            id
+          }
+        }
+      }
+    `,
+    undefined,
+    outsiderKey,
+  );
+  const issuePageOne = await graphql(
+    base,
+    `
+      query ($teamId: ID!) {
+        issues(first: 2, orderBy: CREATED_ASC, filter: { team: { eq: $teamId } }) {
+          nodes {
+            id
+            identifier
+            title
+            children {
+              id
+              identifier
+            }
+            team {
+              id
+              key
+            }
+            state {
+              id
+              name
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    `,
+    { teamId: createdTeamId },
+  );
+  const issuePageTwo = await graphql(
+    base,
+    `
+      query ($teamId: ID!, $after: String!) {
+        issues(first: 2, after: $after, orderBy: CREATED_ASC, filter: { team: { eq: $teamId } }) {
+          nodes {
+            id
+            identifier
+            title
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    `,
+    { teamId: createdTeamId, after: issuePageOne.data?.issues.pageInfo.endCursor },
+  );
+  const directIssue = await graphql(
+    base,
+    `
+      query ($id: ID!) {
+        issue(id: $id) {
+          id
+          identifier
+          title
+          team {
+            key
+          }
+          state {
+            name
+          }
+        }
+      }
+    `,
+    { id: "PGT-1" },
+  );
+  const archivedIssues = await graphql(
+    base,
+    `
+      query ($teamId: ID!) {
+        active: issues(filter: { team: { eq: $teamId } }) {
+          nodes {
+            id
+          }
+        }
+        all: issues(filter: { team: { eq: $teamId }, includeArchived: true }) {
+          nodes {
+            id
+          }
+        }
+      }
+    `,
+    { teamId: createdTeamId },
+  );
+  const unsupportedSearch = await graphql(
+    base,
+    `
+      query {
+        issues(filter: { search: "postgres" }) {
+          nodes {
+            id
+          }
+        }
+      }
+    `,
+  );
   const updatedState = await graphql(
     base,
     `
@@ -915,6 +1122,7 @@ try {
     `,
     { id: createdTeamId },
   );
+  await persistence.execute("DELETE FROM issues WHERE team_id = $1", [createdTeamId]);
   const deletedTeam = await graphql(
     base,
     `
@@ -926,6 +1134,15 @@ try {
     `,
     { id: createdTeamId, confirmation: teamKey },
   );
+  report.issues =
+    !issuePageOne.errors &&
+    !issuePageTwo.errors &&
+    !outsiderIssue.errors &&
+    !memberIssue.errors &&
+    !outsiderIssues.errors &&
+    !directIssue.errors &&
+    !archivedIssues.errors &&
+    unsupportedSearch.errors?.[0]?.extensions?.code === "VALIDATION_FAILED";
   report.teams =
     !teamsBefore.errors &&
     !createdTeam.errors &&
@@ -946,6 +1163,22 @@ try {
     !memberPrivateTeams.errors &&
     !memberPrivateTeams.data?.teams.some((team: { id: string }) => team.id === createdTeamId) &&
     unsupportedNested.errors?.[0]?.extensions?.code === "VALIDATION_FAILED" &&
+    !issuePageOne.errors &&
+    issuePageOne.data?.issues.nodes.length === 2 &&
+    outsiderIssue.data?.issue === null &&
+    !outsiderIssues.errors &&
+    outsiderIssues.data?.issues.nodes.length === 0 &&
+    memberIssue.data?.issue.identifier === "PGT-1" &&
+    issuePageOne.data?.issues.nodes[0].children.some(
+      (child: { identifier: string }) => child.identifier === "PGT-4",
+    ) &&
+    !issuePageTwo.errors &&
+    issuePageTwo.data?.issues.nodes.length === 1 &&
+    directIssue.data?.issue.identifier === "PGT-1" &&
+    !archivedIssues.errors &&
+    archivedIssues.data?.active.nodes.length === 3 &&
+    archivedIssues.data?.all.nodes.length === 4 &&
+    unsupportedSearch.errors?.[0]?.extensions?.code === "VALIDATION_FAILED" &&
     !createdState.errors &&
     updatedState.data?.workflowStateUpdate.workflowState.name === "QA" &&
     updatedTeam.data?.teamUpdate.team.defaultState.id === stateId &&
