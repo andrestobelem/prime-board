@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { McpSession } from "../src/api.ts";
+import { McpApiError, type McpSession } from "../src/api.ts";
 import { createServer as createToolServer } from "../src/server.ts";
 import { createMcpHttpHandler, loadMcpHttpConfig } from "../src/http.ts";
 
@@ -28,7 +28,7 @@ beforeEach(() => {
     { url: SESSION.url },
     {
       createSession: async ({ apiKey }) => {
-        if (apiKey !== SESSION.apiKey) throw new Error("UNAUTHORIZED: invalid key");
+        if (apiKey !== SESSION.apiKey) throw new McpApiError("UNAUTHORIZED", "invalid key");
         return SESSION;
       },
       createServer: () => {
@@ -122,7 +122,8 @@ describe("MCP Streamable HTTP auth and protocol", () => {
       { url: SESSION.url },
       {
         createSession: async ({ apiKey }) => {
-          if (apiKey !== SESSION.apiKey || revoked) throw new Error("UNAUTHORIZED: revoked key");
+          if (apiKey !== SESSION.apiKey || revoked)
+            throw new McpApiError("UNAUTHORIZED", "revoked key");
           return SESSION;
         },
         createServer: () => {
@@ -214,7 +215,7 @@ describe("MCP Streamable HTTP auth and protocol", () => {
       {
         createSession: async ({ apiKey }) => {
           const session = sessions.get(apiKey);
-          if (!session) throw new Error("UNAUTHORIZED: invalid key");
+          if (!session) throw new McpApiError("UNAUTHORIZED", "invalid key");
           return session;
         },
         createServer: (session) => {

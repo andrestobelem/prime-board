@@ -3,7 +3,7 @@
 // Cada sesión HTTP queda vinculada a la API key que la inicializó.
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createMcpSession, type McpConfig, type McpSession } from "./api.ts";
+import { McpApiError, createMcpSession, type McpConfig, type McpSession } from "./api.ts";
 import { createServer } from "./server.ts";
 
 export interface McpHttpConfig {
@@ -58,10 +58,10 @@ function bearerToken(request: Request): string | null {
   return match?.[1] ?? null;
 }
 
-function isAuthError(error: unknown): boolean {
+function isAuthError(error: unknown): error is McpApiError {
   return (
-    error instanceof Error &&
-    /^(UNAUTHORIZED|FORBIDDEN|AUTHENTICATION_FAILED)\b/i.test(error.message)
+    error instanceof McpApiError &&
+    ["UNAUTHORIZED", "FORBIDDEN", "AUTHENTICATION_FAILED"].includes(error.code)
   );
 }
 

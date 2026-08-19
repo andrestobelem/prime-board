@@ -13,6 +13,16 @@ export interface McpConfig {
   apiKey: string;
 }
 
+export class McpApiError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(`${code}: ${message}`);
+    this.name = "McpApiError";
+  }
+}
+
 /** Credencial y endpoint quedan congelados al crear la sesión MCP. */
 export interface McpSession extends McpConfig {
   readonly context: EffectiveWorkspaceContext;
@@ -46,7 +56,7 @@ export async function gqlRequest(
   };
   if (payload.errors?.length) {
     const first = payload.errors[0]!;
-    throw new Error(`${first.extensions?.code ?? "ERROR"}: ${first.message}`);
+    throw new McpApiError(first.extensions?.code ?? "ERROR", first.message);
   }
   return payload.data ?? {};
 }
