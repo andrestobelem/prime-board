@@ -54,16 +54,22 @@ import {
   assertPostgresTeamActive,
   canDiscoverPostgresTeam,
   createPostgresTeam,
+  createPostgresTeamMembership,
   createPostgresWorkflowState,
   deletePostgresTeam,
+  deletePostgresTeamMembership,
   deletePostgresWorkflowState,
   getPostgresDefaultState,
   getPostgresTeam,
+  getPostgresTeamMembership,
   getPostgresWorkflowState,
+  isPostgresTeamMember,
   isPostgresTeamOwner,
+  listPostgresTeamMemberships,
   listPostgresTeamStates,
   listPostgresTeams,
   mapPostgresTeam,
+  mapPostgresTeamMembership,
   mapPostgresWorkflowState,
   updatePostgresTeam,
   updatePostgresWorkflowState,
@@ -372,14 +378,21 @@ export const resolvers = {
         ? listCycles(context.db, team.id).map(mapCycle)
         : [];
     },
-    memberships: (team: { id: string }, _args: unknown, context: Context) => {
+    memberships: async (team: { id: string }, _args: unknown, context: Context) => {
+      const viewer = requireViewer(context);
       if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Team memberships are not yet available with PostgreSQL persistence",
+        const row = await getPostgresTeam(context.persistence, { id: team.id });
+        if (!row || !(await canDiscoverPostgresTeam(context.persistence, viewer, row))) return [];
+        if (
+          !isWorkspaceAdmin(viewer) &&
+          !(await isPostgresTeamMember(context.persistence, team.id, viewer.id))
+        ) {
+          return [];
+        }
+        return (await listPostgresTeamMemberships(context.persistence, team.id)).map(
+          mapPostgresTeamMembership,
         );
       }
-      const viewer = requireViewer(context);
       return isWorkspaceAdmin(viewer) || isTeamMember(context.db, team.id, viewer.id)
         ? listTeamMemberships(context.db, team.id).map(mapTeamMembership)
         : [];
@@ -387,10 +400,20 @@ export const resolvers = {
   },
 
   TeamMembership: {
-    team: (membership: { teamId: string }, _args: unknown, context: Context) =>
-      mapTeam(lookupTeam(context, { id: membership.teamId })!),
-    actor: (membership: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(lookupActor(context, membership.actorId)!),
+    team: async (membership: { teamId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const team = await getPostgresTeam(context.persistence, { id: membership.teamId });
+        return team ? mapPostgresTeam(team) : null;
+      }
+      return mapTeam(lookupTeam(context, { id: membership.teamId })!);
+    },
+    actor: async (membership: { actorId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, membership.actorId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, membership.actorId)!);
+    },
   },
 
   Issue: issueResolvers.Issue,
@@ -614,8 +637,22 @@ export const resolvers = {
           mapActorInvitation,
         );
       },
-      teamMemberships: (_parent: unknown, args: { teamId: string }, context: Context) => {
+      teamMemberships: async (_parent: unknown, args: { teamId: string }, context: Context) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const team = await getPostgresTeam(context.persistence, { id: args.teamId });
+          if (!team || team.archived_at) return [];
+          if (
+            !(await canDiscoverPostgresTeam(context.persistence, viewer, team)) ||
+            (!isWorkspaceAdmin(viewer) &&
+              !(await isPostgresTeamMember(context.persistence, team.id, viewer.id)))
+          ) {
+            return [];
+          }
+          return (await listPostgresTeamMemberships(context.persistence, args.teamId)).map(
+            mapPostgresTeamMembership,
+          );
+        }
         const team = lookupTeam(context, { id: args.teamId });
         if (team?.archived_at) return [];
         if (!team || !(isWorkspaceAdmin(viewer) || isTeamMember(context.db, team.id, viewer.id))) {
@@ -955,12 +992,21 @@ export const resolvers = {
           const team = mapTeam(updateTeam(context.db, args.id, args.input));
           return { success: true, team };
         },
-        teamMembershipCreate: (
+        teamMembershipCreate: async (
           _parent: unknown,
           args: { input: { teamId: string; actorId: string; role?: string | null } },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const membership = await createPostgresTeamMembership(
+              context.persistence,
+              viewer.id,
+              args.input,
+              isWorkspaceAdmin(viewer),
+            );
+            return { success: true, membership: mapPostgresTeamMembership(membership) };
+          }
           requireTeam(context, { id: args.input.teamId });
           requireActor(context, args.input.actorId);
           return {
@@ -970,8 +1016,23 @@ export const resolvers = {
             ),
           };
         },
-        teamMembershipDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+        teamMembershipDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const membership = await getPostgresTeamMembership(context.persistence, args.id);
+            if (!membership) throw apiError("NOT_FOUND", "Team membership not found");
+            if (!apiKeyTeamsWithinLimit(context.auth, [membership.team_id])) {
+              throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+            }
+            return {
+              success: await deletePostgresTeamMembership(
+                context.persistence,
+                viewer.id,
+                args.id,
+                isWorkspaceAdmin(viewer),
+              ),
+            };
+          }
           return {
             success: deleteTeamMembership(context.db, viewer.id, args.id, isWorkspaceAdmin(viewer)),
           };

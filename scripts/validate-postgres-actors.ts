@@ -113,10 +113,17 @@ try {
   );
   const memberId = member.data?.actorCreate.actor.id;
   const memberKey = generateApiKey();
+  const memberKeyId = newId();
   await persistence.execute(
     `INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES ($1, $2, $3, $4, $5)`,
-    [newId(), memberId, "member validation key", hashApiKey(memberKey), now()],
+    [memberKeyId, memberId, "member validation key", hashApiKey(memberKey), now()],
   );
+  for (const scope of ["read", "write"]) {
+    await persistence.execute("INSERT INTO api_key_scopes (api_key_id, scope) VALUES ($1, $2)", [
+      memberKeyId,
+      scope,
+    ]);
+  }
   const memberViewer = await graphql(
     base,
     `
@@ -666,6 +673,111 @@ try {
   );
   const createdTeamId = createdTeam.data?.teamCreate.team.id;
   const teamKey = createdTeam.data?.teamCreate.team.key;
+  const outsider = await graphql(
+    base,
+    `
+      mutation ($input: ActorCreateInput!) {
+        actorCreate(input: $input) {
+          actor {
+            id
+          }
+        }
+      }
+    `,
+    { input: { name: "Postgres Outsider", type: "AGENT" } },
+  );
+  const outsiderId = outsider.data?.actorCreate.actor.id;
+  const outsiderKeyResult = await graphql(
+    base,
+    `
+      mutation ($id: ID!) {
+        apiKeyCreate(input: { actorId: $id, name: "outsider validation key" }) {
+          key
+        }
+      }
+    `,
+    { id: outsiderId },
+  );
+  const outsiderKey = outsiderKeyResult.data?.apiKeyCreate.key;
+  const acceptedActorId = accepted[0]?.data?.actorInvitationAccept.actor.id;
+  const createdMembership = await graphql(
+    base,
+    `
+      mutation ($input: TeamMembershipCreateInput!) {
+        teamMembershipCreate(input: $input) {
+          success
+          membership {
+            id
+            actorId
+            role
+            actor {
+              id
+            }
+            team {
+              id
+            }
+          }
+        }
+      }
+    `,
+    { input: { teamId: createdTeamId, actorId: acceptedActorId, role: "MEMBER" } },
+  );
+  const adminMemberships = await graphql(
+    base,
+    `
+      query ($id: ID!) {
+        team(id: $id) {
+          memberships {
+            id
+            actorId
+            role
+            actor {
+              id
+            }
+            team {
+              id
+            }
+          }
+        }
+      }
+    `,
+    { id: createdTeamId },
+  );
+  const memberMemberships = await graphql(
+    base,
+    `
+      query ($id: ID!) {
+        teamMemberships(teamId: $id) {
+          id
+          actorId
+          role
+        }
+      }
+    `,
+    { id: createdTeamId },
+    acceptedKey,
+  );
+  const memberCannotManageMembership = await graphql(
+    base,
+    `
+      mutation ($input: TeamMembershipCreateInput!) {
+        teamMembershipCreate(input: $input) {
+          success
+          membership {
+            id
+          }
+        }
+      }
+    `,
+    {
+      input: {
+        teamId: createdTeamId,
+        actorId: accepted[0]?.data?.actorInvitationAccept.actor.id,
+        role: "MEMBER",
+      },
+    },
+    acceptedKey,
+  );
   const memberPrivateTeams = await graphql(
     base,
     `
@@ -676,7 +788,7 @@ try {
       }
     `,
     undefined,
-    acceptedKey,
+    outsiderKey,
   );
   const unsupportedNested = await graphql(
     base,
@@ -818,6 +930,19 @@ try {
     !teamsBefore.errors &&
     !createdTeam.errors &&
     createdTeam.data?.teamCreate.team.defaultState.id === initialStateId &&
+    !outsider.errors &&
+    !outsiderKeyResult.errors &&
+    !createdMembership.errors &&
+    createdMembership.data?.teamMembershipCreate.membership.actorId === acceptedActorId &&
+    adminMemberships.data?.team.memberships.some(
+      (membership: { actorId: string; role: string }) =>
+        membership.actorId === acceptedActorId && membership.role === "MEMBER",
+    ) &&
+    !memberMemberships.errors &&
+    memberMemberships.data?.teamMemberships.some(
+      (membership: { actorId: string }) => membership.actorId === acceptedActorId,
+    ) &&
+    memberCannotManageMembership.errors?.[0]?.extensions?.code === "NOT_FOUND" &&
     !memberPrivateTeams.errors &&
     !memberPrivateTeams.data?.teams.some((team: { id: string }) => team.id === createdTeamId) &&
     unsupportedNested.errors?.[0]?.extensions?.code === "VALIDATION_FAILED" &&

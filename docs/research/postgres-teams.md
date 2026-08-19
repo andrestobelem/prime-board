@@ -9,8 +9,8 @@ El modo PostgreSQL permite consultar Teams, crear/actualizar/archivar/restaurar
 y borrar Teams vacíos, además de crear/actualizar/borrar workflow states.
 Cada Team nuevo recibe el workflow default completo y una membership `owner`
 para el actor que lo crea, usada por la autorización de la configuración del
-workflow. La API completa de memberships queda para PRB-433 y falla explícitamente
-con `VALIDATION_FAILED` mientras no esté migrada.
+workflow. La API de memberships (listado, alta y baja) también se resuelve en
+PostgreSQL con la regla de conservar al menos un owner.
 
 `visibility` y `access_policy` se validan con las mismas reglas que SQLite: un
 Team privado exige `team_members`. La lectura de Teams aplica el alcance en
@@ -45,7 +45,7 @@ bun run scripts/validate-postgres-actors.ts
 ```
 
 Verifica creación con workflow, visibilidad privada para otro actor,
-rechazo explícito de un nested resolver no migrado, actualización de Team/default,
+alta/listado/autorización de memberships, rechazo explícito de un nested resolver no migrado, actualización de Team/default,
 creación y actualización de estado, borrado de estado, archivado/restauración
 y delete con confirmación. El reporte incluye `teams: true` junto con auth,
 credentials e invitaciones.

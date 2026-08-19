@@ -575,7 +575,7 @@ export async function canDiscoverPostgresTeam(
 }
 
 export async function isPostgresTeamOwner(
-  persistence: Persistence,
+  persistence: Persistence | PersistenceTransaction,
   teamId: string,
   actorId: string,
 ): Promise<boolean> {
@@ -588,4 +588,188 @@ export async function isPostgresTeamOwner(
       [teamId, actorId],
     ),
   );
+}
+
+export type PostgresTeamMembershipRole = "owner" | "member";
+
+export interface PostgresTeamMembershipRow {
+  id: string;
+  team_id: string;
+  actor_id: string;
+  role: PostgresTeamMembershipRole;
+  created_at: string;
+}
+
+export function mapPostgresTeamMembership(row: PostgresTeamMembershipRow) {
+  return {
+    id: row.id,
+    teamId: row.team_id,
+    actorId: row.actor_id,
+    role: row.role,
+    createdAt: row.created_at,
+  };
+}
+
+export async function getPostgresTeamMembership(
+  persistence: Persistence | PersistenceTransaction,
+  id: string,
+): Promise<PostgresTeamMembershipRow | null> {
+  return persistence.one<PostgresTeamMembershipRow>(
+    "SELECT * FROM team_memberships WHERE id = $1",
+    [id],
+  );
+}
+
+export async function listPostgresTeamMemberships(
+  persistence: Persistence | PersistenceTransaction,
+  teamId: string,
+): Promise<PostgresTeamMembershipRow[]> {
+  return [
+    ...(await persistence.many<PostgresTeamMembershipRow>(
+      "SELECT * FROM team_memberships WHERE team_id = $1 ORDER BY created_at, id",
+      [teamId],
+    )),
+  ];
+}
+
+export async function isPostgresTeamMember(
+  persistence: Persistence | PersistenceTransaction,
+  teamId: string,
+  actorId: string,
+): Promise<boolean> {
+  return Boolean(
+    await persistence.one(
+      `SELECT 1 FROM team_memberships
+       JOIN actors ON actors.id = team_memberships.actor_id
+       WHERE team_memberships.team_id = $1 AND team_memberships.actor_id = $2
+         AND actors.status = 'active'`,
+      [teamId, actorId],
+    ),
+  );
+}
+
+export async function canAccessPostgresTeam(
+  persistence: Persistence,
+  viewer: { id: string; workspace_role: string },
+  teamId: string,
+): Promise<boolean> {
+  const team = await getPostgresTeam(persistence, { id: teamId });
+  return team ? canDiscoverPostgresTeam(persistence, viewer, team) : false;
+}
+
+export async function canWritePostgresTeam(
+  persistence: Persistence,
+  viewer: { id: string; workspace_role: string },
+  teamId: string,
+): Promise<boolean> {
+  const team = await getPostgresTeam(persistence, { id: teamId });
+  if (!team) return false;
+  if (
+    viewer.workspace_role === "admin" ||
+    (await isPostgresTeamMember(persistence, teamId, viewer.id))
+  ) {
+    return true;
+  }
+  return team.visibility === "public" && team.access_policy === "workspace_members";
+}
+
+export async function assertCanAccessPostgresTeam(
+  persistence: Persistence,
+  viewer: { id: string; workspace_role: string },
+  teamId: string,
+): Promise<void> {
+  if (!(await canAccessPostgresTeam(persistence, viewer, teamId))) {
+    throw apiError("NOT_FOUND", "Team resource not found");
+  }
+}
+
+export async function assertCanManagePostgresTeam(
+  persistence: Persistence,
+  viewer: { id: string; workspace_role: string },
+  teamId: string,
+): Promise<void> {
+  const team = await getPostgresTeam(persistence, { id: teamId });
+  if (!team) return;
+  await assertCanAccessPostgresTeam(persistence, viewer, teamId);
+  await assertPostgresTeamActive(persistence, teamId);
+  if (viewer.workspace_role === "admin") return;
+  if (!(await isPostgresTeamOwner(persistence, teamId, viewer.id))) {
+    throw apiError("UNAUTHORIZED", "Team owner permission is required");
+  }
+}
+
+export async function createPostgresTeamMembership(
+  persistence: Persistence,
+  viewerId: string,
+  input: { teamId: string; actorId: string; role?: string | null },
+  allowAdmin = false,
+): Promise<PostgresTeamMembershipRow> {
+  const id = newId();
+  try {
+    await persistence.transaction(async (tx) => {
+      const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
+        input.teamId,
+      ]);
+      if (!team) throw apiError("NOT_FOUND", "Team not found");
+      if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
+      const actor = await tx.one("SELECT id FROM actors WHERE id = $1", [input.actorId]);
+      if (!actor) throw apiError("NOT_FOUND", "Actor not found");
+      if (!allowAdmin && !(await isPostgresTeamOwner(tx, team.id, viewerId))) {
+        throw apiError("NOT_FOUND", "Team resource not found");
+      }
+      const role = (input.role ?? "member").toLowerCase();
+      if (role !== "member" && role !== "owner") {
+        throw apiError("VALIDATION_FAILED", `Invalid team membership role: ${input.role}`);
+      }
+      await tx.execute(
+        `INSERT INTO team_memberships (id, team_id, actor_id, role, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, team.id, input.actorId, role, now()],
+      );
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw apiError("VALIDATION_FAILED", "Actor is already a team member");
+    }
+    throw error;
+  }
+  const membership = await getPostgresTeamMembership(persistence, id);
+  if (!membership) throw new Error("PostgreSQL team membership insert returned no row");
+  return membership;
+}
+
+export async function deletePostgresTeamMembership(
+  persistence: Persistence,
+  viewerId: string,
+  id: string,
+  allowAdmin = false,
+): Promise<boolean> {
+  return persistence.transaction(async (tx) => {
+    const membership = await tx.one<PostgresTeamMembershipRow>(
+      `SELECT team_memberships.* FROM team_memberships
+       JOIN teams ON teams.id = team_memberships.team_id
+       WHERE team_memberships.id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (!membership) throw apiError("NOT_FOUND", "Team membership not found");
+    const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
+      membership.team_id,
+    ]);
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
+    if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
+    if (!allowAdmin && !(await isPostgresTeamOwner(tx, team.id, viewerId))) {
+      throw apiError("NOT_FOUND", "Team resource not found");
+    }
+    if (membership.role === "owner") {
+      const owners = await tx.one<{ count: number }>(
+        "SELECT count(*)::int AS count FROM team_memberships WHERE team_id = $1 AND role = 'owner'",
+        [team.id],
+      );
+      if ((owners?.count ?? 0) <= 1) {
+        throw apiError("VALIDATION_FAILED", "A team must keep one owner");
+      }
+    }
+    await tx.execute("DELETE FROM team_memberships WHERE id = $1", [id]);
+    return true;
+  });
 }

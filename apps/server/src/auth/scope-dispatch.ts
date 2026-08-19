@@ -36,6 +36,7 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:actors",
   "query:teams",
   "query:team",
+  "query:teamMemberships",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:teamArchive",
@@ -43,6 +44,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:teamDelete",
   "mutation:teamCreate",
   "mutation:teamUpdate",
+  "mutation:teamMembershipCreate",
+  "mutation:teamMembershipDelete",
   "mutation:workflowStateCreate",
   "mutation:workflowStateUpdate",
   "mutation:workflowStateDelete",
@@ -256,7 +259,10 @@ function operationTeamIds(
     case "teamUnarchive":
     case "teamDelete":
       return [scalar(args.id) ?? "__missing__"];
+    case "teamMembershipCreate":
+      return [scalar(input.teamId) ?? "__missing__"];
     case "teamMembershipDelete":
+      if (context.persistence) return [];
       return context.db
         .query("SELECT team_id FROM team_memberships WHERE id = ?1")
         .all(scalar(args.id))
