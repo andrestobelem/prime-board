@@ -77,7 +77,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         (
           await gqlRequest(
             sessionConfig,
-            "query($includeArchived: Boolean) { teams(includeArchived: $includeArchived) { id key name description archivedAt } }",
+            "query($includeArchived: Boolean) { teams(includeArchived: $includeArchived) { id key name description visibility accessPolicy archivedAt } }",
             { includeArchived: Boolean(includeArchived) },
           )
         ).teams,
@@ -112,7 +112,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         const mutation = archived ? "teamArchive" : "teamUnarchive";
         const data = await gqlRequest(
           sessionConfig,
-          `mutation($id: ID!) { ${mutation}(id: $id) { team { id key name description createdAt archivedAt } } }`,
+          `mutation($id: ID!) { ${mutation}(id: $id) { team { id key name description visibility accessPolicy createdAt archivedAt } } }`,
           { id: resolved.id },
         );
         return json(data[mutation].team);
@@ -153,6 +153,8 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         key: z.string().optional(),
         description: z.string().optional(),
         defaultState: z.string().optional().describe("Workflow state ID"),
+        visibility: z.enum(["public", "private"]).optional(),
+        accessPolicy: z.enum(["workspace_members", "team_members"]).optional(),
       },
     },
     async (args) => {
@@ -164,10 +166,12 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         if (args.name !== undefined) input.name = args.name;
         if (args.description !== undefined) input.description = args.description;
         if (args.defaultState !== undefined) input.defaultStateId = args.defaultState;
+        if (args.visibility !== undefined) input.visibility = args.visibility.toUpperCase();
+        if (args.accessPolicy !== undefined) input.accessPolicy = args.accessPolicy.toUpperCase();
         const data = await gqlRequest(
           sessionConfig,
           `mutation($id: ID!, $input: TeamUpdateInput!) {
-        teamUpdate(id: $id, input: $input) { team { id key name description createdAt archivedAt states { id name type color position } } }
+        teamUpdate(id: $id, input: $input) { team { id key name description visibility accessPolicy createdAt archivedAt states { id name type color position } } }
       }`,
           { id: args.id, input },
         );
@@ -178,13 +182,17 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       const data = await gqlRequest(
         sessionConfig,
         `mutation($input: TeamCreateInput!) {
-      teamCreate(input: $input) { team { id key name description createdAt archivedAt states { id name type color position } } }
+      teamCreate(input: $input) { team { id key name description visibility accessPolicy createdAt archivedAt states { id name type color position } } }
     }`,
         {
           input: {
             name: args.name,
             key: args.key,
             ...(args.description === undefined ? {} : { description: args.description }),
+            ...(args.visibility === undefined ? {} : { visibility: args.visibility.toUpperCase() }),
+            ...(args.accessPolicy === undefined
+              ? {}
+              : { accessPolicy: args.accessPolicy.toUpperCase() }),
           },
         },
       );
@@ -1900,7 +1908,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
     async () => {
       const data = await gqlRequest(
         sessionConfig,
-        `{ webhooks { id url events enabled createdAt } }`,
+        `{ webhooks { id url events enabled teamId createdAt } }`,
       );
       return json(data.webhooks);
     },
@@ -1914,19 +1922,21 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         url: z.string().url(),
         events: z.array(z.string()).optional().describe("Event names; omitted subscribes to all"),
         secret: z.string().optional().describe("Optional signing secret"),
+        teamId: z.string().optional().describe("Limit delivery to a Team ID"),
       },
     },
-    async ({ url, events, secret }) => {
+    async ({ url, events, secret, teamId }) => {
       const data = await gqlRequest(
         sessionConfig,
         `mutation($input: WebhookCreateInput!) { webhookCreate(input: $input) {
-          webhook { id url events enabled createdAt } secret
+          webhook { id url events enabled teamId createdAt } secret
         } }`,
         {
           input: {
             url,
             ...(events === undefined ? {} : { events }),
             ...(secret === undefined ? {} : { secret }),
+            ...(teamId === undefined ? {} : { teamId }),
           },
         },
       );

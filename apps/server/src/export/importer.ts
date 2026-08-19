@@ -427,13 +427,22 @@ export function rebuildFromRepo(
     for (const team of readJson(join(base, "meta", "teams.json")) as Array<Record<string, any>>) {
       const teamId = newId();
       teamIds.set(team.key, teamId);
+      const visibility = team.visibility === "private" ? "private" : "public";
+      const accessPolicy =
+        team.accessPolicy === "workspace_members" || team.accessPolicy === "team_members"
+          ? team.accessPolicy
+          : "team_members";
       db.query(
-        "INSERT INTO teams (id, name, key, description, created_at, updated_at, archived_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+        `INSERT INTO teams
+         (id, name, key, description, visibility, access_policy, created_at, updated_at, archived_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
       ).run(
         teamId,
         team.name,
         team.key,
         team.description ?? null,
+        visibility,
+        visibility === "private" ? "team_members" : accessPolicy,
         timestamp,
         team.archived ? timestamp : null,
       );

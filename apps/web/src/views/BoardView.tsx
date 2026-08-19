@@ -27,13 +27,14 @@ import type { IssueColumn, IssueOrder } from "../components/DisplayOptions.tsx";
 
 const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
   team(key: $key) {
-    id key name
+    id key name accessPolicy
+    memberships { actor { id name type status } }
     states { id name type color position }
     projects { id name milestones { id name } }
     labels { id name color }
     cycles { id name number }
   }
-  actors { id name type }
+  actors { id name type status }
   issues(filter: $filter, first: 250, after: $after, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} }
     pageInfo { hasNextPage endCursor }
@@ -45,10 +46,16 @@ const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter, $orderBy: Is
 const PROJECT_BOARD_QUERY = `query($id: ID!, $filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
   project(id: $id) {
     id name
-    teams { id key states { id name type color position } labels { id name color } cycles { id name number } }
+    teams {
+      id key accessPolicy
+      memberships { actor { id name type status } }
+      states { id name type color position }
+      labels { id name color }
+      cycles { id name number }
+    }
     milestones { id name }
   }
-  actors { id name type }
+  actors { id name type status }
   issues(filter: $filter, first: 250, after: $after, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} team { id } }
     pageInfo { hasNextPage endCursor }
@@ -170,7 +177,17 @@ export function BoardView({
   }
 
   const issues: BoardCard[] = local ?? [...result.data.issues.nodes, ...extraIssues];
-  const actors: Array<{ id: string; name: string; type: string }> = result.data.actors;
+  type BoardActor = { id: string; name: string; type: string; status: string };
+  const activeActors: BoardActor[] = result.data.actors.filter(
+    (actor: BoardActor) => actor.status === "ACTIVE",
+  );
+  const actorsForTeam = (team: any): BoardActor[] =>
+    team?.accessPolicy === "TEAM_MEMBERS"
+      ? (team.memberships ?? [])
+          .map((membership: { actor: BoardActor }) => membership.actor)
+          .filter((actor: BoardActor) => actor.status === "ACTIVE")
+      : activeActors;
+  const actors = isProject ? activeActors : actorsForTeam(container);
   const actionOptions: IssueActionOptions = {
     states: isProject ? [] : container.states,
     actors,
@@ -180,6 +197,23 @@ export function BoardView({
       : container.projects.map((project: any) => ({ id: project.id, name: project.name })),
     cycles: isProject ? [] : container.cycles,
   };
+
+  function optionsForIssue(issue: BoardCard): IssueActionOptions {
+    const team = isProject
+      ? container.teams.find((candidate: any) => candidate.id === issue.team?.id)
+      : container;
+    return { ...actionOptions, actors: actorsForTeam(team) };
+  }
+
+  const selectedIssues = issues.filter((issue) => selectedIds.has(issue.id));
+  const bulkActors = selectedIssues.length
+    ? activeActors.filter((actor) =>
+        selectedIssues.every((issue) =>
+          optionsForIssue(issue).actors.some((candidate) => candidate.id === actor.id),
+        ),
+      )
+    : actors;
+  const bulkOptions = { ...actionOptions, actors: bulkActors };
 
   async function loadMore(): Promise<void> {
     if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
@@ -413,7 +447,7 @@ export function BoardView({
     <>
       <BulkIssueActions
         selectedCount={selectedIds.size}
-        options={actionOptions}
+        options={bulkOptions}
         onAction={bulkAction}
         onArchive={bulkArchive}
         onClear={() => setSelectedIds(new Set())}
@@ -498,7 +532,7 @@ export function BoardView({
                     />
                     <span className="identifier">{issue.identifier}</span>
                     <IssueActionMenu
-                      options={actionOptions}
+                      options={optionsForIssue(issue)}
                       onAction={(input) => updateIssue(issue.id, input)}
                       onArchive={() => archiveIssue(issue.id)}
                     />

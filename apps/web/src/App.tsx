@@ -33,7 +33,7 @@ import { buildNavigation, getDefaultTeamPath, getTeamKeyForRoute } from "./navig
 const SHELL_QUERY = `{
   workspace { id name }
   teams {
-    id key name
+    id key name accessPolicy
     projects { id name state }
     cycles { id name number state }
   }
@@ -62,6 +62,7 @@ export interface ShellData {
     id: string;
     key: string;
     name: string;
+    accessPolicy: string;
     projects: Array<{ id: string; name: string; state: string }>;
     cycles: Array<{ id: string; name: string; number: number; state: string }>;
   }>;

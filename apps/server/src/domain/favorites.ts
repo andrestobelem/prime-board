@@ -3,6 +3,8 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { canAccessSavedView, type SavedViewRow } from "./saved-views.ts";
+import type { ActorRow } from "../auth/viewer.ts";
+import { canAccessProject } from "../auth/permissions.ts";
 
 export interface FavoriteRow {
   id: string;
@@ -28,7 +30,9 @@ function getFavorite(db: Database, id: string): FavoriteRow | null {
 }
 
 export function listFavorites(db: Database, actorId: string): FavoriteRow[] {
-  return db
+  const actor = db.query("SELECT * FROM actors WHERE id = ?1").get(actorId) as ActorRow | null;
+  if (!actor) return [];
+  const rows = db
     .query(
       `SELECT f.*
        FROM favorites f
@@ -40,6 +44,18 @@ export function listFavorites(db: Database, actorId: string): FavoriteRow[] {
        ORDER BY f.position, f.created_at, f.id`,
     )
     .all(actorId) as FavoriteRow[];
+  return rows.filter((row) =>
+    row.project_id
+      ? canAccessProject(db, actor, row.project_id)
+      : row.saved_view_id
+        ? (() => {
+            const savedView = db
+              .query("SELECT * FROM saved_views WHERE id = ?1")
+              .get(row.saved_view_id) as SavedViewRow | null;
+            return Boolean(savedView && canAccessSavedView(db, savedView, actorId));
+          })()
+        : false,
+  );
 }
 
 function nextPosition(db: Database, actorId: string): number {

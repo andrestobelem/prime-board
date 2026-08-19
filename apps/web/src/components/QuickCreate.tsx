@@ -5,7 +5,7 @@ import { PRIORITY_NAMES } from "./bits.tsx";
 import { navigate } from "../router.tsx";
 
 interface QuickCreateProps {
-  teams: Array<{ id: string; key: string; name: string }>;
+  teams: Array<{ id: string; key: string; name: string; accessPolicy: string }>;
   defaultTeamKey?: string;
   onClose: () => void;
 }
@@ -20,9 +20,24 @@ export function QuickCreate({ teams, defaultTeamKey, onClose }: QuickCreateProps
   const [assigneeId, setAssigneeId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const actors = useQuery<{ actors: Array<{ id: string; name: string; type: string }> }>(
-    "{ actors { id name type } }",
+  const actors = useQuery<{
+    actors: Array<{ id: string; name: string; type: string; status: string }>;
+  }>("{ actors { id name type status } }");
+  const memberships = useQuery<{
+    teamMemberships: Array<{
+      actor: { id: string; name: string; type: string; status: string };
+    }>;
+  }>(
+    `query($teamId: ID!) {
+      teamMemberships(teamId: $teamId) { actor { id name type status } }
+    }`,
+    { teamId },
   );
+  const selectedTeam = teams.find((team) => team.id === teamId);
+  const assignableActors =
+    selectedTeam?.accessPolicy === "TEAM_MEMBERS"
+      ? (memberships.data?.teamMemberships ?? []).map((membership) => membership.actor)
+      : (actors.data?.actors ?? []).filter((actor) => actor.status === "ACTIVE");
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -140,7 +155,7 @@ export function QuickCreate({ teams, defaultTeamKey, onClose }: QuickCreateProps
                 onChange={(event) => setAssigneeId(event.target.value)}
               >
                 <option value="">Unassigned</option>
-                {(actors.data?.actors ?? []).map((actor) => (
+                {assignableActors.map((actor) => (
                   <option key={actor.id} value={actor.id}>
                     {actor.name}
                     {actor.type === "AGENT" ? " (agent)" : ""}

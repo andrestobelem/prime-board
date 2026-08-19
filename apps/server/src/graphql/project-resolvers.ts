@@ -44,12 +44,19 @@ import {
   assertCanManageProject,
   assertCanManageProjectTeams,
   apiKeyTeamsWithinLimit,
+  canAccessProject,
+  canAccessTeam,
+  accessibleTeamIds,
 } from "../auth/permissions.ts";
 
 type MappedProject = ReturnType<typeof mapProject>;
 
 function projectTeamsAllowed(context: Context, projectId: string): boolean {
-  return apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, projectId));
+  const viewer = requireViewer(context);
+  const teamIds = listProjectTeamIds(context.db, projectId);
+  return (
+    canAccessProject(context.db, viewer, projectId) && apiKeyTeamsWithinLimit(context.auth, teamIds)
+  );
 }
 
 export const projectResolvers = {
@@ -62,6 +69,7 @@ export const projectResolvers = {
         : [],
     teams: (project: MappedProject, _args: unknown, context: Context) =>
       listProjectTeamIds(context.db, project.id)
+        .filter((teamId) => canAccessTeam(context.db, requireViewer(context), teamId))
         .filter((teamId) => apiKeyTeamsWithinLimit(context.auth, [teamId]))
         .map((teamId) => mapTeam(lookupTeam(context, { id: teamId })!)),
     issues: (
@@ -77,11 +85,10 @@ export const projectResolvers = {
         filter: { project: { eq: project.id } },
         first,
         after: args.after,
+        teamIds: accessibleTeamIds(context.db, requireViewer(context)),
       });
       return {
-        nodes: page.rows
-          .filter((issue) => apiKeyTeamsWithinLimit(context.auth, [issue.team_id]))
-          .map(mapIssue),
+        nodes: page.rows.map(mapIssue),
         pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
       };
     },
@@ -92,8 +99,10 @@ export const projectResolvers = {
   },
 
   ProjectStatusUpdate: {
-    project: (update: { projectId: string }, _args: unknown, context: Context) =>
-      mapProject(lookupProject(context, update.projectId)!),
+    project: (update: { projectId: string }, _args: unknown, context: Context) => {
+      const project = lookupProject(context, update.projectId);
+      return project && projectTeamsAllowed(context, project.id) ? mapProject(project) : null;
+    },
     author: (update: { authorId: string }, _args: unknown, context: Context) =>
       mapActor(lookupActor(context, update.authorId)!),
   },
@@ -114,15 +123,18 @@ export const projectResolvers = {
       args: { first?: number; after?: string | null },
       context: Context,
     ) => {
+      const milestoneRow = getMilestone(context.db, milestone.id);
+      if (!milestoneRow || !projectTeamsAllowed(context, milestoneRow.project_id)) {
+        return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      }
       const page = listIssuesInWorkspace(context, {
         filter: { milestone: { eq: milestone.id } },
         first: Math.min(Math.max(args.first ?? 100, 1), 250),
         after: args.after,
+        teamIds: accessibleTeamIds(context.db, requireViewer(context)),
       });
       return {
-        nodes: page.rows
-          .filter((issue) => apiKeyTeamsWithinLimit(context.auth, [issue.team_id]))
-          .map(mapIssue),
+        nodes: page.rows.map(mapIssue),
         pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
       };
     },
@@ -145,20 +157,23 @@ export const projectResolvers = {
       args: { state?: string; team?: string; includeArchived?: boolean },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
       if (args.team) {
         const team = lookupTeam(context, { id: args.team });
-        if (team?.archived_at && !args.includeArchived) return [];
+        if (!team || !canAccessTeam(context.db, viewer, team.id)) return [];
+        if (team.archived_at && !args.includeArchived) return [];
       }
       return scopeWorkspaceRows(
         context,
         listProjects(context.db, args.state, args.team, args.includeArchived),
-      ).map(mapProject);
+      )
+        .filter((project) => canAccessProject(context.db, viewer, project.id))
+        .map(mapProject);
     },
     project: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
       const row = lookupProject(context, args.id);
-      return row ? mapProject(row) : null;
+      return row && canAccessProject(context.db, viewer, row.id) ? mapProject(row) : null;
     },
   },
 

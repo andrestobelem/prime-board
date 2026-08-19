@@ -23,6 +23,8 @@ import migration0018 from "./migrations/0018_team_archive.sql" with { type: "tex
 import migration0019 from "./migrations/0019_actor_access_lifecycle.sql" with { type: "text" };
 import migration0020 from "./migrations/0020_api_key_scopes.sql" with { type: "text" };
 import migration0021 from "./migrations/0021_api_key_team_limits_restrict.sql" with { type: "text" };
+import migration0022 from "./migrations/0022_team_visibility.sql" with { type: "text" };
+import migration0023 from "./migrations/0023_webhook_team_scope.sql" with { type: "text" };
 import { newId, now } from "./util.ts";
 
 interface Migration {
@@ -53,6 +55,8 @@ const MIGRATIONS: Migration[] = [
   { version: 19, name: "actor_access_lifecycle", sql: migration0019 },
   { version: 20, name: "api_key_scopes", sql: migration0020 },
   { version: 21, name: "api_key_team_limits_restrict", sql: migration0021 },
+  { version: 22, name: "team_visibility", sql: migration0022 },
+  { version: 23, name: "webhook_team_scope", sql: migration0023 },
 ];
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {

@@ -6,15 +6,15 @@ import { UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
 import { resolveActor, resolveTeam } from "../resolve.ts";
 
-const TEAM_FIELDS = `id key name description createdAt archivedAt`;
+const TEAM_FIELDS = `id key name description visibility accessPolicy createdAt archivedAt`;
 const MEMBERSHIP_FIELDS = `id teamId actorId role createdAt
   team { id key name } actor { id name email type workspaceRole }`;
 const STATE_FIELDS = `id name type color position`;
 const LABEL_FIELDS = `id name color teamId`;
 const USAGE = `Usage:
   pb team list [--include-archived] [--json]
-  pb team create --name TEXT --key KEY [--description TEXT] [--json]
-  pb team update <KEY|ID> [--name TEXT] [--description TEXT] [--default-state ID] [--json]
+  pb team create --name TEXT --key KEY [--description TEXT] [--visibility public|private] [--access-policy workspace-members|team-members] [--json]
+  pb team update <KEY|ID> [--name TEXT] [--description TEXT] [--default-state ID] [--visibility public|private] [--access-policy workspace-members|team-members] [--json]
   pb team archive <KEY|ID> [--json]
   pb team unarchive <KEY|ID> [--json]
   pb team delete <KEY|ID> --confirm KEY [--json]
@@ -36,6 +36,14 @@ function position(value: string): number {
 
 function jsonFlag(argv: string[]) {
   return parseArgs({ args: argv, options: { json: { type: "boolean" } } }).values.json;
+}
+
+function enumValue(value: string, kind: "visibility" | "access policy"): string {
+  const normalized = value.replaceAll("-", "_").toUpperCase();
+  const allowed =
+    kind === "visibility" ? ["PUBLIC", "PRIVATE"] : ["WORKSPACE_MEMBERS", "TEAM_MEMBERS"];
+  if (!allowed.includes(normalized)) throw new UsageError(`Invalid ${kind}: ${value}`);
+  return normalized;
 }
 
 export async function teamCommand(argv: string[]): Promise<void> {
@@ -69,12 +77,19 @@ export async function teamCommand(argv: string[]): Promise<void> {
         name: { type: "string" },
         key: { type: "string" },
         description: { type: "string" },
+        visibility: { type: "string" },
+        "access-policy": { type: "string" },
         json: { type: "boolean" },
       },
     });
     if (!values.name || !values.key) throw new UsageError(USAGE);
     const input: Record<string, unknown> = { name: values.name, key: values.key };
     if (values.description !== undefined) input.description = values.description;
+    if (values.visibility !== undefined)
+      input.visibility = enumValue(values.visibility, "visibility");
+    if (values["access-policy"] !== undefined) {
+      input.accessPolicy = enumValue(values["access-policy"], "access policy");
+    }
     const data = await gqlRequest(
       config,
       `mutation($input: TeamCreateInput!) {
@@ -140,6 +155,8 @@ export async function teamCommand(argv: string[]): Promise<void> {
         name: { type: "string" },
         description: { type: "string" },
         "default-state": { type: "string" },
+        visibility: { type: "string" },
+        "access-policy": { type: "string" },
         json: { type: "boolean" },
       },
     });
@@ -147,6 +164,11 @@ export async function teamCommand(argv: string[]): Promise<void> {
     if (values.name !== undefined) input.name = values.name;
     if (values.description !== undefined) input.description = values.description;
     if (values["default-state"] !== undefined) input.defaultStateId = values["default-state"];
+    if (values.visibility !== undefined)
+      input.visibility = enumValue(values.visibility, "visibility");
+    if (values["access-policy"] !== undefined) {
+      input.accessPolicy = enumValue(values["access-policy"], "access policy");
+    }
     if (!Object.keys(input).length) throw new UsageError(USAGE);
     const team = await resolveTeam(config, ref);
     const data = await gqlRequest(

@@ -4,10 +4,11 @@ import { gqlRequest } from "../api.ts";
 import { loadConfig } from "../config.ts";
 import { UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
+import { resolveTeam } from "../resolve.ts";
 
 const USAGE = `Usage:
   pb webhook list [--json]
-  pb webhook create --url URL [--events a,b] [--secret TEXT] [--json]
+  pb webhook create --url URL [--events a,b] [--secret TEXT] [--team TEAM] [--json]
   pb webhook delete <ID>`;
 
 export async function webhookCommand(argv: string[]): Promise<void> {
@@ -16,10 +17,15 @@ export async function webhookCommand(argv: string[]): Promise<void> {
 
   if (action === "list") {
     const { values } = parseArgs({ args: argv.slice(1), options: { json: { type: "boolean" } } });
-    const data = await gqlRequest(config, "{ webhooks { id url events enabled createdAt } }");
+    const data = await gqlRequest(
+      config,
+      "{ webhooks { id url events enabled teamId createdAt } }",
+    );
     if (values.json) return printJson(data.webhooks);
     for (const hook of data.webhooks) {
-      console.log(`${hook.id}  ${hook.url}  [${hook.events.join(", ")}]${hook.enabled ? "" : "  (disabled)"}`);
+      console.log(
+        `${hook.id}  ${hook.url}  [${hook.events.join(", ")}]${hook.enabled ? "" : "  (disabled)"}`,
+      );
     }
     if (data.webhooks.length === 0) console.log("No webhooks registered.");
     return;
@@ -29,18 +35,26 @@ export async function webhookCommand(argv: string[]): Promise<void> {
     const { values } = parseArgs({
       args: argv.slice(1),
       options: {
-        url: { type: "string" }, events: { type: "string" },
-        secret: { type: "string" }, json: { type: "boolean" },
+        url: { type: "string" },
+        events: { type: "string" },
+        secret: { type: "string" },
+        team: { type: "string" },
+        json: { type: "boolean" },
       },
     });
     if (!values.url) throw new UsageError(USAGE);
     const input: Record<string, unknown> = { url: values.url };
     if (values.events) input.events = values.events.split(",").map((event) => event.trim());
     if (values.secret) input.secret = values.secret;
+    if (values.team) input.teamId = (await resolveTeam(config, values.team)).id;
 
-    const data = await gqlRequest(config, `mutation($input: WebhookCreateInput!) {
-      webhookCreate(input: $input) { webhook { id url events } secret }
-    }`, { input });
+    const data = await gqlRequest(
+      config,
+      `mutation($input: WebhookCreateInput!) {
+      webhookCreate(input: $input) { webhook { id url events teamId } secret }
+    }`,
+      { input },
+    );
     if (values.json) return printJson(data.webhookCreate);
     const { webhook, secret } = data.webhookCreate;
     console.log(`Created webhook ${webhook.id} → ${webhook.url} [${webhook.events.join(", ")}]`);

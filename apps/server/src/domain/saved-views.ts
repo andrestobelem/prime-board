@@ -1,7 +1,8 @@
 // Vistas guardadas: filtros/orden/agrupación/columnas reutilizables (PRB-201/208).
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
-import { isTeamMember } from "./team-memberships.ts";
+import type { ActorRow } from "../auth/viewer.ts";
+import { canWriteTeam } from "../auth/permissions.ts";
 import { newId, now } from "../db/util.ts";
 
 export type SavedViewScope = "personal" | "team" | "workspace";
@@ -64,10 +65,8 @@ export function canViewSavedView(row: SavedViewRow, viewerId: string): boolean {
 export function canAccessSavedView(db: Database, row: SavedViewRow, viewerId: string): boolean {
   if (!canViewSavedView(row, viewerId)) return false;
   if (row.scope !== "team") return true;
-  const workspaceRole = db
-    .query("SELECT workspace_role FROM actors WHERE id = ?1")
-    .get(viewerId) as { workspace_role: string } | null;
-  return workspaceRole?.workspace_role === "admin" || isTeamMember(db, row.team_id!, viewerId);
+  const actor = db.query("SELECT * FROM actors WHERE id = ?1").get(viewerId) as ActorRow | null;
+  return Boolean(actor && row.team_id && canWriteTeam(db, actor, row.team_id));
 }
 
 export function listSavedViews(

@@ -9,7 +9,7 @@ import { availableTeamActors } from "../team-memberships.ts";
 const QUERY = `query($key: String) {
   viewer { id workspaceRole }
   team(key: $key, includeArchived: true) {
-    id key name archivedAt
+    id key name archivedAt visibility accessPolicy
     defaultState { id }
     states { id name type color position }
     labels { id name color teamId }
@@ -23,6 +23,8 @@ const STATE_TYPES = ["TRIAGE", "BACKLOG", "UNSTARTED", "STARTED", "COMPLETED", "
 type DeleteTarget = { id: string; kind: "state" | "label"; name: string };
 type MembershipTarget = { id: string; name: string };
 type TeamLifecycleAction = "archive" | "restore" | "delete";
+type TeamVisibility = "PUBLIC" | "PRIVATE";
+type TeamAccessPolicy = "WORKSPACE_MEMBERS" | "TEAM_MEMBERS";
 
 export function TeamSettingsView({ teamKey }: { teamKey: string }) {
   const result = useQuery<any>(QUERY, { key: teamKey });
@@ -68,6 +70,21 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
     } finally {
       setSaving(null);
     }
+  }
+
+  async function updateTeamAccess(
+    input: Partial<Record<"visibility" | "accessPolicy", TeamVisibility | TeamAccessPolicy>>,
+  ): Promise<void> {
+    if (!canManage) return;
+    await runMutation("team-access", async () => {
+      const response = await mutate<{ teamUpdate: { success: boolean } }>(
+        `mutation($id: ID!, $input: TeamUpdateInput!) {
+          teamUpdate(id: $id, input: $input) { success }
+        }`,
+        { id: team.id, input },
+      );
+      if (!response.teamUpdate.success) throw new Error("Could not update team access settings.");
+    });
   }
 
   async function runLifecycleAction(): Promise<void> {
@@ -278,6 +295,75 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
           </div>
         </section>
       )}
+
+      <section className="settings-panel" aria-labelledby="team-access-title">
+        <div className="settings-panel-header">
+          <div>
+            <h2 id="team-access-title">Team access</h2>
+            <p>Control who can discover and work in this Team.</p>
+          </div>
+        </div>
+        <div className="settings-list">
+          <div className="team-setting-row" aria-busy={saving === "team-access"}>
+            <div className="team-setting-identity">
+              <div>
+                <strong>Visibility</strong>
+                <span className="settings-row-meta">
+                  {team.visibility === "PRIVATE"
+                    ? "Only Team members can discover this Team."
+                    : "Everyone in the workspace can discover this Team."}
+                </span>
+              </div>
+            </div>
+            <div className="team-setting-controls">
+              <select
+                aria-label="Team visibility"
+                value={team.visibility}
+                disabled={!canManage || saving === "team-access"}
+                onChange={(event) => {
+                  const visibility = event.target.value as TeamVisibility;
+                  void updateTeamAccess({
+                    visibility,
+                    ...(visibility === "PRIVATE" ? { accessPolicy: "TEAM_MEMBERS" } : {}),
+                  });
+                }}
+              >
+                <option value="PUBLIC">Public</option>
+                <option value="PRIVATE">Private</option>
+              </select>
+            </div>
+          </div>
+          <div className="team-setting-row" aria-busy={saving === "team-access"}>
+            <div className="team-setting-identity">
+              <div>
+                <strong>Access policy</strong>
+                <span className="settings-row-meta">
+                  {team.accessPolicy === "TEAM_MEMBERS"
+                    ? "Only Team members can modify and assign this Team's work."
+                    : "All workspace members can modify and assign this Team's work."}
+                </span>
+              </div>
+            </div>
+            <div className="team-setting-controls">
+              <select
+                aria-label="Team access policy"
+                value={team.accessPolicy}
+                disabled={!canManage || saving === "team-access"}
+                onChange={(event) =>
+                  void updateTeamAccess({
+                    accessPolicy: event.target.value as TeamAccessPolicy,
+                  })
+                }
+              >
+                <option value="WORKSPACE_MEMBERS" disabled={team.visibility === "PRIVATE"}>
+                  Workspace members
+                </option>
+                <option value="TEAM_MEMBERS">Team members</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="settings-panel" aria-labelledby="team-members-title">
         <div className="settings-panel-header">

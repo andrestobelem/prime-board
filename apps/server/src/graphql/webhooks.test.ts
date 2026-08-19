@@ -251,6 +251,34 @@ describe("webhooks", () => {
     });
   });
 
+  it("entrega team.deleted aunque el Team ya no exista al despachar", async () => {
+    received.length = 0;
+    const team = await gql(
+      app,
+      `mutation { teamCreate(input: { name: "Deletion event", key: "del" }) { team { id } } }`,
+    );
+    const webhook = await gql(
+      app,
+      `mutation($url: String!) {
+        webhookCreate(input: { url: $url, events: ["team.deleted"] }) {
+          webhook { id }
+        }
+      }`,
+      { url: `http://localhost:${receiver.port}/team-deleted` },
+    );
+    expect(webhook.errors).toBeUndefined();
+    await gql(app, `mutation($id: ID!) { teamDelete(id: $id, confirmation: "DEL") { success } }`, {
+      id: team.data!.teamCreate.team.id,
+    });
+    await app.events.idle();
+    const deletion = received
+      .map((item) => JSON.parse(item.body))
+      .find((body) => body.event === "team.deleted");
+    expect(deletion).toBeDefined();
+    expect(deletion.data._teamOwnerIds).toBeUndefined();
+    expect(deletion.data.teamId).toBe(team.data!.teamCreate.team.id);
+  });
+
   it("valida la URL del webhook", async () => {
     const bad = await gql(
       app,

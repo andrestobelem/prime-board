@@ -2,12 +2,15 @@
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { now } from "../db/util.ts";
+import type { ActorRow } from "../auth/viewer.ts";
+import { canAccessTeam } from "../auth/permissions.ts";
 import type { ActivityRow } from "./activity.ts";
 
 export interface InboxActivityRow extends ActivityRow {
   is_read: number;
   is_archived: number;
   issue_assignee_id: string | null;
+  issue_team_id: string;
 }
 
 function escapedRegExp(value: string): string {
@@ -49,9 +52,7 @@ function listInboxActivityInternal(
   limit: number | null,
 ): InboxActivityRow[] {
   const includeArchived = Boolean(opts.includeArchived);
-  const viewer = db.query("SELECT name FROM actors WHERE id = ?1").get(viewerId) as {
-    name: string;
-  } | null;
+  const viewer = db.query("SELECT * FROM actors WHERE id = ?1").get(viewerId) as ActorRow | null;
   if (!viewer) return [];
 
   // La asignación efectiva del issue no alcanza para decidir la relevancia de
@@ -63,6 +64,7 @@ function listInboxActivityInternal(
     .query(
       `SELECT a.*,
               i.assignee_id AS issue_assignee_id,
+              i.team_id AS issue_team_id,
               CASE WHEN r.read_at IS NOT NULL THEN 1 ELSE 0 END AS is_read,
               CASE WHEN r.archived_at IS NOT NULL THEN 1 ELSE 0 END AS is_archived
        FROM activity a
@@ -73,10 +75,11 @@ function listInboxActivityInternal(
        ORDER BY a.created_at DESC, a.id DESC`,
     )
     .all(viewerId, includeArchived ? 1 : 0) as InboxActivityRow[];
+  const visibleRows = rows.filter((row) => canAccessTeam(db, viewer, row.issue_team_id));
 
   const historicalAssignee = new Map<string, string | null>();
   const byIssue = new Map<string, InboxActivityRow[]>();
-  for (const row of rows) {
+  for (const row of visibleRows) {
     const issueRows = byIssue.get(row.issue_id) ?? [];
     issueRows.push(row);
     byIssue.set(row.issue_id, issueRows);
@@ -113,7 +116,7 @@ function listInboxActivityInternal(
     }
   }
 
-  const relevant = rows.filter((row) => {
+  const relevant = visibleRows.filter((row) => {
     if (row.actor_id === viewerId) return false;
     const recipient = historicalAssignee.get(row.id);
     if (row.type === "created" || row.type === "assigned") return recipient === viewerId;

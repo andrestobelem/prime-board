@@ -71,11 +71,23 @@ export const typeDefs = /* GraphQL */ `
     position: Float!
   }
 
+  enum TeamVisibility {
+    PUBLIC
+    PRIVATE
+  }
+
+  enum TeamAccessPolicy {
+    WORKSPACE_MEMBERS
+    TEAM_MEMBERS
+  }
+
   type Team {
     id: ID!
     key: String!
     name: String!
     description: String
+    visibility: TeamVisibility!
+    accessPolicy: TeamAccessPolicy!
     states: [WorkflowState!]!
     """
     Donde caen los issues creados sin estado explícito. Editable vía teamUpdate.
@@ -543,6 +555,7 @@ export const typeDefs = /* GraphQL */ `
     url: String!
     events: [String!]!
     enabled: Boolean!
+    teamId: ID
     createdAt: DateTime!
   }
 
@@ -565,11 +578,15 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     key: String!
     description: String
+    visibility: TeamVisibility
+    accessPolicy: TeamAccessPolicy
   }
 
   input TeamUpdateInput {
     name: String
     description: String
+    visibility: TeamVisibility
+    accessPolicy: TeamAccessPolicy
     """
     Debe ser un estado del team.
     """
@@ -870,6 +887,7 @@ export const typeDefs = /* GraphQL */ `
     Eventos suscriptos; omitir para todos ("*").
     """
     events: [String!]
+    teamId: ID
   }
 
   type WebhookPayload {

@@ -20,7 +20,8 @@ const ISSUE_QUERY = `query($id: ID!) {
   issue(id: $id) {
     id identifier title description priority url branchName createdAt
     team {
-      id key name
+      id key name accessPolicy
+      memberships { actor { id name type status } }
       states { id name type color position }
       labels { id name color }
       projects { id name }
@@ -39,7 +40,7 @@ const ISSUE_QUERY = `query($id: ID!) {
     comments { id body actor { name type } createdAt }
     activity { id type actor { name type } payload createdAt }
   }
-  actors { id name type }
+  actors { id name type status }
 }`;
 
 function Markdown({ text }: { text: string }) {
@@ -204,6 +205,11 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
   if (result.error) return <div className="error-banner">{result.error.message}</div>;
   if (!issue) return <div className="empty">Issue {issueRef} not found.</div>;
+
+  const assignableActors =
+    issue.team.accessPolicy === "TEAM_MEMBERS"
+      ? issue.team.memberships.map((membership: any) => membership.actor)
+      : result.data.actors.filter((actor: any) => actor.status === "ACTIVE");
 
   async function copyText(value: string): Promise<void> {
     try {
@@ -652,7 +658,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
               onChange={(event) => void runUpdate({ assigneeId: event.target.value || null })}
             >
               <option value="">Unassigned</option>
-              {result.data.actors.map((actor: any) => (
+              {assignableActors.map((actor: any) => (
                 <option key={actor.id} value={actor.id}>
                   {actor.name}
                   {actor.type === "AGENT" ? " (agent)" : ""}

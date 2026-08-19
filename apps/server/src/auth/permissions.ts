@@ -42,10 +42,73 @@ export function assertCanUseImportFields(
   }
 }
 
+/** Determina si un Actor puede descubrir un Team y sus datos básicos. */
+export function canDiscoverTeam(db: Database, viewer: ActorRow, teamId: string): boolean {
+  const team = getTeam(db, { id: teamId });
+  if (!team) return false;
+  return (
+    isWorkspaceAdmin(viewer) || isTeamMember(db, teamId, viewer.id) || team.visibility === "public"
+  );
+}
+
+/** Determina si un Actor puede leer el trabajo de un Team según su visibilidad. */
+export function canAccessTeam(db: Database, viewer: ActorRow, teamId: string): boolean {
+  return canDiscoverTeam(db, viewer, teamId);
+}
+
+export function assertCanAssignToTeam(
+  db: Database,
+  viewer: ActorRow,
+  teamId: string,
+  actorId: string,
+): void {
+  const actor = db.query("SELECT status FROM actors WHERE id = ?1").get(actorId) as {
+    status: ActorRow["status"];
+  } | null;
+  if (!actor || actor.status !== "active") {
+    throw apiError("UNAUTHORIZED", "Assignee must be an active actor");
+  }
+  const team = getTeam(db, { id: teamId });
+  if (!team) {
+    throw apiError("UNAUTHORIZED", "Assignee is not allowed for this Team");
+  }
+  assertCanAccessTeam(db, viewer, teamId);
+  if (!canWriteTeam(db, viewer, teamId)) {
+    throw apiError("UNAUTHORIZED", "Assignee is not allowed for this Team");
+  }
+  if (isWorkspaceAdmin(viewer)) return;
+  if (team.access_policy === "workspace_members") return;
+  if (!isTeamMember(db, teamId, actorId)) {
+    throw apiError("UNAUTHORIZED", "Assignee must be a Team member");
+  }
+}
+
+export function accessibleTeamIds(db: Database, viewer: ActorRow): string[] {
+  return (db.query("SELECT id FROM teams ORDER BY id").all() as Array<{ id: string }>)
+    .map((team) => team.id)
+    .filter((teamId) => canAccessTeam(db, viewer, teamId));
+}
+
+/** La política de acceso controla escrituras y asignaciones de trabajo. */
+export function canWriteTeam(db: Database, viewer: ActorRow, teamId: string): boolean {
+  const team = getTeam(db, { id: teamId });
+  if (!team) return false;
+  if (isWorkspaceAdmin(viewer) || isTeamMember(db, teamId, viewer.id)) return true;
+  return team.visibility === "public" && team.access_policy === "workspace_members";
+}
+
+/** Oculta la existencia de Teams privados para actores no autorizados. */
+export function assertCanAccessTeam(db: Database, viewer: ActorRow, teamId: string): void {
+  if (!canAccessTeam(db, viewer, teamId)) {
+    throw apiError("NOT_FOUND", "Team resource not found");
+  }
+}
+
 /** La configuración del team pertenece al admin del workspace o a sus owners. */
 export function assertCanManageTeam(db: Database, viewer: ActorRow, teamId: string): void {
   // El dominio conserva NOT_FOUND para mutations sobre teams inexistentes.
   if (!getTeam(db, { id: teamId })) return;
+  assertCanAccessTeam(db, viewer, teamId);
   assertTeamActive(db, teamId);
   if (isWorkspaceAdmin(viewer)) return;
   if (!isTeamOwner(db, teamId, viewer.id)) {
@@ -60,10 +123,10 @@ export function assertCanManageIssue(
   teamId: string | null | undefined,
 ): void {
   if (!teamId) return;
+  assertCanAccessTeam(db, viewer, teamId);
   assertTeamActive(db, teamId);
-  if (isWorkspaceAdmin(viewer)) return;
-  if (!isTeamMember(db, teamId, viewer.id)) {
-    throw apiError("UNAUTHORIZED", "Issue team membership is required");
+  if (!canWriteTeam(db, viewer, teamId)) {
+    throw apiError("UNAUTHORIZED", "Team access policy does not allow this operation");
   }
 }
 
@@ -85,8 +148,15 @@ export function assertCanManageProject(db: Database, viewer: ActorRow, projectId
   const project = getProject(db, projectId);
   if (!project) return;
   const teamIds = listProjectTeamIds(db, projectId);
-  if (teamIds.some((teamId) => isTeamMember(db, teamId, viewer.id))) return;
-  throw apiError("UNAUTHORIZED", "Project team membership is required");
+  for (const teamId of teamIds) assertCanAccessTeam(db, viewer, teamId);
+  if (teamIds.length > 0 && teamIds.every((teamId) => canWriteTeam(db, viewer, teamId))) return;
+  throw apiError("UNAUTHORIZED", "Project access policy does not allow this operation");
+}
+
+/** Un Project heredado de varios Teams exige acceso a todos sus Teams. */
+export function canAccessProject(db: Database, viewer: ActorRow, projectId: string): boolean {
+  const teamIds = listProjectTeamIds(db, projectId);
+  return teamIds.length > 0 && teamIds.every((teamId) => canAccessTeam(db, viewer, teamId));
 }
 
 /** Autoriza la creación de un proyecto en todos sus teams destino. */
@@ -105,10 +175,11 @@ export function assertCanCreateProject(
   // Deja que el dominio conserve sus errores de validación/not-found.
   if (destinations.length === 0) return;
   if (destinations.some((teamId) => !getTeam(db, { id: teamId }))) return;
+  for (const teamId of destinations) assertCanAccessTeam(db, viewer, teamId);
   for (const teamId of destinations) assertTeamActive(db, teamId);
   if (isWorkspaceAdmin(viewer)) return;
-  if (destinations.some((teamId) => !isTeamMember(db, teamId, viewer.id))) {
-    throw apiError("UNAUTHORIZED", "Project team membership is required");
+  if (destinations.some((teamId) => !canWriteTeam(db, viewer, teamId))) {
+    throw apiError("UNAUTHORIZED", "Project access policy does not allow this operation");
   }
 }
 
@@ -121,10 +192,11 @@ export function assertCanManageProjectTeams(
   if (teamIds.length === 0) return;
   // La mutación debe poder seguir produciendo NOT_FOUND para teams inválidos.
   if (teamIds.some((teamId) => !getTeam(db, { id: teamId }))) return;
+  for (const teamId of teamIds) assertCanAccessTeam(db, viewer, teamId);
   for (const teamId of teamIds) assertTeamActive(db, teamId);
   if (isWorkspaceAdmin(viewer)) return;
-  if (teamIds.some((teamId) => !isTeamMember(db, teamId, viewer.id))) {
-    throw apiError("UNAUTHORIZED", "Project team membership is required");
+  if (teamIds.some((teamId) => !canWriteTeam(db, viewer, teamId))) {
+    throw apiError("UNAUTHORIZED", "Project access policy does not allow this operation");
   }
 }
 

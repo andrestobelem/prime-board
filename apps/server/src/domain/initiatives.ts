@@ -2,9 +2,15 @@
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
-import { getProject } from "./projects.ts";
+import { getProject, listProjectTeamIds } from "./projects.ts";
 import { parseDateTime } from "./datetime.ts";
-import { assertTeamMember, isTeamMember } from "./team-memberships.ts";
+import { isTeamMember } from "./team-memberships.ts";
+import type { ActorRow } from "../auth/viewer.ts";
+import {
+  assertCanManageIssue,
+  assertCanManageProject,
+  canAccessProject,
+} from "../auth/permissions.ts";
 
 export type InitiativeState = "planned" | "active" | "completed" | "canceled";
 
@@ -79,8 +85,10 @@ function resolveState(state: string): InitiativeState {
 }
 
 function setTeams(db: Database, initiativeId: string, teamIds: string[], viewerId: string): void {
+  const viewer = db.query("SELECT * FROM actors WHERE id = ?1").get(viewerId) as ActorRow | null;
+  if (!viewer) throw apiError("NOT_FOUND", "Actor not found");
   for (const teamId of new Set(teamIds)) {
-    assertTeamMember(db, teamId, viewerId);
+    assertCanManageIssue(db, viewer, teamId);
   }
   db.query("DELETE FROM initiative_teams WHERE initiative_id = ?1").run(initiativeId);
   const insert = db.query("INSERT INTO initiative_teams (initiative_id, team_id) VALUES (?1, ?2)");
@@ -88,8 +96,16 @@ function setTeams(db: Database, initiativeId: string, teamIds: string[], viewerI
 }
 
 export function canViewInitiative(db: Database, initiativeId: string, viewerId: string): boolean {
-  const teamIds = listInitiativeTeamIds(db, initiativeId);
-  return teamIds.length === 0 || teamIds.some((teamId) => isTeamMember(db, teamId, viewerId));
+  const viewer = db.query("SELECT * FROM actors WHERE id = ?1").get(viewerId) as ActorRow | null;
+  if (!viewer) return false;
+  const teamIds = new Set(listInitiativeTeamIds(db, initiativeId));
+  for (const projectId of listInitiativeProjectIds(db, initiativeId)) {
+    for (const teamId of listProjectTeamIds(db, projectId)) teamIds.add(teamId);
+    if (!canAccessProject(db, viewer, projectId)) return false;
+  }
+  return [...teamIds].every(
+    (teamId) => viewer.workspace_role === "admin" || isTeamMember(db, teamId, viewerId),
+  );
 }
 
 function assertCanAccess(db: Database, existing: InitiativeRow, viewerId: string): void {
@@ -98,9 +114,17 @@ function assertCanAccess(db: Database, existing: InitiativeRow, viewerId: string
   }
 }
 
-function setProjects(db: Database, initiativeId: string, projectIds: string[]): void {
+function setProjects(
+  db: Database,
+  initiativeId: string,
+  projectIds: string[],
+  viewerId: string,
+): void {
   for (const projectId of projectIds) {
     if (!getProject(db, projectId)) throw apiError("NOT_FOUND", `Project not found: ${projectId}`);
+    const viewer = db.query("SELECT * FROM actors WHERE id = ?1").get(viewerId) as ActorRow | null;
+    if (!viewer) throw apiError("NOT_FOUND", "Actor not found");
+    assertCanManageProject(db, viewer, projectId);
   }
   db.query("DELETE FROM initiative_projects WHERE initiative_id = ?1").run(initiativeId);
   const insert = db.query(
@@ -135,7 +159,7 @@ export function createInitiative(
         (id, name, description, state, target_date, owner_id, created_at, updated_at, archived_at)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, NULL)`,
     ).run(id, name, input.description ?? null, state, input.targetDate ?? null, ownerId, timestamp);
-    if (input.projectIds?.length) setProjects(db, id, input.projectIds);
+    if (input.projectIds?.length) setProjects(db, id, input.projectIds, ownerId);
     if (input.teamIds !== undefined && input.teamIds !== null)
       setTeams(db, id, input.teamIds, ownerId);
   })();
@@ -196,7 +220,7 @@ export function updateInitiative(
       );
     }
     if (input.projectIds !== undefined && input.projectIds !== null) {
-      setProjects(db, id, input.projectIds);
+      setProjects(db, id, input.projectIds, viewerId);
       if (sets.length === 0) {
         db.query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2").run(now(), id);
       }

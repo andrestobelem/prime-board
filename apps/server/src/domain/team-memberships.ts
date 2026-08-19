@@ -40,7 +40,9 @@ export function listTeamMemberships(db: Database, teamId: string): TeamMembershi
 export function isTeamMember(db: Database, teamId: string, actorId: string): boolean {
   return Boolean(
     db
-      .query("SELECT 1 FROM team_memberships WHERE team_id = ?1 AND actor_id = ?2")
+      .query(
+        "SELECT 1 FROM team_memberships JOIN actors ON actors.id = team_memberships.actor_id WHERE team_memberships.team_id = ?1 AND team_memberships.actor_id = ?2 AND actors.status = 'active'",
+      )
       .get(teamId, actorId),
   );
 }
@@ -49,7 +51,7 @@ export function isTeamOwner(db: Database, teamId: string, actorId: string): bool
   return Boolean(
     db
       .query(
-        "SELECT 1 FROM team_memberships WHERE team_id = ?1 AND actor_id = ?2 AND role = 'owner'",
+        "SELECT 1 FROM team_memberships JOIN actors ON actors.id = team_memberships.actor_id WHERE team_memberships.team_id = ?1 AND team_memberships.actor_id = ?2 AND team_memberships.role = 'owner' AND actors.status = 'active'",
       )
       .get(teamId, actorId),
   );

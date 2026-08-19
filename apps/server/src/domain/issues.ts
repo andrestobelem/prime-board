@@ -475,6 +475,8 @@ export interface ListIssuesOptions {
   first: number;
   after?: string | null;
   orderBy?: IssueOrder | null;
+  /** Team IDs visible to the caller; null means unrestricted. */
+  teamIds?: readonly string[] | null;
 }
 
 export interface IssuePage {
@@ -497,6 +499,14 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
   const params = new ParamSink();
   const filter = options.filter ?? {};
   const clauses = [buildIssueFilter(filter, params)];
+  if (options.teamIds) {
+    if (options.teamIds.length === 0) {
+      clauses.push("1 = 0");
+    } else {
+      const placeholders = options.teamIds.map((teamId) => params.add(teamId));
+      clauses.push(`issues.team_id IN (${placeholders.join(", ")})`);
+    }
+  }
   if (!filter.includeArchived) {
     clauses.push("issues.archived_at IS NULL");
     clauses.push("teams.archived_at IS NULL");
@@ -514,6 +524,14 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
     const cursorParams = new ParamSink();
     const cursorId = cursorParams.add(decoded.id);
     const cursorClauses = [buildIssueFilter(filter, cursorParams)];
+    if (options.teamIds) {
+      if (options.teamIds.length === 0) {
+        cursorClauses.push("1 = 0");
+      } else {
+        const placeholders = options.teamIds.map((teamId) => cursorParams.add(teamId));
+        cursorClauses.push(`issues.team_id IN (${placeholders.join(", ")})`);
+      }
+    }
     if (!filter.includeArchived) {
       cursorClauses.push("issues.archived_at IS NULL");
       cursorClauses.push("teams.archived_at IS NULL");

@@ -31,7 +31,11 @@ import { listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
 import {
   assertCanManageIssue,
   assertCanUseImportFields,
+  assertCanAssignToTeam,
+  assertCanManageProject,
   apiKeyTeamsWithinLimit,
+  accessibleTeamIds,
+  canAccessTeam,
 } from "../auth/permissions.ts";
 import type { Context } from "./context.ts";
 import {
@@ -181,14 +185,18 @@ export const issueResolvers = {
     parent: (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.parent_id) return null;
       const parent = lookupIssueById(context, issue._row.parent_id);
-      return parent && apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, parent.team_id])
+      return parent &&
+        canAccessTeam(context.db, requireViewer(context), parent.team_id) &&
+        apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, parent.team_id])
         ? mapIssue(parent)
         : null;
     },
     children: (issue: MappedIssue, args: { includeArchived?: boolean | null }, context: Context) =>
       listChildrenInWorkspace(context, issue.id, Boolean(args.includeArchived))
-        .filter((child) =>
-          apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, child.team_id]),
+        .filter(
+          (child) =>
+            canAccessTeam(context.db, requireViewer(context), child.team_id) &&
+            apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, child.team_id]),
         )
         .map(mapIssue),
     labels: (issue: MappedIssue, _args: unknown, context: Context) =>
@@ -196,7 +204,8 @@ export const issueResolvers = {
         .filter(
           (label) =>
             label.team_id === null ||
-            apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, label.team_id]),
+            (canAccessTeam(context.db, requireViewer(context), label.team_id) &&
+              apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, label.team_id])),
         )
         .map(mapLabel),
     project: (issue: MappedIssue, _args: unknown, context: Context) => {
@@ -204,6 +213,9 @@ export const issueResolvers = {
       const project = lookupProject(context, issue._row.project_id);
       if (
         !project ||
+        !listProjectTeamIds(context.db, project.id).every((teamId) =>
+          canAccessTeam(context.db, requireViewer(context), teamId),
+        ) ||
         !apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, project.id))
       )
         return null;
@@ -214,6 +226,9 @@ export const issueResolvers = {
       const milestone = getMilestone(context.db, issue._row.milestone_id);
       if (
         !milestone ||
+        !listProjectTeamIds(context.db, milestone.project_id).every((teamId) =>
+          canAccessTeam(context.db, requireViewer(context), teamId),
+        ) ||
         !apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, milestone.project_id))
       )
         return null;
@@ -222,7 +237,9 @@ export const issueResolvers = {
     cycle: (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.cycle_id) return null;
       const cycle = getCycle(context.db, issue._row.cycle_id);
-      return cycle && apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, cycle.team_id])
+      return cycle &&
+        canAccessTeam(context.db, requireViewer(context), cycle.team_id) &&
+        apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, cycle.team_id])
         ? mapCycle(cycle)
         : null;
     },
@@ -235,6 +252,8 @@ export const issueResolvers = {
           const related = lookupIssueById(context, relation.relatedId);
           if (
             !related ||
+            !canAccessTeam(context.db, requireViewer(context), issue._row.team_id) ||
+            !canAccessTeam(context.db, requireViewer(context), related.team_id) ||
             !apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, related.team_id])
           )
             return null;
@@ -263,8 +282,11 @@ export const issueResolvers = {
       const related = lookupIssueById(context, relation._relatedId);
       if (!related) return null;
       if (
-        relation._sourceTeamId &&
-        !apiKeyTeamsWithinLimit(context.auth, [relation._sourceTeamId, related.team_id])
+        (relation._sourceTeamId &&
+          !canAccessTeam(context.db, requireViewer(context), relation._sourceTeamId)) ||
+        !canAccessTeam(context.db, requireViewer(context), related.team_id) ||
+        (relation._sourceTeamId &&
+          !apiKeyTeamsWithinLimit(context.auth, [relation._sourceTeamId, related.team_id]))
       )
         return null;
       return mapIssue(related);
@@ -315,21 +337,22 @@ export const issueResolvers = {
 
   Query: {
     issue: (_parent: unknown, args: { id: string }, context: Context) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
       const row = lookupIssue(context, args.id);
-      return row ? mapIssue(row) : null;
+      return row && canAccessTeam(context.db, viewer, row.team_id) ? mapIssue(row) : null;
     },
     issues: (
       _parent: unknown,
       args: { filter?: IssueFilter; first?: number; after?: string; orderBy?: IssueOrder },
       context: Context,
     ) => {
-      requireViewer(context);
+      const viewer = requireViewer(context);
       const page = listIssuesInWorkspace(context, {
         filter: args.filter,
         first: args.first ?? 50,
         after: args.after,
         orderBy: args.orderBy,
+        teamIds: accessibleTeamIds(context.db, viewer),
       });
       return {
         nodes: page.rows.map(mapIssue),
@@ -344,9 +367,15 @@ export const issueResolvers = {
       assertCanUseImportFields(viewer, args.input);
       const team = requireTeam(context, { id: args.input.teamId, key: args.input.teamKey });
       assertCanManageIssue(context.db, viewer, team.id);
-      if (args.input.assigneeId) requireActor(context, args.input.assigneeId);
+      if (args.input.assigneeId) {
+        requireActor(context, args.input.assigneeId);
+        assertCanAssignToTeam(context.db, viewer, team.id, args.input.assigneeId);
+      }
       if (args.input.parentId) requireIssue(context, args.input.parentId);
-      if (args.input.projectId) requireProject(context, args.input.projectId);
+      if (args.input.projectId) {
+        requireProject(context, args.input.projectId);
+        assertCanManageProject(context.db, viewer, args.input.projectId);
+      }
       if (args.input.creatorId) requireActor(context, args.input.creatorId);
       const row = createIssue(context.db, viewer.id, args.input);
       context.events.emit("issue.created", viewer, issueEventData(row));
@@ -358,10 +387,21 @@ export const issueResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
-      assertIssueAccess(context, viewer, args.id);
-      if (args.input.assigneeId) requireActor(context, args.input.assigneeId);
+      const currentIssue = assertIssueAccess(context, viewer, args.id);
+      if (args.input.assigneeId) {
+        requireActor(context, args.input.assigneeId);
+        assertCanAssignToTeam(context.db, viewer, currentIssue.team_id, args.input.assigneeId);
+      }
       if (args.input.parentId) requireIssue(context, args.input.parentId);
-      if (args.input.projectId) requireProject(context, args.input.projectId);
+      if (args.input.projectId) {
+        requireProject(context, args.input.projectId);
+        assertCanManageProject(context.db, viewer, args.input.projectId);
+      }
+      if (args.input.milestoneId) {
+        const projectId =
+          args.input.projectId !== undefined ? args.input.projectId : currentIssue.project_id;
+        if (projectId) assertCanManageProject(context.db, viewer, projectId);
+      }
       const { row, changes } = updateIssue(context.db, viewer.id, args.id, args.input);
       if (changes.length > 0) {
         const changeMap = Object.fromEntries(

@@ -3,6 +3,8 @@
 import type { Database } from "bun:sqlite";
 import { now } from "../db/util.ts";
 import type { WebhookEventName } from "./events.ts";
+import { canAccessTeam, isWorkspaceAdmin } from "../auth/permissions.ts";
+import type { ActorRow } from "../auth/viewer.ts";
 
 export type { WebhookEventName } from "./events.ts";
 
@@ -14,6 +16,7 @@ export interface WebhookRow {
   enabled: number;
   created_at: string;
   owner_id: string | null;
+  team_id: string | null;
 }
 
 export interface EventActor {
@@ -37,6 +40,63 @@ export function signPayload(secret: string, body: string): string {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function eventTeamIds(
+  db: Database,
+  event: WebhookEventName,
+  data: Record<string, unknown>,
+): string[] {
+  const direct =
+    typeof data.teamId === "string"
+      ? [data.teamId]
+      : event.startsWith("team.") && typeof data.id === "string"
+        ? [data.id]
+        : [];
+  if (direct.length > 0) return direct;
+  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  if (issueId) {
+    const row = db.query("SELECT team_id FROM issues WHERE id = ?1").get(issueId) as {
+      team_id: string;
+    } | null;
+    return row ? [row.team_id] : [];
+  }
+  const projectId =
+    typeof data.projectId === "string"
+      ? data.projectId
+      : event.startsWith("project.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (projectId) {
+    return (
+      db.query("SELECT team_id FROM project_teams WHERE project_id = ?1").all(projectId) as Array<{
+        team_id: string;
+      }>
+    ).map((row) => row.team_id);
+  }
+  return [];
+}
+
+function ownerCanReceive(
+  db: Database,
+  ownerId: string | null,
+  teamIds: readonly string[],
+  deletedTeamOwnerIds: readonly string[] = [],
+): boolean {
+  if (!ownerId) return false;
+  const owner = db.query("SELECT * FROM actors WHERE id = ?1").get(ownerId) as ActorRow | null;
+  return Boolean(
+    owner &&
+    owner.status === "active" &&
+    teamIds.every((teamId) => {
+      const team = db.query("SELECT id FROM teams WHERE id = ?1").get(teamId);
+      return Boolean(
+        team
+          ? canAccessTeam(db, owner, teamId)
+          : isWorkspaceAdmin(owner) || deletedTeamOwnerIds.includes(ownerId),
+      );
+    }),
+  );
+}
+
 export class WebhookDispatcher {
   private readonly pending = new Set<Promise<void>>();
 
@@ -53,16 +113,34 @@ export class WebhookDispatcher {
     changes?: Record<string, { from: unknown; to: unknown }>,
   ): void {
     const hooks = this.db.query("SELECT * FROM webhooks WHERE enabled = 1").all() as WebhookRow[];
+    const teamIds = eventTeamIds(this.db, event, data);
+    const deletedTeamOwnerIds =
+      event === "team.deleted" && Array.isArray(data._teamOwnerIds)
+        ? data._teamOwnerIds.filter((id): id is string => typeof id === "string")
+        : [];
     const subscribed = hooks.filter((hook) => {
       const events = JSON.parse(hook.events) as string[];
-      return events.includes("*") || events.includes(event);
+      if (!(events.includes("*") || events.includes(event))) return false;
+      if (
+        hook.team_id &&
+        (!teamIds.includes(hook.team_id) ||
+          !ownerCanReceive(this.db, hook.owner_id, [hook.team_id], deletedTeamOwnerIds))
+      ) {
+        return false;
+      }
+      // Legacy/global hooks are still owner-scoped: an owner must be able to
+      // read every Team touched by the event before receiving its payload.
+      return ownerCanReceive(this.db, hook.owner_id, teamIds, deletedTeamOwnerIds);
     });
     if (subscribed.length === 0) return;
 
+    const publicData = Object.fromEntries(
+      Object.entries(data).filter(([key]) => key !== "_teamOwnerIds"),
+    );
     const body = JSON.stringify({
       event,
       actor: { id: actor.id, name: actor.name, type: actor.type },
-      data,
+      data: publicData,
       ...(changes && Object.keys(changes).length > 0 ? { changes } : {}),
       createdAt: now(),
     });

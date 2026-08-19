@@ -4,6 +4,8 @@ import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import type { WebhookRow } from "../webhooks/dispatcher.ts";
 import { isWebhookEventName } from "../webhooks/events.ts";
+import { canAccessTeam } from "../auth/permissions.ts";
+import type { ActorRow } from "../auth/viewer.ts";
 
 export function mapWebhook(row: WebhookRow) {
   return {
@@ -11,23 +13,28 @@ export function mapWebhook(row: WebhookRow) {
     url: row.url,
     events: JSON.parse(row.events) as string[],
     enabled: row.enabled === 1,
+    teamId: row.team_id,
     createdAt: row.created_at,
   };
 }
 
 export function listWebhooks(db: Database, actorId: string, isAdmin: boolean): WebhookRow[] {
-  if (isAdmin) {
-    return db.query("SELECT * FROM webhooks ORDER BY created_at").all() as WebhookRow[];
-  }
-  return db
-    .query("SELECT * FROM webhooks WHERE owner_id = ?1 ORDER BY created_at")
-    .all(actorId) as WebhookRow[];
+  const rows = (
+    isAdmin
+      ? db.query("SELECT * FROM webhooks ORDER BY created_at").all()
+      : db.query("SELECT * FROM webhooks WHERE owner_id = ?1 ORDER BY created_at").all(actorId)
+  ) as WebhookRow[];
+  if (isAdmin) return rows;
+  const actor = db.query("SELECT * FROM actors WHERE id = ?1").get(actorId) as ActorRow | null;
+  return rows.filter(
+    (row) => !row.team_id || Boolean(actor && canAccessTeam(db, actor, row.team_id)),
+  );
 }
 
 export function createWebhook(
   db: Database,
   ownerId: string,
-  input: { url: string; secret?: string | null; events?: string[] | null },
+  input: { url: string; secret?: string | null; events?: string[] | null; teamId?: string | null },
 ): { row: WebhookRow; secret: string } {
   let parsed: URL;
   try {
@@ -52,8 +59,8 @@ export function createWebhook(
 
   const id = newId();
   db.query(
-    "INSERT INTO webhooks (id, url, secret, events, enabled, created_at, owner_id) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6)",
-  ).run(id, input.url, secret, JSON.stringify(events), now(), ownerId);
+    "INSERT INTO webhooks (id, url, secret, events, enabled, created_at, owner_id, team_id) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7)",
+  ).run(id, input.url, secret, JSON.stringify(events), now(), ownerId, input.teamId ?? null);
   const row = db.query("SELECT * FROM webhooks WHERE id = ?1").get(id) as WebhookRow;
   return { row, secret };
 }

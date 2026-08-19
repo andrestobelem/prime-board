@@ -15,6 +15,8 @@ export interface TeamRow {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  visibility: "public" | "private";
+  access_policy: "workspace_members" | "team_members";
 }
 
 export interface WorkflowStateRow {
@@ -32,6 +34,8 @@ export function mapTeam(row: TeamRow) {
     key: row.key,
     name: row.name,
     description: row.description,
+    visibility: row.visibility,
+    accessPolicy: row.access_policy,
     createdAt: row.created_at,
     archivedAt: row.archived_at,
     _row: row,
@@ -151,7 +155,13 @@ export function listTeamStates(db: Database, teamId: string): WorkflowStateRow[]
 
 export function createTeam(
   db: Database,
-  input: { name: string; key: string; description?: string | null },
+  input: {
+    name: string;
+    key: string;
+    description?: string | null;
+    visibility?: "public" | "private" | null;
+    accessPolicy?: "workspace_members" | "team_members" | null;
+  },
   ownerId?: string,
 ): TeamRow {
   const name = input.name.trim();
@@ -166,12 +176,26 @@ export function createTeam(
   const duplicate = db.query("SELECT id FROM teams WHERE key = ?1").get(key);
   if (duplicate) throw apiError("VALIDATION_FAILED", `Team key ${key} is already in use`);
 
+  const visibility = input.visibility ?? "public";
+  const accessPolicy = input.accessPolicy ?? "team_members";
+  if (visibility !== "public" && visibility !== "private") {
+    throw apiError("VALIDATION_FAILED", "Team visibility must be public or private");
+  }
+  if (accessPolicy !== "workspace_members" && accessPolicy !== "team_members") {
+    throw apiError("VALIDATION_FAILED", "Team access policy is invalid");
+  }
+  if (visibility === "private" && accessPolicy !== "team_members") {
+    throw apiError("VALIDATION_FAILED", "Private Teams must restrict access to Team members");
+  }
+
   const id = newId();
   db.transaction(() => {
     const timestamp = now();
     db.query(
-      "INSERT INTO teams (id, name, key, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-    ).run(id, name, key, input.description ?? null, timestamp, timestamp);
+      `INSERT INTO teams
+       (id, name, key, description, visibility, access_policy, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
+    ).run(id, name, key, input.description ?? null, visibility, accessPolicy, timestamp);
     seedTeamWorkflow(db, id);
     if (ownerId) {
       db.query(
@@ -202,6 +226,8 @@ export interface TeamUpdateInput {
   name?: string | null;
   description?: string | null;
   defaultStateId?: string | null;
+  visibility?: "public" | "private" | null;
+  accessPolicy?: "workspace_members" | "team_members" | null;
 }
 
 export function updateTeam(db: Database, id: string, input: TeamUpdateInput): TeamRow {
@@ -227,6 +253,19 @@ export function updateTeam(db: Database, id: string, input: TeamUpdateInput): Te
     if (!state) throw apiError("VALIDATION_FAILED", "Default state must belong to the team");
     push("default_state_id", input.defaultStateId);
   }
+  const visibility = input.visibility ?? team.visibility;
+  const accessPolicy = input.accessPolicy ?? team.access_policy;
+  if (visibility !== "public" && visibility !== "private") {
+    throw apiError("VALIDATION_FAILED", "Team visibility must be public or private");
+  }
+  if (accessPolicy !== "workspace_members" && accessPolicy !== "team_members") {
+    throw apiError("VALIDATION_FAILED", "Team access policy is invalid");
+  }
+  if (visibility === "private" && accessPolicy !== "team_members") {
+    throw apiError("VALIDATION_FAILED", "Private Teams must restrict access to Team members");
+  }
+  if (input.visibility != null) push("visibility", visibility);
+  if (input.accessPolicy != null) push("access_policy", accessPolicy);
   if (sets.length > 0) {
     push("updated_at", now());
     params.push(team.id);
