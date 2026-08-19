@@ -1,7 +1,7 @@
 # Lectura de issues en PostgreSQL
 
-- **Ticket:** PRB-434
-- **Implementación:** `apps/server/src/domain/postgres-issues.ts`
+- **Tickets:** PRB-434, PRB-435
+- **Implementación:** `apps/server/src/domain/postgres-issues.ts`, `apps/server/src/domain/filters.ts`
 
 ## Alcance
 
@@ -18,12 +18,14 @@ y los issues archivados se incluyen únicamente con `includeArchived: true`.
 ## Compatibilidad y límites explícitos
 
 El generador de filtros existente se reutiliza después de traducir sus
-parámetros posicionales a `$1`, `$2`, etc. La búsqueda full-text todavía no
-está migrada al dialecto PostgreSQL y devuelve `VALIDATION_FAILED`; tampoco se
-consulta silenciosamente SQLite. Los campos anidados de labels, projects,
-milestones, cycles, comments, relations y activity mantienen el mismo límite
-explícito hasta que sus dominios sean migrados.
+parámetros posicionales a `$1`, `$2`, etc. El predicado full-text usa el índice
+`search_vector` de PostgreSQL, tokens simples con prefijos, frases exactas,
+normalización de mayúsculas/acentos y parámetros bind; la migración `0004`
+reconstruye el vector de filas existentes. Tampoco se consulta silenciosamente
+SQLite. Los campos anidados de labels, projects, milestones, cycles, comments,
+relations y activity mantienen el mismo límite explícito hasta que sus dominios
+sean migrados.
 
 La validación reproducible está en `scripts/validate-postgres-actors.ts` e
-incluye lectura directa por identificador, paginación, children, archivado y
-rechazo de full-text no migrado.
+incluye lectura directa por identificador, paginación, children, archivado,
+visibilidad privada y búsquedas por prefijo, frase, acento y entrada inválida.

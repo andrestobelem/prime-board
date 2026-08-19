@@ -111,7 +111,16 @@ export function ftsQuery(search: string): string {
   return [...exact, ...prefixes].join(" ");
 }
 
-export function buildIssueFilter(filter: IssueFilter, params: ParamSink): string {
+export interface IssueFilterSqlOptions {
+  /** Permite a un backend sustituir el predicado FTS sin cambiar el contrato público. */
+  searchClause?: (search: string, params: ParamSink) => string;
+}
+
+export function buildIssueFilter(
+  filter: IssueFilter,
+  params: ParamSink,
+  options: IssueFilterSqlOptions = {},
+): string {
   const clauses: string[] = [];
 
   if (filter.team) clauses.push(...idClauses("issues.team_id", filter.team, params));
@@ -170,19 +179,23 @@ export function buildIssueFilter(filter: IssueFilter, params: ParamSink): string
   if (filter.search?.trim()) {
     // Una frase vacía (p. ej. `""`) significa búsqueda ignorada; `*` y las
     // comillas sin cerrar se conservan como tokens literales sin invocar sintaxis FTS5.
-    const query = ftsQuery(filter.search);
-    if (query) {
-      clauses.push(
-        `issues.rowid IN (SELECT rowid FROM issues_fts WHERE issues_fts MATCH ${params.add(query)})`,
-      );
+    if (options.searchClause) {
+      clauses.push(options.searchClause(filter.search, params));
+    } else {
+      const query = ftsQuery(filter.search);
+      if (query) {
+        clauses.push(
+          `issues.rowid IN (SELECT rowid FROM issues_fts WHERE issues_fts MATCH ${params.add(query)})`,
+        );
+      }
     }
   }
 
   for (const sub of filter.and ?? []) {
-    clauses.push(buildIssueFilter(sub, params));
+    clauses.push(buildIssueFilter(sub, params, options));
   }
   if (filter.or?.length) {
-    const branches = filter.or.map((sub) => buildIssueFilter(sub, params));
+    const branches = filter.or.map((sub) => buildIssueFilter(sub, params, options));
     clauses.push(`(${branches.join(" OR ")})`);
   }
 

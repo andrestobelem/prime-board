@@ -833,7 +833,7 @@ try {
       issueIds[0],
       createdTeamId,
       1,
-      "First PostgreSQL issue",
+      "First PostgreSQL issue — Definición",
       null,
       initialStateId,
       null,
@@ -1017,17 +1017,42 @@ try {
     `,
     { teamId: createdTeamId },
   );
-  const unsupportedSearch = await graphql(
+  const postgresSearch = await graphql(
     base,
     `
-      query {
-        issues(filter: { search: "postgres" }) {
+      query ($teamId: ID!, $phrase: String!, $emptySearch: String!) {
+        prefix: issues(
+          filter: { team: { eq: $teamId }, search: "postgres", includeArchived: true }
+        ) {
+          nodes {
+            id
+          }
+        }
+        phrase: issues(filter: { team: { eq: $teamId }, search: $phrase }) {
+          nodes {
+            identifier
+          }
+        }
+        accent: issues(filter: { team: { eq: $teamId }, search: "definicion" }) {
+          nodes {
+            identifier
+          }
+        }
+        ignored: issues(
+          filter: { team: { eq: $teamId }, search: $emptySearch, includeArchived: true }
+        ) {
+          nodes {
+            id
+          }
+        }
+        invalid: issues(filter: { team: { eq: $teamId }, search: "*" }) {
           nodes {
             id
           }
         }
       }
     `,
+    { teamId: createdTeamId, phrase: '"First PostgreSQL"', emptySearch: '""' },
   );
   const updatedState = await graphql(
     base,
@@ -1142,7 +1167,7 @@ try {
     !outsiderIssues.errors &&
     !directIssue.errors &&
     !archivedIssues.errors &&
-    unsupportedSearch.errors?.[0]?.extensions?.code === "VALIDATION_FAILED";
+    !postgresSearch.errors;
   report.teams =
     !teamsBefore.errors &&
     !createdTeam.errors &&
@@ -1178,7 +1203,12 @@ try {
     !archivedIssues.errors &&
     archivedIssues.data?.active.nodes.length === 3 &&
     archivedIssues.data?.all.nodes.length === 4 &&
-    unsupportedSearch.errors?.[0]?.extensions?.code === "VALIDATION_FAILED" &&
+    !postgresSearch.errors &&
+    postgresSearch.data?.prefix.nodes.length === 4 &&
+    postgresSearch.data?.phrase.nodes[0].identifier === "PGT-1" &&
+    postgresSearch.data?.accent.nodes[0].identifier === "PGT-1" &&
+    postgresSearch.data?.ignored.nodes.length === 4 &&
+    postgresSearch.data?.invalid.nodes.length === 0 &&
     !createdState.errors &&
     updatedState.data?.workflowStateUpdate.workflowState.name === "QA" &&
     updatedTeam.data?.teamUpdate.team.defaultState.id === stateId &&

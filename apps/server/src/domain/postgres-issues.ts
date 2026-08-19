@@ -26,16 +26,40 @@ function valuesOf(params: ParamSink): SqlValue[] {
   return params.values as SqlValue[];
 }
 
-function rejectPostgresSearch(filter: IssueFilter): void {
-  if (filter.search?.trim()) {
-    throw apiError(
-      "VALIDATION_FAILED",
-      "Issue full-text search is not yet available with PostgreSQL persistence",
-    );
-  }
-  for (const child of filter.and ?? []) rejectPostgresSearch(child);
-  for (const child of filter.or ?? []) rejectPostgresSearch(child);
+function postgresSearchQuery(search: string): string | null {
+  const phrases = [...search.matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+  const rest = search.replace(/"[^"]*"/g, " ");
+  const words = (value: string) =>
+    value
+      .normalize("NFD")
+      .replace(/\p{M}/gu, "")
+      .match(/[\p{L}\p{N}]+/gu)
+      ?.map((word) => `${word}:*`) ?? [];
+  const exactPhrases = phrases
+    .map((phrase) => {
+      const phraseWords =
+        phrase
+          .normalize("NFD")
+          .replace(/\p{M}/gu, "")
+          .match(/[\p{L}\p{N}]+/gu) ?? [];
+      return phraseWords.length > 0 ? phraseWords.join(" <-> ") : "";
+    })
+    .filter(Boolean);
+  const prefixes = words(rest);
+  const query = [...exactPhrases, ...prefixes].join(" & ");
+  return query || null;
 }
+
+function postgresSearchClause(search: string, params: ParamSink): string {
+  const query = postgresSearchQuery(search);
+  if (query) return `issues.search_vector @@ to_tsquery('simple', ${params.add(query)})`;
+  // Mantiene la compatibilidad de FTS5: una o más frases vacías ignoran la
+  // búsqueda, mientras que tokens sin letras (por ejemplo `*`) no matchean.
+  const quoted = /"[^"]*"/;
+  return quoted.test(search) && !search.replace(/"[^"]*"/g, " ").trim() ? "1 = 1" : "1 = 0";
+}
+
+const POSTGRES_FILTER_OPTIONS = { searchClause: postgresSearchClause };
 
 function orderValue(row: IssueRow, orderBy: IssueOrder): string {
   return orderBy === "UPDATED_ASC" || orderBy === "UPDATED_DESC" ? row.updated_at : row.created_at;
@@ -131,11 +155,10 @@ export async function listPostgresIssues(
   const order = ORDER_COLUMNS[orderBy];
   if (!order) throw apiError("VALIDATION_FAILED", "Invalid issue order");
   const filter = options.filter ?? {};
-  rejectPostgresSearch(filter);
 
   const params = new ParamSink();
   const clauses = [
-    buildIssueFilter(filter, params),
+    buildIssueFilter(filter, params, POSTGRES_FILTER_OPTIONS),
     addTeamScope(params, options.teamIds),
     addArchiveScope(filter),
   ];
@@ -148,7 +171,7 @@ export async function listPostgresIssues(
     const cursorParams = new ParamSink();
     const cursorId = cursorParams.add(decoded.id);
     const cursorClauses = [
-      buildIssueFilter(filter, cursorParams),
+      buildIssueFilter(filter, cursorParams, POSTGRES_FILTER_OPTIONS),
       addTeamScope(cursorParams, options.teamIds),
       addArchiveScope(filter),
     ];
