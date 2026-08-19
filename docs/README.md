@@ -8,5 +8,10 @@ Acá vive la documentación del proyecto: specs, relevamientos y decisiones.
 - `guia-agentes.md` — cómo operar prime-board siendo un agente: GraphQL, CLI, MCP y webhooks.
 - `investigacion-tickets-en-repo.md` — cómo hacer del repo la fuente de verdad de los tickets.
 - `extensiones-prime-agent.md` — uso de la extensión `question` para preguntas interactivas.
+- `audits/linear-actual-diferencias.md` — comparación canónica con Linear actual, clasificación de diferencias y decisión multi-workspace (PRB-421).
+- `audits/linear-modelo-datos.md` — auditoría del modelo de datos y relaciones frente a Linear (PRB-377).
+- `audits/linear-paridad-graphql.md` — auditoría de paridad de la API GraphQL frente a Linear (PRB-396).
+- `audits/linear-paridad-visual-usabilidad.md` — auditoría visual y de usabilidad frente a Linear (PRB-278).
+- `research/linear-settings-parity.md` — snapshot histórico de paridad de Settings.
 - `agents/` — configuración que consumen las skills de `.agents/skills/`: tracker de
   issues, roles de triage y layout de domain docs.

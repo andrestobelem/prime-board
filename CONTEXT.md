@@ -8,35 +8,39 @@ identificadores de la aplicación.
 
 **Workspace**:
 Límite de autorización y estado operativo que contiene actors, teams y recursos de planificación.
-La implementación actual mantiene un único Workspace por proceso/DB; la arquitectura se prepara
-para que una instalación pueda contener más de uno sin habilitar todavía su selección o creación.
+El modelo objetivo permite varios Workspaces dentro de una DB/proceso, cada uno aislado por su
+Workspace Context; la implementación actual todavía opera con un único Workspace hasta completar
+PRB-411–420. En el dominio se conserva este término aunque Linear use `Organization` en GraphQL.
 _Avoid_: Organization, tenant, account
 
 **Workspace Context**:
 Identidad efectiva del Workspace que acompaña una operación de API, CLI, MCP o UI y delimita sus
-lecturas, mutaciones, eventos y réplica. En el modo actual siempre resuelve el único Workspace de
-la instalación; no es un valor que el caller pueda falsificar mediante un input.
+lecturas, mutaciones, eventos y réplica. Debe resolverse desde credencial, Membership y selector
+validado; nunca es autoridad un `workspaceId` enviado sin prueba de acceso. Hoy resuelve el único
+Workspace de la instalación; PRB-411–420 lo convertirá en contexto seleccionable y no falsificable.
 _Avoid_: Current organization, namespace
 
 **Actor**:
 Persona o agente que opera uno o más Workspaces. Puede crear y asignar issues, comentar,
 autenticarse y recibir actividad; `Human` y `Agent` son tipos de Actor, no roles de autorización.
-La implementación actual conserva la identidad del Actor en el Workspace único mientras se prepara
-la futura relación de Membership de Workspace. Su ciclo de acceso se expresa con `active`,
-`suspended` o `left`: un Actor no activo no puede autenticarse, pero su autoría histórica permanece.
-Las invitaciones son locales y entregan el token y la API key una sola vez.
+En el modelo objetivo la identidad es global y su rol/estado viven en cada Workspace Membership; la
+implementación actual conserva compatibilidad con columnas globales mientras se prepara la migración.
+Su ciclo de acceso por Workspace se expresa con `active`, `suspended` o `left`: un Actor no activo no
+puede autenticarse en ese Workspace, pero su autoría histórica permanece. Las invitaciones son locales
+y entregan el token y la API key una sola vez.
 _Avoid_: User, account
 
 **Workspace Role**:
-Capacidad de un Actor dentro de un Workspace: `admin` o `member`. En el modo single-workspace
-actual se conserva de forma compatible como atributo global del Actor; la preparación multi-workspace
-lo trasladará a una Membership de Workspace antes de habilitar más de uno.
+Capacidad de un Actor dentro de un Workspace: `admin` o `member`. Durante la transición se conserva
+`workspace_role` como compatibilidad single-workspace; antes de habilitar un segundo Workspace la
+autoridad se traslada a la Membership correspondiente.
 _Avoid_: Workspace membership, account role
 
 **Workspace Membership**:
-Relación futura entre un Actor y un Workspace que expresa pertenencia, rol, estado de acceso y
-posibles límites de sus credenciales. Todavía no se expone como entidad operativa separada porque
-la instalación sigue teniendo un único Workspace.
+Relación entre un Actor y un Workspace que expresa pertenencia, rol, estado de acceso y posibles
+límites de sus credenciales. Es la autoridad objetivo para roster y permisos; mientras la migración no
+esté habilitada, la instalación conserva la compatibilidad single-workspace y no expone aún esta
+relación como selector operativo.
 _Avoid_: Team membership, seat
 
 **Team**:
@@ -56,8 +60,8 @@ scope.
 _Avoid_: Tenant scope, namespace
 
 **Workspace-scoped**:
-Recurso sin Team asociado, visible para cualquier Actor autenticado y administrable según su
-Workspace Role.
+Recurso sin Team asociado, visible para cualquier Actor con Membership activa en el Workspace y
+administrable según su Workspace Role efectivo.
 _Avoid_: Global, public
 
 **Team-scoped**:
