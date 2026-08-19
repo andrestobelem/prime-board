@@ -39,6 +39,7 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:teamMemberships",
   "query:issue",
   "query:issues",
+  "query:labels",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:teamArchive",
@@ -63,6 +64,11 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:issueCreate",
   "mutation:issueUpdate",
   "mutation:issueArchive",
+  "mutation:labelCreate",
+  "mutation:labelUpdate",
+  "mutation:labelDelete",
+  "mutation:issueRelationCreate",
+  "mutation:issueRelationDelete",
   "mutation:apiKeyCreate",
   "mutation:apiKeyDelete",
   "mutation:apiKeyRotate",
@@ -234,7 +240,9 @@ function operationTeamIds(
     case "project":
       return teamIdsForProject(context, args.id);
     case "projects":
+      return args.team ? [teamForRef(context, args.team) ?? "__missing__"] : null;
     case "labels":
+      if (context.persistence) return [];
       return args.team ? [teamForRef(context, args.team) ?? "__missing__"] : null;
     case "savedView":
       return teamIdsForSavedView(context, args.id);
@@ -316,6 +324,7 @@ function operationTeamIds(
     case "commentCreate":
       return teamIdsForIssue(context, input.issueId);
     case "issueRelationCreate":
+      if (context.persistence) return [];
       return [
         ...new Set([
           ...teamIdsForIssue(context, input.issueId),
@@ -323,6 +332,7 @@ function operationTeamIds(
         ]),
       ];
     case "issueRelationDelete": {
+      if (context.persistence) return [];
       const row = context.db
         .query("SELECT issue_id, related_id FROM issue_relations WHERE id = ?1")
         .get(scalar(args.id)) as { issue_id: string; related_id: string } | null;

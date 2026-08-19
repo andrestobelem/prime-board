@@ -207,6 +207,14 @@ import {
   mapTeamMembership,
 } from "../domain/team-memberships.ts";
 import { getWorkspace, mapWorkspace, updateWorkspace } from "../domain/workspaces.ts";
+import {
+  createPostgresLabel,
+  deletePostgresLabel,
+  getPostgresLabel,
+  listPostgresLabels,
+  mapPostgresLabel,
+  updatePostgresLabel,
+} from "../domain/postgres-labels.ts";
 
 // Scalars passthrough: los timestamps viajan como strings ISO-8601 UTC.
 const DateTime = new GraphQLScalarType({
@@ -342,14 +350,15 @@ export const resolvers = {
         ? mapWorkflowState(getDefaultState(context.db, team._row))
         : null;
     },
-    labels: (team: { id: string }, _args: unknown, context: Context) => {
+    labels: async (team: { id: string }, _args: unknown, context: Context) => {
+      const viewer = requireViewer(context);
       if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Team labels are not yet available with PostgreSQL persistence",
-        );
+        const row = await getPostgresTeam(context.persistence, { id: team.id });
+        return row && (await canDiscoverPostgresTeam(context.persistence, viewer, row))
+          ? (await listPostgresLabels(context.persistence, team.id)).map(mapPostgresLabel)
+          : [];
       }
-      return canAccessTeam(context.db, requireViewer(context), team.id)
+      return canAccessTeam(context.db, viewer, team.id)
         ? listLabels(context.db, team.id).map(mapLabel)
         : [];
     },
@@ -662,8 +671,40 @@ export const resolvers = {
           mapTeamMembership,
         );
       },
-      labels: (_parent: unknown, args: { team?: string }, context: Context) => {
+      labels: async (_parent: unknown, args: { team?: string }, context: Context) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const team = args.team
+            ? await getPostgresTeam(context.persistence, { id: args.team })
+            : null;
+          if (
+            args.team &&
+            (!team || !(await canDiscoverPostgresTeam(context.persistence, viewer, team)))
+          ) {
+            return [];
+          }
+          if (team?.archived_at) {
+            return (await listPostgresLabels(context.persistence))
+              .filter((label) => label.team_id == null)
+              .map(mapPostgresLabel);
+          }
+          const labels = await listPostgresLabels(context.persistence, team?.id ?? null);
+          const visible = [];
+          for (const label of labels) {
+            if (!label.team_id) {
+              visible.push(label);
+              continue;
+            }
+            const labelTeam = await getPostgresTeam(context.persistence, { id: label.team_id });
+            if (
+              labelTeam &&
+              (await canDiscoverPostgresTeam(context.persistence, viewer, labelTeam))
+            ) {
+              visible.push(label);
+            }
+          }
+          return visible.map(mapPostgresLabel);
+        }
         const team = args.team ? lookupTeam(context, { id: args.team }) : null;
         if (args.team && (!team || !canAccessTeam(context.db, viewer, team.id))) return [];
         // Selectors omit inaccessible and archived Team labels while preserving workspace labels.
@@ -1370,12 +1411,19 @@ export const resolvers = {
             success: deleteWebhook(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)),
           };
         },
-        labelCreate: (
+        labelCreate: async (
           _parent: unknown,
           args: { input: { name: string; color?: string | null; teamId?: string | null } },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            if (args.input.teamId && !apiKeyTeamsWithinLimit(context.auth, [args.input.teamId])) {
+              throw apiError("NOT_FOUND", "Team resource not found");
+            }
+            const label = await createPostgresLabel(context.persistence, viewer, args.input);
+            return { success: true, label: mapPostgresLabel(label) };
+          }
           if (args.input.teamId != null) {
             assertCanManageTeam(context.db, viewer, args.input.teamId);
           } else {
@@ -1454,12 +1502,25 @@ export const resolvers = {
           });
           return { success: true, movedIssues: moved };
         },
-        labelUpdate: (
+        labelUpdate: async (
           _parent: unknown,
           args: { id: string; input: { name?: string | null; color?: string | null } },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresLabel(context.persistence, args.id);
+            if (existing?.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("NOT_FOUND", "Label resource not found");
+            }
+            const label = await updatePostgresLabel(
+              context.persistence,
+              viewer,
+              args.id,
+              args.input,
+            );
+            return { success: true, label: mapPostgresLabel(label) };
+          }
           const existing = getLabel(context.db, args.id);
           if (existing) {
             if (existing.team_id == null) assertWorkspaceAdmin(viewer);
@@ -1468,8 +1529,16 @@ export const resolvers = {
           const label = mapLabel(updateLabel(context.db, args.id, args.input));
           return { success: true, label };
         },
-        labelDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+        labelDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresLabel(context.persistence, args.id);
+            if (existing?.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("NOT_FOUND", "Label resource not found");
+            }
+            const affected = await deletePostgresLabel(context.persistence, viewer, args.id);
+            return { success: true, affectedIssues: affected };
+          }
           const existing = getLabel(context.db, args.id);
           if (existing) {
             if (existing.team_id == null) assertWorkspaceAdmin(viewer);

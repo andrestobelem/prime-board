@@ -65,6 +65,8 @@ import {
   archivePostgresIssue,
 } from "../domain/postgres-issues.ts";
 import { getPostgresActor, mapPostgresActor } from "../domain/postgres-actors.ts";
+import { listPostgresIssueLabels, mapPostgresLabel } from "../domain/postgres-labels.ts";
+import { listPostgresRelations, mapPostgresRelation } from "../domain/postgres-relations.ts";
 import {
   canDiscoverPostgresTeam,
   getPostgresTeam,
@@ -274,12 +276,9 @@ export const issueResolvers = {
         )
         .map(mapIssue);
     },
-    labels: (issue: MappedIssue, _args: unknown, context: Context) => {
+    labels: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Issue labels are not yet available with PostgreSQL persistence",
-        );
+        return (await listPostgresIssueLabels(context.persistence, issue.id)).map(mapPostgresLabel);
       }
       return listIssueLabels(context.db, issue.id)
         .filter(
@@ -353,12 +352,29 @@ export const issueResolvers = {
       }
       return listComments(context.db, issue.id).map(mapComment);
     },
-    relations: (issue: MappedIssue, _args: unknown, context: Context) => {
+    relations: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Issue relations are not yet available with PostgreSQL persistence",
-        );
+        const viewer = requireViewer(context);
+        const result: Array<ReturnType<typeof mapPostgresRelation> & { _sourceTeamId: string }> =
+          [];
+        for (const relation of await listPostgresRelations(context.persistence, issue.id)) {
+          const related = await getPostgresIssue(context.persistence, relation.relatedId);
+          const relatedTeam = related
+            ? await getPostgresTeam(context.persistence, { id: related.team_id })
+            : null;
+          const sourceTeam = await getPostgresTeam(context.persistence, { id: issue._row.team_id });
+          if (
+            related &&
+            relatedTeam &&
+            sourceTeam &&
+            (await canDiscoverPostgresTeam(context.persistence, viewer, sourceTeam)) &&
+            (await canDiscoverPostgresTeam(context.persistence, viewer, relatedTeam)) &&
+            apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, related.team_id])
+          ) {
+            result.push({ ...mapPostgresRelation(relation), _sourceTeamId: issue._row.team_id });
+          }
+        }
+        return result;
       }
       return listRelationsInWorkspace(context, issue.id)
         .map((relation) => {
@@ -401,11 +417,30 @@ export const issueResolvers = {
   },
 
   IssueRelation: {
-    relatedIssue: (
+    relatedIssue: async (
       relation: { _relatedId: string; _sourceTeamId?: string },
       _args: unknown,
       context: Context,
     ) => {
+      if (context.persistence) {
+        const related = await getPostgresIssue(context.persistence, relation._relatedId);
+        const viewer = requireViewer(context);
+        const sourceTeam = relation._sourceTeamId
+          ? await getPostgresTeam(context.persistence, { id: relation._sourceTeamId })
+          : null;
+        const relatedTeam = related
+          ? await getPostgresTeam(context.persistence, { id: related.team_id })
+          : null;
+        return related &&
+          relatedTeam &&
+          (!sourceTeam ||
+            (await canDiscoverPostgresTeam(context.persistence, viewer, sourceTeam))) &&
+          (await canDiscoverPostgresTeam(context.persistence, viewer, relatedTeam)) &&
+          (!relation._sourceTeamId ||
+            apiKeyTeamsWithinLimit(context.auth, [relation._sourceTeamId, related.team_id]))
+          ? mapIssue(related)
+          : null;
+      }
       const related = lookupIssueById(context, relation._relatedId);
       if (!related) return null;
       if (

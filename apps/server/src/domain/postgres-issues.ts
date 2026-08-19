@@ -23,6 +23,7 @@ import type { TeamRow } from "./teams.ts";
 import { apiError } from "../graphql/errors.ts";
 import { isWorkspaceAdmin } from "../auth/permissions.ts";
 import { newId, now } from "../db/util.ts";
+import { applyPostgresLabelOps } from "./postgres-labels.ts";
 
 const SELECT_ISSUE =
   "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id";
@@ -227,14 +228,7 @@ function hasOwn(input: object, key: string): boolean {
 }
 
 function assertPostgresIssueDependencies(input: Record<string, unknown>): void {
-  const unsupported = [
-    "projectId",
-    "milestoneId",
-    "cycleId",
-    "labelIds",
-    "addLabelIds",
-    "removeLabelIds",
-  ];
+  const unsupported = ["projectId", "milestoneId", "cycleId"];
   const field = unsupported.find((name) => hasOwn(input, name));
   if (field) {
     throw apiError(
@@ -411,6 +405,16 @@ export async function createPostgresIssue(
         createdAt,
       ],
     );
+    if (input.labelIds?.length) {
+      await applyPostgresLabelOps(
+        tx,
+        viewer.id,
+        { ...(await getPostgresIssue(tx, issueId))!, id: issueId },
+        {
+          labelIds: input.labelIds,
+        },
+      );
+    }
     await recordPostgresActivity(tx, issueId, viewer.id, "created", { title, number }, createdAt);
     const row = await getPostgresIssue(tx, issueId);
     if (!row) throw apiError("NOT_FOUND", "Issue not found after creation");
@@ -502,6 +506,11 @@ export async function updatePostgresIssue(
         type: "sort_order_changed",
         payload: { from: issue.sort_order, to: input.sortOrder },
       });
+    }
+    const labelsChanged = await applyPostgresLabelOps(tx, viewer.id, issue, input);
+    if (labelsChanged && sets.length === 0) {
+      // label operations are part of the same transaction and still advance updated_at.
+      push("updated_at", now());
     }
     if (sets.length > 0) {
       const updatedAt = now();
