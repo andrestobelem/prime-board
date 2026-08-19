@@ -13,6 +13,7 @@ Acá vive la documentación del proyecto: specs, relevamientos y decisiones.
 - `audits/linear-paridad-graphql.md` — auditoría de paridad de la API GraphQL frente a Linear (PRB-396).
 - `audits/linear-paridad-visual-usabilidad.md` — auditoría visual y de usabilidad frente a Linear (PRB-278).
 - `research/linear-settings-parity.md` — snapshot histórico de paridad de Settings.
+- `adr/0017-multi-workspace-compartido.md` — decisión vigente para múltiples Workspaces aislados en una DB/proceso.
 - `research/sqlite-postgresql-podman.md` — investigación de migración de SQLite a PostgreSQL con Podman (PRB-410).
 - `agents/` — configuración que consumen las skills de `.agents/skills/`: tracker de
   issues, roles de triage y layout de domain docs.

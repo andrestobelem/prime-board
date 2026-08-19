@@ -1,5 +1,9 @@
 # Local-first single-tenant, con API keys hasheadas y sin OAuth
 
+> **Estado actual (2026-08-19):** ADR-0017 decide preparar múltiples Workspaces aislados en una misma
+> DB/proceso. Este ADR sigue describiendo el modo operativo single-workspace vigente hasta completar
+> PRB-411–420; la topología objetivo y la autorización futura se rigen por ADR-0017.
+
 El modelo de uso es un proceso local con **un** workspace, corriendo donde corre el agente.
 No hay multi-tenancy, ni organizaciones, ni OAuth: la autenticación es una API key por actor
 (`pb_<random>`, guardada como hash SHA-256), y el primer arranque siembra el workspace, el
@@ -25,8 +29,9 @@ nuevas superficies reciban un `WorkspaceContext` no falsificable, que las decisi
 puedan migrar de `Actor.workspace_role` a Membership y que export/rebuild y Repository Replica
 conserven la identidad y el alcance del Workspace.
 
-La migración multi-workspace queda condicionada a un requisito explícito de servicio hosted o de
-compartir una DB/proceso entre organizaciones independientes. Antes de habilitarla habrá que
-resolver la identidad de Actor, alcance de API keys, unicidad de Team keys/identifiers, aislamiento
-de relaciones y webhooks, y la estrategia de réplica. Esta revisión reemplaza la interpretación de
-“single-tenant” como ausencia de frontera de Workspace, pero no cambia el modo operativo vigente.
+La habilitación multi-workspace queda condicionada a completar la puerta de ADR-0017 y PRB-420.
+El requisito de compartir una DB/proceso entre Workspaces ya está decidido para prime-board; antes de
+habilitarlo deben resolverse la identidad de Actor, el alcance de API keys, la unicidad de Team
+keys/identifiers, el aislamiento de relaciones y webhooks, y la estrategia de réplica. Esta revisión
+reemplaza la interpretación de “single-tenant” como ausencia de frontera de Workspace, pero no cambia
+el modo operativo vigente.

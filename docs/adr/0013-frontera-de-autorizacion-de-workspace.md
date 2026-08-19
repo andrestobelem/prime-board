@@ -1,7 +1,12 @@
 # ADR-0013: Frontera futura de autorización de Workspace
 
-- Estado: aceptado para preparación; habilitación pendiente
+- Estado: transición supersedida por ADR-0017; preparación vigente, habilitación pendiente
 - Fecha: 2026-08-18
+
+> ADR-0017 (2026-08-19) fija la topología de múltiples Workspaces en una misma DB/proceso, Actor
+> global y API keys globales con grants. Este ADR conserva las invariantes de la frontera y el
+> modo single-workspace actual; sus alternativas abiertas de identidad, keys y topología ya no son
+> la decisión vigente.
 
 ## Contexto
 
@@ -26,9 +31,10 @@ Se mantienen estas reglas de transición:
 3. `Actor.workspace_role` continúa siendo la compatibilidad single-workspace y no se amplían sus
    permisos. Antes de habilitar un segundo Workspace, el rol deberá vivir en una relación
    `Workspace Membership` o en una estructura equivalente.
-4. El alcance de una API key, la identidad global o por Workspace del Actor y la topología de
-   selección quedan deliberadamente abiertos hasta resolver el requisito de producto. Las
-   interfaces deben permitir ambas alternativas sin acoplar los resolvers a una columna global.
+4. ADR-0017 decide identidad global de Actor, API keys globales con grants explícitos por Workspace
+   y selección validada por credencial, grant y Membership. Las interfaces deben conservar el seam de
+   transición hasta que PRB-413 implemente esa decisión; si la complejidad exige keys de un solo
+   Workspace, la alternativa debe registrarse explícitamente allí antes de cambiar el esquema.
 5. La revocación y administración de keys deberán poder limitarse al Workspace autorizado. Los
    webhooks y eventos se despacharán únicamente dentro del Workspace efectivo.
 
@@ -43,7 +49,8 @@ Se mantienen estas reglas de transición:
 
 ## Consecuencias
 
-La implementación puede preparar tipos, adaptadores y tests sin romper la instalación actual,
-pero no debe inventar una política de selección. Una futura decisión de producto deberá elegir
-explícitamente entre Actor global o por Workspace, keys por Workspace o con scopes múltiples, y
-los flujos de invitación/suspensión/transferencia de roles.
+La implementación puede preparar tipos, adaptadores y tests sin romper la instalación actual, pero
+la política de selección y el modelo de identidad ya están fijados por ADR-0017. PRB-413 debe
+implementar o, si encuentra un bloqueo técnico documentado, reemplazar explícitamente el modelo de
+keys globales con grants antes de cambiar el esquema; también debe cubrir invitación, suspensión y
+transferencia de roles.
