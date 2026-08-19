@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
 
 /**
- * Minimal Prime Agent integration for discovering and checking prime-board.
+ * Integración mínima con Prime Agent para descubrir y comprobar prime-board.
  *
- * This extension deliberately does not start a server or mutate project files.
- * The prime-board workflow skill remains the source of truth for issue operations.
+ * Esta extensión no inicia servidores ni modifica archivos del proyecto.
+ * La skill prime-board-workflow sigue siendo la fuente de verdad para operar Issues.
  */
 
 type NotificationLevel = "info" | "warning" | "error";
@@ -48,7 +48,7 @@ export type PrimeBoardStatus = {
 const DEFAULT_URL = "http://localhost:3333";
 const HEALTH_TIMEOUT_MS = 1_000;
 
-/** Find the Git project containing the supplied working directory. */
+/** Encuentra el proyecto Git que contiene el directorio de trabajo indicado. */
 export function discoverPrimeBoardProject(cwd: string): string | null {
   const result = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
     encoding: "utf8",
@@ -58,7 +58,7 @@ export function discoverPrimeBoardProject(cwd: string): string | null {
   return root || null;
 }
 
-/** Check the configured local server without starting it or changing project state. */
+/** Comprueba el servidor local configurado sin iniciarlo ni cambiar el estado del proyecto. */
 export async function getPrimeBoardStatus(
   cwd: string,
   url = process.env.PRIME_BOARD_URL || DEFAULT_URL,

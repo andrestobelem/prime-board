@@ -1,67 +1,77 @@
-# Isolated project setup
+# Configuración aislada del proyecto
 
-## 1. Start the instance
+## 1. Iniciar la instancia
 
-From the cloned prime-board repository:
+Desde el checkout clonado de prime-board:
 
 ```bash
-bun scripts/prime-board-project.ts --project /path/to/project
+bun scripts/prime-board-project.ts --project /ruta/al/proyecto
 ```
 
-The command derives an isolated database under `~/.prime-board/projects/`, sets
-`PRIME_BOARD_REPO` to the target repository, and starts the server on port 3333. Override
-`--port` or `--db` when needed. The server writes the target project's `.prime-board/`
-replica; do not edit that directory directly.
+El comando deriva una base aislada bajo `~/.prime-board/projects/`, define `PRIME_BOARD_REPO`
+para el repositorio objetivo e inicia el servidor en el puerto 3333. Sobrescribe `--port` o
+`--db` cuando sea necesario. El servidor escribe la réplica `.prime-board/` del proyecto;
+no edites ese directorio directamente.
 
-To inspect the derived configuration without starting a server:
+Para inspeccionar la configuración sin iniciar un servidor:
 
 ```bash
-eval "$(bun scripts/prime-board-project.ts --project /path/to/project --print-env)"
+eval "$(bun scripts/prime-board-project.ts --project /ruta/al/proyecto --print-env)"
 ```
 
-The admin key is printed only on the first server start. Create an Actor and an API key for
-normal work, then export the resulting key as `PRIME_BOARD_API_KEY`.
+La admin key se imprime una sola vez durante el primer inicio. Crea un Actor y una API key
+normal, y exporta esta última como `PRIME_BOARD_API_KEY`.
 
-## 2. Install the skill in the target project
-
-Copy this skill directory into the target project's agent skills directory:
+## 2. Instalar la skill en el proyecto objetivo
 
 ```bash
-mkdir -p /path/to/project/.agents/skills
-cp -R /path/to/prime-board/.agents/skills/prime-board-workflow \
-  /path/to/project/.agents/skills/prime-board-workflow
+mkdir -p /ruta/al/proyecto/.agents/skills
+cp -R /ruta/a/prime-board/.agents/skills/prime-board-workflow \
+  /ruta/al/proyecto/.agents/skills/prime-board-workflow
 ```
 
-Keep the target project's own `AGENTS.md` as the authority for code conventions. Add a short
-pointer there if the agent does not discover project skills automatically.
+Las convenciones del proyecto siguen teniendo autoridad en su `AGENTS.md`.
 
-## 3. Configure the CLI
+## 3. Configurar el CLI
 
 ```bash
-export PRIME_BOARD_ROOT=/path/to/prime-board
+export PRIME_BOARD_ROOT=/ruta/a/prime-board
 export PRIME_BOARD_URL=http://localhost:3333
 export PRIME_BOARD_API_KEY=pb_...
-export PRIME_BOARD_TEAM=PB
+export PRIME_BOARD_TEAM=PRB
 alias pb='bun "$PRIME_BOARD_ROOT/apps/cli/src/index.ts"'
 pb issue list --team "$PRIME_BOARD_TEAM" --json
 ```
 
-## 4. Configure MCP
+## 4. Configurar MCP HTTP (interfaz principal)
+
+Inicia el transporte local en otra terminal. El servidor MCP no lee una API key del entorno:
+valida el Bearer enviado por cada cliente.
+
+```bash
+PRIME_BOARD_URL=http://localhost:3333 \
+PRIME_BOARD_MCP_HOST=127.0.0.1 \
+PRIME_BOARD_MCP_PORT=3334 \
+bun "$PRIME_BOARD_ROOT/apps/mcp/src/http.ts"
+```
+
+Configura el cliente MCP con el endpoint y el header Bearer, sin guardar la clave en el package:
 
 ```json
 {
   "mcpServers": {
     "prime-board": {
-      "command": "bun",
-      "args": ["/path/to/prime-board/apps/mcp/src/index.ts"],
-      "env": {
-        "PRIME_BOARD_URL": "http://localhost:3333",
-        "PRIME_BOARD_API_KEY": "pb_..."
-      }
+      "type": "http",
+      "url": "http://127.0.0.1:3334/mcp",
+      "bearerTokenEnvVar": "PRIME_BOARD_API_KEY"
     }
   }
 }
 ```
 
-For multiple projects, run one instance per project with a distinct database and port. Never
-reuse a database between projects.
+El transporte stdio existente continúa disponible para clientes que aún no soportan HTTP:
+usa `bun "$PRIME_BOARD_ROOT/apps/mcp/src/index.ts"` con `PRIME_BOARD_URL` y
+`PRIME_BOARD_API_KEY` en el entorno del proceso, nunca en el package ni en `.prime-board/`.
+
+Para varios proyectos, ejecuta una instancia por proyecto con una base y un puerto distintos.
+Nunca reutilices una base entre proyectos.

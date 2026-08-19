@@ -39,6 +39,16 @@ describe("Prime Agent package", () => {
     }
   });
 
+  it("documents HTTP MCP as the primary Prime Agent transport", () => {
+    const setup = readFileSync(
+      join(PACKAGE_ROOT, "skills", "prime-board-workflow", "references", "setup.md"),
+      "utf8",
+    );
+    expect(setup).toContain('"type": "http"');
+    expect(setup).toContain('"bearerTokenEnvVar": "PRIME_BOARD_API_KEY"');
+    expect(setup).toContain("apps/mcp/src/http.ts");
+  });
+
   it("loads the extension through its public factory seam", async () => {
     const extension = await import(join(PACKAGE_ROOT, "extensions", "index.ts"));
     const commands: string[] = [];

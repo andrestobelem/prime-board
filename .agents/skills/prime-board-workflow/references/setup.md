@@ -46,22 +46,35 @@ alias pb='bun "$PRIME_BOARD_ROOT/apps/cli/src/index.ts"'
 pb issue list --team "$PRIME_BOARD_TEAM" --json
 ```
 
-## 4. Configure MCP
+## 4. Configurar MCP HTTP (interfaz principal)
+
+Inicia el transporte local en otra terminal. El servidor MCP no lee una API key del entorno:
+valida el Bearer enviado por cada cliente.
+
+```bash
+PRIME_BOARD_URL=http://localhost:3333 \\
+PRIME_BOARD_MCP_HOST=127.0.0.1 \\
+PRIME_BOARD_MCP_PORT=3334 \\
+bun "$PRIME_BOARD_ROOT/apps/mcp/src/http.ts"
+```
+
+Configura Prime Agent con `bearerTokenEnvVar` para que la credencial permanezca en el entorno:
 
 ```json
 {
   "mcpServers": {
     "prime-board": {
-      "command": "bun",
-      "args": ["/path/to/prime-board/apps/mcp/src/index.ts"],
-      "env": {
-        "PRIME_BOARD_URL": "http://localhost:3333",
-        "PRIME_BOARD_API_KEY": "pb_..."
-      }
+      "type": "http",
+      "url": "http://127.0.0.1:3334/mcp",
+      "bearerTokenEnvVar": "PRIME_BOARD_API_KEY"
     }
   }
 }
 ```
 
-For multiple projects, run one instance per project with a distinct database and port. Never
-reuse a database between projects.
+El transporte stdio existente sigue disponible para clientes que aún no soportan HTTP:
+usa `bun "$PRIME_BOARD_ROOT/apps/mcp/src/index.ts"` con `PRIME_BOARD_URL` y
+`PRIME_BOARD_API_KEY` en el entorno del proceso, nunca en el package ni en `.prime-board/`.
+
+Para varios proyectos, ejecuta una instancia por proyecto con una base y un puerto distintos.
+Nunca reutilices una base entre proyectos.

@@ -1,7 +1,7 @@
 # `@prime-board/agent`
 
 Package mínimo de [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) para
-prime-board. Distribuye una extensión de discovery/status y la skill
+prime-board. Distribuye una extensión de descubrimiento/estado y la skill
 `prime-board-workflow`; no inicia el runtime, configura credenciales ni modifica la réplica
 `.prime-board/`.
 
@@ -13,17 +13,17 @@ Desde el checkout de prime-board:
 prime-agent package install ./packages/prime-board-agent --local
 ```
 
-También se puede instalar desde npm o Git cuando exista un release del paquete.
+También puede instalarse desde npm o Git cuando exista un release del paquete.
 
 ## Extensión
 
 La extensión registra:
 
-- `/prime-board`: descubre el root Git del proyecto y comprueba `GET /health`.
-- `prime_board_status`: la misma comprobación como herramienta del agente.
+- `/prime-board`: descubre la raíz Git del proyecto y comprueba `GET /health`.
+- `prime_board_status`: expone la misma comprobación como herramienta del agente.
 
-La URL se toma de `PRIME_BOARD_URL` o usa `http://localhost:3333`. La comprobación es
-read-only y no arranca procesos; el launcher y la configuración del runtime siguen siendo
+La URL se toma de `PRIME_BOARD_URL` o usa `http://localhost:3333`. La comprobación es de
+solo lectura y no inicia procesos; el launcher y la configuración del runtime siguen siendo
 responsabilidad del proyecto.
 
 ## Skill
