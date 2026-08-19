@@ -219,7 +219,9 @@ describe("cross-workspace isolation matrix", () => {
 
       expect(result.issues).toBe(2);
       expect(countWorkspaces(rebuilt)).toBe(1);
-      expect((rebuilt.query("SELECT id FROM workspace").get() as { id: string }).id).not.toBe(
+      // PRB-403: la réplica conserva la identidad de origen; la DB sigue
+      // reconstruyéndose como una instalación con un solo Workspace operativo.
+      expect((rebuilt.query("SELECT id FROM workspace").get() as { id: string }).id).toBe(
         foreign.workspaceId,
       );
       expect(

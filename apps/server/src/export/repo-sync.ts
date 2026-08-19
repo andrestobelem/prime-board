@@ -39,8 +39,11 @@ export function createRepoSync(db: Database, root: string | null): RepoSync | nu
     },
     syncIssue(issueId: string) {
       try {
-        // Si el issue no existe (o el repo está vacío), cae al export completo.
-        if (!exportIssue(db, root, issueId)) exportBoard(db, root);
+        // Un repo vacío o histórico sin metadata todavía no es una réplica
+        // reconstruible: inicializarlo con el export completo deja también la
+        // identidad y el alcance del Workspace.
+        const metadata = join(root, ".prime-board", "meta", "export.json");
+        if (!existsSync(metadata) || !exportIssue(db, root, issueId)) exportBoard(db, root);
       } catch (error) {
         console.error(`repo sync failed: ${error}`);
       }

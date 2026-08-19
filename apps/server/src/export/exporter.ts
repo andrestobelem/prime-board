@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { stringify as toYaml } from "yaml";
 import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
 import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
+import { createReplicaMetadata, getReplicaWorkspaceId } from "./replica-metadata.ts";
 
 /** JSON con claves ordenadas: sin esto, el diff cambia por reordenamientos casuales. */
 /**
@@ -464,6 +465,7 @@ export function exportBoard(
 
   const context = buildContext(db);
   const { lookups } = context;
+  const workspaceId = getReplicaWorkspaceId(db);
   let files = 0;
   const baseWrite = makeWriter(() => {
     files += 1;
@@ -488,18 +490,24 @@ export function exportBoard(
 
   // Alcance del export: un rebuild desde un export parcial borraría lo que no
   // está en el repo, así que queda registrado y el importador lo verifica.
-  write(
-    join(base, "meta", "export.json"),
-    stableStringify({
-      scope: options.teamKey ? `team:${options.teamKey.toUpperCase()}` : "workspace",
-    }),
-  );
-
   // ---- meta ----
-  const workspace = db.query("SELECT name, url_key FROM workspace LIMIT 1").get() as {
+  const workspace = db.query("SELECT id, name, url_key FROM workspace LIMIT 1").get() as {
+    id: string;
     name: string;
     url_key: string;
   } | null;
+  // La metadata versionada marca la frontera para un selector de Workspace
+  // futuro. La topología actual sigue teniendo un Workspace operativo; solo
+  // viajan con la réplica su identidad estable y el alcance de reemplazo explícito.
+  write(
+    join(base, "meta", "export.json"),
+    stableStringify(
+      createReplicaMetadata(
+        workspace?.id ?? workspaceId,
+        options.teamKey ? `team:${options.teamKey.toUpperCase()}` : "workspace",
+      ),
+    ),
+  );
   write(
     join(base, "meta", "workspace.json"),
     stableStringify({ name: workspace?.name, urlKey: workspace?.url_key }),

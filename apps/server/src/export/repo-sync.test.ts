@@ -37,6 +37,11 @@ describe("repo sync en cada escritura", () => {
     );
     expect(result.errors).toBeUndefined();
     expect(existsSync(join(repoDir, ".prime-board", "issues", "PB-1.md"))).toBe(true);
+    // El primer sync inicializa una réplica reconstruible con identidad y scope.
+    const workspace = app.db.query("SELECT id FROM workspace LIMIT 1").get() as { id: string };
+    expect(
+      JSON.parse(readFileSync(join(repoDir, ".prime-board", "meta", "export.json"), "utf8")),
+    ).toMatchObject({ version: 1, workspaceId: workspace.id, scope: "workspace" });
     const events = logFor("PB-1").map((line) => JSON.parse(line));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: "created", issue: "PB-1" });

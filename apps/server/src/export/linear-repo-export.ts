@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as toYaml } from "yaml";
 import { createSourceMap, mergeSourceMap, writeSourceMap, type SourceMap } from "./source-map.ts";
+import { createReplicaMetadata } from "./replica-metadata.ts";
 
 export interface LinearWorkspace {
   id: string;
@@ -679,7 +680,7 @@ export function writeLinearExportToRepo(
     writeFileSync(join(base, relative), content, "utf8");
     result.files += 1;
   };
-  write("meta/export.json", json({ scope: "workspace" }));
+  write("meta/export.json", json(createReplicaMetadata(source.workspace.id)));
   write(
     "meta/workspace.json",
     json({ name: source.workspace.name, urlKey: source.workspace.urlKey ?? "prime-board" }),

@@ -11,6 +11,7 @@ import { parse as parseYaml } from "yaml";
 import { newId, now } from "../db/util.ts";
 import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
 import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
+import { readReplicaMetadata, type ReadReplicaMetadata } from "./replica-metadata.ts";
 
 export interface RebuildResult {
   issues: number;
@@ -25,6 +26,29 @@ export interface RebuildOptions {
 }
 
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+
+/**
+ * Comprueba el destino antes de leer credenciales o ejecutar SQL destructivo.
+ *
+ * Hoy una DB tiene exactamente un Workspace operativo. Rechazar un destino que ya
+ * tenga varios es intencional: protege vecinos futuros de un rebuild de toda la
+ * base sin simular que esta versión puede operar dos Workspaces.
+ */
+function validateRebuildTarget(db: Database, metadata: ReadReplicaMetadata | null): void {
+  const workspaces = db.query("SELECT id FROM workspace ORDER BY id").all() as Array<{
+    id: string;
+  }>;
+  if (workspaces.length > 1) {
+    throw new Error(
+      "Cannot rebuild a multi-Workspace database: target scoping is reserved for a future topology",
+    );
+  }
+  if (metadata?.workspaceId && workspaces[0] && workspaces[0].id !== metadata.workspaceId) {
+    throw new Error(
+      `Workspace metadata targets ${metadata.workspaceId}, but the operational Workspace is ${workspaces[0].id}`,
+    );
+  }
+}
 
 /** Validate the declared team scope before rebuild can clear the destination. */
 function validatePartialScope(base: string, teamKey: string): void {
@@ -158,32 +182,18 @@ export function rebuildFromRepo(
   if (!existsSync(base)) throw new Error(`No .prime-board directory in ${rootDir}`);
 
   // La metadata del export se valida antes de leer credenciales o abrir la
-  // transacción destructiva (PRB-237). Los repos antiguos sin este archivo se
-  // tratan como exports completos por compatibilidad.
-  const exportPath = join(base, "meta", "export.json");
-  if (existsSync(exportPath)) {
-    let scope: unknown;
-    try {
-      scope = readJson(exportPath).scope;
-    } catch (error) {
+  // transacción destructiva (PRB-237/403). Los repos antiguos sin este archivo
+  // se tratan como exports completos por compatibilidad.
+  const metadata = readReplicaMetadata(rootDir);
+  const scope = metadata?.scope ?? "workspace";
+  validateRebuildTarget(db, metadata);
+  if (scope.startsWith("team:")) {
+    if (!options.allowPartial) {
       throw new Error(
-        `Invalid meta/export.json: ${error instanceof Error ? error.message : error}`,
+        `Refusing partial export (${scope}); rerun with --allow-partial to replace the index explicitly`,
       );
     }
-    if (scope === "workspace") {
-      // Alcance completo: permitido por defecto.
-    } else if (typeof scope === "string" && /^team:[A-Z][A-Z0-9]{0,7}$/.test(scope)) {
-      if (!options.allowPartial) {
-        throw new Error(
-          `Refusing partial export (${scope}); rerun with --allow-partial to replace the index explicitly`,
-        );
-      }
-    } else {
-      throw new Error(`Invalid export scope: ${String(scope)}`);
-    }
-    if (typeof scope === "string" && scope.startsWith("team:")) {
-      validatePartialScope(base, scope.slice("team:".length));
-    }
+    validatePartialScope(base, scope.slice("team:".length));
   }
 
   // Reject ambiguous project keys before opening the destructive transaction.
@@ -200,6 +210,22 @@ export function rebuildFromRepo(
     }
     seenProjectNames.add(name);
   }
+
+  // Valida también el snapshot del Workspace antes de entrar en la transacción
+  // destructiva. Es opcional en el formato histórico de identidad, pero si está
+  // presente debe coincidir con la metadata versionada de la réplica.
+  const workspaceSnapshot = readJson(join(base, "meta", "workspace.json")) as Record<string, any>;
+  if (
+    metadata?.workspaceId &&
+    workspaceSnapshot.id != null &&
+    String(workspaceSnapshot.id) !== metadata.workspaceId
+  ) {
+    throw new Error(
+      `Workspace metadata (${metadata.workspaceId}) does not match workspace snapshot (${workspaceSnapshot.id})`,
+    );
+  }
+  const rebuiltWorkspaceId =
+    metadata?.workspaceId ?? (workspaceSnapshot.id ? String(workspaceSnapshot.id) : newId());
 
   // 1. Credenciales locales. El id exportado es la identidad estable; el nombre
   // queda como fallback para repos antiguos que todavía no lo incluían.
@@ -283,11 +309,16 @@ export function rebuildFromRepo(
     }
 
     const timestamp = now();
-    // 3. Workspace y actores.
-    const workspace = readJson(join(base, "meta", "workspace.json"));
+    // 3. Workspace y actores. La metadata v1 conserva la identidad estable;
+    // exports históricos no la tenían y reciben un id nuevo como antes.
     db.query(
       "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
-    ).run(newId(), workspace.name ?? "Prime Board", workspace.urlKey ?? "prime-board", timestamp);
+    ).run(
+      rebuiltWorkspaceId,
+      workspaceSnapshot.name ?? "Prime Board",
+      workspaceSnapshot.urlKey ?? "prime-board",
+      timestamp,
+    );
 
     const actorIds = new Map<string, string>();
     const actorIdsBySourceId = new Map<string, string>();
