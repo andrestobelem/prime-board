@@ -15,5 +15,6 @@ Acá vive la documentación del proyecto: specs, relevamientos y decisiones.
 - `research/linear-settings-parity.md` — snapshot histórico de paridad de Settings.
 - `adr/0017-multi-workspace-compartido.md` — decisión vigente para múltiples Workspaces aislados en una DB/proceso.
 - `research/sqlite-postgresql-podman.md` — investigación de migración de SQLite a PostgreSQL con Podman (PRB-410).
+- `research/prime-board-como-extension-prime-agent.md` — investigación de empaquetado de prime-board como package/extensión de Prime Agent (PRB-422).
 - `agents/` — configuración que consumen las skills de `.agents/skills/`: tracker de
   issues, roles de triage y layout de domain docs.
