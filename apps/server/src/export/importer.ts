@@ -231,7 +231,7 @@ export function rebuildFromRepo(
   // queda como fallback para repos antiguos que todavía no lo incluían.
   const keys = db
     .query(
-      "SELECT api_keys.actor_id, api_keys.name, api_keys.hash, api_keys.last_used_at, api_keys.created_at, actors.name AS actor_name " +
+      "SELECT api_keys.actor_id, api_keys.name, api_keys.hash, api_keys.last_used_at, api_keys.revoked_at, api_keys.created_at, actors.name AS actor_name " +
         "FROM api_keys JOIN actors ON actors.id = api_keys.actor_id",
     )
     .all() as Array<Record<string, string | null>>;
@@ -331,14 +331,19 @@ export function rebuildFromRepo(
       if (workspaceRole !== "admin" && workspaceRole !== "member") {
         throw new Error(`Invalid workspace role for actor ${actor.name}: ${workspaceRole}`);
       }
+      const status = actor.status ?? "active";
+      if (status !== "active" && status !== "suspended" && status !== "left") {
+        throw new Error(`Invalid actor status for actor ${actor.name}: ${status}`);
+      }
       db.query(
-        "INSERT INTO actors (id, name, email, type, workspace_role, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        "INSERT INTO actors (id, name, email, type, workspace_role, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
       ).run(
         id,
         actor.name as string,
         actor.email ?? null,
         actor.type as string,
         workspaceRole,
+        status,
         timestamp,
       );
     }
@@ -965,13 +970,14 @@ export function rebuildFromRepo(
         throw new Error(`Cannot restore API key ${key.name ?? "<unnamed>"}: actor disappeared`);
       }
       db.query(
-        "INSERT INTO api_keys (id, actor_id, name, hash, last_used_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO api_keys (id, actor_id, name, hash, last_used_at, revoked_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
       ).run(
         newId(),
         actorId,
         key.name as string,
         key.hash as string,
         (key.last_used_at ?? null) as string | null,
+        (key.revoked_at ?? null) as string | null,
         key.created_at as string,
       );
       result.preservedKeys += 1;

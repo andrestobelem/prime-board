@@ -344,7 +344,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       const data = await gqlRequest(
         sessionConfig,
         `query($type: ActorType) {
-      actors(type: $type) { id name email type }
+      actors(type: $type) { id name email type status }
     }`,
         { type: type ? type.toUpperCase() : null },
       );
@@ -374,7 +374,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         const data = await gqlRequest(
           sessionConfig,
           `mutation($id: ID!, $input: ActorUpdateInput!) { actorUpdate(id: $id, input: $input) {
-        actor { id name email type workspaceRole createdAt }
+        actor { id name email type workspaceRole status createdAt }
       } }`,
           { id: args.id, input },
         );
@@ -385,7 +385,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       const data = await gqlRequest(
         sessionConfig,
         `mutation($input: ActorCreateInput!) { actorCreate(input: $input) {
-      actor { id name email type workspaceRole createdAt }
+      actor { id name email type workspaceRole status createdAt }
     } }`,
         {
           input: {
@@ -396,6 +396,137 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         },
       );
       return json(data.actorCreate.actor);
+    },
+  );
+
+  server.registerTool(
+    "invite_user",
+    {
+      description: "Invite an actor. The bearer token is returned only once.",
+      inputSchema: {
+        email: z.string().optional(),
+        name: z.string().optional(),
+        type: z.enum(["human", "agent"]).optional(),
+        expiresAt: z.string().optional(),
+      },
+    },
+    async ({ email, name, type, expiresAt }) => {
+      const input = {
+        ...(email === undefined ? {} : { email }),
+        ...(name === undefined ? {} : { name }),
+        ...(type === undefined ? {} : { type: type.toUpperCase() }),
+        ...(expiresAt === undefined ? {} : { expiresAt }),
+      };
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($input: ActorInviteInput!) { actorInvite(input: $input) {
+        invitation { id email name type status expiresAt } token
+      } }`,
+        { input },
+      );
+      return json(data.actorInvite);
+    },
+  );
+
+  server.registerTool(
+    "accept_invitation",
+    {
+      description: "Accept an invitation and receive a new API key once.",
+      inputSchema: {
+        token: z.string(),
+        name: z.string().optional(),
+        type: z.enum(["human", "agent"]).optional(),
+      },
+    },
+    async ({ token, name, type }) => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($token: String!, $input: ActorInvitationAcceptInput!) {
+        actorInvitationAccept(token: $token, input: $input) {
+          actor { id name email type workspaceRole status createdAt } invitation { id status } key
+        }
+      }`,
+        {
+          token,
+          input: {
+            ...(name === undefined ? {} : { name }),
+            ...(type === undefined ? {} : { type: type.toUpperCase() }),
+          },
+        },
+      );
+      return json(data.actorInvitationAccept);
+    },
+  );
+
+  server.registerTool(
+    "list_invitations",
+    {
+      description: "List pending or historical actor invitations (Workspace Admin only).",
+      inputSchema: { includeRevoked: z.boolean().optional() },
+    },
+    async ({ includeRevoked }) => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `query($includeRevoked: Boolean) { actorInvitations(includeRevoked: $includeRevoked) {
+        id email name type status actorId expiresAt createdAt
+      } }`,
+        { includeRevoked: includeRevoked ?? false },
+      );
+      return json(data.actorInvitations);
+    },
+  );
+
+  server.registerTool(
+    "revoke_invitation",
+    {
+      description: "Revoke a pending actor invitation.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($id: ID!) { actorInvitationRevoke(id: $id) { success invitation { id status } } }`,
+        { id },
+      );
+      return json(data.actorInvitationRevoke);
+    },
+  );
+
+  for (const [tool, mutation, description] of [
+    ["suspend_user", "actorSuspend", "Suspend an actor's access without deleting its identity."],
+    ["reactivate_user", "actorReactivate", "Reactivate a suspended actor."],
+    [
+      "revoke_user",
+      "actorRevoke",
+      "Permanently revoke an actor's access while preserving history.",
+    ],
+  ] as const) {
+    server.registerTool(
+      tool,
+      { description, inputSchema: { actor: z.string().describe('Actor ID, name or "me"') } },
+      async ({ actor }) => {
+        const data = await gqlRequest(
+          sessionConfig,
+          `mutation($id: ID!) { ${mutation}(id: $id) { success actor { id name email type workspaceRole status createdAt } } }`,
+          { id: await resolveActor(sessionConfig, actor) },
+        );
+        return json(data[mutation]);
+      },
+    );
+  }
+
+  server.registerTool(
+    "leave_workspace",
+    {
+      description: "Leave the current workspace as the authenticated actor.",
+      inputSchema: {},
+    },
+    async () => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation { actorLeave { success actor { id name status } } }`,
+      );
+      return json(data.actorLeave);
     },
   );
 

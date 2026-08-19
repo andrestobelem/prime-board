@@ -52,6 +52,7 @@ describe("openDatabase", () => {
       "project_updates",
       "inbox_receipts",
       "favorites",
+      "actor_invitations",
     ]) {
       expect(tables).toContain(table);
     }

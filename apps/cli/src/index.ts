@@ -30,7 +30,7 @@ Commands:
   project list|view|create|archive|unarchive|milestone-*|update-*  Work with planning
   view list|create|update|duplicate|delete Saved views
   team list|create|update|archive|unarchive|membership-*|workflow-state-*|label-* Manage teams
-  actor list|create|update                   Manage actors
+  actor list|create|update|invite|suspend|reactivate|revoke|leave Manage actors
   api-key create|delete                      Manage API keys
   webhook list|create|delete               Manage webhooks
   cycle list|view|create|update|delete     Manage team cycles

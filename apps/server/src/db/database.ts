@@ -20,6 +20,7 @@ import migration0015 from "./migrations/0015_actor_workspace_roles.sql" with { t
 import migration0016 from "./migrations/0016_webhook_ownership.sql" with { type: "text" };
 import migration0017 from "./migrations/0017_favorites.sql" with { type: "text" };
 import migration0018 from "./migrations/0018_team_archive.sql" with { type: "text" };
+import migration0019 from "./migrations/0019_actor_access_lifecycle.sql" with { type: "text" };
 import { newId, now } from "./util.ts";
 
 interface Migration {
@@ -47,6 +48,7 @@ const MIGRATIONS: Migration[] = [
   { version: 16, name: "webhook_ownership", sql: migration0016 },
   { version: 17, name: "favorites", sql: migration0017 },
   { version: 18, name: "team_archive", sql: migration0018 },
+  { version: 19, name: "actor_access_lifecycle", sql: migration0019 },
 ];
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {

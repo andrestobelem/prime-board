@@ -9,6 +9,7 @@ export interface ActorRow {
   email: string | null;
   type: "human" | "agent";
   workspace_role: "admin" | "member";
+  status: "active" | "suspended" | "left";
   avatar_url: string | null;
   created_at: string;
   updated_at: string;
@@ -20,7 +21,16 @@ export function resolveViewer(db: Database, authorization: string | null): Actor
   if (!match) return null;
 
   const hash = hashApiKey(match[1]!);
-  const key = db.query("SELECT id, actor_id FROM api_keys WHERE hash = ?1").get(hash) as {
+  // Cruzar la key con el actor antes de tocar last_used_at evita que una
+  // credencial suspendida deje actividad y, sobre todo, que vuelva a operar.
+  const key = db
+    .query(
+      `SELECT api_keys.id, api_keys.actor_id
+       FROM api_keys JOIN actors ON actors.id = api_keys.actor_id
+       WHERE api_keys.hash = ?1 AND api_keys.revoked_at IS NULL
+         AND actors.status = 'active'`,
+    )
+    .get(hash) as {
     id: string;
     actor_id: string;
   } | null;

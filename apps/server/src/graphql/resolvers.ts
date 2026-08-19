@@ -8,6 +8,15 @@ import {
   listApiKeys,
   mapActor,
   mapApiKey,
+  createActorInvitation,
+  listActorInvitations,
+  mapActorInvitation,
+  revokeActorInvitation,
+  acceptActorInvitation,
+  suspendActor,
+  reactivateActor,
+  leaveActor,
+  revokeActor,
 } from "../domain/actors.ts";
 import {
   archiveTeam,
@@ -172,6 +181,13 @@ export const resolvers = {
   JSON: JSONScalar,
   ActorType: { HUMAN: "human", AGENT: "agent" },
   ActorWorkspaceRole: { ADMIN: "admin", MEMBER: "member" },
+  ActorStatus: { ACTIVE: "active", SUSPENDED: "suspended", LEFT: "left" },
+  ActorInvitationStatus: {
+    PENDING: "pending",
+    ACCEPTED: "accepted",
+    REVOKED: "revoked",
+    EXPIRED: "expired",
+  },
   StateType: {
     TRIAGE: "triage",
     BACKLOG: "backlog",
@@ -331,6 +347,13 @@ export const resolvers = {
     },
   },
 
+  ActorInvitation: {
+    invitedBy: (invitation: { invitedById: string }, _args: unknown, context: Context) =>
+      mapActor(lookupActor(context, invitation.invitedById)!),
+    actor: (invitation: { actorId: string | null }, _args: unknown, context: Context) =>
+      invitation.actorId ? mapActor(lookupActor(context, invitation.actorId)!) : null,
+  },
+
   Query: {
     ...issueResolvers.Query,
     ...projectResolvers.Query,
@@ -365,6 +388,15 @@ export const resolvers = {
     actors: (_parent: unknown, args: { type?: string }, context: Context) => {
       requireViewer(context);
       return listActorsInWorkspace(context, args.type).map(mapActor);
+    },
+    actorInvitations: (
+      _parent: unknown,
+      args: { includeRevoked?: boolean | null },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      return listActorInvitations(context.db, Boolean(args.includeRevoked)).map(mapActorInvitation);
     },
     teamMemberships: (_parent: unknown, args: { teamId: string }, context: Context) => {
       requireViewer(context);
@@ -660,6 +692,69 @@ export const resolvers = {
       assertCanManageActor(viewer, args.id);
       const actor = mapActor(updateActor(context.db, args.id, args.input));
       return { success: true, actor };
+    },
+    actorInvite: (
+      _parent: unknown,
+      args: {
+        input: {
+          email?: string | null;
+          name?: string | null;
+          type?: string | null;
+          expiresAt?: string | null;
+          metadata?: unknown;
+        };
+      },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      const result = createActorInvitation(context.db, viewer.id, args.input);
+      return { success: true, invitation: mapActorInvitation(result.row), token: result.token };
+    },
+    actorInvitationAccept: (
+      _parent: unknown,
+      args: { token: string; input: { name?: string | null; type?: string | null } },
+      context: Context,
+    ) => {
+      const result = acceptActorInvitation(context.db, args.token, args.input);
+      return {
+        success: true,
+        invitation: mapActorInvitation(result.invitation),
+        actor: mapActor(result.actor),
+        key: result.key,
+      };
+    },
+    actorInvitationRevoke: (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      return {
+        success: true,
+        invitation: mapActorInvitation(revokeActorInvitation(context.db, args.id)),
+      };
+    },
+    actorSuspend: (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      requireActor(context, args.id);
+      return { success: true, actor: mapActor(suspendActor(context.db, args.id, viewer.id)) };
+    },
+    actorReactivate: (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      requireActor(context, args.id);
+      return { success: true, actor: mapActor(reactivateActor(context.db, args.id)) };
+    },
+    actorRevoke: (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      assertWorkspaceAdmin(viewer);
+      requireActor(context, args.id);
+      return { success: true, actor: mapActor(revokeActor(context.db, args.id)) };
+    },
+    actorLeave: (_parent: unknown, args: { id?: string | null }, context: Context) => {
+      const viewer = requireViewer(context);
+      const actorId = args.id ?? viewer.id;
+      if (actorId !== viewer.id) throw apiError("UNAUTHORIZED", "You can only leave as yourself");
+      return { success: true, actor: mapActor(leaveActor(context.db, actorId)) };
     },
     apiKeyCreate: (
       _parent: unknown,

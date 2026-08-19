@@ -14,6 +14,19 @@ export const typeDefs = /* GraphQL */ `
     MEMBER
   }
 
+  enum ActorStatus {
+    ACTIVE
+    SUSPENDED
+    LEFT
+  }
+
+  enum ActorInvitationStatus {
+    PENDING
+    ACCEPTED
+    REVOKED
+    EXPIRED
+  }
+
   enum StateType {
     TRIAGE
     BACKLOG
@@ -29,6 +42,7 @@ export const typeDefs = /* GraphQL */ `
     email: String
     type: ActorType!
     workspaceRole: ActorWorkspaceRole!
+    status: ActorStatus!
     apiKeys: [ApiKey!]!
     createdAt: DateTime!
   }
@@ -117,6 +131,60 @@ export const typeDefs = /* GraphQL */ `
     actor: Actor!
     createdAt: DateTime!
     lastUsedAt: DateTime
+    revokedAt: DateTime
+  }
+
+  type ActorInvitation {
+    id: ID!
+    email: String
+    name: String
+    type: ActorType
+    status: ActorInvitationStatus!
+    invitedBy: Actor!
+    actor: Actor
+    actorId: ID
+    metadata: JSON!
+    createdAt: DateTime!
+    expiresAt: DateTime!
+    acceptedAt: DateTime
+    revokedAt: DateTime
+  }
+
+  input ActorInviteInput {
+    email: String
+    name: String
+    type: ActorType
+    expiresAt: DateTime
+    metadata: JSON
+  }
+
+  input ActorInvitationAcceptInput {
+    name: String
+    type: ActorType
+  }
+
+  type ActorInvitationPayload {
+    success: Boolean!
+    invitation: ActorInvitation!
+    """
+    Token en claro; se devuelve únicamente al crear la invitación.
+    """
+    token: String!
+  }
+
+  type ActorInvitationAcceptPayload {
+    success: Boolean!
+    invitation: ActorInvitation!
+    actor: Actor!
+    """
+    API key en claro; se devuelve únicamente al aceptar la invitación.
+    """
+    key: String!
+  }
+
+  type ActorInvitationRevokePayload {
+    success: Boolean!
+    invitation: ActorInvitation!
   }
 
   type Issue {
@@ -905,6 +973,7 @@ export const typeDefs = /* GraphQL */ `
     teams(includeArchived: Boolean = false): [Team!]!
     team(id: ID, key: String, includeArchived: Boolean = false): Team
     actors(type: ActorType): [Actor!]!
+    actorInvitations(includeRevoked: Boolean = false): [ActorInvitation!]!
     teamMemberships(teamId: ID!): [TeamMembership!]!
     """
     Acepta UUID o identificador legible (AT-126).
@@ -964,6 +1033,16 @@ export const typeDefs = /* GraphQL */ `
     teamMembershipDelete(id: ID!): DeletePayload!
     actorCreate(input: ActorCreateInput!): ActorPayload!
     actorUpdate(id: ID!, input: ActorUpdateInput!): ActorPayload!
+    actorInvite(input: ActorInviteInput!): ActorInvitationPayload!
+    actorInvitationAccept(
+      token: String!
+      input: ActorInvitationAcceptInput!
+    ): ActorInvitationAcceptPayload!
+    actorInvitationRevoke(id: ID!): ActorInvitationRevokePayload!
+    actorSuspend(id: ID!): ActorPayload!
+    actorReactivate(id: ID!): ActorPayload!
+    actorRevoke(id: ID!): ActorPayload!
+    actorLeave(id: ID): ActorPayload!
     apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyPayload!
     apiKeyDelete(id: ID!): DeletePayload!
     workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!

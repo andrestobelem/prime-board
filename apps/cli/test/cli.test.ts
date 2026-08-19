@@ -513,6 +513,38 @@ describe("pb project / team / webhook", () => {
     expect(updatedActor.code).toBe(0);
     expect(JSON.parse(updatedActor.out).email).toBe("agent@example.test");
 
+    const invitation = pb([
+      "actor",
+      "invite",
+      "--email",
+      "invited@example.test",
+      "--type",
+      "agent",
+      "--json",
+    ]);
+    expect(invitation.code).toBe(0);
+    const invitationPayload = JSON.parse(invitation.out);
+    expect(invitationPayload.token).toMatch(/^pb_/);
+    const acceptedInvite = pb([
+      "actor",
+      "accept-invite",
+      "--token",
+      invitationPayload.token,
+      "--name",
+      "cli-invited-agent",
+      "--type",
+      "agent",
+      "--json",
+    ]);
+    expect(acceptedInvite.code).toBe(0);
+    expect(JSON.parse(acceptedInvite.out).key).toMatch(/^pb_/);
+    const suspended = pb(["actor", "suspend", actorId, "--json"]);
+    expect(suspended.code).toBe(0);
+    expect(JSON.parse(suspended.out).status).toBe("SUSPENDED");
+    const reactivated = pb(["actor", "reactivate", actorId, "--json"]);
+    expect(reactivated.code).toBe(0);
+    expect(JSON.parse(reactivated.out).status).toBe("ACTIVE");
+
     const key = pb([
       "api-key",
       "create",
@@ -591,6 +623,9 @@ describe("pb project / team / webhook", () => {
     expect(pb(["team", "workflow-state-delete", stateId, "--json"]).code).toBe(0);
     expect(pb(["team", "membership-delete", membershipId, "--json"]).code).toBe(0);
     expect(pb(["api-key", "delete", keyPayload.apiKey.id, "--json"]).code).toBe(0);
+    const revoked = pb(["actor", "revoke", actorId, "--json"]);
+    expect(revoked.code).toBe(0);
+    expect(JSON.parse(revoked.out).status).toBe("LEFT");
   });
 
   it("crea, lista y borra webhooks mostrando el secret una sola vez", () => {

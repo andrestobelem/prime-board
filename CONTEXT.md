@@ -22,7 +22,9 @@ _Avoid_: Current organization, namespace
 Persona o agente que opera uno o más Workspaces. Puede crear y asignar issues, comentar,
 autenticarse y recibir actividad; `Human` y `Agent` son tipos de Actor, no roles de autorización.
 La implementación actual conserva la identidad del Actor en el Workspace único mientras se prepara
-la futura relación de Membership de Workspace.
+la futura relación de Membership de Workspace. Su ciclo de acceso se expresa con `active`,
+`suspended` o `left`: un Actor no activo no puede autenticarse, pero su autoría histórica permanece.
+Las invitaciones son locales y entregan el token y la API key una sola vez.
 _Avoid_: User, account
 
 **Workspace Role**:
