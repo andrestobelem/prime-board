@@ -31,7 +31,8 @@ backend es PostgreSQL. Las operaciones restantes se rechazan antes de tocarlo.
 
 Las invitaciones usan `token_hash`, nunca el token plaintext, y el índice único
 parcial PostgreSQL sobre email pendiente sigue siendo el árbitro final de dos
-creaciones concurrentes. La aceptación reserva la fila con `FOR UPDATE`, cambia
+creaciones concurrentes; una invitación pendiente vencida se marca `expired`
+antes de insertar otra para el mismo email. La aceptación reserva la fila con `FOR UPDATE`, cambia
 el estado dentro de la transacción, crea actor y key, y enlaza `actor_id` y
 `accepted_at`. Si falla cualquier paso, el rollback deja la invitación pendiente
 y no deja actor/key parciales.

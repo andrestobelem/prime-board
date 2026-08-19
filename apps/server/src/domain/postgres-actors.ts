@@ -14,6 +14,15 @@ function assertNotReactivatingHistorical(name: string, existingName?: string): v
   throw apiError("VALIDATION_FAILED", `Cannot reuse historical agent name "${name}"`);
 }
 
+function isUniqueViolation(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (current instanceof Error && /unique|duplicate|23505/i.test(current.message)) return true;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
+}
+
 export function mapPostgresActor(row: ActorRow) {
   return {
     id: row.id,
@@ -63,14 +72,19 @@ export async function createPostgresActor(
   }
   const id = newId();
   const timestamp = now();
-  const row = await persistence.one<ActorRow>(
-    `INSERT INTO actors (id, name, email, type, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $5)
-     RETURNING *`,
-    [id, name, input.email ?? null, input.type, timestamp],
-  );
-  if (!row) throw new Error("PostgreSQL actor insert returned no row");
-  return row;
+  try {
+    const row = await persistence.one<ActorRow>(
+      `INSERT INTO actors (id, name, email, type, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $5)
+       RETURNING *`,
+      [id, name, input.email ?? null, input.type, timestamp],
+    );
+    if (!row) throw new Error("PostgreSQL actor insert returned no row");
+    return row;
+  } catch (error) {
+    if (isUniqueViolation(error)) throw apiError("VALIDATION_FAILED", "Actor name already exists");
+    throw error;
+  }
 }
 
 export async function updatePostgresActor(

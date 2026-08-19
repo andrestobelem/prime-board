@@ -254,13 +254,23 @@ async function invitationStatus(
   persistence: Persistence,
   row: ActorInvitationRow,
 ): Promise<ActorInvitationRow> {
-  if (row.status === "pending" && Date.parse(row.expires_at) <= Date.now()) {
-    await persistence.execute("UPDATE actor_invitations SET status = 'expired' WHERE id = $1", [
-      row.id,
-    ]);
-    return { ...row, status: "expired" };
+  const expiresAt = Date.parse(row.expires_at);
+  if (row.status !== "pending" || !Number.isFinite(expiresAt) || expiresAt > Date.now()) {
+    return row;
   }
-  return row;
+  const updated = await persistence.execute(
+    `UPDATE actor_invitations SET status = 'expired'
+     WHERE id = $1 AND status = 'pending'`,
+    [row.id],
+  );
+  if (updated.rowCount === 1) return { ...row, status: "expired" };
+  // A concurrent accept/revoke won the row lock; return the committed state
+  // instead of manufacturing an expired status over an accepted invitation.
+  return (
+    (await persistence.one<ActorInvitationRow>("SELECT * FROM actor_invitations WHERE id = $1", [
+      row.id,
+    ])) ?? row
+  );
 }
 
 export async function getPostgresActorInvitation(
@@ -313,15 +323,6 @@ export async function createPostgresActorInvitation(
   if (type !== null && type !== "human" && type !== "agent") {
     throw apiError("VALIDATION_FAILED", `Invalid actor type: ${input.type}`);
   }
-  if (
-    email &&
-    (await persistence.one(
-      "SELECT id FROM actor_invitations WHERE lower(email) = lower($1) AND status = 'pending'",
-      [email],
-    ))
-  ) {
-    throw apiError("VALIDATION_FAILED", "A pending invitation already exists for this email");
-  }
   let metadataJson = "{}";
   if (input.metadata !== undefined && input.metadata !== null) {
     try {
@@ -338,14 +339,36 @@ export async function createPostgresActorInvitation(
   const id = newId();
   const timestamp = now();
   try {
-    const row = await persistence.one<ActorInvitationRow>(
-      `INSERT INTO actor_invitations
-       (id, email, name, type, token_hash, status, invited_by, metadata_json, created_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9)
-       RETURNING *`,
-      [id, email, name, type, hashApiKey(token), invitedBy, metadataJson, timestamp, expiresAt],
-    );
-    if (!row) throw new Error("PostgreSQL invitation insert returned no row");
+    const row = await persistence.transaction(async (tx) => {
+      if (email) {
+        const existing = await tx.one<Pick<ActorInvitationRow, "id" | "expires_at">>(
+          `SELECT id, expires_at FROM actor_invitations
+           WHERE lower(email) = lower($1) AND status = 'pending' FOR UPDATE`,
+          [email],
+        );
+        if (existing) {
+          if (Date.parse(existing.expires_at) <= Date.now()) {
+            await tx.execute("UPDATE actor_invitations SET status = 'expired' WHERE id = $1", [
+              existing.id,
+            ]);
+          } else {
+            throw apiError(
+              "VALIDATION_FAILED",
+              "A pending invitation already exists for this email",
+            );
+          }
+        }
+      }
+      const row = await tx.one<ActorInvitationRow>(
+        `INSERT INTO actor_invitations
+         (id, email, name, type, token_hash, status, invited_by, metadata_json, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9)
+         RETURNING *`,
+        [id, email, name, type, hashApiKey(token), invitedBy, metadataJson, timestamp, expiresAt],
+      );
+      if (!row) throw new Error("PostgreSQL invitation insert returned no row");
+      return row;
+    });
     return { row, token };
   } catch (error) {
     // The partial unique index remains the final arbiter for concurrent invites.
@@ -379,27 +402,30 @@ export async function acceptPostgresActorInvitation(
   token: string,
   input: { name?: string | null; type?: string | null },
 ): Promise<{ actor: ActorRow; invitation: ActorInvitationRow; key: string }> {
-  return persistence.transaction(async (tx) => {
+  const outcome = await persistence.transaction(async (tx) => {
     const row = await tx.one<ActorInvitationRow>(
       "SELECT * FROM actor_invitations WHERE token_hash = $1 FOR UPDATE",
       [hashApiKey(token)],
     );
-    if (!row) throw apiError("UNAUTHORIZED", "Invalid actor invitation token");
-    if (row.status !== "pending" || Date.parse(row.expires_at) <= Date.now()) {
-      if (row.status === "pending") {
-        await tx.execute("UPDATE actor_invitations SET status = 'expired' WHERE id = $1", [row.id]);
-      }
-      throw apiError("UNAUTHORIZED", "Invalid actor invitation token");
+    if (!row || row.status !== "pending") return { kind: "invalid" as const };
+    const expiresAt = Date.parse(row.expires_at);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      await tx.execute(
+        `UPDATE actor_invitations SET status = 'expired' WHERE id = $1 AND status = 'pending'`,
+        [row.id],
+      );
+      return { kind: "expired" as const };
     }
     const reserved = await tx.execute(
       "UPDATE actor_invitations SET status = 'accepted' WHERE id = $1 AND status = 'pending'",
       [row.id],
     );
-    if (reserved.rowCount !== 1) throw apiError("UNAUTHORIZED", "Invalid actor invitation token");
+    if (reserved.rowCount !== 1) return { kind: "invalid" as const };
     const name =
       normalizedOptional(input.name) ?? row.name ?? (row.email ? row.email.split("@")[0] : null);
     if (!name)
       throw apiError("VALIDATION_FAILED", "Actor name is required to accept an invitation");
+    assertActorNameAvailable(name);
     const type = (input.type ?? row.type ?? "human").toLowerCase();
     if (type !== "human" && type !== "agent") {
       throw apiError("VALIDATION_FAILED", `Invalid actor type: ${input.type}`);
@@ -409,11 +435,18 @@ export async function acceptPostgresActorInvitation(
     }
     const actorId = newId();
     const timestamp = now();
-    const actor = await tx.one<ActorRow>(
-      `INSERT INTO actors (id, name, email, type, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $5) RETURNING *`,
-      [actorId, name, row.email, type, timestamp],
-    );
+    let actor: ActorRow | null;
+    try {
+      actor = await tx.one<ActorRow>(
+        `INSERT INTO actors (id, name, email, type, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $5) RETURNING *`,
+        [actorId, name, row.email, type, timestamp],
+      );
+    } catch (error) {
+      if (isUniqueViolation(error))
+        throw apiError("VALIDATION_FAILED", "Actor name already exists");
+      throw error;
+    }
     if (!actor) throw new Error("PostgreSQL invitation actor insert returned no row");
     const key = generateApiKey();
     const inserted = await insertApiKey(
@@ -431,6 +464,10 @@ export async function acceptPostgresActorInvitation(
       [actorId, acceptedAt, row.id],
     );
     if (!invitation) throw new Error("PostgreSQL invitation update returned no row");
-    return { actor, invitation, key: inserted.key };
+    return { kind: "accepted" as const, actor, invitation, key: inserted.key };
   });
+  if (outcome.kind === "invalid" || outcome.kind === "expired") {
+    throw apiError("UNAUTHORIZED", "Invalid actor invitation token");
+  }
+  return outcome;
 }

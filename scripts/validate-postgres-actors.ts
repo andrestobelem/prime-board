@@ -377,6 +377,86 @@ try {
       { input: { email: "duplicate@example.test", name: "Duplicate B", type: "HUMAN" } },
     ),
   ]);
+  const sameNameInvites = await Promise.all([
+    graphql(
+      base,
+      `
+        mutation ($input: ActorInviteInput!) {
+          actorInvite(input: $input) {
+            success
+            token
+          }
+        }
+      `,
+      { input: { email: "same-name-a@example.test", name: "Same Name Invite", type: "AGENT" } },
+    ),
+    graphql(
+      base,
+      `
+        mutation ($input: ActorInviteInput!) {
+          actorInvite(input: $input) {
+            success
+            token
+          }
+        }
+      `,
+      { input: { email: "same-name-b@example.test", name: "Same Name Invite", type: "AGENT" } },
+    ),
+  ]);
+  const sameNameAccepts = await Promise.all(
+    sameNameInvites.map((result) =>
+      graphql(
+        base,
+        `
+          mutation ($token: String!, $input: ActorInvitationAcceptInput!) {
+            actorInvitationAccept(token: $token, input: $input) {
+              success
+              actor {
+                id
+                name
+              }
+            }
+          }
+        `,
+        {
+          token: result.data?.actorInvite.token,
+          input: { name: "Same Name Invite", type: "AGENT" },
+        },
+      ),
+    ),
+  );
+  const expiredInvitationToken = generateApiKey();
+  await persistence.execute(
+    `INSERT INTO actor_invitations
+      (id, email, name, type, token_hash, status, invited_by, metadata_json, created_at, expires_at)
+     VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9)`,
+    [
+      newId(),
+      "expired@example.test",
+      "Expired Invite",
+      "human",
+      hashApiKey(expiredInvitationToken),
+      adminId,
+      "{}",
+      now(),
+      new Date(Date.now() - 1000).toISOString(),
+    ],
+  );
+  const replacedExpiredInvite = await graphql(
+    base,
+    `
+      mutation ($input: ActorInviteInput!) {
+        actorInvite(input: $input) {
+          success
+          invitation {
+            status
+            email
+          }
+        }
+      }
+    `,
+    { input: { email: "expired@example.test", name: "Replaced Invite", type: "HUMAN" } },
+  );
   const invitedActors = await graphql(
     base,
     `
@@ -515,7 +595,18 @@ try {
       (actor: { name: string }) => actor.name === "Concurrent Agent",
     ).length === 1 &&
     duplicateSuccesses.length === 1 &&
-    duplicateInvites.some((result) => result.errors?.[0]?.extensions?.code === "VALIDATION_FAILED");
+    duplicateInvites.some(
+      (result) => result.errors?.[0]?.extensions?.code === "VALIDATION_FAILED",
+    ) &&
+    sameNameAccepts.filter((result) => !result.errors).length === 1 &&
+    sameNameAccepts.some(
+      (result) => result.errors?.[0]?.extensions?.code === "VALIDATION_FAILED",
+    ) &&
+    invitedActors.data?.actors.filter(
+      (actor: { name: string }) => actor.name === "Same Name Invite",
+    ).length === 1 &&
+    replacedExpiredInvite.data?.actorInvite.success === true &&
+    replacedExpiredInvite.data?.actorInvite.invitation.status === "PENDING";
   const finalWorkspace = await graphql(
     base,
     `
