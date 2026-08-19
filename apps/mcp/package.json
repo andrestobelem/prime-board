@@ -2,7 +2,8 @@
   "name": "@prime-board/mcp",
   "private": true,
   "bin": {
-    "pb-mcp": "src/index.ts"
+    "pb-mcp": "src/index.ts",
+    "pb-mcp-http": "src/http.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
