@@ -1,0 +1,8 @@
+{
+  "packages": [
+    "npm:prime-question@file:/Users/andrestobelem/ws/at/prime-question/prime-question-0.1.0.tgz",
+    "npm:prime-status@file:/Users/andrestobelem/ws/at/prime-status/prime-status-0.1.0.tgz",
+    "npm:/Users/andrestobelem/ws/at/prime-status/prime-status-0.1.0.tgz",
+    "../../packages/prime-board-agent"
+  ]
+}
