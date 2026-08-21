@@ -26,6 +26,7 @@ import migration0021 from "./migrations/0021_api_key_team_limits_restrict.sql" w
 import migration0022 from "./migrations/0022_team_visibility.sql" with { type: "text" };
 import migration0023 from "./migrations/0023_webhook_team_scope.sql" with { type: "text" };
 import migration0024 from "./migrations/0024_workspace_roots.sql" with { type: "text" };
+import migration0025 from "./migrations/0025_workspace_constraints.sql" with { type: "text" };
 import { newId, now } from "./util.ts";
 
 interface Migration {
@@ -59,6 +60,7 @@ const MIGRATIONS: Migration[] = [
   { version: 22, name: "team_visibility", sql: migration0022 },
   { version: 23, name: "webhook_team_scope", sql: migration0023 },
   { version: 24, name: "workspace_roots", sql: migration0024 },
+  { version: 25, name: "workspace_constraints", sql: migration0025 },
 ];
 
 const WORKSPACE_ROOT_TABLES = [
@@ -160,6 +162,20 @@ export function openDatabase(path: string): Database {
   return db;
 }
 
+function validateWorkspaceConstraints(db: Database): void {
+  const violations = db.query("PRAGMA foreign_key_check").all() as Array<{
+    table?: string;
+    rowid?: number;
+    parent?: string;
+  }>;
+  if (violations.length > 0) {
+    const first = violations[0];
+    throw new Error(
+      `Workspace constraints found a cross-Workspace reference in ${first?.table ?? "unknown table"}`,
+    );
+  }
+}
+
 export function migrate(db: Database): void {
   db.exec(
     "CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
@@ -172,19 +188,33 @@ export function migrate(db: Database): void {
   );
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue;
-    db.transaction(() => {
-      if (migration.version === 24) validateWorkspaceMigration(db, "before");
-      db.exec(migration.sql);
-      if (migration.version === 24) {
-        normalizeBackfilledMembershipIds(db);
-        validateWorkspaceMigration(db, "after");
-      }
-      db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
-        migration.version,
-        migration.name,
-        now(),
-      );
-    })();
+    // PRB-472 reconstruye el grafo de tablas para reemplazar FKs simples por
+    // FKs compuestas. SQLite no permite cambiar foreign_keys dentro de una
+    // transacción activa, por eso el runner desactiva la comprobación solo
+    // alrededor de esta migración y la reactiva aun si falla.
+    const rebuild = migration.version === 25;
+    if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      db.transaction(() => {
+        if (migration.version === 24) validateWorkspaceMigration(db, "before");
+        db.exec(migration.sql);
+        if (migration.version === 24) {
+          normalizeBackfilledMembershipIds(db);
+          validateWorkspaceMigration(db, "after");
+        }
+        if (migration.version === 25) validateWorkspaceConstraints(db);
+        db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
+          migration.version,
+          migration.name,
+          now(),
+        );
+      })();
+    } finally {
+      if (rebuild) db.exec("PRAGMA foreign_keys = ON");
+    }
+    if (rebuild) {
+      validateWorkspaceConstraints(db);
+    }
   }
 
   // Las bases existentes no pasan por bootstrap otra vez. Conservamos su

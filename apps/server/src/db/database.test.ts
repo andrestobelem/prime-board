@@ -374,7 +374,7 @@ describe("multi-workspace root migration", () => {
     });
     expect(membership.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 24 });
+    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 25 });
 
     migrate(db);
     expect(db.query("SELECT count(*) AS count FROM workspace_memberships").get()).toEqual({
@@ -439,6 +439,139 @@ describe("webhook ownership migration", () => {
       owner_id: string;
     };
     expect(owner.owner_id).toBe("admin-id");
+    db.close();
+  });
+});
+
+describe("Workspace constraint migration", () => {
+  function scopedDatabase(): Database {
+    const db = openDatabase(":memory:");
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    db.query(
+      "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES ('workspace-a', 'A', 'a', ?1, ?1), ('workspace-b', 'B', 'b', ?1, ?1)",
+    ).run(timestamp);
+    db.query(
+      "INSERT INTO actors (id, name, type, created_at, updated_at) VALUES ('actor-a', 'A', 'agent', ?1, ?1), ('actor-b', 'B', 'agent', ?1, ?1)",
+    ).run(timestamp);
+    db.query(
+      "INSERT INTO teams (id, name, key, workspace_id, created_at, updated_at) VALUES ('team-a', 'A', 'SAME', 'workspace-a', ?1, ?1), ('team-b', 'B', 'SAME', 'workspace-b', ?1, ?1)",
+    ).run(timestamp);
+    db.query(
+      "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at, workspace_id) VALUES ('state-a', 'team-a', 'Todo', 'unstarted', '#000', 0, ?1, ?1, 'workspace-a'), ('state-b', 'team-b', 'Todo', 'unstarted', '#000', 0, ?1, ?1, 'workspace-b')",
+    ).run(timestamp);
+    db.query(
+      "INSERT INTO projects (id, name, state, workspace_id, created_at, updated_at) VALUES ('project-a', 'A', 'backlog', 'workspace-a', ?1, ?1), ('project-b', 'B', 'backlog', 'workspace-b', ?1, ?1)",
+    ).run(timestamp);
+    db.query(
+      "INSERT INTO issues (id, team_id, number, title, state_id, creator_id, workspace_id, created_at, updated_at) VALUES ('issue-a', 'team-a', 1, 'A', 'state-a', 'actor-a', 'workspace-a', ?1, ?1), ('issue-b', 'team-b', 1, 'B', 'state-b', 'actor-b', 'workspace-b', ?1, ?1)",
+    ).run(timestamp);
+    return db;
+  }
+
+  it("permite keys/nombres iguales entre Workspaces y rechaza duplicados locales", () => {
+    const db = scopedDatabase();
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO teams (id, name, key, workspace_id, created_at, updated_at) VALUES ('team-a2', 'A2', 'SAME', 'workspace-a', ?1, ?1)",
+        )
+        .run(timestamp),
+    ).toThrow();
+
+    db.query(
+      "INSERT INTO labels (id, name, color, workspace_id, created_at) VALUES ('label-a', 'same', '#000', 'workspace-a', ?1), ('label-b', 'same', '#000', 'workspace-b', ?1)",
+    ).run(timestamp);
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO labels (id, name, color, workspace_id, created_at) VALUES ('label-a2', 'same', '#000', 'workspace-a', ?1)",
+        )
+        .run(timestamp),
+    ).toThrow();
+    db.query(
+      "INSERT INTO labels (id, name, color, team_id, workspace_id, created_at) VALUES ('team-label-a', 'same', '#000', 'team-a', 'workspace-a', ?1), ('team-label-b', 'same', '#000', 'team-b', 'workspace-b', ?1)",
+    ).run(timestamp);
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO labels (id, name, color, team_id, workspace_id, created_at) VALUES ('team-label-a2', 'same', '#000', 'team-a', 'workspace-a', ?1)",
+        )
+        .run(timestamp),
+    ).toThrow();
+    expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    db.close();
+  });
+
+  it("rechaza referencias cross-Workspace en links, Parents y relaciones", () => {
+    const db = scopedDatabase();
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO project_teams (project_id, team_id, workspace_id) VALUES ('project-a', 'team-b', 'workspace-a')",
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO issues (id, team_id, number, title, state_id, creator_id, parent_id, workspace_id, created_at, updated_at) VALUES ('issue-cross', 'team-a', 2, 'cross', 'state-a', 'actor-a', 'issue-b', 'workspace-a', ?1, ?1)",
+        )
+        .run(timestamp),
+    ).toThrow();
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO issue_relations (id, issue_id, related_id, type, workspace_id, created_at) VALUES ('relation-cross', 'issue-a', 'issue-b', 'related', 'workspace-a', ?1)",
+        )
+        .run(timestamp),
+    ).toThrow();
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO initiatives (id, name, state, workspace_id, created_at, updated_at) VALUES ('initiative-a', 'A', 'planned', 'workspace-a', ?1, ?1)",
+        )
+        .run(timestamp),
+    ).not.toThrow();
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO initiative_teams (initiative_id, team_id, workspace_id) VALUES ('initiative-a', 'team-b', 'workspace-a')",
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO project_updates (id, project_id, author_id, health, body, workspace_id, created_at, updated_at) VALUES ('update-cross', 'project-b', 'actor-a', 'on_track', 'cross', 'workspace-a', ?1, ?1)",
+        )
+        .run(timestamp),
+    ).toThrow();
+    db.query(
+      "INSERT INTO labels (id, name, color, workspace_id, created_at) VALUES ('label-a', 'label', '#000', 'workspace-a', ?1), ('label-b', 'label', '#000', 'workspace-b', ?1)",
+    ).run(timestamp);
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO issue_labels (issue_id, label_id, workspace_id) VALUES ('issue-a', 'label-b', 'workspace-a')",
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO webhooks (id, url, secret, workspace_id, team_id, created_at) VALUES ('webhook-cross', 'https://example.test', 'secret', 'workspace-a', 'team-b', ?1)",
+        )
+        .run(timestamp),
+    ).toThrow();
+    expect(() =>
+      db
+        .query(
+          "INSERT INTO teams (id, name, key, created_at, updated_at) VALUES ('team-unscoped', 'X', 'X', ?1, ?1)",
+        )
+        .run(timestamp),
+    ).toThrow(/Workspace context is required/);
     db.close();
   });
 });
