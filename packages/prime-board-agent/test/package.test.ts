@@ -26,6 +26,27 @@ describe("Prime Agent package", () => {
     expect(manifest.files).toEqual(expect.arrayContaining(["extensions", "skills", "README.md"]));
   });
 
+  it("keeps Agent package dependencies portable across worktrees", () => {
+    const repoRoot = resolve(PACKAGE_ROOT, "../..");
+    const npmManifest = JSON.parse(
+      readFileSync(join(repoRoot, ".prime", "agent", "npm", "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(npmManifest.dependencies).toEqual({
+      "prime-question": "0.1.0",
+      "prime-status": "0.1.0",
+    });
+
+    const settings = JSON.parse(
+      readFileSync(join(repoRoot, ".prime", "agent", "settings.json"), "utf8"),
+    ) as { packages?: string[] };
+    expect(settings.packages).toEqual([
+      "npm:prime-question@0.1.0",
+      "npm:prime-status@0.1.0",
+      "../../packages/prime-board-agent",
+    ]);
+    expect(settings.packages?.some((source) => source.startsWith("npm:/"))).toBe(false);
+  });
+
   it("keeps manifest resources discoverable at their declared paths", () => {
     for (const resourcePath of manifest.pi?.extensions ?? []) {
       expect(statSync(join(PACKAGE_ROOT, resourcePath)).isDirectory()).toBe(true);
