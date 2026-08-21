@@ -28,6 +28,17 @@ describe("teams", () => {
       "COMPLETED",
       "CANCELED",
     ]);
+    const workspace = app.db.query("SELECT id FROM workspace LIMIT 1").get() as { id: string };
+    const teamRow = app.db.query("SELECT id, workspace_id FROM teams WHERE key = 'AG'").get() as {
+      id: string;
+      workspace_id: string;
+    };
+    expect(teamRow.workspace_id).toBe(workspace.id);
+    expect(
+      app.db
+        .query("SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1 AND workspace_id = ?2")
+        .get(teamRow.id, workspace.id),
+    ).toEqual({ count: 5 });
   });
 
   it("busca team por key y agrega estados custom", async () => {

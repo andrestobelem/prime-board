@@ -1002,7 +1002,7 @@ export const resolvers = {
             );
             return { success: true, team };
           }
-          const team = mapTeam(createTeam(context.db, args.input, viewer.id));
+          const team = mapTeam(createTeam(context.db, args.input, viewer.id, context.workspace.workspaceId));
           return { success: true, team };
         },
         teamUpdate: async (

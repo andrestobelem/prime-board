@@ -566,6 +566,10 @@ CREATE TRIGGER issues_fts_update AFTER UPDATE OF title, description ON issues BE
   VALUES (new.rowid, new.title, coalesce(new.description, ''));
 END;
 
+-- La tabla FTS5 usa content externo. El rebuild de issues puede cambiar rowids;
+-- reconstruimos el índice antes de reactivar las escrituras incrementales.
+INSERT INTO issues_fts(issues_fts) VALUES ('rebuild');
+
 CREATE TRIGGER teams_workspace_scope_insert AFTER INSERT ON teams
 WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1 BEGIN
   UPDATE teams SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id;
