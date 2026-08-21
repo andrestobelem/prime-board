@@ -1,7 +1,7 @@
 // Shell de la UI: sidebar + topbar + contenido ruteado por hash.
 // Atajos globales: C crea un issue, ⌘K abre el command palette (AT-148).
 import { useEffect, useState } from "react";
-import { getApiKey, mutate, useQuery } from "./api.ts";
+import { getApiKey, getServerAuthMode, mutate, useQuery, type ServerAuthMode } from "./api.ts";
 import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueList.tsx";
 import { DisplayOptions, type IssueColumn, type IssueOrder } from "./components/DisplayOptions.tsx";
 import { ErrorState } from "./components/AsyncState.tsx";
@@ -106,7 +106,18 @@ function loadColumns(): IssueColumn[] {
 export function App() {
   const route = useRoute();
   const [hasKey, setHasKey] = useState(() => Boolean(getApiKey()));
+  const [serverAuthMode, setServerAuthMode] = useState<ServerAuthMode | null>(null);
   const shell = useQuery<ShellData>(SHELL_QUERY);
+
+  useEffect(() => {
+    let mounted = true;
+    getServerAuthMode().then((mode) => {
+      if (mounted) setServerAuthMode(mode);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
   const [createOpen, setCreateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -192,10 +203,12 @@ export function App() {
     ]);
   };
 
+  const localAuth = serverAuthMode === "local";
+
   const logout = () => {
     localStorage.removeItem("pb.apiKey");
     setFavorites([]);
-    setHasKey(false);
+    if (!localAuth) setHasKey(false);
   };
 
   const reorderFavorite = async (favorite: SidebarFavorite, position: number) => {
@@ -213,14 +226,18 @@ export function App() {
     });
   };
 
-  if (!hasKey || (shell.error && shell.error.code === "UNAUTHORIZED")) {
+  if (serverAuthMode === null) {
+    return <div className="loading">Loading…</div>;
+  }
+
+  if ((!hasKey && !localAuth) || (shell.error && shell.error.code === "UNAUTHORIZED")) {
     return (
       <div className="app">
         <div className="main">
           <div className="topbar">
             <span className="title">Welcome to prime-board</span>
           </div>
-          <SettingsView />
+          <SettingsView localAuth={localAuth} />
         </div>
       </div>
     );
@@ -249,7 +266,7 @@ export function App() {
     content = <ProjectsView projects={navigation.projects} />;
   } else if (section === "settings") {
     topbar = <span className="title">Settings</span>;
-    content = <SettingsView />;
+    content = <SettingsView localAuth={localAuth} />;
   } else if (section === "team-settings" && param) {
     topbar = (
       <>

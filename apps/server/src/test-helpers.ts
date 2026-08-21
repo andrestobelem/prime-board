@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { migrate } from "./db/database.ts";
 import { bootstrap } from "./db/seed.ts";
 import { createApp } from "./server.ts";
-import type { Config } from "./config.ts";
+import type { AuthMode, Config } from "./config.ts";
 import type { WebhookDispatcher } from "./webhooks/dispatcher.ts";
 
 export interface TestApp {
@@ -14,13 +14,15 @@ export interface TestApp {
   stop: () => void;
 }
 
-export function createTestApp(repoRoot?: string): TestApp {
+export function createTestApp(repoRoot?: string, authMode: AuthMode = "api-key"): TestApp {
   const db = new Database(":memory:", { strict: true });
   db.exec("PRAGMA foreign_keys = ON;");
   migrate(db);
   const seed = bootstrap(db);
   const config: Config = {
     port: 0,
+    host: "127.0.0.1",
+    authMode,
     dbPath: ":memory:",
     dev: true,
     webDist: "/nonexistent",

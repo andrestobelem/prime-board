@@ -36,17 +36,22 @@ type TeamAction = {
   team: WorkspaceAdminTeam;
 };
 
-export function SettingsView() {
+export function SettingsView({ localAuth = false }: { localAuth?: boolean }) {
   const [onboardingKey] = useState(() => getStagedOnboardingKey());
-  const existingKey = getApiKey();
-  const useOnboardingKey = shouldUseOnboardingKey(existingKey, onboardingKey);
+  const existingKey = localAuth ? "local" : getApiKey();
+  const useOnboardingKey = !localAuth && shouldUseOnboardingKey(existingKey, onboardingKey);
   const onboardingConflict = Boolean(
-    onboardingKey && existingKey && !useOnboardingKey && existingKey !== onboardingKey,
+    !localAuth &&
+    onboardingKey &&
+    existingKey &&
+    !useOnboardingKey &&
+    existingKey !== onboardingKey,
   );
   const [key, setKey] = useState(() =>
-    useOnboardingKey ? onboardingKey : existingKey || onboardingKey,
+    useOnboardingKey ? onboardingKey : localAuth ? "" : existingKey || onboardingKey,
   );
   const [status, setStatus] = useState<string | null>(() => {
+    if (localAuth) return "Local mode is active. This server does not require an API key.";
     if (!onboardingKey) return null;
     if (onboardingConflict) return "An onboarding key was detected; your existing key was kept.";
     if (existingKey) return "This onboarding key is already saved in this browser.";
@@ -63,7 +68,7 @@ export function SettingsView() {
   const isAdmin = adminData?.viewer.workspaceRole?.toUpperCase() === "ADMIN";
 
   const loadAdmin = useCallback(async () => {
-    if (!existingKey) return;
+    if (!localAuth && !existingKey) return;
     setAdminLoading(true);
     setAdminError(null);
     try {
@@ -77,7 +82,7 @@ export function SettingsView() {
     } finally {
       setAdminLoading(false);
     }
-  }, [existingKey]);
+  }, [existingKey, localAuth]);
 
   useEffect(() => {
     if (onboardingKey) clearStagedOnboardingKey();
@@ -186,42 +191,46 @@ export function SettingsView() {
           <option value="light">Light</option>
         </select>
       </label>
-      {onboardingConflict && (
-        <div role="status" style={{ color: "var(--text-muted)" }}>
-          <p style={{ margin: 0 }}>
-            This link contains another API key. Your existing credential was not replaced.
+      {!localAuth && (
+        <>
+          {onboardingConflict && (
+            <div role="status" style={{ color: "var(--text-muted)" }}>
+              <p style={{ margin: 0 }}>
+                This link contains another API key. Your existing credential was not replaced.
+              </p>
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => {
+                  setKey(onboardingKey);
+                  setStatus("Onboarding key selected. Save & connect to confirm the change.");
+                }}
+              >
+                Use onboarding key
+              </button>
+            </div>
+          )}
+          <label>
+            API key
+            <input
+              value={key}
+              placeholder="pb_..."
+              onChange={(event) => setKey(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && save()}
+            />
+          </label>
+          <div>
+            <button className="btn" onClick={save}>
+              Save & connect
+            </button>
+          </div>
+          <p style={{ color: "var(--text-faint)" }}>
+            The key is stored in this browser only (localStorage) and sent as
+            <code> Authorization: Bearer</code> to /graphql.
           </p>
-          <button
-            className="btn secondary"
-            type="button"
-            onClick={() => {
-              setKey(onboardingKey);
-              setStatus("Onboarding key selected. Save & connect to confirm the change.");
-            }}
-          >
-            Use onboarding key
-          </button>
-        </div>
+        </>
       )}
-      <label>
-        API key
-        <input
-          value={key}
-          placeholder="pb_..."
-          onChange={(event) => setKey(event.target.value)}
-          onKeyDown={(event) => event.key === "Enter" && save()}
-        />
-      </label>
-      <div>
-        <button className="btn" onClick={save}>
-          Save & connect
-        </button>
-      </div>
       {status && <div style={{ color: "var(--text-muted)" }}>{status}</div>}
-      <p style={{ color: "var(--text-faint)" }}>
-        The key is stored in this browser only (localStorage) and sent as
-        <code> Authorization: Bearer</code> to /graphql.
-      </p>
 
       {existingKey && (
         <section

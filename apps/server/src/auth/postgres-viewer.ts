@@ -4,6 +4,23 @@ import type { ApiKeyScope } from "../domain/actors.ts";
 import type { ActorRow, AuthContext } from "./viewer.ts";
 import { now } from "../db/util.ts";
 
+/** Resolves the Workspace Admin for a local instance without credentials. */
+export async function resolveLocalPostgresAuth(
+  persistence: Persistence,
+): Promise<AuthContext | null> {
+  const actor = await persistence.one<ActorRow>(
+    "SELECT * FROM actors WHERE workspace_role = 'admin' AND status = 'active' ORDER BY created_at, id LIMIT 1",
+  );
+  if (!actor) return null;
+  return {
+    actor,
+    keyId: "local",
+    scopes: ["read", "write", "admin"],
+    teamIds: null,
+    expiresAt: null,
+  };
+}
+
 /** Resuelve una API key contra las tablas PostgreSQL del dominio migrado. */
 export async function resolvePostgresAuth(
   persistence: Persistence,

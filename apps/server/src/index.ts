@@ -10,6 +10,19 @@ import { createApp } from "./server.ts";
 
 const config = loadConfig();
 
+function reportBootstrap(created: boolean, adminApiKey?: string): void {
+  if (!created) return;
+  console.log("First run: workspace seeded.");
+  if (config.authMode === "local") {
+    console.log("Local auth mode is active; no API key is required.");
+    return;
+  }
+  if (adminApiKey) {
+    // La key se muestra una única vez: solo se persiste su hash.
+    console.log(`Admin API key (save it now, it will not be shown again): ${adminApiKey}`);
+  }
+}
+
 if (config.persistenceBackend === "postgres") {
   if (!config.postgresUrl) {
     throw new Error("PRIME_BOARD_POSTGRES_URL is required when PRIME_BOARD_PERSISTENCE=postgres");
@@ -18,11 +31,7 @@ if (config.persistenceBackend === "postgres") {
   await migratePostgres(sql);
   const persistence = createPostgresPersistence(sql);
   const result = await bootstrapPostgres(persistence);
-  if (result.created && result.adminApiKey) {
-    // La key se muestra una única vez: solo se persiste su hash.
-    console.log("First run: workspace seeded.");
-    console.log(`Admin API key (save it now, it will not be shown again): ${result.adminApiKey}`);
-  }
+  reportBootstrap(result.created, result.adminApiKey);
 
   // Los dominios todavía no migrados conservan un SQLite efímero como seam de
   // compatibilidad; workspace/actors ya leen y escriben exclusivamente PG.
@@ -41,11 +50,7 @@ if (config.persistenceBackend === "postgres") {
 } else {
   const db = openDatabase(config.dbPath);
   const result = bootstrap(db);
-  if (result.created && result.adminApiKey) {
-    // La key se muestra una única vez: solo se persiste su hash.
-    console.log("First run: workspace seeded.");
-    console.log(`Admin API key (save it now, it will not be shown again): ${result.adminApiKey}`);
-  }
+  reportBootstrap(result.created, result.adminApiKey);
 
   const { server } = createApp({ db, config });
   console.log(`prime-board server listening on http://localhost:${server.port}`);

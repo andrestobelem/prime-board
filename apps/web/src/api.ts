@@ -8,6 +8,20 @@ import {
   type EffectiveWorkspaceContext,
 } from "./ui-context.ts";
 
+export type ServerAuthMode = "api-key" | "local";
+
+export async function getServerAuthMode(): Promise<ServerAuthMode> {
+  try {
+    const response = await fetch("/config", { cache: "no-store" });
+    if (!response.ok) return "api-key";
+    const payload = (await response.json()) as { authMode?: unknown };
+    return payload.authMode === "local" ? "local" : "api-key";
+  } catch {
+    // Older or external servers do not expose /config; keep the safe default.
+    return "api-key";
+  }
+}
+
 export function getApiKey(): string {
   clearUiStateWithoutCredential();
   return localStorage.getItem("pb.apiKey") ?? "";

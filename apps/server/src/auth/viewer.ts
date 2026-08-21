@@ -41,6 +41,28 @@ function listTeamIds(db: Database, keyId: string): string[] | null {
   return rows.length ? rows.map((row) => row.team_id) : null;
 }
 
+/**
+ * Resolves the seeded Workspace Admin for a loopback-only local instance.
+ *
+ * Local mode has no credential to scope, so it grants the same full access as
+ * the local bootstrap key while keeping the actor visible in activity records.
+ */
+export function resolveLocalAuth(db: Database): AuthContext | null {
+  const actor = db
+    .query(
+      "SELECT * FROM actors WHERE workspace_role = 'admin' AND status = 'active' ORDER BY created_at, id LIMIT 1",
+    )
+    .get() as ActorRow | null;
+  if (!actor) return null;
+  return {
+    actor,
+    keyId: "local",
+    scopes: ["read", "write", "admin"],
+    teamIds: null,
+    expiresAt: null,
+  };
+}
+
 export function resolveAuth(db: Database, authorization: string | null): AuthContext | null {
   if (!authorization) return null;
   const match = authorization.match(/^Bearer\s+(pb_[A-Za-z0-9_-]+)$/);

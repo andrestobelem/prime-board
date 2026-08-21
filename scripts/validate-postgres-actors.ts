@@ -24,6 +24,8 @@ let server: ReturnType<typeof createApp>["server"] | undefined;
 const report: Record<string, unknown> = {};
 const config: Config = {
   port: 0,
+  host: "127.0.0.1",
+  authMode: "api-key",
   dbPath: ":memory:",
   postgresUrl: url,
   persistenceBackend: "postgres",

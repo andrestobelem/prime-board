@@ -3,8 +3,8 @@ import type { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { createSchema, createYoga } from "graphql-yoga";
 import { APP_NAME, APP_VERSION, typeDefs } from "@prime-board/schema";
-import { resolveAuth } from "./auth/viewer.ts";
-import { resolvePostgresAuth } from "./auth/postgres-viewer.ts";
+import { resolveAuth, resolveLocalAuth } from "./auth/viewer.ts";
+import { resolveLocalPostgresAuth, resolvePostgresAuth } from "./auth/postgres-viewer.ts";
 import type { Config } from "./config.ts";
 import type { Context } from "./graphql/context.ts";
 import { resolvers } from "./graphql/resolvers.ts";
@@ -37,9 +37,14 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
     // no se pisan el rastreo de "¿ya sincronizó?" — delega en el mismo `repo`
     // singleton, así que la escritura en sí sigue siendo una sola por mutation.
     context: async ({ request }): Promise<Context> => {
-      const auth = persistence
-        ? await resolvePostgresAuth(persistence, request.headers.get("authorization"))
-        : resolveAuth(db, request.headers.get("authorization"));
+      const auth =
+        config.authMode === "local"
+          ? persistence
+            ? await resolveLocalPostgresAuth(persistence)
+            : resolveLocalAuth(db)
+          : persistence
+            ? await resolvePostgresAuth(persistence, request.headers.get("authorization"))
+            : resolveAuth(db, request.headers.get("authorization"));
       const workspace = persistence
         ? await getPostgresWorkspace(persistence)
         : resolveWorkspaceContext(db);
@@ -62,6 +67,7 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
   });
 
   const server = Bun.serve({
+    hostname: config.host,
     port: config.port,
     async fetch(request) {
       const url = new URL(request.url);
@@ -70,6 +76,9 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
       }
       if (url.pathname === "/health") {
         return Response.json({ status: "ok" });
+      }
+      if (url.pathname === "/config") {
+        return Response.json({ authMode: config.authMode });
       }
 
       // UI estática buildeada (si existe). Los clientes de API (sin Accept html

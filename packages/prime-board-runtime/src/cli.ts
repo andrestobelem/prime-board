@@ -13,6 +13,9 @@ Options:
   --port PORT     HTTP port (1-65535)
   --web-dist PATH Static UI directory
   --help          Show this help
+
+Environment:
+  PRIME_BOARD_AUTH_MODE=local  Loopback-only mode without an API key
 `;
 
 let options;

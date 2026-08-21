@@ -10,7 +10,7 @@ bun run server
 ```
 
 En un **workspace nuevo de desarrollo** el server siembra datos demo (team `PB`, actor `admin`); el workspace migrado opera con team `PRB`.
-e imprime la API key de admin **una única vez**:
+En modo `api-key` imprime la API key de admin **una única vez**:
 
 ```
 First run: workspace seeded.
@@ -20,6 +20,16 @@ prime-board server listening on http://localhost:3333
 
 Config por env: `PRIME_BOARD_PORT` (default 3333) y `PRIME_BOARD_DB`
 (default `~/.prime-board/prime-board.db`).
+
+Para una instancia de desarrollo solo local, se puede desactivar el pedido de API key:
+
+```bash
+PRIME_BOARD_AUTH_MODE=local bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto
+```
+
+Este modo fuerza el servidor a `127.0.0.1`, autentica como el Workspace Admin y da acceso completo.
+No lo uses detrás de un proxy ni en una interfaz de red compartida.
+El modo normal (`api-key`) no cambia.
 
 ### Instancia aislada para otro proyecto
 
