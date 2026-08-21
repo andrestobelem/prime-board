@@ -76,7 +76,11 @@ console.error(`prime-board project: ${projectRoot}`);
 console.error(`prime-board replica: ${join(projectRoot, ".prime-board")}`);
 console.error(`prime-board database: ${databasePath}`);
 console.error(`prime-board URL: ${url}`);
-console.error("Save the admin API key printed by the first server start.");
+if (process.env.PRIME_BOARD_AUTH_MODE === "local") {
+  console.error("Local auth mode is active; no API key is required.");
+} else {
+  console.error("Save the admin API key printed by the first server start.");
+}
 
 const server = Bun.spawn([process.execPath, "run", "--cwd", "apps/server", "start"], {
   cwd: PRIME_BOARD_ROOT,
