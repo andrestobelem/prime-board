@@ -1,3 +1,6 @@
+export const DEFAULT_WORKSPACE_NAME = "workspace";
+export const DEFAULT_WORKSPACE_URL_KEY = "prime-board";
+
 // Workflow default que se siembra al crear un team (spec §3, tabla workflow_states).
 export const DEFAULT_WORKFLOW = [
   { name: "Backlog", type: "backlog", color: "#95a2b3" },

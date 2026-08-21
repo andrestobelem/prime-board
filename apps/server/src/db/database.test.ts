@@ -81,6 +81,12 @@ describe("bootstrap", () => {
     expect(result.created).toBe(true);
     expect(result.adminApiKey).toStartWith("pb_");
 
+    const workspace = db.query("SELECT name, url_key FROM workspace").get() as {
+      name: string;
+      url_key: string;
+    };
+    expect(workspace).toEqual({ name: "workspace", url_key: "prime-board" });
+
     const team = db.query("SELECT key FROM teams").get() as { key: string };
     expect(team.key).toBe("PB");
     const states = db.query("SELECT type FROM workflow_states ORDER BY position").values();

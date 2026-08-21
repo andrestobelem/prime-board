@@ -23,7 +23,7 @@ describe("graphql auth", () => {
     const result = await gql(app, "{ viewer { name type } workspace { name urlKey } }");
     expect(result.errors).toBeUndefined();
     expect(result.data!.viewer).toEqual({ name: "admin", type: "HUMAN" });
-    expect(result.data!.workspace).toEqual({ name: "Prime Board", urlKey: "prime-board" });
+    expect(result.data!.workspace).toEqual({ name: "workspace", urlKey: "prime-board" });
   });
 
   it("resuelve el viewer sin key en modo local", async () => {

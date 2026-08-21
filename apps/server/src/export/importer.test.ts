@@ -117,6 +117,28 @@ describe("rebuildFromRepo", () => {
     }
   });
 
+  it("usa workspace como nombre por defecto para snapshots históricos sin nombre", () => {
+    const legacy = mkdtempSync(join(tmpdir(), "pb-legacy-workspace-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, legacy);
+      writeFileSync(join(legacy, ".prime-board", "meta", "workspace.json"), "{}\n");
+      writeFileSync(join(legacy, ".prime-board", "meta", "export.json"), '{"scope":"workspace"}\n');
+
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      rebuildFromRepo(fresh, legacy);
+
+      expect(fresh.query("SELECT name, url_key FROM workspace").get()).toEqual({
+        name: "workspace",
+        url_key: "prime-board",
+      });
+    } finally {
+      fresh.close();
+      rmSync(legacy, { recursive: true, force: true });
+    }
+  });
+
   it("acepta milestones cualificados por proyecto en snapshots importados", () => {
     const qualified = mkdtempSync(join(tmpdir(), "pb-qualified-milestone-"));
     try {

@@ -64,7 +64,7 @@ describe("pb auth", () => {
     expect(result.code).toBe(0);
     const parsed = JSON.parse(result.out);
     expect(parsed.viewer.name).toBe("admin");
-    expect(parsed.workspace.name).toBe("Prime Board");
+    expect(parsed.workspace.name).toBe("workspace");
   });
 
   it("workspace update renombra y conserva urlKey", () => {

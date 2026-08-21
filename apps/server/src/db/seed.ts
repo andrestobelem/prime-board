@@ -2,7 +2,7 @@
 // y su API key, que se devuelve UNA sola vez para que el caller la muestre.
 import type { Database } from "bun:sqlite";
 import { generateApiKey, hashApiKey } from "../auth/keys.ts";
-import { DEFAULT_WORKFLOW } from "./defaults.ts";
+import { DEFAULT_WORKFLOW, DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_URL_KEY } from "./defaults.ts";
 import { newId, now } from "./util.ts";
 
 export interface BootstrapResult {
@@ -38,7 +38,7 @@ export function bootstrap(db: Database): BootstrapResult {
     const timestamp = now();
     db.query(
       "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-    ).run(newId(), "Prime Board", "prime-board", timestamp, timestamp);
+    ).run(newId(), DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_URL_KEY, timestamp, timestamp);
 
     const teamId = newId();
     db.query(

@@ -146,7 +146,7 @@ describe("mcp tools", () => {
 
   it("get_workspace y list_teams responden", async () => {
     const workspace = parseResult(await client.callTool({ name: "get_workspace", arguments: {} }));
-    expect(workspace.workspace.name).toBe("Prime Board");
+    expect(workspace.workspace.name).toBe("workspace");
     const teams = parseResult(await client.callTool({ name: "list_teams", arguments: {} }));
     expect(teams[0].key).toBe("PB");
   });

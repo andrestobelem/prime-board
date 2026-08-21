@@ -8,6 +8,7 @@ import type { Database } from "bun:sqlite";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_URL_KEY } from "../db/defaults.ts";
 import { newId, now } from "../db/util.ts";
 import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
 import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
@@ -381,8 +382,8 @@ export function rebuildFromRepo(
       "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
     ).run(
       rebuiltWorkspaceId,
-      workspaceSnapshot.name ?? "Prime Board",
-      workspaceSnapshot.urlKey ?? "prime-board",
+      workspaceSnapshot.name ?? DEFAULT_WORKSPACE_NAME,
+      workspaceSnapshot.urlKey ?? DEFAULT_WORKSPACE_URL_KEY,
       timestamp,
     );
 

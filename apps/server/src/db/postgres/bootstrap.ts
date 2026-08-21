@@ -1,6 +1,10 @@
 import type { Persistence } from "../persistence.ts";
 import { generateApiKey, hashApiKey } from "../../auth/keys.ts";
-import { DEFAULT_WORKFLOW } from "../defaults.ts";
+import {
+  DEFAULT_WORKFLOW,
+  DEFAULT_WORKSPACE_NAME,
+  DEFAULT_WORKSPACE_URL_KEY,
+} from "../defaults.ts";
 import { newId, now } from "../util.ts";
 
 export interface PostgresBootstrapResult {
@@ -26,7 +30,7 @@ export async function bootstrapPostgres(
     await tx.execute(
       `INSERT INTO workspace (id, name, url_key, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $4)`,
-      [workspaceId, "Prime Board", "prime-board", timestamp],
+      [workspaceId, DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_URL_KEY, timestamp],
     );
     await tx.execute(
       `INSERT INTO teams (id, name, key, description, created_at, updated_at)
