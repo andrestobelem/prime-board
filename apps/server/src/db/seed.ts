@@ -28,8 +28,10 @@ export function seedTeamWorkflow(db: Database, teamId: string): void {
 
 /** Crea los datos iniciales si la DB está vacía. Idempotente entre reinicios. */
 export function bootstrap(db: Database): BootstrapResult {
-  const existing = db.query("SELECT id FROM workspace LIMIT 1").get();
-  if (existing) {
+  const existing = db.query("SELECT EXISTS (SELECT 1 FROM workspace) AS present").get() as {
+    present: number;
+  };
+  if (existing.present) {
     return { created: false };
   }
 

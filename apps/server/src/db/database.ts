@@ -25,6 +25,7 @@ import migration0020 from "./migrations/0020_api_key_scopes.sql" with { type: "t
 import migration0021 from "./migrations/0021_api_key_team_limits_restrict.sql" with { type: "text" };
 import migration0022 from "./migrations/0022_team_visibility.sql" with { type: "text" };
 import migration0023 from "./migrations/0023_webhook_team_scope.sql" with { type: "text" };
+import migration0024 from "./migrations/0024_workspace_roots.sql" with { type: "text" };
 import { newId, now } from "./util.ts";
 
 interface Migration {
@@ -57,7 +58,97 @@ const MIGRATIONS: Migration[] = [
   { version: 21, name: "api_key_team_limits_restrict", sql: migration0021 },
   { version: 22, name: "team_visibility", sql: migration0022 },
   { version: 23, name: "webhook_team_scope", sql: migration0023 },
+  { version: 24, name: "workspace_roots", sql: migration0024 },
 ];
+
+const WORKSPACE_ROOT_TABLES = [
+  "teams",
+  "projects",
+  "issues",
+  "labels",
+  "webhooks",
+  "saved_views",
+  "cycles",
+  "reviews",
+  "initiatives",
+  "project_updates",
+  "actor_invitations",
+] as const;
+
+function countRows(db: Database, table: string): number {
+  const row = db.query(`SELECT count(*) AS count FROM ${table}`).get() as { count: number };
+  return row.count;
+}
+
+function normalizeBackfilledMembershipIds(db: Database): void {
+  const memberships = db
+    .query("SELECT id FROM workspace_memberships WHERE instr(id, ':') > 0 ORDER BY id")
+    .values() as Array<[string]>;
+  const update = db.query("UPDATE workspace_memberships SET id = ?1 WHERE id = ?2");
+  for (const [legacyId] of memberships) {
+    // SQL mantiene el backfill determinista hasta que el runner puede usar el
+    // generador UUID v7 del repositorio. Las Memberships son identidades nuevas;
+    // no se modifica ninguna PK existente del dominio.
+    update.run(newId(), legacyId);
+  }
+}
+
+function validateWorkspaceMigration(db: Database, phase: "before" | "after"): void {
+  const workspaceCount = countRows(db, "workspace");
+  if (phase === "before") {
+    if (workspaceCount > 1) {
+      throw new Error(
+        "Workspace migration cannot backfill a database with more than one Workspace",
+      );
+    }
+    if (workspaceCount === 0) {
+      const populated = WORKSPACE_ROOT_TABLES.find((table) => countRows(db, table) > 0);
+      if (populated) {
+        throw new Error(`Workspace migration cannot backfill ${populated} without a Workspace`);
+      }
+    }
+    const foreignKeyViolations = db.query("PRAGMA foreign_key_check").all();
+    if (foreignKeyViolations.length > 0) {
+      throw new Error("Workspace migration requires a valid legacy foreign-key graph");
+    }
+    return;
+  }
+
+  if (workspaceCount === 0) {
+    const populated = WORKSPACE_ROOT_TABLES.find((table) => countRows(db, table) > 0);
+    if (populated) {
+      throw new Error(`Workspace migration left ${populated} without a Workspace`);
+    }
+  } else if (workspaceCount === 1) {
+    const unscoped = WORKSPACE_ROOT_TABLES.find((table) => {
+      const row = db
+        .query(
+          `SELECT count(*) AS count FROM ${table}
+           WHERE workspace_id IS NULL
+              OR NOT EXISTS (SELECT 1 FROM workspace WHERE workspace.id = ${table}.workspace_id)`,
+        )
+        .get() as { count: number };
+      return row.count > 0;
+    });
+    if (unscoped) {
+      throw new Error(`Workspace migration did not backfill ${unscoped}`);
+    }
+
+    const actors = countRows(db, "actors");
+    const memberships = countRows(db, "workspace_memberships");
+    if (memberships !== actors) {
+      throw new Error(
+        `Workspace migration created ${memberships} Memberships for ${actors} Actors`,
+      );
+    }
+  }
+
+  const foreignKeyViolations = db.query("PRAGMA foreign_key_check").all();
+  if (foreignKeyViolations.length > 0) {
+    throw new Error("Workspace migration produced foreign-key violations");
+  }
+}
+
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {
     mkdirSync(dirname(path), { recursive: true });
@@ -82,7 +173,12 @@ export function migrate(db: Database): void {
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue;
     db.transaction(() => {
+      if (migration.version === 24) validateWorkspaceMigration(db, "before");
       db.exec(migration.sql);
+      if (migration.version === 24) {
+        normalizeBackfilledMembershipIds(db);
+        validateWorkspaceMigration(db, "after");
+      }
       db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
         migration.version,
         migration.name,

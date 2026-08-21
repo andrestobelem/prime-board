@@ -17,9 +17,15 @@ export function getWorkspace(db: Database, id?: string): WorkspaceRow | null {
       .query("SELECT id, name, url_key, created_at, updated_at FROM workspace WHERE id = ?1")
       .get(id) as WorkspaceRow | null;
   }
-  return db
-    .query("SELECT id, name, url_key, created_at, updated_at FROM workspace LIMIT 1")
-    .get() as WorkspaceRow | null;
+  const workspaces = db
+    .query(
+      "SELECT id, name, url_key, created_at, updated_at FROM workspace ORDER BY created_at, id",
+    )
+    .all() as WorkspaceRow[];
+  if (workspaces.length > 1) {
+    throw apiError("VALIDATION_FAILED", "Workspace selection is required");
+  }
+  return workspaces[0] ?? null;
 }
 
 export function mapWorkspace(row: WorkspaceRow) {

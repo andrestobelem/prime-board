@@ -204,18 +204,29 @@ async function markPostgresActorLeft(persistence: Persistence, id: string): Prom
 }
 
 export async function getPostgresWorkspace(persistence: Persistence, id?: string | null) {
-  return persistence.one<{
+  const query =
+    "SELECT id, name, url_key, created_at, updated_at FROM workspace" +
+    (id ? " WHERE id = $1" : " ORDER BY created_at, id");
+  if (id) {
+    return persistence.one<{
+      id: string;
+      name: string;
+      url_key: string;
+      created_at: string;
+      updated_at: string;
+    }>(query, [id]);
+  }
+  const workspaces = await persistence.many<{
     id: string;
     name: string;
     url_key: string;
     created_at: string;
     updated_at: string;
-  }>(
-    id
-      ? "SELECT id, name, url_key, created_at, updated_at FROM workspace WHERE id = $1"
-      : "SELECT id, name, url_key, created_at, updated_at FROM workspace LIMIT 1",
-    id ? [id] : undefined,
-  );
+  }>(query);
+  if (workspaces.length > 1) {
+    throw apiError("VALIDATION_FAILED", "Workspace selection is required");
+  }
+  return workspaces[0] ?? null;
 }
 
 export async function updatePostgresWorkspace(

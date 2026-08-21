@@ -16,13 +16,19 @@ export interface PostgresBootstrapResult {
 export async function bootstrapPostgres(
   persistence: Persistence,
 ): Promise<PostgresBootstrapResult> {
-  if (await persistence.one("SELECT id FROM workspace LIMIT 1")) return { created: false };
+  const existing = await persistence.one<{ present: boolean }>(
+    "SELECT EXISTS (SELECT 1 FROM workspace) AS present",
+  );
+  if (existing?.present) return { created: false };
   const apiKey = generateApiKey();
   const created = await persistence.transaction(async (tx) => {
     await tx.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
       "prime-board-workspace-bootstrap",
     ]);
-    if (await tx.one("SELECT id FROM workspace LIMIT 1")) return false;
+    const existing = await tx.one<{ present: boolean }>(
+      "SELECT EXISTS (SELECT 1 FROM workspace) AS present",
+    );
+    if (existing?.present) return false;
     const timestamp = now();
     const workspaceId = newId();
     const teamId = newId();

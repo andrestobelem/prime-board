@@ -48,12 +48,15 @@ function listTeamIds(db: Database, keyId: string): string[] | null {
  * the local bootstrap key while keeping the actor visible in activity records.
  */
 export function resolveLocalAuth(db: Database): AuthContext | null {
-  const actor = db
+  const actors = db
     .query(
-      "SELECT * FROM actors WHERE workspace_role = 'admin' AND status = 'active' ORDER BY created_at, id LIMIT 1",
+      "SELECT * FROM actors WHERE workspace_role = 'admin' AND status = 'active' ORDER BY created_at, id",
     )
-    .get() as ActorRow | null;
-  if (!actor) return null;
+    .all() as ActorRow[];
+  // El modo local no tiene credencial ni selector de Workspace. No elige un
+  // admin arbitrario cuando la instalación deja de ser inequívoca.
+  if (actors.length !== 1) return null;
+  const actor = actors[0]!;
   return {
     actor,
     keyId: "local",

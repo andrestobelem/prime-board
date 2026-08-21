@@ -8,10 +8,13 @@ import { now } from "../db/util.ts";
 export async function resolveLocalPostgresAuth(
   persistence: Persistence,
 ): Promise<AuthContext | null> {
-  const actor = await persistence.one<ActorRow>(
-    "SELECT * FROM actors WHERE workspace_role = 'admin' AND status = 'active' ORDER BY created_at, id LIMIT 1",
+  const actors = await persistence.many<ActorRow>(
+    "SELECT * FROM actors WHERE workspace_role = 'admin' AND status = 'active' ORDER BY created_at, id",
   );
-  if (!actor) return null;
+  // El modo local no tiene credencial ni selector de Workspace. No elige un
+  // admin arbitrario cuando la instalación deja de ser inequívoca.
+  if (actors.length !== 1) return null;
+  const actor = actors[0]!;
   return {
     actor,
     keyId: "local",
