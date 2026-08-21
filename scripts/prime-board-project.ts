@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import {
   acquireInstanceLock,
   chooseAvailablePort,
+  reserveAvailablePort,
   classifyInstance,
   deriveProjectIdentity,
   retireInstanceLock,
@@ -154,7 +155,20 @@ if (status.state === "running" && status.record) {
 }
 if (status.state === "stale") retireInstanceLock(identity);
 
-const port = await chooseAvailablePort(requestedPort, portIsExplicit);
+let server: ReturnType<typeof Bun.spawn> | null = null;
+let receivedSignal: "SIGINT" | "SIGTERM" | null = null;
+const onSignal = (signal: "SIGINT" | "SIGTERM") => {
+  if (server) {
+    server.kill(signal);
+  } else {
+    receivedSignal = signal;
+  }
+};
+process.once("SIGINT", onSignal);
+process.once("SIGTERM", onSignal);
+
+const portReservation = await reserveAvailablePort(requestedPort, portIsExplicit, homedir());
+const port = portReservation.port;
 const instanceRecord: InstanceRecord = {
   version: 1,
   projectRoot,
@@ -167,6 +181,7 @@ let releaseLock: (() => void) | null = null;
 try {
   releaseLock = acquireInstanceLock(identity, instanceRecord);
 } catch (error) {
+  portReservation.release();
   const concurrent = classifyInstance(identity);
   if (concurrent.state === "running" && concurrent.record) {
     console.error(
@@ -175,6 +190,14 @@ try {
     process.exit(0);
   }
   throw error;
+}
+
+if (receivedSignal) {
+  releaseLock?.();
+  portReservation.release();
+  process.removeListener("SIGINT", onSignal);
+  process.removeListener("SIGTERM", onSignal);
+  process.exit(receivedSignal === "SIGINT" ? 130 : 143);
 }
 
 console.error(`prime-board project: ${projectRoot}`);
@@ -195,13 +218,6 @@ const environment = {
   PRIME_BOARD_HOST: "127.0.0.1",
   PRIME_BOARD_PERSISTENCE: "sqlite",
 };
-let server: ReturnType<typeof Bun.spawn> | null = null;
-const forwardSignal = (signal: "SIGINT" | "SIGTERM") => server?.kill(signal);
-const onSigint = () => forwardSignal("SIGINT");
-const onSigterm = () => forwardSignal("SIGTERM");
-process.once("SIGINT", onSigint);
-process.once("SIGTERM", onSigterm);
-
 let exitCode = 1;
 try {
   server = Bun.spawn([process.execPath, "run", "--cwd", "apps/server", "start"], {
@@ -213,9 +229,10 @@ try {
   });
   exitCode = await server.exited;
 } finally {
-  process.removeListener("SIGINT", onSigint);
-  process.removeListener("SIGTERM", onSigterm);
+  process.removeListener("SIGINT", onSignal);
+  process.removeListener("SIGTERM", onSignal);
   releaseLock?.();
+  portReservation.release();
 }
 process.exit(exitCode);
 
