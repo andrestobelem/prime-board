@@ -2,3 +2,5 @@
 {"actor":"admin","issue":"PRB-503","payload":{"type":"blocks","issue":"PRB-412"},"ts":"2026-08-21T20:58:35.044Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-503","payload":{"type":"related","issue":"PRB-472"},"ts":"2026-08-21T20:58:35.104Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-503","payload":{"type":"related","issue":"PRB-496"},"ts":"2026-08-21T20:58:35.160Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-503","payload":{"body":"Corregido en `677fb26`: la migración 0025 ejecuta `INSERT INTO issues_fts(issues_fts) VALUES ('rebuild')` después de reemplazar `issues`.\n\nLa regresión usa un rowid no contiguo y comprueba la búsqueda mediante el join con `issues`."},"ts":"2026-08-21T21:20:07.928Z","type":"commented"}
+{"actor":"admin","issue":"PRB-503","payload":{"from":"Needs Triage","to":"Ready for Human"},"ts":"2026-08-21T21:20:24.900Z","type":"state_changed"}

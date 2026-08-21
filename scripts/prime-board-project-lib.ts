@@ -162,3 +162,113 @@ export async function chooseAvailablePort(
   }
   throw new Error(`No available port found after ${preferredPort}`);
 }
+
+export interface PortReservation {
+  port: number;
+  release: () => void;
+}
+
+interface PortReservationRecord {
+  version: 1;
+  port: number;
+  pid: number;
+  reservedAt: string;
+}
+
+function portReservationPath(homeDirectory: string, port: number): string {
+  return join(resolve(homeDirectory), ".prime-board", "ports", `${port}.lock`);
+}
+
+function readPortReservation(path: string): PortReservationRecord | "invalid" | null {
+  const metadataPath = join(path, "reservation.json");
+  if (!existsSync(metadataPath)) return null;
+  try {
+    const record = JSON.parse(readFileSync(metadataPath, "utf8")) as PortReservationRecord;
+    if (record.version !== 1 || !Number.isInteger(record.pid) || record.port <= 0) {
+      return "invalid";
+    }
+    return record;
+  } catch {
+    return "invalid";
+  }
+}
+
+function retirePortReservation(path: string): void {
+  const quarantinePath = `${path}.stale-${process.pid}-${Date.now()}`;
+  try {
+    renameSync(path, quarantinePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  rmSync(quarantinePath, { recursive: true, force: true });
+}
+
+function acquirePortReservation(homeDirectory: string, port: number): (() => void) | null {
+  const path = portReservationPath(homeDirectory, port);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      mkdirSync(path, { mode: 0o700 });
+      const record: PortReservationRecord = {
+        version: 1,
+        port,
+        pid: process.pid,
+        reservedAt: new Date().toISOString(),
+      };
+      writeFileSync(join(path, "reservation.json"), `${JSON.stringify(record)}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        rmSync(path, { recursive: true, force: true });
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        rmSync(path, { recursive: true, force: true });
+        throw error;
+      }
+      const record = readPortReservation(path);
+      // A newly-created directory can be observed before its metadata is written.
+      // Keep malformed or incomplete reservations occupied instead of stealing them.
+      if (record === null || record === "invalid") return null;
+      if (processIsAlive(record.pid)) return null;
+      retirePortReservation(path);
+    }
+  }
+  return null;
+}
+
+/**
+ * Atomically reserves a loopback port for the launcher startup window.
+ * The reservation stays held until the child server exits or startup fails.
+ */
+export async function reserveAvailablePort(
+  preferredPort: number,
+  explicit: boolean,
+  homeDirectory = homedir(),
+  probe: PortProbe = portIsAvailable,
+): Promise<PortReservation> {
+  for (let port = preferredPort; port <= 65535; port += 1) {
+    const release = acquirePortReservation(homeDirectory, port);
+    if (!release) {
+      if (explicit) throw new Error(`Port ${preferredPort} is already in use`);
+      continue;
+    }
+    let available = false;
+    try {
+      available = await probe(port);
+    } catch (error) {
+      release();
+      throw error;
+    }
+    if (available) return { port, release };
+    release();
+    if (explicit) throw new Error(`Port ${preferredPort} is already in use`);
+  }
+  throw new Error(`No available port found after ${preferredPort}`);
+}

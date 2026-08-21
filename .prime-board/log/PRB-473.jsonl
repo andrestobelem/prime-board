@@ -13,3 +13,4 @@
 {"actor":"admin","issue":"PRB-473","payload":{"body":"Revisión independiente de admin sobre `5e50b80`:\n\n- `bun test apps/server/src/db/database.test.ts` — 11 pass, 0 fail.\n- `bun run typecheck` — OK.\n- La integración con `58fbcc6` no es directa: ambos branches registran una migración `0025`.\n\nLa suite aislada pasa. PRB-496 registra la colisión y queda relacionada con esta Issue."},"ts":"2026-08-21T20:50:53.630Z","type":"commented"}
 {"actor":"admin","issue":"PRB-473","payload":{"type":"related","issue":"PRB-499"},"ts":"2026-08-21T20:55:12.108Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-473","payload":{"type":"related","issue":"PRB-500"},"ts":"2026-08-21T20:55:12.345Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-473","payload":{"type":"related","issue":"PRB-505"},"ts":"2026-08-21T21:14:20.625Z","type":"relation_added"}

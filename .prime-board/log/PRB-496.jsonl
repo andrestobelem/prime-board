@@ -9,3 +9,7 @@
 {"actor":"admin","issue":"PRB-496","payload":{"type":"related","issue":"PRB-500"},"ts":"2026-08-21T20:55:12.398Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-496","payload":{"type":"related","issue":"PRB-502"},"ts":"2026-08-21T20:57:30.827Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-496","payload":{"type":"related","issue":"PRB-503"},"ts":"2026-08-21T20:58:35.160Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-496","payload":{"type":"related","issue":"PRB-504"},"ts":"2026-08-21T21:09:37.453Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-496","payload":{"type":"related","issue":"PRB-505"},"ts":"2026-08-21T21:14:20.675Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-496","payload":{"body":"Integración completada en `677fb26`:\n\n- `0025_workspace_constraints.sql` conserva el rebuild y las FKs compuestas.\n- `0026_api_key_workspaces.sql` añade grants sin repetir la columna ya creada por 0025.\n- `migrate()` ejecuta ambas versiones en orden y valida cada backfill.\n- El seed y la normalización de Team Memberships conservan el Workspace.\n\nValidación: `apps/server/src/db/database.test.ts` → 14 pass, 0 fail; la suite del servidor completa → 324 pass, 0 fail; `bun run typecheck` pasa."},"ts":"2026-08-21T21:20:07.608Z","type":"commented"}
+{"actor":"admin","issue":"PRB-496","payload":{"from":"Needs Triage","to":"Ready for Human"},"ts":"2026-08-21T21:20:24.578Z","type":"state_changed"}

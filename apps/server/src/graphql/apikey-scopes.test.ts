@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { createApiKey, rotateApiKey } from "../domain/actors.ts";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 
 let app: TestApp | null = null;
@@ -110,6 +111,97 @@ describe("API key scopes and lifecycle", () => {
     const accepted = await gql(app, `{ teams { key } }`, {}, rotated.data!.apiKeyRotate.key);
     expect(accepted.data!.teams.map((team: { key: string }) => team.key)).toEqual(["PB"]);
   });
+  it("scopes created and rotated keys to the active Workspace", async () => {
+    app = createTestApp();
+    const actor = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "workspace-key", type: AGENT }) { actor { id } } }`,
+    );
+    const actorId = actor.data!.actorCreate.actor.id;
+    const currentWorkspace = app.db
+      .query("SELECT id FROM workspace ORDER BY created_at, id LIMIT 1")
+      .get() as { id: string };
+    const currentTeam = app.db.query("SELECT id FROM teams WHERE key = 'PB'").get() as {
+      id: string;
+    };
+    const otherWorkspaceId = "workspace-api-key-other";
+    const otherTeamId = "team-api-key-other";
+    app.db
+      .query(
+        "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, 'Other', 'other-api-key', '2099-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')",
+      )
+      .run(otherWorkspaceId);
+    app.db
+      .query(
+        `INSERT INTO teams
+         (id, name, key, next_issue_number, created_at, updated_at, default_state_id,
+          archived_at, visibility, access_policy, workspace_id)
+         VALUES (?1, 'Other team', 'PB', 1, '2099-01-01T00:00:00.000Z',
+                 '2099-01-01T00:00:00.000Z', NULL, NULL, 'public', 'team_members', ?2)`,
+      )
+      .run(otherTeamId, otherWorkspaceId);
+
+    const created = createApiKey(app.db, {
+      actorId,
+      name: "current",
+      teamIds: [currentTeam.id],
+      workspaceId: currentWorkspace.id,
+    });
+    const oldId = created.row.id;
+    expect(
+      app.db.query("SELECT workspace_id FROM api_key_team_limits WHERE api_key_id = ?1").get(oldId),
+    ).toEqual({ workspace_id: currentWorkspace.id });
+    expect(
+      app.db
+        .query("SELECT workspace_id, is_default FROM api_key_workspaces WHERE api_key_id = ?1")
+        .get(oldId),
+    ).toEqual({ workspace_id: currentWorkspace.id, is_default: 1 });
+
+    expect(() =>
+      createApiKey(app!.db, {
+        actorId,
+        name: "foreign",
+        teamIds: [otherTeamId],
+        workspaceId: currentWorkspace.id,
+      }),
+    ).toThrow("Team not found");
+    expect(
+      app.db.query("SELECT count(*) AS count FROM api_keys WHERE name = 'foreign'").get(),
+    ).toEqual({ count: 0 });
+
+    expect(() =>
+      rotateApiKey(app!.db, oldId, {
+        name: "foreign-rotation",
+        teamIds: [otherTeamId],
+        workspaceId: currentWorkspace.id,
+      }),
+    ).toThrow("Team not found");
+    expect(app.db.query("SELECT revoked_at FROM api_keys WHERE id = ?1").get(oldId)).toEqual({
+      revoked_at: null,
+    });
+    expect(
+      app.db.query("SELECT count(*) AS count FROM api_keys WHERE name = 'foreign-rotation'").get(),
+    ).toEqual({ count: 0 });
+
+    const rotated = rotateApiKey(app.db, oldId, {
+      name: "rotated",
+      teamIds: [currentTeam.id],
+      workspaceId: currentWorkspace.id,
+    });
+    const rotatedId = rotated.row.id;
+    expect(rotated.row.rotated_from_id).toBe(oldId);
+    expect(
+      app.db
+        .query("SELECT workspace_id FROM api_key_team_limits WHERE api_key_id = ?1")
+        .get(rotatedId),
+    ).toEqual({ workspace_id: currentWorkspace.id });
+    expect(
+      app.db
+        .query("SELECT workspace_id, is_default FROM api_key_workspaces WHERE api_key_id = ?1")
+        .get(rotatedId),
+    ).toEqual({ workspace_id: currentWorkspace.id, is_default: 1 });
+  });
+
   it("does not leak multi-Team resources or Workspace collections through a limited key", async () => {
     app = createTestApp();
     const actor = await gql(

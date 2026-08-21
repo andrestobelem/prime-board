@@ -3,3 +3,5 @@
 {"actor":"admin","issue":"PRB-499","payload":{"type":"related","issue":"PRB-472"},"ts":"2026-08-21T20:55:12.058Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-499","payload":{"type":"related","issue":"PRB-473"},"ts":"2026-08-21T20:55:12.108Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-499","payload":{"type":"related","issue":"PRB-496"},"ts":"2026-08-21T20:55:12.162Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-499","payload":{"body":"Corregido en `677fb26`: `seedTeamWorkflow` y la inserción de `team_memberships` reciben y escriben `workspace_id`. La prueba de segundo Workspace valida ambos alcances y la idempotencia.\n\nValidación: tests de DB y suite de servidor pasan."},"ts":"2026-08-21T21:20:07.687Z","type":"commented"}
+{"actor":"admin","issue":"PRB-499","payload":{"from":"Needs Triage","to":"Ready for Human"},"ts":"2026-08-21T21:20:24.654Z","type":"state_changed"}

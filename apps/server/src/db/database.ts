@@ -26,6 +26,8 @@ import migration0021 from "./migrations/0021_api_key_team_limits_restrict.sql" w
 import migration0022 from "./migrations/0022_team_visibility.sql" with { type: "text" };
 import migration0023 from "./migrations/0023_webhook_team_scope.sql" with { type: "text" };
 import migration0024 from "./migrations/0024_workspace_roots.sql" with { type: "text" };
+import migration0025 from "./migrations/0025_workspace_constraints.sql" with { type: "text" };
+import migration0026 from "./migrations/0026_api_key_workspaces.sql" with { type: "text" };
 import { newId, now } from "./util.ts";
 
 interface Migration {
@@ -59,6 +61,8 @@ const MIGRATIONS: Migration[] = [
   { version: 22, name: "team_visibility", sql: migration0022 },
   { version: 23, name: "webhook_team_scope", sql: migration0023 },
   { version: 24, name: "workspace_roots", sql: migration0024 },
+  { version: 25, name: "workspace_constraints", sql: migration0025 },
+  { version: 26, name: "api_key_workspaces", sql: migration0026 },
 ];
 
 const WORKSPACE_ROOT_TABLES = [
@@ -149,6 +153,40 @@ function validateWorkspaceMigration(db: Database, phase: "before" | "after"): vo
   }
 }
 
+function validateApiKeyWorkspaceMigration(db: Database, phase: "before" | "after"): void {
+  const workspaceCount = countRows(db, "workspace");
+  if (phase === "before") {
+    // La migración de constraints ya añadió workspace_id a los límites. Esta
+    // etapa valida grants y límites después de añadir la tabla de grants.
+    return;
+  }
+  const unscopedLimit = db
+    .query("SELECT count(*) AS count FROM api_key_team_limits WHERE workspace_id IS NULL")
+    .get() as { count: number };
+  if (workspaceCount > 1 && unscopedLimit.count > 0) {
+    throw new Error("API key team limits cannot be backfilled with multiple Workspaces");
+  }
+  if (phase === "after") {
+    if (workspaceCount === 1 && unscopedLimit.count > 0) {
+      throw new Error("API key team limits remain outside the Workspace");
+    }
+    if (workspaceCount === 1) {
+      const missingGrant = db
+        .query(
+          "SELECT count(*) AS count FROM api_keys WHERE NOT EXISTS (SELECT 1 FROM api_key_workspaces WHERE api_key_id = api_keys.id)",
+        )
+        .get() as { count: number };
+      if (missingGrant.count > 0) {
+        throw new Error("API key Workspace grant backfill is incomplete");
+      }
+    }
+  }
+  const foreignKeyViolations = db.query("PRAGMA foreign_key_check").all();
+  if (foreignKeyViolations.length > 0) {
+    throw new Error("API key Workspace migration produced foreign-key violations");
+  }
+}
+
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {
     mkdirSync(dirname(path), { recursive: true });
@@ -158,6 +196,20 @@ export function openDatabase(path: string): Database {
   db.exec("PRAGMA foreign_keys = ON;");
   migrate(db);
   return db;
+}
+
+function validateWorkspaceConstraints(db: Database): void {
+  const violations = db.query("PRAGMA foreign_key_check").all() as Array<{
+    table?: string;
+    rowid?: number;
+    parent?: string;
+  }>;
+  if (violations.length > 0) {
+    const first = violations[0];
+    throw new Error(
+      `Workspace constraints found a cross-Workspace reference in ${first?.table ?? "unknown table"}`,
+    );
+  }
 }
 
 export function migrate(db: Database): void {
@@ -172,19 +224,35 @@ export function migrate(db: Database): void {
   );
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue;
-    db.transaction(() => {
-      if (migration.version === 24) validateWorkspaceMigration(db, "before");
-      db.exec(migration.sql);
-      if (migration.version === 24) {
-        normalizeBackfilledMembershipIds(db);
-        validateWorkspaceMigration(db, "after");
-      }
-      db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
-        migration.version,
-        migration.name,
-        now(),
-      );
-    })();
+    // PRB-472 reconstruye el grafo de tablas para reemplazar FKs simples por
+    // FKs compuestas. SQLite no permite cambiar foreign_keys dentro de una
+    // transacción activa, por eso el runner desactiva la comprobación solo
+    // alrededor de esta migración y la reactiva aun si falla.
+    const rebuild = migration.version === 25;
+    if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      db.transaction(() => {
+        if (migration.version === 24) validateWorkspaceMigration(db, "before");
+        if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "before");
+        db.exec(migration.sql);
+        if (migration.version === 24) {
+          normalizeBackfilledMembershipIds(db);
+          validateWorkspaceMigration(db, "after");
+        }
+        if (migration.version === 25) validateWorkspaceConstraints(db);
+        if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "after");
+        db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
+          migration.version,
+          migration.name,
+          now(),
+        );
+      })();
+    } finally {
+      if (rebuild) db.exec("PRAGMA foreign_keys = ON");
+    }
+    if (rebuild) {
+      validateWorkspaceConstraints(db);
+    }
   }
 
   // Las bases existentes no pasan por bootstrap otra vez. Conservamos su
@@ -193,22 +261,34 @@ export function migrate(db: Database): void {
     count: number;
   };
   if (membershipCount.count === 0) {
-    const actors = db
-      .query("SELECT id FROM actors")
-      .values()
-      .map((row) => row[0] as string);
-    const teams = db
-      .query("SELECT id FROM teams")
-      .values()
-      .map((row) => row[0] as string);
+    // El backfill histórico asignaba cada Actor a cada Team. Después de la
+    // migración multi-Workspace, solo son válidas las combinaciones cubiertas
+    // por una Membership del mismo Workspace.
+    const candidates = db
+      .query(
+        `SELECT teams.id AS team_id, actors.id AS actor_id, teams.workspace_id
+         FROM teams
+         JOIN workspace_memberships
+           ON workspace_memberships.workspace_id = teams.workspace_id
+         JOIN actors ON actors.id = workspace_memberships.actor_id
+         WHERE teams.workspace_id IS NOT NULL
+         ORDER BY teams.id, actors.id`,
+      )
+      .all() as Array<{ team_id: string; actor_id: string; workspace_id: string }>;
     const insert = db.query(
-      "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES (?1, ?2, ?3, 'owner', ?4)",
+      "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at, workspace_id) VALUES (?1, ?2, ?3, 'owner', ?4, ?5)",
     );
-    if (actors.length > 0 && teams.length > 0) {
+    if (candidates.length > 0) {
       db.transaction(() => {
         const timestamp = now();
-        for (const teamId of teams) {
-          for (const actorId of actors) insert.run(newId(), teamId, actorId, timestamp);
+        for (const candidate of candidates) {
+          insert.run(
+            newId(),
+            candidate.team_id,
+            candidate.actor_id,
+            timestamp,
+            candidate.workspace_id,
+          );
         }
       })();
     }

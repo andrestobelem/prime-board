@@ -211,6 +211,130 @@ describe("webhooks", () => {
     });
   });
 
+  it("entrega project.updated al archivar y restaurar un Project", async () => {
+    received.length = 0;
+    const hook = await gql(
+      app,
+      `mutation($url: String!) {
+        webhookCreate(input: { url: $url, events: ["project.updated"] }) { webhook { id } }
+      }`,
+      { url: `http://localhost:${receiver.port}/project-archive` },
+    );
+    const project = await gql(
+      app,
+      `mutation { projectCreate(input: { name: "Webhook project archive" }) { project { id } } }`,
+    );
+    const projectId = project.data!.projectCreate.project.id as string;
+
+    const archived = await gql(
+      app,
+      `mutation($id: ID!) { projectArchive(id: $id) { project { archivedAt } } }`,
+      { id: projectId },
+    );
+    expect(archived.errors).toBeUndefined();
+    const archivedAt = archived.data!.projectArchive.project.archivedAt as string;
+    await app.events.idle();
+    expect(received).toHaveLength(1);
+    const archivePayload = JSON.parse(received[0]!.body);
+    expect(archivePayload.event).toBe("project.updated");
+    expect(archivePayload.actor.name).toBe("admin");
+    expect(archivePayload.data.id).toBe(projectId);
+    expect(archivePayload.data.archivedAt).toBe(archivedAt);
+    expect(archivePayload.changes.archivedAt).toEqual({ from: null, to: archivedAt });
+
+    received.length = 0;
+    const restored = await gql(
+      app,
+      `mutation($id: ID!) { projectUnarchive(id: $id) { project { archivedAt } } }`,
+      { id: projectId },
+    );
+    expect(restored.errors).toBeUndefined();
+    expect(restored.data!.projectUnarchive.project.archivedAt).toBeNull();
+    await app.events.idle();
+    expect(received).toHaveLength(1);
+    const restorePayload = JSON.parse(received[0]!.body);
+    expect(restorePayload.event).toBe("project.updated");
+    expect(restorePayload.actor.name).toBe("admin");
+    expect(restorePayload.data.id).toBe(projectId);
+    expect(restorePayload.data.archivedAt).toBeNull();
+    expect(restorePayload.changes.archivedAt).toEqual({ from: archivedAt, to: null });
+
+    await gql(app, `mutation($id: ID!) { webhookDelete(id: $id) { success } }`, {
+      id: hook.data!.webhookCreate.webhook.id,
+    });
+  });
+
+  it("no entrega Project events cuando el viewer no está autorizado", async () => {
+    received.length = 0;
+    const hook = await gql(
+      app,
+      `mutation($url: String!) {
+        webhookCreate(input: { url: $url, events: ["project.updated"] }) { webhook { id } }
+      }`,
+      { url: `http://localhost:${receiver.port}/unauthorized-project` },
+    );
+    const actor = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "webhook-project-outsider", type: AGENT }) { actor { id } } }`,
+    );
+    const outsiderKey = await gql(
+      app,
+      `mutation($actorId: ID!) { apiKeyCreate(input: { actorId: $actorId, name: "webhook project outsider" }) { key } }`,
+      { actorId: actor.data!.actorCreate.actor.id },
+    );
+    const project = await gql(
+      app,
+      `mutation { projectCreate(input: { name: "Unauthorized webhook project" }) { project { id } } }`,
+    );
+    const projectId = project.data!.projectCreate.project.id as string;
+
+    const archive = await gql(
+      app,
+      `mutation($id: ID!) { projectArchive(id: $id) { success } }`,
+      { id: projectId },
+      outsiderKey.data!.apiKeyCreate.key,
+    );
+    const restore = await gql(
+      app,
+      `mutation($id: ID!) { projectUnarchive(id: $id) { success } }`,
+      { id: projectId },
+      outsiderKey.data!.apiKeyCreate.key,
+    );
+    expect(archive.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+    expect(restore.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+    await app.events.idle();
+    expect(received).toHaveLength(0);
+    await gql(app, `mutation($id: ID!) { webhookDelete(id: $id) { success } }`, {
+      id: hook.data!.webhookCreate.webhook.id,
+    });
+  });
+
+  it("no entrega project.updated para Projects inexistentes", async () => {
+    received.length = 0;
+    const hook = await gql(
+      app,
+      `mutation($url: String!) {
+        webhookCreate(input: { url: $url, events: ["project.updated"] }) { webhook { id } }
+      }`,
+      { url: `http://localhost:${receiver.port}/missing-project` },
+    );
+    const archive = await gql(
+      app,
+      `mutation { projectArchive(id: "missing-project") { success } }`,
+    );
+    const restore = await gql(
+      app,
+      `mutation { projectUnarchive(id: "missing-project") { success } }`,
+    );
+    expect(archive.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+    expect(restore.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+    await app.events.idle();
+    expect(received).toHaveLength(0);
+    await gql(app, `mutation($id: ID!) { webhookDelete(id: $id) { success } }`, {
+      id: hook.data!.webhookCreate.webhook.id,
+    });
+  });
+
   it("reintenta con backoff hasta entregar", async () => {
     received.length = 0;
     attempts = 0;

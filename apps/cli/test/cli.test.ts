@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..", "..", "..");
-const PORT = 3394;
+let port: number;
 let tempDir: string;
 let server: Bun.Subprocess;
 let apiKey = "";
@@ -14,7 +14,7 @@ function pb(args: string[], stdin?: string) {
   const proc = Bun.spawnSync(["bun", join(ROOT, "apps/cli/src/index.ts"), ...args], {
     env: {
       ...process.env,
-      PRIME_BOARD_URL: `http://localhost:${PORT}`,
+      PRIME_BOARD_URL: `http://localhost:${port}`,
       PRIME_BOARD_API_KEY: apiKey,
     },
     stdin: stdin ? new TextEncoder().encode(stdin) : undefined,
@@ -32,7 +32,7 @@ beforeAll(async () => {
     env: {
       ...process.env,
       PRIME_BOARD_DB: join(tempDir, "test.db"),
-      PRIME_BOARD_PORT: String(PORT),
+      PRIME_BOARD_PORT: "0",
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -48,6 +48,9 @@ beforeAll(async () => {
     buffer += decoder.decode(value);
   }
   reader.releaseLock();
+  const portMatch = buffer.match(/listening on http:\/\/localhost:(\d+)/);
+  if (!portMatch) throw new Error(`No server port in output: ${buffer}`);
+  port = Number(portMatch[1]);
   const match = buffer.match(/Admin API key.*: (pb_\S+)/);
   if (!match) throw new Error(`No API key in server output: ${buffer}`);
   apiKey = match[1]!;
@@ -309,7 +312,7 @@ describe("pb issue", () => {
     const invalid = Bun.spawnSync(["bun", join(ROOT, "apps/cli/src/index.ts"), "auth", "status"], {
       env: {
         ...process.env,
-        PRIME_BOARD_URL: `http://localhost:${PORT}`,
+        PRIME_BOARD_URL: `http://localhost:${port}`,
         PRIME_BOARD_API_KEY: "pb_bad",
       },
     });
@@ -565,7 +568,7 @@ describe("pb project / team / webhook", () => {
       {
         env: {
           ...process.env,
-          PRIME_BOARD_URL: `http://localhost:${PORT}`,
+          PRIME_BOARD_URL: `http://localhost:${port}`,
           PRIME_BOARD_API_KEY: keyPayload.key,
         },
       },

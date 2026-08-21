@@ -162,7 +162,8 @@ export function createTeam(
     visibility?: "public" | "private" | null;
     accessPolicy?: "workspace_members" | "team_members" | null;
   },
-  ownerId?: string,
+  ownerId: string | undefined,
+  workspaceId: string,
 ): TeamRow {
   const name = input.name.trim();
   const key = input.key.trim().toUpperCase();
@@ -173,7 +174,9 @@ export function createTeam(
       "Team key must be 1-8 alphanumeric characters starting with a letter",
     );
   }
-  const duplicate = db.query("SELECT id FROM teams WHERE key = ?1").get(key);
+  const duplicate = db
+    .query("SELECT id FROM teams WHERE workspace_id = ?1 AND key = ?2")
+    .get(workspaceId, key);
   if (duplicate) throw apiError("VALIDATION_FAILED", `Team key ${key} is already in use`);
 
   const visibility = input.visibility ?? "public";
@@ -193,14 +196,23 @@ export function createTeam(
     const timestamp = now();
     db.query(
       `INSERT INTO teams
-       (id, name, key, description, visibility, access_policy, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
-    ).run(id, name, key, input.description ?? null, visibility, accessPolicy, timestamp);
-    seedTeamWorkflow(db, id);
+       (id, workspace_id, name, key, description, visibility, access_policy, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)`,
+    ).run(
+      id,
+      workspaceId,
+      name,
+      key,
+      input.description ?? null,
+      visibility,
+      accessPolicy,
+      timestamp,
+    );
+    seedTeamWorkflow(db, id, workspaceId);
     if (ownerId) {
       db.query(
-        "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES (?1, ?2, ?3, 'owner', ?4)",
-      ).run(newId(), id, ownerId, timestamp);
+        "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at, workspace_id) VALUES (?1, ?2, ?3, 'owner', ?4, ?5)",
+      ).run(newId(), id, ownerId, timestamp, workspaceId);
     }
   })();
   return db.query("SELECT * FROM teams WHERE id = ?1").get(id) as TeamRow;

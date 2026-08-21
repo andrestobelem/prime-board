@@ -2,7 +2,7 @@
   "name": "pi-extensions",
   "private": true,
   "dependencies": {
-    "prime-question": "file:../../../../prime-question/prime-question-0.1.0.tgz",
-    "prime-status": "file:../../../../prime-status/prime-status-0.1.0.tgz"
+    "prime-question": "0.1.0",
+    "prime-status": "0.1.0"
   }
 }

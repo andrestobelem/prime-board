@@ -116,14 +116,15 @@ export function listApiKeyScopes(db: Database, keyId: string): ApiKeyScope[] {
   return scopes.length ? scopes : [...API_KEY_SCOPES];
 }
 
-export function listApiKeyTeamIds(db: Database, keyId: string): string[] {
-  return db
-    .query("SELECT team_id FROM api_key_team_limits WHERE api_key_id = ?1 ORDER BY team_id")
-    .all(keyId)
-    .map((row) => (row as { team_id: string }).team_id);
+export function listApiKeyTeamIds(db: Database, keyId: string, workspaceId?: string): string[] {
+  const query = workspaceId
+    ? "SELECT team_id FROM api_key_team_limits WHERE api_key_id = ?1 AND workspace_id = ?2 ORDER BY team_id"
+    : "SELECT team_id FROM api_key_team_limits WHERE api_key_id = ?1 ORDER BY team_id";
+  const rows = workspaceId ? db.query(query).all(keyId, workspaceId) : db.query(query).all(keyId);
+  return rows.map((row) => (row as { team_id: string }).team_id);
 }
 
-export function mapApiKey(row: ApiKeyRow, db?: Database) {
+export function mapApiKey(row: ApiKeyRow, db?: Database, workspaceId?: string) {
   return {
     id: row.id,
     name: row.name,
@@ -134,7 +135,7 @@ export function mapApiKey(row: ApiKeyRow, db?: Database) {
     expiresAt: row.expires_at,
     rotatedFromId: row.rotated_from_id,
     scopes: db ? listApiKeyScopes(db, row.id) : [],
-    teamIds: db ? listApiKeyTeamIds(db, row.id) : [],
+    teamIds: db ? listApiKeyTeamIds(db, row.id, workspaceId) : [],
   };
 }
 
@@ -176,14 +177,32 @@ function normalizeApiKeyScopes(scopes: readonly string[] | null | undefined): Ap
   return API_KEY_SCOPES.filter((scope) => unique.includes(scope));
 }
 
+function resolveApiKeyWorkspace(db: Database, workspaceId?: string): string {
+  if (workspaceId) {
+    const workspace = db.query("SELECT id FROM workspace WHERE id = ?1").get(workspaceId);
+    if (!workspace) throw apiError("NOT_FOUND", `Workspace not found: ${workspaceId}`);
+    return workspaceId;
+  }
+  const workspaces = db.query("SELECT id FROM workspace ORDER BY created_at, id").all() as Array<{
+    id: string;
+  }>;
+  if (workspaces.length !== 1) {
+    throw apiError("VALIDATION_FAILED", "Workspace context is required");
+  }
+  return workspaces[0]!.id;
+}
+
 function normalizeApiKeyTeamIds(
   db: Database,
   teamIds: readonly string[] | null | undefined,
+  workspaceId: string,
 ): string[] {
   if (teamIds == null || teamIds.length === 0) return [];
   const unique = [...new Set(teamIds)];
   for (const teamId of unique) {
-    if (!db.query("SELECT id FROM teams WHERE id = ?1").get(teamId)) {
+    if (
+      !db.query("SELECT id FROM teams WHERE id = ?1 AND workspace_id = ?2").get(teamId, workspaceId)
+    ) {
       throw apiError("NOT_FOUND", `Team not found: ${teamId}`);
     }
   }
@@ -206,21 +225,34 @@ export function apiKeyMetadata(
     teamIds?: readonly string[] | null;
     expiresAt?: string | null;
   },
+  workspaceId?: string,
 ): { scopes: ApiKeyScope[]; teamIds: string[]; expiresAt: string | null } {
+  const resolvedWorkspaceId = resolveApiKeyWorkspace(db, workspaceId);
   return {
     scopes: normalizeApiKeyScopes(input.scopes),
-    teamIds: normalizeApiKeyTeamIds(db, input.teamIds),
+    teamIds: normalizeApiKeyTeamIds(db, input.teamIds, resolvedWorkspaceId),
     expiresAt: normalizeApiKeyExpiry(input.expiresAt),
   };
 }
 
-function insertApiKeyMetadata(db: Database, keyId: string, metadata: ApiKeyMetadata): void {
+function insertApiKeyMetadata(
+  db: Database,
+  keyId: string,
+  metadata: ApiKeyMetadata,
+  workspaceId: string,
+  createdAt: string,
+): void {
   const scopeInsert = db.query("INSERT INTO api_key_scopes (api_key_id, scope) VALUES (?1, ?2)");
   for (const scope of metadata.scopes) scopeInsert.run(keyId, scope);
   const teamInsert = db.query(
-    "INSERT INTO api_key_team_limits (api_key_id, team_id) VALUES (?1, ?2)",
+    "INSERT INTO api_key_team_limits (api_key_id, team_id, workspace_id) VALUES (?1, ?2, ?3)",
   );
-  for (const teamId of metadata.teamIds) teamInsert.run(keyId, teamId);
+  for (const teamId of metadata.teamIds) teamInsert.run(keyId, teamId, workspaceId);
+  db.query(
+    `INSERT OR IGNORE INTO api_key_workspaces
+     (api_key_id, workspace_id, is_default, created_at)
+     VALUES (?1, ?2, 1, ?3)`,
+  ).run(keyId, workspaceId, createdAt);
 }
 
 /** Crea una key para un actor. Devuelve la key en claro UNA sola vez. */
@@ -233,6 +265,7 @@ export function createApiKey(
     teamIds?: readonly string[] | null;
     expiresAt?: string | null;
     rotatedFromId?: string | null;
+    workspaceId?: string;
   },
 ): { row: ApiKeyRow; key: string } {
   const actor = getActor(db, input.actorId);
@@ -241,7 +274,8 @@ export function createApiKey(
     throw apiError("UNAUTHORIZED", "Only active actors can receive API keys");
   }
   if (!input.name.trim()) throw apiError("VALIDATION_FAILED", "API key name cannot be empty");
-  const metadata = apiKeyMetadata(db, input);
+  const workspaceId = resolveApiKeyWorkspace(db, input.workspaceId);
+  const metadata = apiKeyMetadata(db, input, workspaceId);
   const key = generateApiKey();
   const id = newId();
   const createdAt = now();
@@ -258,7 +292,7 @@ export function createApiKey(
       input.rotatedFromId ?? null,
       createdAt,
     );
-    insertApiKeyMetadata(db, id, metadata);
+    insertApiKeyMetadata(db, id, metadata, workspaceId, createdAt);
     row = db.query("SELECT * FROM api_keys WHERE id = ?1").get(id) as ApiKeyRow;
   })();
   return { row: row!, key };
@@ -273,16 +307,29 @@ export function rotateApiKey(
     scopes?: readonly string[] | null;
     teamIds?: readonly string[] | null;
     expiresAt?: string | null;
+    workspaceId?: string;
   },
 ): { row: ApiKeyRow; key: string } {
   const existing = getApiKey(db, id);
   if (!existing) throw apiError("NOT_FOUND", "API key not found");
   if (existing.revoked_at) throw apiError("VALIDATION_FAILED", "API key is already revoked");
-  const metadata = apiKeyMetadata(db, {
-    scopes: input.scopes === undefined ? listApiKeyScopes(db, id) : input.scopes,
-    teamIds: input.teamIds === undefined ? listApiKeyTeamIds(db, id) : input.teamIds,
-    expiresAt: input.expiresAt === undefined ? existing.expires_at : input.expiresAt,
-  });
+  const workspaceId = resolveApiKeyWorkspace(db, input.workspaceId);
+  if (
+    !db
+      .query("SELECT 1 FROM api_key_workspaces WHERE api_key_id = ?1 AND workspace_id = ?2")
+      .get(id, workspaceId)
+  ) {
+    throw apiError("NOT_FOUND", "API key is not available in this Workspace");
+  }
+  const metadata = apiKeyMetadata(
+    db,
+    {
+      scopes: input.scopes === undefined ? listApiKeyScopes(db, id) : input.scopes,
+      teamIds: input.teamIds === undefined ? listApiKeyTeamIds(db, id, workspaceId) : input.teamIds,
+      expiresAt: input.expiresAt === undefined ? existing.expires_at : input.expiresAt,
+    },
+    workspaceId,
+  );
   const key = generateApiKey();
   const replacementId = newId();
   const timestamp = now();
@@ -298,7 +345,7 @@ export function rotateApiKey(
       existing.id,
       timestamp,
     );
-    insertApiKeyMetadata(db, replacementId, metadata);
+    insertApiKeyMetadata(db, replacementId, metadata, workspaceId, timestamp);
     const revoked = db
       .query("UPDATE api_keys SET revoked_at = ?1 WHERE id = ?2 AND revoked_at IS NULL")
       .run(timestamp, id);
