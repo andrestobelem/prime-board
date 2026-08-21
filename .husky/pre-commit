@@ -1,3 +1,4 @@
 bunx lint-staged
 bun run typecheck
-bun test
+ROOT="$(git rev-parse --show-toplevel)"
+bun test "$ROOT/apps/cli/test/cli.test.ts" "$ROOT/apps/server" "$ROOT/apps/web" "$ROOT/apps/mcp" "$ROOT/packages" "$ROOT/scripts"
