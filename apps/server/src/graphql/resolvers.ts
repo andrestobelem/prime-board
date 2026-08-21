@@ -534,7 +534,9 @@ export const resolvers = {
       if (context.persistence) {
         return (await listPostgresApiKeys(context.persistence, actor.id)).map(mapPostgresApiKey);
       }
-      return listApiKeys(context.db, actor.id).map((row) => mapApiKey(row, context.db));
+      return listApiKeys(context.db, actor.id).map((row) =>
+        mapApiKey(row, context.db, context.workspace.workspaceId),
+      );
     },
   },
 
@@ -1002,7 +1004,9 @@ export const resolvers = {
             );
             return { success: true, team };
           }
-          const team = mapTeam(createTeam(context.db, args.input, viewer.id, context.workspace.workspaceId));
+          const team = mapTeam(
+            createTeam(context.db, args.input, viewer.id, context.workspace.workspaceId),
+          );
           return { success: true, team };
         },
         teamUpdate: async (
@@ -1271,10 +1275,18 @@ export const resolvers = {
             assertApiKeyScope(context, "admin");
             assertUnrestrictedApiKey(context);
           }
-          const metadata = apiKeyMetadata(context.db, args.input);
+          const metadata = apiKeyMetadata(context.db, args.input, context.workspace.workspaceId);
           assertChildApiKey(context, target, args.input, metadata);
-          const { row, key } = createApiKey(context.db, { ...args.input, ...metadata });
-          return { success: true, apiKey: mapApiKey(row, context.db), key };
+          const { row, key } = createApiKey(context.db, {
+            ...args.input,
+            ...metadata,
+            workspaceId: context.workspace.workspaceId,
+          });
+          return {
+            success: true,
+            apiKey: mapApiKey(row, context.db, context.workspace.workspaceId),
+            key,
+          };
         },
         apiKeyDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
@@ -1347,21 +1359,33 @@ export const resolvers = {
             assertUnrestrictedApiKey(context);
           }
           const target = requireActor(context, existing.actor_id);
-          const metadata = apiKeyMetadata(context.db, {
-            scopes:
-              args.input.scopes === undefined
-                ? listApiKeyScopes(context.db, args.id)
-                : args.input.scopes,
-            teamIds:
-              args.input.teamIds === undefined
-                ? listApiKeyTeamIds(context.db, args.id)
-                : args.input.teamIds,
-            expiresAt:
-              args.input.expiresAt === undefined ? existing.expires_at : args.input.expiresAt,
-          });
+          const metadata = apiKeyMetadata(
+            context.db,
+            {
+              scopes:
+                args.input.scopes === undefined
+                  ? listApiKeyScopes(context.db, args.id)
+                  : args.input.scopes,
+              teamIds:
+                args.input.teamIds === undefined
+                  ? listApiKeyTeamIds(context.db, args.id, context.workspace.workspaceId)
+                  : args.input.teamIds,
+              expiresAt:
+                args.input.expiresAt === undefined ? existing.expires_at : args.input.expiresAt,
+            },
+            context.workspace.workspaceId,
+          );
           assertChildApiKey(context, target, args.input, metadata);
-          const { row, key } = rotateApiKey(context.db, args.id, { ...args.input, ...metadata });
-          return { success: true, apiKey: mapApiKey(row, context.db), key };
+          const { row, key } = rotateApiKey(context.db, args.id, {
+            ...args.input,
+            ...metadata,
+            workspaceId: context.workspace.workspaceId,
+          });
+          return {
+            success: true,
+            apiKey: mapApiKey(row, context.db, context.workspace.workspaceId),
+            key,
+          };
         },
         webhookCreate: (
           _parent: unknown,
