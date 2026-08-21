@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hashApiKey } from "../auth/keys.ts";
 import { migrate, openDatabase } from "./database.ts";
-import { bootstrap } from "./seed.ts";
+import { bootstrap, seedWorkspace } from "./seed.ts";
 import migration0016 from "./migrations/0016_webhook_ownership.sql" with { type: "text" };
 
 const tempDirs: string[] = [];
@@ -82,6 +82,7 @@ describe("openDatabase", () => {
       "favorites",
       "actor_invitations",
       "workspace_memberships",
+      "api_key_workspaces",
     ]) {
       expect(tables).toContain(table);
     }
@@ -128,6 +129,7 @@ describe("bootstrap", () => {
     ]);
     const storedKey = db.query("SELECT hash FROM api_keys").get() as { hash: string };
     expect(storedKey.hash).toBe(hashApiKey(result.adminApiKey!));
+    expect(db.query("SELECT is_default FROM api_key_workspaces").get()).toEqual({ is_default: 1 });
     db.close();
   });
 
@@ -374,7 +376,7 @@ describe("multi-workspace root migration", () => {
     });
     expect(membership.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 24 });
+    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 25 });
 
     migrate(db);
     expect(db.query("SELECT count(*) AS count FROM workspace_memberships").get()).toEqual({
@@ -403,6 +405,115 @@ describe("multi-workspace root migration", () => {
         (row) => row.name === "workspace_id",
       ),
     ).toBe(false);
+    db.close();
+  });
+});
+
+describe("API key Workspace grants and Workspace seed", () => {
+  it("backfillea grants, límites e invitaciones sin cambiar hashes", () => {
+    const db = legacyDatabase();
+    const timestamp = "2026-01-02T03:04:05.000Z";
+    db.query(
+      "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES ('workspace-legacy', 'Legacy', 'legacy', ?1, ?1)",
+    ).run(timestamp);
+    db.query(
+      `INSERT INTO actors
+       (id, name, type, workspace_role, status, created_at, updated_at)
+       VALUES ('actor-legacy', 'legacy-admin', 'agent', 'admin', 'active', ?1, ?1)`,
+    ).run(timestamp);
+    db.query(
+      "INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES ('key-legacy', 'actor-legacy', 'Legacy key', 'legacy-hash', ?1)",
+    ).run(timestamp);
+    db.query(
+      "INSERT INTO teams (id, name, key, description, created_at, updated_at) VALUES ('team-legacy', 'Legacy', 'LEG', NULL, ?1, ?1)",
+    ).run(timestamp);
+    db.query(
+      "INSERT INTO api_key_team_limits (api_key_id, team_id) VALUES ('key-legacy', 'team-legacy')",
+    ).run();
+    db.query(
+      `INSERT INTO actor_invitations
+       (id, email, name, type, token_hash, status, invited_by, metadata_json, created_at, expires_at)
+       VALUES ('invitation-legacy', 'legacy@example.test', 'Legacy', 'agent', 'invitation-hash', 'pending', 'actor-legacy', '{}', ?1, '2027-01-01')`,
+    ).run(timestamp);
+
+    migrate(db);
+    expect(db.query("SELECT workspace_id FROM api_key_workspaces").get()).toEqual({
+      workspace_id: "workspace-legacy",
+    });
+    expect(db.query("SELECT is_default FROM api_key_workspaces").get()).toEqual({ is_default: 1 });
+    expect(db.query("SELECT workspace_id FROM api_key_team_limits").get()).toEqual({
+      workspace_id: "workspace-legacy",
+    });
+    expect(db.query("SELECT workspace_id FROM actor_invitations").get()).toEqual({
+      workspace_id: "workspace-legacy",
+    });
+    expect(db.query("SELECT hash FROM api_keys").get()).toEqual({ hash: "legacy-hash" });
+    migrate(db);
+    expect(db.query("SELECT count(*) AS count FROM api_key_workspaces").get()).toEqual({
+      count: 1,
+    });
+    expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    db.close();
+  });
+
+  it("siembra un Workspace adicional sin duplicar recursos del primero", () => {
+    const db = openDatabase(tempDbPath());
+    const first = bootstrap(db);
+    const firstWorkspace = db.query("SELECT id FROM workspace").get() as { id: string };
+    const firstTeam = db.query("SELECT id FROM teams").get() as { id: string };
+    const firstActor = db.query("SELECT id FROM actors").get() as { id: string };
+    const firstKeyCount = (
+      db.query("SELECT count(*) AS count FROM api_keys").get() as { count: number }
+    ).count;
+
+    const second = seedWorkspace(db, {
+      name: "Second Workspace",
+      urlKey: "second-workspace",
+      adminActorId: firstActor.id,
+      teamKey: "SEC",
+    });
+    expect(second.created).toBe(true);
+    expect(second.workspaceId).not.toBe(firstWorkspace.id);
+    expect(db.query("SELECT count(*) AS count FROM workspace").get()).toEqual({ count: 2 });
+    expect(
+      db
+        .query("SELECT count(*) AS count FROM teams WHERE workspace_id = ?1")
+        .get(firstWorkspace.id),
+    ).toEqual({ count: 1 });
+    expect(
+      db
+        .query("SELECT count(*) AS count FROM teams WHERE workspace_id = ?1")
+        .get(second.workspaceId),
+    ).toEqual({ count: 1 });
+    expect(
+      db
+        .query("SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1")
+        .get(firstTeam.id),
+    ).toEqual({ count: 5 });
+    expect(
+      db
+        .query("SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1")
+        .get(second.teamId),
+    ).toEqual({ count: 5 });
+    expect(db.query("SELECT count(*) AS count FROM api_keys").get()).toEqual({
+      count: firstKeyCount,
+    });
+    expect(
+      db
+        .query("SELECT count(*) AS count FROM api_key_workspaces WHERE workspace_id = ?1")
+        .get(second.workspaceId),
+    ).toEqual({ count: 1 });
+
+    const repeat = seedWorkspace(db, {
+      name: "Changed name is ignored",
+      urlKey: "second-workspace",
+      adminActorId: firstActor.id,
+      teamKey: "SEC",
+    });
+    expect(repeat.created).toBe(false);
+    expect(db.query("SELECT count(*) AS count FROM workspace").get()).toEqual({ count: 2 });
+    expect(db.query("SELECT count(*) AS count FROM teams").get()).toEqual({ count: 2 });
+    expect(first.created).toBe(true);
     db.close();
   });
 });

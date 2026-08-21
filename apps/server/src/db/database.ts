@@ -26,6 +26,7 @@ import migration0021 from "./migrations/0021_api_key_team_limits_restrict.sql" w
 import migration0022 from "./migrations/0022_team_visibility.sql" with { type: "text" };
 import migration0023 from "./migrations/0023_webhook_team_scope.sql" with { type: "text" };
 import migration0024 from "./migrations/0024_workspace_roots.sql" with { type: "text" };
+import migration0025 from "./migrations/0025_api_key_workspaces.sql" with { type: "text" };
 import { newId, now } from "./util.ts";
 
 interface Migration {
@@ -59,6 +60,7 @@ const MIGRATIONS: Migration[] = [
   { version: 22, name: "team_visibility", sql: migration0022 },
   { version: 23, name: "webhook_team_scope", sql: migration0023 },
   { version: 24, name: "workspace_roots", sql: migration0024 },
+  { version: 25, name: "api_key_workspaces", sql: migration0025 },
 ];
 
 const WORKSPACE_ROOT_TABLES = [
@@ -149,6 +151,41 @@ function validateWorkspaceMigration(db: Database, phase: "before" | "after"): vo
   }
 }
 
+function validateApiKeyWorkspaceMigration(db: Database, phase: "before" | "after"): void {
+  const workspaceCount = countRows(db, "workspace");
+  if (phase === "before") {
+    // api_key_team_limits receives workspace_id in this migration, so its
+    // preflight can only reject an ambiguous multi-Workspace database after
+    // the ALTER TABLE has run.
+    return;
+  }
+  const unscopedLimit = db
+    .query("SELECT count(*) AS count FROM api_key_team_limits WHERE workspace_id IS NULL")
+    .get() as { count: number };
+  if (workspaceCount > 1 && unscopedLimit.count > 0) {
+    throw new Error("API key team limits cannot be backfilled with multiple Workspaces");
+  }
+  if (phase === "after") {
+    if (workspaceCount === 1 && unscopedLimit.count > 0) {
+      throw new Error("API key team limits remain outside the Workspace");
+    }
+    if (workspaceCount === 1) {
+      const missingGrant = db
+        .query(
+          "SELECT count(*) AS count FROM api_keys WHERE NOT EXISTS (SELECT 1 FROM api_key_workspaces WHERE api_key_id = api_keys.id)",
+        )
+        .get() as { count: number };
+      if (missingGrant.count > 0) {
+        throw new Error("API key Workspace grant backfill is incomplete");
+      }
+    }
+  }
+  const foreignKeyViolations = db.query("PRAGMA foreign_key_check").all();
+  if (foreignKeyViolations.length > 0) {
+    throw new Error("API key Workspace migration produced foreign-key violations");
+  }
+}
+
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {
     mkdirSync(dirname(path), { recursive: true });
@@ -174,11 +211,13 @@ export function migrate(db: Database): void {
     if (applied.has(migration.version)) continue;
     db.transaction(() => {
       if (migration.version === 24) validateWorkspaceMigration(db, "before");
+      if (migration.version === 25) validateApiKeyWorkspaceMigration(db, "before");
       db.exec(migration.sql);
       if (migration.version === 24) {
         normalizeBackfilledMembershipIds(db);
         validateWorkspaceMigration(db, "after");
       }
+      if (migration.version === 25) validateApiKeyWorkspaceMigration(db, "after");
       db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
         migration.version,
         migration.name,
