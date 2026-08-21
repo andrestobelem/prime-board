@@ -5,15 +5,15 @@
 
 ## Conclusión ejecutiva
 
-Sí, es viable, pero **no como un plugin binario único**: el mecanismo oficial de Prime Agent es un **Prime Agent package** distribuible por npm, Git o ruta local. Ese paquete puede contener una extensión TypeScript, skills Markdown/Python, prompts y themes.
+La integración es viable, pero **no como un plugin binario único**. Prime Agent distribuye **Prime Agent packages** por npm, Git o una ruta local. El package puede contener una extensión TypeScript, skills Markdown/Python, prompts y themes.
 
-Para prime-board recomiendo separar tres capas:
+Para prime-board, separa tres capas:
 
 1. **Package de Prime Agent (`@prime-board/agent`)**: extensión que descubre el repositorio, levanta o verifica el runtime local, registra comandos/tools de control y carga la skill de workflow.
 2. **Runtime distribuible de prime-board**: servidor GraphQL + web estática + SQLite + migraciones. Debe distribuirse como fuente ejecutable con Bun o, preferentemente, como binario standalone por plataforma.
 3. **Adaptador de capacidades**: mantener GraphQL como autoridad y exponer MCP HTTP o tools finas de la extensión. El MCP actual de prime-board es stdio, que no encaja directamente con la integración MCP de Prime Agent.
 
-La primera versión no debe activar multi-Workspace: debe conservar una instancia por repositorio, una DB aislada y la réplica `.prime-board/` existente.
+La primera versión debe mantener desactivado multi-Workspace. Conserva una instancia por repositorio, una DB aislada y la réplica `.prime-board/` existente.
 
 ## Qué soporta oficialmente Prime Agent
 
@@ -28,7 +28,7 @@ La instalación local documenta estos puntos de extensión:
 | **Package**              | Transporte npm/Git/local de extensiones, skills, prompts y themes               | **Sí**: es la unidad oficial de distribución.                                                         |
 | **SDK/RPC/ACP**          | Integrar Prime Agent como aplicación o proceso externo                          | No es el formato de recursos que necesitamos para instalar prime-board.                               |
 
-No existe un contrato separado llamado `plugin`, ni un cargador de plugins nativos/binarios. La extensión TypeScript es el equivalente más cercano a un plugin in-process.
+Prime Agent no define un contrato separado llamado `plugin` ni carga plugins nativos o binarios. La extensión TypeScript es el equivalente más cercano a un plugin in-process.
 
 ### Manifest mínimo del package
 
@@ -59,7 +59,7 @@ prime-agent package install git:github.com/andrestobelem/prime-board@vX --local
 prime-agent package install ./prime-board-agent --local
 ```
 
-`--local` escribe `.prime/agent/settings.json`, que puede versionarse; el paquete no debería escribir secretos ni `mcpServers` dentro de su manifest.
+`--local` escribe `.prime/agent/settings.json`, que puede versionarse. El package no debe escribir secretos ni `mcpServers` en su manifest.
 
 ## Inventario verificable de prime-board
 
@@ -77,7 +77,7 @@ prime-agent package install ./prime-board-agent --local
 | Configuración de clientes                   | `PRIME_BOARD_URL`, `PRIME_BOARD_API_KEY`, `PRIME_BOARD_PROFILE` | Resolver por proceso y nunca persistir en settings de Prime Agent como texto plano.              |
 | Skills del proyecto                         | `.agents/skills/prime-board-workflow`                           | Reempaquetar o enlazar como `skills/prime-board-workflow`.                                       |
 
-El servidor importa las 23 migraciones SQL como texto en tiempo de build, lo que favorece un binario compilado. La web, en cambio, se resuelve mediante `PRIME_BOARD_WEB_DIST`/`apps/web/dist` y necesita un tratamiento explícito para assets empaquetados.
+El server importa las 23 migraciones SQL como texto durante el build, lo que favorece un binario compilado. La web se resuelve mediante `PRIME_BOARD_WEB_DIST`/`apps/web/dist`; el package debe tratar de forma explícita los assets empaquetados.
 
 ## Arquitectura recomendada
 
@@ -122,7 +122,7 @@ Auth:     ~/.prime-board/credentials/<project-hash>.json (0600)
 3. Añadir una skill Python con `McpIntegration` y `server = "prime-board"`.
 4. La extensión arranca el server y configura/descubre URL y credencial; la skill enumera tools con `list_tools()`.
 
-Ventajas: conserva la cobertura del MCP existente, evita duplicar cada resolver en TypeScript y sigue el patrón de Linear/Notion de Prime Agent. Requiere cambiar el transporte actual y diseñar bien sesiones, auth y lifecycle.
+Esta opción conserva la cobertura del MCP existente, evita duplicar resolvers en TypeScript y sigue el patrón de Linear/Notion de Prime Agent. Requiere cambiar el transporte actual y diseñar sesiones, auth y lifecycle.
 
 **Alternativa de prototipo: tools TypeScript directas.**
 
@@ -166,11 +166,11 @@ Ventaja: Prime Agent solo necesita ejecutar un binario. Desventajas: artefactos 
 
 ### C. Servicio remoto/hosted
 
-No lo recomiendo para este objetivo: cambia local-first, añade auth/operación y no resuelve la réplica Git por proyecto. Además queda fuera del alcance de la decisión multi-Workspace vigente.
+No uses esta opción para este objetivo: cambia local-first, añade auth/operación y no resuelve la réplica Git por proyecto. También queda fuera de la decisión multi-Workspace vigente.
 
 ## Seguridad y datos
 
-- Los packages y extensiones de Prime Agent ejecutan código con permisos del sistema; instalar un package equivale a confiar en él.
+- Los packages y extensiones de Prime Agent ejecutan código con permisos del sistema. Instalar un package equivale a confiar en él.
 - El server local debe bindear explícitamente a `127.0.0.1` y exigir bearer en GraphQL/MCP; solo `/health` puede ser anónimo.
 - API keys y secrets de Webhooks deben vivir fuera del package y de `.prime-board/`, con permisos `0600`.
 - El path del repositorio puede contener espacios o caracteres especiales: usar `spawn(command, argv, { cwd, env })`, nunca `sh -c`.
@@ -258,4 +258,4 @@ No lo recomiendo para este objetivo: cambia local-first, añade auth/operación 
 
 ## Regla de actualización
 
-Actualizar este documento si cambia la API de packages/extensions/MCP de Prime Agent, si prime-board publica un runtime instalable o si se decide el mecanismo HTTP/stdio. No tratar la extensión como frontera de seguridad ni habilitar multi-Workspace por el mero hecho de empaquetar el runtime.
+Actualiza este documento si cambia la API de packages/extensions/MCP de Prime Agent, si prime-board publica un runtime instalable o si se decide el mecanismo HTTP/stdio. La extensión no es una frontera de seguridad. Empaquetar el runtime tampoco habilita multi-Workspace.

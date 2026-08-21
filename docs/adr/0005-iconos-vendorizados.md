@@ -1,13 +1,7 @@
-# Los íconos de la UI se vendorizan, no se instalan como dependencia
+# La UI incluye sus íconos; no instala una dependencia
 
-`apps/web/src/components/icons.tsx` tiene los paths SVG inline, copiados de Lucide (ISC) y
-con su atribución en el encabezado, en vez de depender de `lucide-react`.
+`apps/web/src/components/icons.tsx` contiene los paths SVG inline copiados de Lucide (ISC), con la atribución en el encabezado. La UI no depende de `lucide-react`.
 
-Se midió: los íconos que la UI usa pesan **1,9 KB gzip** vendorizados contra 3,2 KB del
-paquete más ~40 MB en `node_modules`. Y hay tres íconos que Lucide no tiene con el lenguaje
-visual de Linear —`in-progress` (círculo con sector tipo torta), `no-priority` (tres guiones)
-y `urgent` (cuadrado redondeado con `!`)— que están dibujados a mano sobre el mismo grid de
-24×24: con la librería quedarían como un caso aparte, vendorizados conviven sin costura.
+Medimos el peso de los íconos que usa la UI: **1,9 KB gzip** cuando están incluidos en el proyecto, frente a 3,2 KB del paquete y unos 40 MB en `node_modules`. Además, Lucide no ofrece tres íconos con el lenguaje visual de Linear: `in-progress` (círculo con sector), `no-priority` (tres guiones) y `urgent` (cuadrado redondeado con `!`). Los tres usan el mismo grid de 24×24 y conviven con los paths copiados.
 
-Esto es una desviación deliberada del camino obvio: **no "arreglar" esto instalando
-`lucide-react`**. El costo aceptado es que actualizar un ícono es copiar un path a mano.
+Esta es una desviación deliberada: **no instales `lucide-react` para corregirla**. El costo aceptado es copiar a mano un path cuando se actualiza un ícono.

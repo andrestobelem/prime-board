@@ -6,13 +6,9 @@
 
 ## Resumen ejecutivo
 
-La migración es viable, pero no es un cambio de imagen de contenedor ni un reemplazo
-mecánico del archivo `.db`. El servidor depende de `bun:sqlite` y de su API síncrona en
-la capa de dominio; PostgreSQL exige un cliente de red asíncrono, un pool y transacciones
-que conserven la misma conexión. El trabajo debe tratarse como una migración de la capa
-de persistencia y como un cutover con downtime planificado.
+La migración es viable, pero no consiste en cambiar la imagen del contenedor ni en reemplazar mecánicamente el archivo `.db`. El server depende de `bun:sqlite` y de su API síncrona en la capa de dominio. PostgreSQL exige un cliente de red asíncrono, un pool y transacciones que conserven la misma conexión. Trata el trabajo como una migración de persistencia y como un cutover con downtime planificado.
 
-La recomendación para una primera implementación es:
+Para la primera implementación, recomendamos:
 
 1. Ejecutar PostgreSQL en un contenedor Podman con un volumen nombrado y healthcheck.
 2. Usar `Bun.SQL` como cliente PostgreSQL, detrás de una interfaz propia de persistencia;
@@ -31,14 +27,9 @@ Este documento no reemplaza esa decisión ni autoriza todavía el cambio de runt
 
 ## Alcance y método
 
-Se revisaron el código de `apps/server`, las 23 migraciones SQL presentes en el árbol de
-trabajo, los tests de persistencia/exportación y la documentación del modelo. También se
-consultaron fuentes primarias oficiales de Bun, PostgreSQL, Podman, la imagen oficial de
-PostgreSQL y SQLite. Las URLs y la fecha de consulta están en [Fuentes](#fuentes).
+Revisamos el código de `apps/server`, las 23 migraciones SQL del árbol de trabajo, los tests de persistencia/exportación y la documentación del modelo. También consultamos fuentes primarias oficiales de Bun, PostgreSQL, Podman, la imagen oficial de PostgreSQL y SQLite. Las URLs y la fecha de consulta aparecen en [Fuentes](#fuentes).
 
-No se implementó el driver, no se levantó un PostgreSQL de producción, no se ejecutó un
-cutover y no se modificaron las migraciones actuales. El inventario refleja el árbol
-revisado el 2026-08-19; debe repetirse antes de empezar la implementación.
+No implementamos el driver, no levantamos un PostgreSQL de producción, no ejecutamos un cutover ni modificamos las migraciones actuales. El inventario refleja el árbol revisado el 2026-08-19. Repítelo antes de comenzar la implementación.
 
 ## 1. Estado actual verificado
 
@@ -144,8 +135,7 @@ El inventario de incompatibilidades conocidas incluye:
 | `ALTER TABLE` incremental SQLite                         | Crear DDL PostgreSQL propio. No ejecutar literalmente los 23 archivos porque contienen FTS5, `rowid`, `typeof` y semántica de tipos SQLite.                    |
 | `                                                        |                                                                                                                                                                | `, `lower`, `coalesce`, FKs, `CHECK` | Son generalmente portables, pero deben pasar por la suite PostgreSQL, especialmente nullability, collation y cascadas. |
 
-No hay que asumir que una query válida en SQLite conserva la misma concurrencia en
-PostgreSQL. La numeración de issues, aceptación de invitaciones, rotación de keys y
+No asumas que una query válida en SQLite conserva la misma concurrencia en PostgreSQL. La numeración de issues, aceptación de invitaciones, rotación de keys y
 cualquier operación read-modify-write deben quedar en una transacción y probarse con
 requests concurrentes.
 
@@ -155,8 +145,7 @@ Los tests actuales exigen, entre otras cosas, prefijos (`webhook` encuentra `web
 frases exactas entre comillas, insensibilidad a mayúsculas y acentos, caracteres
 especiales seguros y entradas FTS malformadas sin filtrar un error interno.
 
-El reemplazo propuesto es una columna `tsvector` derivada de título y descripción, un
-índice GIN y consultas `@@` con configuración `simple`. Hay que decidir y probar uno de
+El reemplazo propuesto usa una columna `tsvector` derivada de título y descripción, un índice GIN y consultas `@@` con configuración `simple`. Hay que decidir y probar uno de
 estos mecanismos para acentos:
 
 - extensión oficial `unaccent` en la base y una expresión/trigger de normalización;
@@ -554,7 +543,7 @@ commiteado: deja la proyección atrasada y debe ser visible como lag, no como un
 
 ### Qué significa “CDC” aquí
 
-No se usará el WAL de PostgreSQL como CDC canónico. El WAL puede servir para recuperación del
+El WAL de PostgreSQL no funcionará como CDC canónico. El WAL puede servir para recuperación del
 motor, pero capturarlo para producir Markdown invertiría la autoridad: primero existiría un
 cambio en la DB y después una réplica eventual en Git. El mecanismo de cambio de dominio será el
 Log versionado del repo. `Activity` pasa a ser una proyección legible del evento; no es el evento
@@ -592,6 +581,4 @@ rotarlos.
 - La suite debe probar replay determinista, idempotencia, merge union, conflicto del mismo campo,
   corrupción/truncado de Log y recuperación desde checkpoint.
 
-Esta decisión reemplaza el camino de carga directa recomendado en el cuerpo anterior de esta
-investigación para la arquitectura objetivo; la carga directa solo queda como herramienta de
-comparación/backup durante el cutover, no como autoridad final.
+Esta decisión reemplaza el camino de carga directa que recomendaba el cuerpo anterior para la arquitectura objetivo. La carga directa queda como herramienta de comparación o backup durante el cutover, no como autoridad final.

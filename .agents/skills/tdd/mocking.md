@@ -1,13 +1,13 @@
 # When to Mock
 
-Mock at **system boundaries** only:
+Mock only at **system boundaries**:
 
 - External APIs (payment, email, etc.)
-- Databases (sometimes - prefer test DB)
+- Databases (sometimes; prefer a test DB)
 - Time/randomness
 - File system (sometimes)
 
-Don't mock:
+Do not mock:
 
 - Your own classes/modules
 - Internal collaborators
@@ -52,8 +52,8 @@ const api = {
 };
 ```
 
-The SDK approach means:
-- Each mock returns one specific shape
+The SDK approach provides:
+- One specific shape from each mock
 - No conditional logic in test setup
-- Easier to see which endpoints a test exercises
-- Type safety per endpoint
+- Clear visibility into the endpoints a test exercises
+- Type safety for each endpoint

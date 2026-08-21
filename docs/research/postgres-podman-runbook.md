@@ -6,17 +6,13 @@
 
 ## Arranque
 
-El comando versionado crea una red y un volumen nombrados, guarda la contraseña en
-un secreto de Podman y arranca PostgreSQL solo en loopback:
+El comando versionado crea una red y un volumen con nombre, guarda la contraseña en un secreto de Podman e inicia PostgreSQL solo en loopback:
 
 ```bash
 scripts/postgres-dev.sh up
 ```
 
-La primera ejecución solicita la contraseña sin mostrarla. En automatización se
-puede proporcionar `PB_PG_PASSWORD` por un canal de secretos del runner; nunca se
-pasa como argumento ni se escribe en el repositorio. Los nombres y el puerto se
-pueden aislar por entorno:
+La primera ejecución solicita la contraseña sin mostrarla. En automatización, proporciona `PB_PG_PASSWORD` mediante un canal de secretos del runner. Nunca la pases como argumento ni la escribas en el repositorio. Aísla los nombres y el puerto por entorno:
 
 ```bash
 PB_PG_CONTAINER=prime-board-postgres \
@@ -27,10 +23,7 @@ PB_PG_PORT=5432 \
 scripts/postgres-dev.sh up
 ```
 
-La aplicación en el host usa `127.0.0.1:${PB_PG_PORT}`. Un contenedor conectado a
-`PB_PG_NETWORK` usa `PB_PG_CONTAINER:5432`; no se publica PostgreSQL en interfaces
-externas. El healthcheck usa `pg_isready` y el script espera readiness antes de
-terminar.
+La aplicación en el host usa `127.0.0.1:${PB_PG_PORT}`. Un contenedor conectado a `PB_PG_NETWORK` usa `PB_PG_CONTAINER:5432`. El script no publica PostgreSQL en interfaces externas. Usa `pg_isready` como healthcheck y espera readiness antes de terminar.
 
 ## Verificación y ciclo de vida
 
@@ -40,10 +33,7 @@ scripts/postgres-dev.sh check
 scripts/postgres-dev.sh down
 ```
 
-`check` ejecuta una consulta real con el rol configurado. `down` conserva el
-volumen y el secreto para que el siguiente `up` mantenga los datos. Para borrar
-los recursos se requiere una operación explícita de Podman y un backup verificado
-previamente; el script no ejecuta esa destrucción accidentalmente.
+`check` ejecuta una query real con el rol configurado. `down` conserva el volumen y el secreto para que el siguiente `up` mantenga los datos. Para borrar recursos, ejecuta una operación explícita de Podman y verifica antes un backup. El script no destruye recursos por accidente.
 
 ## Backup y restore
 
@@ -56,13 +46,11 @@ PB_PG_BACKUP="$PWD/.scratch/prime-board.dump" scripts/postgres-dev.sh restore
 PB_PG_BACKUP="$PWD/.scratch/prime-board.dump" scripts/postgres-dev.sh check
 ```
 
-El directorio `.scratch/` debe permanecer fuera de git. `restore` usa el rol local
-`postgres` del contenedor para ejecutar `pg_restore`, pero conecta al nombre de la
-base configurada; no necesita imprimir ni transportar la contraseña.
+Mantén el directorio `.scratch/` fuera de Git. `restore` usa el rol local `postgres` del contenedor para ejecutar `pg_restore` y conecta al nombre de la base configurada. No necesita imprimir ni transportar la contraseña.
 
 ## Validación ejecutada
 
-Se probó el flujo completo con nombres, puerto, secreto, volumen y red efímeros:
+El equipo probó el flujo completo con nombres, puerto, secreto, volumen y red efímeros:
 
 1. `up` creó los recursos y esperó `pg_isready`.
 2. `status` mostró el contenedor `running` con imagen major `17`.
@@ -71,4 +59,4 @@ Se probó el flujo completo con nombres, puerto, secreto, volumen y red efímero
 5. `check` volvió a pasar y se eliminaron contenedor, red, volumen, secreto y
    máquina Podman de la validación.
 
-No se versionan dumps, URLs ni credenciales.
+El repositorio no versiona dumps, URLs ni credenciales.

@@ -5,7 +5,7 @@ description: Set up Husky pre-commit hooks with lint-staged (Prettier), type che
 
 # Setup Pre-Commit Hooks
 
-## What This Sets Up
+## What this skill sets up
 
 - **Husky** pre-commit hook
 - **lint-staged** running Prettier on all staged files
@@ -16,11 +16,11 @@ description: Set up Husky pre-commit hooks with lint-staged (Prettier), type che
 
 ### 1. Detect package manager
 
-Check for `package-lock.json` (npm), `pnpm-lock.yaml` (pnpm), `yarn.lock` (yarn), `bun.lockb` (bun). Use whichever is present. Default to npm if unclear.
+Check for `package-lock.json` (npm), `pnpm-lock.yaml` (pnpm), `yarn.lock` (yarn), or `bun.lockb` (bun). Use the detected package manager. If detection is unclear, use npm.
 
 ### 2. Install dependencies
 
-Install as devDependencies:
+Add these packages as development dependencies:
 
 ```
 husky lint-staged prettier
@@ -44,7 +44,7 @@ npm run typecheck
 npm run test
 ```
 
-**Adapt**: Replace `npm` with detected package manager. If repo has no `typecheck` or `test` script in package.json, omit those lines and tell the user.
+**Adapt**: Replace `npm` with the detected package manager. If the repository has no `typecheck` or `test` script in package.json, omit those lines and tell the user.
 
 ### 5. Create `.lintstagedrc`
 
@@ -56,7 +56,7 @@ npm run test
 
 ### 6. Create `.prettierrc` (if missing)
 
-Only create if no Prettier config exists. Use these defaults:
+Create this file only when no Prettier config exists. Use these defaults:
 
 ```json
 {
@@ -86,6 +86,6 @@ This will run through the new pre-commit hooks — a good smoke test that everyt
 
 ## Notes
 
-- Husky v9+ doesn't need shebangs in hook files
-- `prettier --ignore-unknown` skips files Prettier can't parse (images, etc.)
-- The pre-commit runs lint-staged first (fast, staged-only), then full typecheck and tests
+- Husky v9+ does not need shebangs in hook files.
+- `prettier --ignore-unknown` skips files that Prettier cannot parse, such as images.
+- The pre-commit hook runs lint-staged first (fast and staged-only), then full typecheck and tests.

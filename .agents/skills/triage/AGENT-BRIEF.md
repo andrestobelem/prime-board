@@ -1,24 +1,24 @@
 # Writing Agent Briefs
 
-An agent brief is a structured comment posted on a GitHub issue or PR when it moves to `ready-for-agent`. It is the authoritative specification that an AFK agent will work from. The original body and discussion are context — the agent brief is the contract.
+An agent brief is a structured comment on a GitHub issue or PR when it moves to `ready-for-agent`. It is the authoritative specification for an AFK agent. The original body and discussion provide context. The agent brief is the contract.
 
-The brief states **what the agent should do**, which stretches to both surfaces: for an issue, that's building the change from nothing; for a PR, it's what's left to do *to the existing diff* — finish it, close gaps, address review points. Same principles either way; the PR example below shows the difference.
+The brief states **what the agent should do**. For an issue, this means building the change. For a PR, this means completing the existing diff, closing gaps, and addressing review points. The principles are the same. The PR example below shows the difference.
 
 ## Principles
 
 ### Durability over precision
 
-The issue may sit in `ready-for-agent` for days or weeks. The codebase will change in the meantime. Write the brief so it stays useful even as files are renamed, moved, or refactored.
+An issue may remain in `ready-for-agent` for days or weeks while the codebase changes. Write the brief so it remains useful after files are renamed, moved, or refactored.
 
-- **Do** describe interfaces, types, and behavioral contracts
-- **Do** name specific types, function signatures, or config shapes that the agent should look for or modify
-- **Don't** reference file paths — they go stale
-- **Don't** reference line numbers
-- **Don't** assume the current implementation structure will remain the same
+- **Describe** interfaces, types, and behavioral contracts.
+- **Name** specific types, function signatures, or config shapes that the agent must find or modify.
+- **Do not reference** file paths. They can become stale.
+- **Do not reference** line numbers.
+- **Do not assume** that the current implementation structure will remain.
 
 ### Behavioral, not procedural
 
-Describe **what** the system should do, not **how** to implement it. The agent will explore the codebase fresh and make its own implementation decisions.
+Describe **what** the system must do, not **how** to implement it. The agent will explore the current codebase and choose the implementation.
 
 - **Good:** "The `SkillConfig` type should accept an optional `schedule` field of type `CronExpression`"
 - **Bad:** "Open src/types/skill.ts and add a schedule field on line 42"
@@ -27,14 +27,14 @@ Describe **what** the system should do, not **how** to implement it. The agent w
 
 ### Complete acceptance criteria
 
-The agent needs to know when it's done. Every agent brief must have concrete, testable acceptance criteria. Each criterion should be independently verifiable.
+The agent must know when the work is complete. Every agent brief must include concrete, testable acceptance criteria. Verify each criterion independently.
 
 - **Good:** "Running `gh issue list --label needs-triage` returns issues that have been through initial classification"
 - **Bad:** "Triage should work correctly"
 
 ### Explicit scope boundaries
 
-State what is out of scope. This prevents the agent from gold-plating or making assumptions about adjacent features.
+State what is out of scope. This prevents extra work and assumptions about adjacent features.
 
 ## Template
 
@@ -199,9 +199,9 @@ The function around line 150 has the issue.
 ```
 
 This is bad because:
-- No category
-- Vague description ("the triage thing is broken")
-- References file paths and line numbers that will go stale
-- No acceptance criteria
-- No scope boundaries
-- No description of current vs desired behavior
+- It has no category.
+- It has a vague description ("the triage thing is broken").
+- It references file paths and line numbers that can become stale.
+- It has no acceptance criteria.
+- It has no scope boundaries.
+- It does not describe current and desired behavior.

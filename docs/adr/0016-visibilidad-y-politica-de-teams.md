@@ -7,13 +7,13 @@
 
 Cada Team conserva dos dimensiones independientes:
 
-- `visibility` (`public`/`private`) controla descubrimiento y lectura. Un Team público es legible por actores activos del Workspace; uno privado sólo es legible por sus miembros y admins.
-- `accessPolicy` (`workspace_members`/`team_members`) controla escrituras y asignaciones. La primera permite operar sobre Teams públicos a miembros activos del Workspace; la segunda exige membership activa. Un Team privado siempre usa `team_members`.
+- `visibility` (`public`/`private`) controla el descubrimiento y la lectura. Los Actors activos del Workspace pueden leer un Team público. Solo sus members y admins pueden leer un Team privado.
+- `accessPolicy` (`workspace_members`/`team_members`) controla escrituras y asignaciones. La primera permite operar sobre Teams públicos a los Actors activos del Workspace; la segunda exige Membership activa. Un Team privado siempre usa `team_members`.
 
-Los roles de Workspace, memberships, ownership y límites de API keys siguen siendo capas independientes: una key nunca agrega permisos. Las memberships de actores suspendidos o retirados no cuentan como activas.
+Workspace Roles, Memberships, ownership y límites de API keys siguen siendo capas independientes. Una key nunca agrega permisos. Las Memberships de Actors suspendidos o retirados no cuentan como activas.
 
-Los proyectos multi-Team requieren acceso a todos sus Teams. Webhooks se asocian opcionalmente a un Team y, aun sin asociación, sólo se entregan si el owner puede leer todos los Teams del evento. Las iniciativas, reviews y vistas guardadas con scope Team conservan además sus controles de membership existentes. No se exportan secretos.
+Los Projects multi-Team requieren acceso a todos sus Teams. Un Webhook puede asociarse a un Team. Incluso sin asociación, el sistema lo entrega solo si el owner puede leer todos los Teams del evento. Initiatives, Reviews y Saved Views con Team Scope conservan sus controles de Membership. El sistema no exporta secretos.
 
 ## Compatibilidad
 
-La migración usa `public` y `team_members` como defaults para conservar el comportamiento previo de lectura pública y escritura restringida a miembros. Los exports legacy sin estos campos usan esos mismos defaults; los exports nuevos preservan ambos valores.
+La migración usa `public` y `team_members` como defaults. Así conserva la lectura pública y la escritura restringida a members. Los exports legacy sin estos campos usan los mismos defaults. Los exports nuevos preservan ambos valores.

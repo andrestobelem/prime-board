@@ -6,19 +6,19 @@
 
 ## Método y fuentes
 
-Se comparó la introspección del SDL de `packages/schema/src/sdl.ts` con la introspección pública del endpoint oficial de Linear:
+Comparamos la introspección del SDL de `packages/schema/src/sdl.ts` con la introspección pública del endpoint oficial de Linear:
 
 ```text
 https://api.linear.app/graphql
 ```
 
-Linear documenta que ese endpoint soporta introspección en [Getting started – GraphQL](https://linear.app/developers/graphql). También se consultaron [Issue relations](https://linear.app/docs/issue-relations), [Custom Views](https://linear.app/docs/custom-views), [Inbox](https://linear.app/docs/inbox) y [Documents](https://linear.app/docs/documents).
+Linear documenta que ese endpoint soporta introspección en [Getting started – GraphQL](https://linear.app/developers/graphql). También consultamos [Issue relations](https://linear.app/docs/issue-relations), [Custom Views](https://linear.app/docs/custom-views), [Inbox](https://linear.app/docs/inbox) y [Documents](https://linear.app/docs/documents).
 
-La comparación distingue la paridad del núcleo de la compatibilidad completa con el producto actual de Linear, que incluye integraciones, CRM, releases, AI y otras superficies fuera del MVP.
+La comparación distingue la paridad del núcleo de la compatibilidad completa con Linear. La compatibilidad completa incluye integraciones, CRM, releases, AI y otras superficies fuera del MVP.
 
 ## Veredicto
 
-Prime Board ofrece un contrato GraphQL coherente para el núcleo de issues y planificación, pero **no es drop-in compatible con la API GraphQL de Linear**. Los conceptos principales están presentes, aunque difieren nombres, tipos, paginación, filtros y cobertura de operaciones.
+Prime Board ofrece un contrato GraphQL coherente para el núcleo de Issues y planificación, pero **no es compatible drop-in con la API GraphQL de Linear**. Los conceptos principales están presentes. Difieren los nombres, los tipos, la paginación, los filtros y la cobertura de operaciones.
 
 ### Tamaño del contrato
 
@@ -30,7 +30,7 @@ Prime Board ofrece un contrato GraphQL coherente para el núcleo de issues y pla
 | Campos del tipo Project |          13 |     80 | Faltan miembros, recursos, relaciones y métricas avanzadas. |
 | Campos de `PageInfo`    |           2 |      4 | Falta paginación Relay bidireccional completa.              |
 
-Los conteos no son una métrica de calidad por sí mismos: Linear expone funcionalidades que Prime Board explícitamente no intenta replicar todavía.
+Los conteos no son una métrica de calidad. Linear expone funcionalidades que Prime Board todavía no intenta replicar.
 
 ## Correspondencias del núcleo
 
@@ -74,7 +74,7 @@ Diferencias verificadas:
 - `Issue.children`: Prime Board solo añade `includeArchived`; Linear ofrece filtro, cursor bidireccional y orden.
 - Varias colecciones locales (`teams`, `actors`, `labels`, `projects`, `cycles`, `reviews`, `initiatives`, comments y relations) son listas no paginables.
 
-**Clasificación:** gap de compatibilidad API; el forward pagination local cubre el MVP, pero no permite usar clientes Relay de Linear sin adapter.
+**Clasificación:** gap de compatibilidad de API. La paginación forward local cubre el MVP, pero los clientes Relay de Linear necesitan un adapter.
 
 ### 2. Issue, filtros y orden
 
@@ -105,7 +105,7 @@ Linear publica `ProjectStatus` como objeto y campos para icon/color, prioridad, 
 
 Prime Board publica un enum `ProjectState`, lead, target date, teams, milestones, issues y updates. No publica miembros, labels, dependencias, documents ni attachments.
 
-Además, Linear usa `TimelessDate` para fechas sin hora (`targetDate`, `dueDate`), mientras Prime Board usa `DateTime` para `targetDate` de Project, Milestone e Initiative. Es una diferencia semántica visible para clientes.
+Además, Linear usa `TimelessDate` para fechas sin hora (`targetDate`, `dueDate`). Prime Board usa `DateTime` para `targetDate` de Project, Milestone e Initiative. Los clientes observan esta diferencia semántica.
 
 ### 5. Team, User y WorkflowState
 
@@ -155,4 +155,4 @@ La documentación de Linear indica que `extensions` puede contener códigos y de
 4. Definir recursos vinculables (documents, attachments y notifications).
 5. Evaluar operaciones avanzadas solo según el alcance agent-first.
 
-No se implementaron correcciones ni se crearon tickets de implementación como parte de esta auditoría. Los gaps deben priorizarse antes de convertirlos en trabajo.
+Esta auditoría no implementó correcciones ni creó tickets. Prioriza los gaps antes de convertirlos en trabajo.

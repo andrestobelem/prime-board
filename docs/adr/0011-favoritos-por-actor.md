@@ -1,25 +1,14 @@
-# ADR-0011: favoritos privados por actor
+# ADR-0011: Favoritos privados por Actor
 
 - Estado: aceptado
 - Fecha: 2026-08-17
 
 ## Decisión
 
-Los favoritos son relaciones privadas del actor autenticado. Cada fila referencia exactamente
-un proyecto o una vista guardada mediante una FK explícita y conserva un `position` entero
-ordenado desde cero. `favoriteCreate` es idempotente por actor y recurso; `favoriteDelete`
-es idempotente para el propio actor; `favoriteReorder` recibe el índice destino y renumera
-la lista completa para evitar empates.
+Los favoritos son relaciones privadas del Actor autenticado. Cada fila referencia exactamente un Project o una Saved View mediante una FK explícita y conserva un `position` entero que empieza en cero. `favoriteCreate` es idempotente por Actor y recurso. `favoriteDelete` es idempotente para el Actor propietario. `favoriteReorder` recibe el índice destino y renumera la lista completa para evitar empates.
 
-`Query.favorites` no acepta `actorId`: siempre devuelve únicamente los favoritos del viewer.
-Las vistas personales de otro actor y los recursos inexistentes no pueden agregarse. Los
-proyectos y vistas archivados se conservan en la relación para que desarchivar restaure el
-favorito, pero se excluyen del listado; el borrado físico queda protegido por `ON DELETE
-CASCADE`.
+`Query.favorites` no acepta `actorId`: siempre devuelve solo los favoritos del viewer. El sistema no permite agregar Saved Views personales de otro Actor ni recursos inexistentes. Conserva Projects y Saved Views archivados en la relación para que desarchivar restaure el favorito, pero los excluye del listado. `ON DELETE CASCADE` protege el borrado físico.
 
 ## Repositorio y rebuild
 
-`meta/favorites.json` usa nombres naturales (actor, proyecto y la clave compuesta de vista:
-scope, team, owner y nombre), nunca UUIDs ni credenciales. El export parcial omite favoritos
-de vistas fuera del team exportado. El rebuild resuelve esas claves después de crear
-proyectos y vistas, valida duplicados y reconstruye el orden.
+`meta/favorites.json` usa nombres naturales (Actor, Project y la clave compuesta de Saved View: Scope, Team, owner y nombre). Nunca guarda UUIDs ni credenciales. Un export parcial omite favoritos de Saved Views fuera del Team exportado. El rebuild resuelve esas claves después de crear Projects y Saved Views, valida duplicados y reconstruye el orden.

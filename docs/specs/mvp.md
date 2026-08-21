@@ -1,4 +1,4 @@
-# Spec del MVP de prime-board
+# Especificación del MVP de prime-board
 
 > Convención: la prosa de este doc está en español; todo lo que es parte de la aplicación
 > (esquemas, tipos, comandos, nombres de campos) está en inglés.
@@ -8,25 +8,13 @@
 
 ## 0. Estado de esta especificación
 
-Esta es la especificación histórica del MVP y conserva decisiones útiles para el
-modelo local-first. El producto vigente también incluye capacidades que se incorporaron
-después del MVP: relaciones entre issues, milestones, ciclos, inbox, initiatives,
-vistas guardadas y project/status updates. La matriz de clientes y el alcance vigente
-están documentados en [`docs/alcance-mvp.md`](../alcance-mvp.md); esa matriz, el schema
-GraphQL y los tickets `PRB-*` son la referencia actual para distinguir una capacidad
-implementada de un gap de UI.
+Esta especificación histórica conserva decisiones útiles para el modelo local-first. El producto vigente también incluye Relations entre Issues, Milestones, Cycles, Inbox, Initiatives, Saved Views y Project Updates. La matriz de clientes y el alcance vigente están documentados en [`docs/alcance-mvp.md`](../alcance-mvp.md). Esa matriz, el schema GraphQL y los tickets `PRB-*` son la referencia actual para distinguir una capacidad implementada de un gap de UI.
 
-Siguen fuera de alcance: multi-workspace/multi-tenant, Documents, Timeline/analytics,
-funcionalidad enterprise (SSO/SCIM, SLAs) e integraciones que no sean necesarias para
-el flujo API-first de agentes. Linear se usa como archivo histórico y no como contrato
-actual del producto.
+El alcance todavía excluye multi-workspace/multi-tenant, Documents, Timeline/analytics, funcionalidad Enterprise (SSO/SCIM, SLAs) e integraciones que no sean necesarias para el flujo API-first de agentes. Linear funciona como archivo histórico, no como contrato actual del producto.
 
 ## 1. Resumen
 
-prime-board es un clon de Linear para agentes: un issue tracker **local-first,
-single-tenant y API-first**. Un único proceso Bun sirve la API GraphQL, la UI web y el
-despacho de webhooks, sobre una base SQLite en disco. Alrededor de esa API orbitan tres
-clientes: la **UI** (Linear-like), el **CLI `pb`** y el **MCP server**.
+prime-board es un clon de Linear para agentes: un gestor de Issues **local-first, single-tenant y API-first**. Un proceso Bun sirve la API GraphQL, la UI web y el dispatcher de Webhooks sobre una base SQLite en disco. Tres clientes consumen esa API: la **UI** (Linear-like), el **CLI `pb`** y el **MCP server**.
 
 ```
                     ┌────────────────────────────────────┐
@@ -38,10 +26,10 @@ clientes: la **UI** (Linear-like), el **CLI `pb`** y el **MCP server**.
 
 ## 2. Stack y estructura del repo
 
-- **Runtime:** Bun (TypeScript estricto). SQLite vía `bun:sqlite`.
+- **Runtime:** Bun con TypeScript estricto. SQLite mediante `bun:sqlite`.
 - **GraphQL:** GraphQL Yoga (o equivalente liviano compatible con Bun) + schema SDL-first.
-- **UI:** React + Vite, buildeada a estáticos servidos por el mismo proceso.
-- **Monorepo simple:**
+- **UI:** React + Vite, compilada como archivos estáticos que sirve el mismo proceso.
+- **Monorepo:**
 
 ```
 apps/
@@ -60,9 +48,7 @@ docs/         # documentación (español)
 
 ## 3. Modelo de datos
 
-Todas las entidades usan `id` UUID v7 (ordenables por tiempo), `createdAt`/`updatedAt`
-ISO-8601 UTC, y soft-delete por `archivedAt` donde aplica. Migraciones SQL versionadas
-corren al arrancar el server.
+Todas las entidades usan `id` UUID v7 (ordenable por tiempo) y `createdAt`/`updatedAt` en ISO-8601 UTC. Las entidades que lo requieren usan soft-delete mediante `archivedAt`. El server ejecuta migraciones SQL versionadas al arrancar.
 
 | Tabla             | Campos clave                                                                                                                             | Notas                                                                                                                              |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -82,20 +68,16 @@ corren al arrancar el server.
 
 ## 4. API GraphQL
 
-Endpoint único `POST /graphql`. **Paridad total**: la UI, el CLI y el MCP no usan ningún
-canal privado. GraphiQL habilitado en dev.
+El endpoint único es `POST /graphql`. **Paridad total**: la UI, el CLI y el MCP no usan canales privados. GraphiQL está habilitado en dev.
 
 ### Convenciones
 
-- **Auth:** header `Authorization: Bearer pb_...`. Toda mutación registra al actor de la
-  key como autor (en `activity`, `creatorId`, etc.).
-- **Identificadores:** las queries aceptan UUID o identificador legible (`TEAM-126`) donde
-  tenga sentido (`issue(id:)`).
+- **Auth:** header `Authorization: Bearer pb_...`. Toda mutación registra como autor al Actor de la key (en `activity`, `creatorId`, etc.).
+- **Identifiers:** las queries aceptan UUID o Identifier legible (`TEAM-126`) donde corresponda (`issue(id:)`).
 - **Paginación:** cursor-based (`first/after`), estilo Relay simplificado
   (`nodes`, `pageInfo { hasNextPage, endCursor }`).
 - **Filtros:** input objects componibles con `and`/`or`, inspirados en los de Linear.
-- **Errores:** GraphQL errors con `extensions.code` (`NOT_FOUND`, `UNAUTHORIZED`,
-  `VALIDATION_FAILED`).
+- **Errores:** GraphQL devuelve errors con `extensions.code` (`NOT_FOUND`, `UNAUTHORIZED`, `VALIDATION_FAILED`).
 
 ### Esquema (SDL resumido)
 
@@ -181,13 +163,9 @@ Los `*Payload` devuelven `{ success: Boolean!, <entidad> }` como en Linear.
 
 ## 5. Identidad y auth
 
-- **Bootstrap:** al primer arranque el server crea el workspace, un team default y un
-  actor `admin` (human), e imprime su API key por consola una única vez.
-- Las keys se guardan hasheadas (SHA-256). Sin key ⇒ `UNAUTHORIZED` (excepto la UI
-  servida y GraphiQL en dev, configurable).
-- Cada agente se registra como `Actor(type: AGENT)` con un nombre operativo (no el nombre del
-  modelo/LLM) y su propia key. `actorUpdate` permite renombrarlo sin cambiar su identidad: la autoría en
-  issues, comentarios y actividad queda siempre atribuida al agente real.
+- **Bootstrap:** en el primer arranque, el server crea el Workspace, un Team default y el Actor `admin` (human). Imprime su API key por consola una sola vez.
+- El sistema guarda las keys como hashes SHA-256. Sin key, devuelve `UNAUTHORIZED` (excepto para la UI servida y GraphiQL en dev, que son configurables).
+- Cada agente se registra como `Actor(type: AGENT)` con un nombre operativo, no con el nombre del modelo/LLM, y su propia key. `actorUpdate` permite renombrarlo sin cambiar su identidad. La API atribuye Issues, Comments y Activity al agente real.
 
 ## 6. Webhooks
 
@@ -196,12 +174,11 @@ Los `*Payload` devuelven `{ success: Boolean!, <entidad> }` como en Linear.
 - **Eventos MVP:** `issue.created`, `issue.updated`, `issue.archived`,
   `comment.created`, `project.created`, `project.updated`.
 - **Payload:** `{ event, actor {id,name,type}, data { ...entidad }, changes? { campo: {from,to} }, createdAt }`.
-- Entrega asíncrona (cola en memoria), 3 reintentos con backoff; los fallos se loguean.
-  Garantías de entrega fuertes quedan post-MVP.
+- Entrega asíncrona mediante una cola en memoria, con tres reintentos y backoff. El sistema registra los fallos. Las garantías de entrega fuertes quedan fuera del MVP.
 
 ## 7. CLI (`pb`)
 
-Cliente de la API GraphQL (no toca la DB). Config en `~/.prime-board/cli.json`
+El CLI es un cliente de la API GraphQL y no toca la DB. Guarda la configuración en `~/.prime-board/cli.json`
 (`url`, `apiKey`; override con `PRIME_BOARD_URL` / `PRIME_BOARD_API_KEY`).
 
 ```
@@ -221,8 +198,7 @@ pb webhook create --url http://... --events issue.created,comment.created
 
 ## 8. MCP server
 
-Tools espejo de la API, nombradas como las del MCP de Linear para que un agente que ya
-sabe usar Linear opere prime-board sin aprender nada:
+El MCP expone tools espejo de la API, con los mismos nombres que el MCP de Linear. Un agente que ya sabe usar Linear puede operar prime-board sin aprender un contrato nuevo:
 
 `list_issues`, `get_issue`, `save_issue`, `list_comments`, `save_comment`,
 `list_projects`, `get_project`, `save_project`, `list_teams`, `get_team`,
@@ -233,8 +209,7 @@ sabe usar Linear opere prime-board sin aprender nada:
 
 ## 9. UI web
 
-Requisito explícito: **lo más parecida a Linear posible** (look & feel, densidad,
-velocidad, teclado). Dark theme por defecto.
+Requisito explícito: **lo más parecida posible a Linear** en look & feel, densidad, velocidad y teclado. Usa dark theme por defecto.
 
 **Pantallas del MVP:**
 
@@ -252,8 +227,7 @@ velocidad, teclado). Dark theme por defecto.
 8. **Atajos base:** `C` crear, `Cmd+K` palette, `↑↓/J/K` moverse, `Enter` abrir,
    `Esc` cerrar.
 
-La UI consume exclusivamente `/graphql` con una key de sesión local (MVP: la key se pega
-una vez en settings y queda en `localStorage`).
+La UI consume exclusivamente `/graphql` con una key de sesión local. En el MVP, el usuario pega la key una vez en Settings y la UI la guarda en `localStorage`.
 
 ## 10. Criterios de aceptación del MVP
 
@@ -275,7 +249,7 @@ una vez en settings y queda en `localStorage`).
 
 ## 11. Fuera de alcance
 
-Lo listado en [`alcance-mvp.md` § Exclusiones](../alcance-mvp.md#exclusiones-del-mvp-con-justificación):
+Consulta la lista de exclusiones en [`alcance-mvp.md` § Exclusiones históricas](../alcance-mvp.md#exclusiones-históricas-del-mvp-con-justificación):
 relaciones entre issues, milestones, ciclos, estimaciones, due dates, templates, triage
 dedicado, status updates, initiatives, documents, adjuntos, custom views, OAuth/SSO,
 multi-tenant, notificaciones en UI, integraciones de terceros, importers, insights.

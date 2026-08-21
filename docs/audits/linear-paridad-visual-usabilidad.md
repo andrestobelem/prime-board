@@ -1,4 +1,4 @@
-# Auditoría de paridad visual y usabilidad con Linear
+# Auditoría de paridad visual y usabilidad frente a Linear
 
 > Ticket: [PRB-278](http://localhost:3333/issue/PRB-278)
 > Fecha: 2026-08-17
@@ -6,9 +6,9 @@
 
 ## Veredicto
 
-prime-board ya transmite una experiencia **Linear-like reconocible**: shell oscuro y denso, sidebar por workspace/team, lista y board, detalle de issue con edición inline, filtros, favoritos, creación rápida y command palette. Además, para el caso de uso de agentes ofrece algo que Linear no prioriza como interfaz principal: CLI `pb`, MCP, actores `AGENT`, API keys por actor y webhooks.
+prime-board ya ofrece una experiencia **Linear-like reconocible**: shell oscuro y denso, sidebar por Workspace/Team, lista y board, detalle de Issue con edición inline, filtros, Favorites, creación rápida y command palette. Para el caso de uso de agentes también ofrece superficies que Linear no prioriza como interfaz principal: CLI `pb`, MCP, Actors `AGENT`, API keys por Actor y Webhooks.
 
-La diferencia principal no es la paleta: es la **profundidad de las interacciones**. Linear permite que casi cualquier acción sobre una issue se ejecute igual desde lista, board, detalle, teclado, command menu o menú contextual. En prime-board esos caminos existen solo para una parte de las acciones. El siguiente salto no es copiar más pantallas, sino cerrar esos caminos y hacer que los cambios sean confiables y accesibles.
+La diferencia principal no es la paleta, sino la **profundidad de las interacciones**. Linear permite ejecutar casi cualquier acción sobre una Issue desde la lista, el board, el detalle, el teclado, el command menu o el menú contextual. prime-board ofrece esos caminos solo para algunas acciones. El siguiente salto no es copiar pantallas: es completar los caminos y hacer confiables y accesibles los cambios.
 
 ## Qué ya está bien
 
@@ -26,7 +26,7 @@ La diferencia principal no es la paleta: es la **profundidad de las interaccione
 
 ### 1. Shell y navegación
 
-**Prime-board está suficientemente cerca** de la referencia visual en la estructura que importa: workspace arriba, recursos globales, favoritos y equipos debajo. No conviene implementar `Switch workspace`: el dominio está decidido como single-workspace (ADR-0003 y PRB-267).
+**Prime-board está suficientemente cerca** de la referencia visual en la estructura importante: Workspace arriba, recursos globales, Favorites y Teams debajo. No conviene implementar `Switch workspace`: el dominio mantiene single-workspace (ADR-0003 y PRB-267).
 
 Diferencias aceptables para nuestro producto:
 
@@ -39,7 +39,7 @@ Diferencias aceptables para nuestro producto:
 
 Linear documenta que una issue resaltada puede operarse con teclado, command menu o menú contextual, y que lista y board comparten casi toda la superficie de acciones. Prime-board tiene selección con checkbox y un único bulk action visible: cambiar estado (`IssueFilterToolbar.tsx`). La palette hoy navega, crea issues, abre Settings y cambia tema, pero no actualiza la issue seleccionada (`components/Palette.tsx`).
 
-Faltan para que el flujo se sienta completo:
+Para completar el flujo, faltan:
 
 - `X`, `Shift+X` y `Cmd/Ctrl+A` para seleccionar; acciones de selección para assignee, priority, labels, project, cycle, archive y relaciones.
 - `?` para ayuda de atajos y `/`/`Cmd/Ctrl-F` para búsqueda contextual; `Cmd/Ctrl-K` debe ser contextual a la issue o selección, no solo un lanzador de navegación.
@@ -49,13 +49,13 @@ Faltan para que el flujo se sienta completo:
 - Ocultar columnas, mostrar grupos vacíos, swimlanes, peek/preview y display properties.
 - Paridad de acciones entre lista y board.
 
-La parte que sí conviene conservar es el modelo actual de columnas por estado semántico: permite que un board multi-team no dependa de nombres idénticos de estados.
+Conviene conservar el modelo actual de columnas por State Type. Así un board multi-Team no depende de nombres de estado idénticos.
 
 ### 3. Filtros, búsqueda y vistas guardadas — diferencia importante
 
-El API soporta filtros por team, state/state type, assignee, creator, project, milestone, cycle, parent, priority, labels, búsqueda FTS, `unblocked` y composición `and/or`. La UI de team solo expone búsqueda, state, assignee, priority y una label (`issue-filter.ts` y `IssueFilterToolbar.tsx`).
+La API soporta filtros por team, state/state type, assignee, creator, project, milestone, cycle, parent, priority, labels, búsqueda FTS, `unblocked` y composición `and/or`. La UI de team solo expone búsqueda, state, assignee, priority y una label (`issue-filter.ts` y `IssueFilterToolbar.tsx`).
 
-Linear trata una view como otra lectura dinámica de los mismos issues: sus filtros pueden combinarse, compartirse por URL y guardarse junto con layout, grouping, ordering y propiedades visibles. También ofrece `O-V`/`Shift-V` para abrir views/display options. Hay una brecha de producto en Saved Views:
+Linear trata una Saved View como otra lectura dinámica de las mismas Issues: sus filtros pueden combinarse, compartirse por URL y guardarse junto con layout, grouping, ordering y propiedades visibles. También ofrece `O-V`/`Shift-V` para abrir views/display options. Hay una brecha de producto en Saved Views:
 
 - crear una vista desde el sidebar solo pide nombre y fuerza `scope: TEAM`;
 - la vista creada desde el botón de `Workspace > Views` puede no aparecer allí porque el callback elige el team actual;
@@ -66,7 +66,7 @@ Linear concentra filtros, layout, grouping, ordering y display properties en `Di
 
 ### 4. Detalle de issue y confiabilidad
 
-La composición visual está bien encaminada, pero hay acciones que no tienen el mismo acabado:
+La composición visual está bien encaminada, pero algunas acciones aún tienen un acabado distinto:
 
 - El menú de issue expone copiar link/identifier y volver a la lista, pero no archivar la issue aunque existe `issueArchive` en GraphQL.
 - Linear también ofrece suscripción, menciones y delegación; prime-board tiene asignación y actores agentes, pero todavía no tiene suscriptores/menciones como superficie explícita. Para agentes, Activity + webhooks cubren parte del caso y la suscripción visual puede esperar.
@@ -74,7 +74,7 @@ La composición visual está bien encaminada, pero hay acciones que no tienen el
 - Los dialogs y popovers manejan Escape en algunos casos, pero no hay foco atrapado/retornado ni `aria-modal` en `EntityModal`; las filas y cards principales son `div` clickeables y no elementos enfocables.
 - El drag & drop del board no tiene una alternativa de teclado equivalente.
 
-Para un producto usado por agentes y humanos, esta es una prioridad: una operación perdida o silenciosamente fallida cuesta más que una diferencia visual.
+Para un producto usado por Agents y personas, esta es una prioridad. Una operación perdida o silenciosamente fallida cuesta más que una diferencia visual.
 
 ### 5. Proyectos y planificación
 
@@ -88,7 +88,7 @@ Frente a Linear todavía faltan, pero son **deseables**, no bloqueantes del núc
 - Project details sidebar y vistas guardadas adjuntas al proyecto.
 - Workspace Projects con layouts list/board/timeline, filtros y ordenamiento.
 
-No recomendamos incorporar Timeline/Roadmap ni documentos colaborativos solo para cerrar la comparación visual; están fuera del foco agent-first.
+No incorpores Timeline/Roadmap ni documentos colaborativos solo para cerrar la comparación visual. Están fuera del foco agent-first.
 
 ### 6. Inbox, reviews y triage
 
@@ -106,7 +106,7 @@ Hay tres problemas que no aparecen en una captura estática pero cambian mucho l
 - Las listas fijan `first: 250`. El aviso dice que hay que estrechar filtros, pero Board y Project no comparten el toolbar y no existe load-more/cursor UI.
 - Los estados vacíos no distinguen “no hay datos” de “los filtros no coinciden”: la lista siempre sugiere `C`, y Teams/Projects no ofrecen CTA contextual de creación.
 
-La respuesta correcta es un patrón común de `Loading / Error + Retry / Empty + CTA`, y paginación o load-more en las vistas que ya conocen `pageInfo.hasNextPage`. No hace falta clonar los skeletons de Linear al píxel, pero sí conservar el camino de recuperación.
+La respuesta correcta es un patrón común de `Loading / Error + Retry / Empty + CTA`. Agrega paginación o load-more en las vistas que ya conocen `pageInfo.hasNextPage`. No hace falta clonar los skeletons de Linear al píxel, pero sí conservar el camino de recuperación.
 
 ### 8. Accesibilidad y responsive
 
@@ -118,11 +118,11 @@ El responsive básico está resuelto, pero hay deuda transversal:
 - Los colores `--text-faint` (`#5c6067` dark, `#9a9ea6` light) tienen contraste insuficiente para texto normal; los textos secundarios deben reservarse para contenido no esencial o aclararse.
 - En viewport estrecho la toolbar y las acciones de detalle deben conservar una ruta usable sin depender solo del overflow horizontal.
 
-Esto debe entrar en la próxima tanda de calidad, no como una reescritura estética aislada.
+Incluye estos cambios en la próxima tanda de calidad. No los trates como una reescritura estética aislada.
 
 ## Deuda de documentación detectada
 
-`docs/alcance-mvp.md` y `docs/specs/mvp.md` todavía describen como fuera de alcance relaciones, milestones, cycles, inbox, initiatives, custom views y status updates, aunque hoy existen en API/UI/CLI/MCP. Es documentación histórica válida para entender el origen, pero ya no alcanza como mapa de producto vigente. Conviene actualizarla o agregar un documento de alcance actual antes de la próxima tanda para que “faltante” no signifique “feature deliberadamente post-MVP”.
+`docs/alcance-mvp.md` y `docs/specs/mvp.md` todavía describen como fuera de alcance Relations, Milestones, Cycles, Inbox, Initiatives, Saved Views y Project Updates, aunque hoy existen en API/UI/CLI/MCP. Esa documentación histórica explica el origen, pero ya no funciona como mapa de producto vigente. Actualízala o agrega un documento de alcance actual antes de la próxima tanda. Así «faltante» no significará «feature deliberadamente post-MVP».
 
 ## Qué dejamos fuera deliberadamente
 
@@ -136,7 +136,7 @@ Estas diferencias con Linear son conscientes y no son bugs del clon:
 - personalización completa del sidebar, Pulse y superficies de AI/Agent que no sean necesarias para asignar trabajo a actores agentes;
 - copiar cada atajo o detalle social de Linear cuando la API/CLI/MCP ofrece una ruta mejor para agentes.
 
-La frontera correcta es: copiar **semántica, jerarquía y caminos de operación**; no copiar funcionalidades que agregan management o colaboración documental sin mejorar el ciclo agente → issue → evidencia → cierre.
+La frontera correcta es copiar **semántica, jerarquía y caminos de operación**. No copies funcionalidades que agreguen management o colaboración documental sin mejorar el ciclo agente → Issue → evidencia → cierre.
 
 ## Orden recomendado
 
@@ -184,7 +184,7 @@ La frontera correcta es: copiar **semántica, jerarquía y caminos de operación
 
 ## Tickets derivados
 
-La auditoría no implementa cambios de producto. Los siguientes tickets separan el trabajo accionable:
+La auditoría no implementa cambios de producto. Estos tickets separan el trabajo accionable:
 
 - **PRB-279** — acciones de issues en lista, board y command menu.
 - **PRB-280** — filtros y Display options.
@@ -198,4 +198,4 @@ La auditoría no implementa cambios de producto. Los siguientes tickets separan 
 ## Verificación
 
 - `bun run build` ✅
-- La revisión no modificó código de producto; solo documenta diferencias y prioridades.
+- La revisión no modificó código de producto. Solo documenta diferencias y prioridades.

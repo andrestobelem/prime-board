@@ -10,14 +10,14 @@ bun scripts/prime-board-project.ts --project /path/to/project
 
 The command derives an isolated database under `~/.prime-board/projects/`, sets
 `PRIME_BOARD_REPO` to the target repository, and starts one instance per project. The default
-port is 3333; if it is occupied and no explicit `--port` was provided, the launcher selects the
-next free loopback port. An explicit occupied port fails instead of connecting to another
-project. The server writes the target project's `.prime-board/` replica; do not edit that
-directory directly.
+port is 3333. If that port is occupied and you did not provide `--port`, the launcher selects
+the next free loopback port. An explicitly occupied port causes an error instead of connecting
+to another project. The server writes the target project's `.prime-board/` replica. Do not edit
+that directory directly.
 
 The launcher records the active instance in a project lock under `~/.prime-board/projects/`.
-A second invocation for the same repository reuses the existing process, database and port.
-Different repositories receive different database identities and ports.
+A second invocation for the same repository reuses the process, database, and port. Different
+repositories receive different database identities and ports.
 
 To discover the active configuration without starting a server:
 
@@ -25,11 +25,11 @@ To discover the active configuration without starting a server:
 eval "$(bun scripts/prime-board-project.ts --project /path/to/project --print-env)"
 ```
 
-Use `--status` to inspect the instance. It exits with 0 for `running`, 1 for `not-running` and
-2 for `stale`.
+Use `--status` to inspect the instance. It exits with 0 for `running`, 1 for `not-running`,
+and 2 for `stale`.
 
 The admin key is printed only on the first server start. Create an Actor and an API key for
-normal work, then export the resulting key as `PRIME_BOARD_API_KEY`.
+normal work. Then export the resulting key as `PRIME_BOARD_API_KEY`.
 
 ## 2. Install the skill in the target project
 
@@ -41,7 +41,7 @@ cp -R /path/to/prime-board/.agents/skills/prime-board-workflow \
   /path/to/project/.agents/skills/prime-board-workflow
 ```
 
-Keep the target project's own `AGENTS.md` as the authority for code conventions. Add a short
+Use the target project's own `AGENTS.md` as the authority for code conventions. Add a short
 pointer there if the agent does not discover project skills automatically.
 
 ## 3. Configure the CLI

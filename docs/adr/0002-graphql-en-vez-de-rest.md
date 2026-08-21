@@ -1,12 +1,7 @@
 # GraphQL en vez de REST
 
-La API pública de Linear es GraphQL, y prime-board es un clon de Linear para agentes: la
-paridad conceptual hace que un agente que ya sabe operar Linear sepa operar prime-board, y
-que el MCP server pueda exponer las mismas 14 tools que el MCP de Linear.
+La API pública de Linear usa GraphQL y prime-board es un clon de Linear para agentes. Esta paridad conceptual permite que un agente que ya opera Linear opere prime-board. También permite que el MCP server exponga las mismas 14 tools que el MCP de Linear.
 
-Además, las queries flexibles le sirven al consumidor principal: un agente que quiere pedir
-exactamente los campos que va a usar, sin varios round-trips ni endpoints a medida.
+Las queries flexibles sirven al consumidor principal. Un agente puede pedir exactamente los campos que necesita sin varios round-trips ni endpoints específicos.
 
-Si alguien propone REST en el futuro, el argumento a vencer no es técnico sino de
-compatibilidad: romper la paridad con Linear le quita al producto su principal atajo de
-adopción.
+Si alguien propone REST, debe resolver primero el costo de compatibilidad. Romper la paridad con Linear elimina el principal atajo de adopción del producto.

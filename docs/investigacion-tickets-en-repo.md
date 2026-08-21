@@ -1,4 +1,4 @@
-# Investigación: el repo como fuente de verdad de los tickets
+# Investigación: el repositorio como fuente de verdad de los tickets
 
 > Ticket: PRB-153 · Investigación pedida por Andrés.
 > **Decisión de partida (no evaluada, dada):** el repo debía ser la fuente de verdad.
@@ -8,20 +8,19 @@
 
 ## TL;DR histórico
 
-La recomendación de esta investigación fue **event sourcing versionado en git**. El repo guarda un **log append-only de
-eventos por issue** (`.prime-board/log/PRB-155.jsonl`) como fuente de verdad, y SQLite pasa a
-ser un **índice derivado y descartable**, reconstruible con un comando. Es la única opción
-probada que hace que **dos agentes editando el mismo ticket en branches distintas mergeen
-solos y sin perder información**.
+Esta investigación recomendó **event sourcing versionado en Git**. El repositorio guarda un **Log append-only de
+eventos por Issue** (`.prime-board/log/PRB-155.jsonl`) como fuente de verdad. SQLite funciona como
+**índice derivado y descartable**, que un comando puede reconstruir. Entre las opciones probadas, es la única
+que permite que **dos agentes editen la misma Issue en branches distintas y hagan merge sin perder información**.
 
-Dolt queda descartado para este objetivo (razones abajo), pero no por malo: por incompatible
-con "el repo es la fuente de verdad" y con "un proceso, cero configuración".
+Dolt queda descartado para este objetivo, no por su calidad, sino porque no cumple dos premisas:
+«el repositorio es la fuente de verdad» y «un proceso, cero configuración».
 
 ## 1. Opciones evaluadas
 
 ### 1.1 Dolt
 
-Base MySQL-compatible con semántica git (branch, diff, merge de datos).
+Base compatible con MySQL y con semántica de Git (branch, diff y merge de datos).
 
 |     |                                                                                                                                                                                            |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -31,26 +30,26 @@ Base MySQL-compatible con semántica git (branch, diff, merge de datos).
 | ❌  | **Lo que queda versionado en el repo es una base opaca**, no archivos que se lean en un PR. El objetivo era justamente lo contrario.                                                       |
 | ❌  | Reescribir la capa de datos: SQL dialecto MySQL, adiós `bun:sqlite` y FTS5.                                                                                                                |
 
-**Veredicto:** excelente herramienta para versionar _datos SQL_, mala para "el repo es la
-fuente de verdad y quiero leer los tickets en el diff". Si algún día prime-board necesitara
-branches de datos con SQL pesado, se reevalúa.
+**Veredicto:** es una herramienta excelente para versionar _datos SQL_, pero no sirve para «el repositorio es la
+fuente de verdad y quiero leer las Issues en el diff». Si prime-board necesita branches de datos con SQL pesado,
+se reevalúa la decisión.
 
 ### 1.2 Snapshot por issue (markdown + front-matter)
 
-Un archivo por ticket con el estado actual. Es lo más legible… y falla en lo importante
+Un archivo por Issue con el estado actual. Es legible, pero falla en lo importante
 (ver experimento): **dos agentes que comentan el mismo ticket producen un conflicto falso**,
 cuando semánticamente los dos comentarios deberían coexistir.
 
 ### 1.3 Log append-only de eventos (event sourcing) ⭐
 
-Un archivo por issue donde solo se agregan líneas: `created`, `state_changed`, `commented`…
-El estado actual se **deriva** replicando el log. Es, casualmente, lo que prime-board ya hace
+Un archivo por Issue al que el sistema solo agrega líneas: `created`, `state_changed`, `commented`…
+El estado actual se **deriva** replicando el log. Es similar a lo que prime-board ya hace
 en la tabla `activity` (append-only desde las primeras versiones): **el modelo de datos ya está listo para esto.**
 
 ### 1.4 Estilo `git-bug` (objetos y refs de git, fuera del working tree)
 
 `git-bug` guarda cada issue como una cadena de operaciones inmutables en objetos git bajo
-`refs/git-bug/…`, y al mergear branches divergentes reconstruye el issue aplicando todas las
+`refs/git-bug/…`, y al hacer merge de branches divergentes reconstruye el issue aplicando todas las
 operaciones en orden determinista (relojes de Lamport, desempate por id).
 Converge sin conflictos manuales — **valida el enfoque de log de operaciones** — pero los
 issues **no se ven en el working tree ni en un PR**, que es lo que buscamos.
@@ -99,8 +98,8 @@ Ambos cambios sobrevivieron, sin intervención humana. Y cuando dos agentes toca
 campo**, el reducer resuelve determinísticamente por timestamp (last-write-wins), que es
 exactamente lo que hace Linear cuando dos personas cambian el estado a la vez.
 
-El snapshot markdown, en cambio, exige resolver a mano un conflicto que **no existe
-semánticamente**: los dos comentarios tenían que quedar.
+El snapshot Markdown, en cambio, obliga a resolver a mano un conflicto que **no existe
+semánticamente**: ambos Comments deben conservarse.
 
 ## 3. Arquitectura recomendada
 
@@ -129,13 +128,12 @@ sin que el server esté corriendo**, y los cambios de tickets viajan en el mismo
 
 ## 4. Lo que NO puede ir al repo
 
-Hallazgo importante al mapear "todo": hay dos tablas con material sensible.
+El relevamiento identificó dos tablas con material sensible:
 
 - `api_keys.hash` — hashes de las API keys de humanos y agentes.
 - `webhooks.secret` — secretos de firma HMAC, **en texto plano**.
 
-Versionarlos sería publicar credenciales en el historial de git (y en GitHub, si el repo es
-público). Deben quedar en una base local no versionada. "El repo es la fuente de verdad" aplica
+Versionarlos publicaría credenciales en el historial de Git y, si el repositorio fuera público, en GitHub. Deben quedar en una base local no versionada. "El repo es la fuente de verdad" aplica
 a **datos de dominio**, no a credenciales.
 
 ## 5. Riesgos y decisiones abiertas
@@ -165,7 +163,7 @@ a **datos de dominio**, no a credenciales.
 | **3** | Las mutaciones escriben primero al log; SQLite pasa a índice. `.gitattributes` con `merge=union`. | Medio  |
 | **4** | Snapshot `.md` derivado + hooks de commit/merge. Secretos fuera del repo.                         | Medio  |
 
-Después de la fase 2 ya se puede borrar la DB sin perder nada — que es el 80% del valor.
+Después de la fase 2 el equipo puede borrar la DB sin perder datos. Esa fase entrega cerca del 80 % del valor.
 
 ## Fuentes
 
@@ -179,7 +177,7 @@ Después de la fase 2 ya se puede borrar la DB sin perder nada — que es el 80%
 
 ## Apéndice: lo que cambió al implementarlo
 
-La recomendación se implementó completa. Cuatro cosas resultaron distintas de lo previsto:
+El equipo implementó la recomendación completa. Cuatro resultados difirieron de lo previsto:
 
 1. **El log no era autosuficiente.** La tabla `activity` era un historial para la UI:
    `created` solo guardaba `{title}` y `description_changed` guardaba `{}`. Hubo que
@@ -194,8 +192,8 @@ La recomendación se implementó completa. Cuatro cosas resultaron distintas de 
    borraría en silencio el resto del workspace. El export registra su alcance en
    `meta/export.json` y el importador se niega salvo `--allow-partial`.
 
-Ese fue el estado propuesto al cerrar la investigación. El contrato implementado después
+Ese era el estado propuesto al cerrar la investigación. El contrato implementado después
 mantiene `bun run export`, `bun run rebuild` y la sincronización automática con
 `PRIME_BOARD_REPO`, pero define la DB como fuente operativa y `.prime-board/` como réplica.
-`bun run rebuild --from <repo> --allow-partial` es un reemplazo explícito, nunca un merge; el detalle vigente
+`bun run rebuild --from <repo> --allow-partial` hace un reemplazo explícito, nunca un merge. El detalle vigente
 está en [ADR-0004](adr/0004-repo-como-fuente-de-verdad.md).

@@ -1,47 +1,37 @@
 # Paridad de configuración: Linear y prime-board
 
 **Fecha del relevamiento:** 2026-08-18
-**Propósito:** comparar el alcance de la configuración pública de Linear con la configuración
-visible hoy en `apps/web` de prime-board, priorizando los gaps que afectan a un board
-API-first para agentes.
+**Propósito:** comparar la configuración pública de Linear con la configuración visible hoy en `apps/web` de prime-board. La comparación prioriza los gaps que afectan a un board API-first para agentes.
 
 ## Alcance y método
 
-- Se consultó únicamente documentación de primera parte publicada en `linear.app/docs`,
-  documentación de desarrolladores en `linear.app/developers` y el esquema GraphQL público
-  enlazado por esa documentación en [Apollo Studio, esquema actual de Linear](https://studio.apollographql.com/public/Linear-API/schema/reference?variant=current).
-  No se usaron comparativas, blogs ni documentación de terceros.
+- Consultamos únicamente documentación de primera parte publicada en `linear.app/docs`, documentación de desarrolladores en `linear.app/developers` y el esquema GraphQL público enlazado por esa documentación en [Apollo Studio, esquema actual de Linear](https://studio.apollographql.com/public/Linear-API/schema/reference?variant=current). No consultamos comparativas, blogs ni documentación de terceros.
 - La documentación de Linear usa _workspace_ para la organización raíz; el esquema GraphQL
   lo describe como `Organization`. La documentación de Developers identifica el endpoint
   público (`https://api.linear.app/graphql`) y que admite introspección: [GraphQL API —
   Getting started](https://linear.app/developers/graphql).
-- El esquema se consultó el 2026-08-18 mediante introspección sin credenciales, verificando
-  especialmente `Organization`, `Team`, `UserSettings`, `WorkflowState`, `IssueLabel`,
+- Consultamos el esquema el 2026-08-18 mediante introspección sin credenciales. Verificamos especialmente `Organization`, `Team`, `UserSettings`, `WorkflowState`, `IssueLabel`,
   `ViewPreferences` y `Webhook`, además de los nombres de las operaciones de consulta y
   mutación. El esquema puede cambiar; los enlaces anteriores son la fuente canónica vigente.
-- Para prime-board se revisaron `SettingsView`, `TeamSettingsView`, `MembersView`, la
-  navegación en `Sidebar`, `App` y `navigation`, y los módulos de tema y cliente GraphQL.
-  Las referencias locales enlazadas son evidencia de la UI actual, no una afirmación de que
-  el backend no tenga una capacidad no expuesta por estas vistas. No se hicieron cambios de
-  código, tickets, commit ni push.
+- Para prime-board revisamos `SettingsView`, `TeamSettingsView`, `MembersView`, la navegación en `Sidebar`, `App` y `navigation`, y los módulos de tema y cliente GraphQL. Las referencias locales son evidencia de la UI actual, no una afirmación de que el backend carezca de capacidades que estas vistas no exponen. No hicimos cambios de código, tickets, commits ni push.
 
 ## Resumen ejecutivo
 
-1. **La configuración actual de prime-board cubre un núcleo útil pero estrecho:** tema local,
+1. **La configuración actual de prime-board cubre un núcleo útil pero estrecho:** incluye tema local,
    credencial de API, nombre del workspace, ciclo de vida de equipos, miembros/actores y
    claves, estados de workflow y labels. La página de team también permite membresías y
    muestra una vista de solo lectura cuando no se tienen permisos.
-2. **Linear separa cuatro superficies que hoy están mezcladas o ausentes:** administración
+2. **Linear separa cuatro superficies que hoy prime-board mezcla o no expone:** administración
    del workspace, configuración de cada team, preferencias de la cuenta y controles de
    seguridad/integraciones. Linear documenta además plantillas, ciclos, triage, vistas,
    notificaciones, auditoría, exportación y facturación.
-3. **Prioridad P0:** hacer explícitos y aplicar en servidor los roles/permisos y el ciclo de
+3. **Prioridad P0:** declarar y aplicar en el server los roles, los permisos y el ciclo de
    vida de miembros/equipos, y dotar a las API keys de alcance revocable. Es la diferencia
    entre una UI de administración y una superficie segura para agentes.
-4. **Prioridad P1:** persistir settings de team y cuenta, completar workflow/triage/ciclos,
+4. **Prioridad P1:** persistir Settings de Team y cuenta, y completar Workflow/Triage/Cycles,
    plantillas, notificaciones y webhooks. Son los controles que vuelven repetible y observable
    el trabajo automatizado.
-5. **Prioridad P2/P3:** label groups y ciclo de vida de labels, vistas/preferencias avanzadas,
+5. **Prioridad P2/P3:** Label Groups y ciclo de vida de Labels, Saved Views/Preferences avanzadas,
    proyectos/iniciativas, auditoría/exportación, SSO/SCIM/IP, integraciones generales y
    billing. SAML/SCIM, billing y features Enterprise de Linear son referencias de alcance,
    no requisitos del MVP de prime-board.
@@ -65,8 +55,7 @@ API-first para agentes.
 
 ## Tabla de categorías y paridad
 
-La marca **🟢** significa que hay un equivalente visible, **🟡** que hay cobertura
-parcial, y **⚪** que no se observó una superficie equivalente en los archivos revisados.
+La marca **🟢** indica un equivalente visible, **🟡** cobertura parcial y **⚪** ausencia de una superficie equivalente en los archivos revisados.
 La prioridad indica el gap de producto para prime-board, no la prioridad que Linear asigna a
 la feature.
 
@@ -84,7 +73,7 @@ la feature.
 | **Views, defaults y navegación**                     | Custom Views permite filtros guardados, scopes workspace/team/project/initiative, compartir, owner, favoritos y suscripciones individuales/Slack: [Custom Views](https://linear.app/docs/custom-views). Display options controla layout, grouping, ordering y columnas, con defaults personales o de workspace: [Display options](https://linear.app/docs/display-options).                                                                                                                                                                                                                                                            | 🟡 Hay creación de views con scopes, navegación por scope, favoritos y preferencias de list/board en localStorage; no se observa UI de owner, suscripciones, defaults persistentes por usuario/workspace ni views de project/initiative.                                           | **P1** para persistir `UserSettings`/`ViewPreferences` y defaults; **P2** para subscriptions y owners.                                                                                                                                                       |
 | **Preferencias personales, perfil y notificaciones** | Preferences cubre home view, nombres completos, primer día, emojis, submit de comentarios, tema, tipografía, cursor, links, desktop y auto-assign: [Preferences](https://linear.app/docs/account-preferences). Profile cubre avatar, nombre/username, email, cuentas conectadas y salir del workspace: [Profile](https://linear.app/docs/profile). Notifications cubre Inbox y canales desktop/mobile/email/Slack: [Notifications](https://linear.app/docs/notifications). Git tiene settings personales propios: [Code & Reviews](https://linear.app/docs/code-and-reviews).                                                          | 🟡 Solo se observa tema, API key/onboarding y algunos defaults de list/board locales; no hay perfil, home default, notificaciones por canal, auto-assign, preferencias editoriales ni code/review settings.                                                                        | **P1.** Persistir preferencias en el servidor y ofrecer notificaciones por evento/canal. Es especialmente importante para agentes que necesitan recibir cambios sin polling.                                                                                 |
 | **API keys, OAuth, webhooks e integraciones**        | Linear soporta API keys y OAuth2; las API keys pueden limitarse por permisos (`Read`, `Write`, `Admin`, crear issues/comentarios) y teams. Admins gestionan webhooks por team o teams públicos; el API también expone OAuth apps: [API and Webhooks](https://linear.app/docs/api-and-webhooks), [GraphQL — Authentication](https://linear.app/developers/graphql), [OAuth2](https://linear.app/developers/oauth-2-0-authentication), [Webhooks](https://linear.app/developers/webhooks). La Integration Directory incluye integraciones propias y de terceros: [Integration Directory](https://linear.app/docs/integration-directory). | 🟡 `MembersView` crea/revoca keys por actor y muestra última utilización, pero no scopes, restricciones por team, expiración, rotación o sesiones. No se observa administración de OAuth apps, webhooks o integraciones.                                                           | **P0** para scopes/team limits, revocación y auditoría de keys; **P1** para webhooks y OAuth orientados a agentes; **P2** para catálogo/conectores UI.                                                                                                       |
-| **Seguridad, autenticación y provisioning**          | Linear permite Google/email/passkeys y restringir métodos; Enterprise añade SAML, IP restrictions y SCIM, que provisiona/suspende usuarios y puede sincronizar grupos/teams: [Login methods](https://linear.app/docs/login-methods), [SAML](https://linear.app/docs/saml-and-access-control), [SCIM](https://linear.app/docs/scim), [Security](https://linear.app/docs/security).                                                                                                                                                                                                                                                      | ⚪ La UI revisada autentica pegando una key y guardándola en browser; no hay login/session management, métodos permitidos, SSO, IP allowlist ni provisioning.                                                                                                                      | **P1** para sesiones y política de credenciales en una instalación multiusuario; **P3/fuera de MVP** para SAML/SCIM/IP, salvo requisito Enterprise explícito.                                                                                                |
+| **Seguridad, autenticación y provisioning**          | Linear permite Google/email/passkeys y restringir métodos; Enterprise añade SAML, IP restrictions y SCIM, que provisiona/suspende usuarios y puede sincronizar grupos/teams: [Login methods](https://linear.app/docs/login-methods), [SAML](https://linear.app/docs/saml-and-access-control), [SCIM](https://linear.app/docs/scim), [Security](https://linear.app/docs/security).                                                                                                                                                                                                                                                      | ⚪ La UI revisada autentica pegando una key y guardandola en browser; no hay login/session management, métodos permitidos, SSO, IP allowlist ni provisioning.                                                                                                                      | **P1** para sesiones y política de credenciales en una instalación multiusuario; **P3/fuera de MVP** para SAML/SCIM/IP, salvo requisito Enterprise explícito.                                                                                                |
 | **Auditoría y exportación**                          | Audit Log registra durante 90 días eventos de acceso, suscripciones y cambios de settings, con filtros y acceso API/webhook: [Audit log](https://linear.app/docs/audit-log). Admins/owners pueden exportar issues y miembros a CSV, incluyendo equipos privados según permisos: [Exporting Data](https://linear.app/docs/exporting-data).                                                                                                                                                                                                                                                                                              | ⚪ No se observa pantalla ni control de audit log/export en las vistas revisadas.                                                                                                                                                                                                  | **P2 alto.** Registrar cambios de permisos, keys, teams y settings desde el inicio; agregar exportación cuando haya necesidad de migración/reporting.                                                                                                        |
 | **Billing, plan y uso**                              | Billing permite ver/cambiar plan, método de pago, email, facturas y cancelación; el billing depende de usuarios no suspendidos: [Billing and plans](https://linear.app/docs/billing-and-plans). Los créditos de AI son un balance workspace-level opcional con límites por workspace/usuario/loop: [AI Credits](https://linear.app/docs/ai-credits).                                                                                                                                                                                                                                                                                   | ⚪ No se observa billing, plan, seat counting ni AI usage en la UI revisada.                                                                                                                                                                                                       | **P3/fuera del alcance del board para agentes.** Solo priorizar si prime-board pasa a ofrecer servicio multi-tenant facturado.                                                                                                                               |
 
@@ -105,7 +94,7 @@ mostró una superficie de settings más amplia que la UI actual de prime-board:
 | `ViewPreferences`          | `type`, `viewType`, `preferences`, con defaults de organización y overrides de usuario según la descripción del tipo.                                                                                                                                        | Los valores hoy guardados en `localStorage` podrían modelarse como preferencias persistentes y con defaults por scope.       |
 | `Webhook`                  | `label`, `url`, `enabled`, `team`, `teamIds`, `allPublicTeams`, `creator`, `secret`, `resourceTypes`, `failures`.                                                                                                                                            | Para agentes, el webhook es una primitiva de integración y no solo una opción cosmética de la UI.                            |
 
-La evidencia anterior proviene del esquema enlazado oficialmente en [Apollo Studio — Linear API,
+La evidencia proviene del esquema enlazado oficialmente en [Apollo Studio — Linear API,
 variant current](https://studio.apollographql.com/public/Linear-API/schema/reference?variant=current),
 no de una implementación local de prime-board. La documentación de webhooks confirma además que
 los eventos soportados incluyen issues, comentarios, proyectos, ciclos, labels, users y otros
@@ -195,9 +184,7 @@ secuencia recomendada es:
 5. `Audit/Export`: antes de habilitar administración multi-tenant o integraciones sensibles.
 6. Enterprise/billing: explícitamente fuera del MVP hasta que cambie el modelo operativo.
 
-El criterio rector es conservar la fortaleza de prime-board —agentes como actores de primera
-clase y API-first— y tomar de Linear aquello que mejora **control, repetibilidad, seguridad y
-observabilidad**, no todo su catálogo de configuración.
+El criterio rector conserva la fortaleza de prime-board —Agents como Actors de primera clase y API-first— y toma de Linear solo lo que mejora **control, repetibilidad, seguridad y observabilidad**. No copia todo su catálogo de configuración.
 
 ## Fuentes primarias consultadas
 

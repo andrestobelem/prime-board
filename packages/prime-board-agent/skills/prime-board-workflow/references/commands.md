@@ -1,6 +1,6 @@
 # Comandos de prime-board
 
-Configura primero la conexión:
+Configura la conexión antes de ejecutar otros comandos:
 
 ```bash
 export PRIME_BOARD_TEAM="${PRIME_BOARD_TEAM:-PRB}"
@@ -24,7 +24,7 @@ pb issue update PRB-123 --state started --assignee me --json
 ```
 
 Usa los nombres de estado reales del Team o sus tipos semánticos. No supongas que todos los
-Teams tienen los mismos nombres visibles ni que la clave es `PRB`.
+Teams muestran los mismos nombres ni que la clave es `PRB`.
 
 ## Informar evidencia y resolver
 
@@ -34,8 +34,8 @@ pb issue update PRB-123 --state completed --json
 ```
 
 El comentario debe indicar el comportamiento entregado, los comandos de validación y las
-brechas restantes. Si aparece un error nuevo mientras trabajas, crea primero un Issue separado
-y referencia el arreglo.
+brechas restantes. Si aparece un error nuevo, crea un Issue separado antes de corregirlo y
+referencia ese Issue en el arreglo.
 
 ## Dependencias nativas
 
@@ -44,5 +44,5 @@ pb issue link PRB-123 --blocked-by PRB-122
 pb issue list --team "$PRIME_BOARD_TEAM" --unblocked --json
 ```
 
-Usa `--related` para contexto sin bloqueo y `--duplicate-of` cuando un Issue sea redundante.
-No codifiques los bloqueos solo en prosa.
+Usa `--related` para contexto sin bloqueo. Usa `--duplicate-of` cuando un Issue sea redundante.
+Registra los bloqueos con enlaces, no solo en prosa.

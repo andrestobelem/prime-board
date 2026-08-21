@@ -6,11 +6,11 @@ disable-model-invocation: true
 
 <what-to-do>
 
-The user has passed (or will pass) a markdown file of raw material. Treat it as the input pile — anything from a tidy list of fragments to a wall of unstructured prose to a transcript. The format does not matter. Read it end-to-end before doing anything else.
+The user provides a Markdown file of raw material. Treat it as the input: fragments, unstructured prose, or a transcript. The format does not matter. Read the complete file before doing anything else.
 
-Then run a shaping session that produces a separate article document. This is **exploit**: the exploring is done, the pile is fixed — commit to a structure and mine the pile to fill it. Do not edit the raw material file — it is read-only to this skill.
+Run a shaping session that produces a separate article document. This is **exploit**: exploration is complete and the input is fixed. Choose a structure and use the input to fill it. Do not edit the raw material file. This skill treats it as read-only.
 
-If the user did not say where to save the article, ask once and remember the path.
+If the user did not provide an article path, ask once and remember it.
 
 </what-to-do>
 
@@ -18,29 +18,29 @@ If the user did not say where to save the article, ask once and remember the pat
 
 ## The loop
 
-1. **Read the pile.** Read the input file in full. Form a sense of what's in it.
-2. **Establish the prerequisites.** Settle with the user what the reader knows walking in — the concepts that are **grounded** from the start. Everything else must be grounded by a block before a later block can lean on it. See [Grounding](#grounding).
-3. **Draft 2–3 candidate openings.** Each opening should imply a different thesis or angle for the article. Show all of them. Force the user to pick or compose a hybrid. The chosen opening defines what the rest of the article must do.
-4. **Grow paragraph by paragraph.** After the opening lands, ask "given this opening, what does the reader need to hear next?" Pull material from the pile to answer. The next block may only lean on grounded concepts, and grounds new ones as it lands. Argue about the form the next block takes — a paragraph, a list, a table, a callout, a quote, a code block. Each format choice should be deliberate and defensible.
-5. **Append to the article file as you go.** Don't batch. Write each agreed paragraph or block immediately so the user can see the article taking shape.
-6. **Loop step 4 until the article is done.** The user decides when it's done.
+1. **Read the pile.** Read the complete input file and identify its contents.
+2. **Establish the prerequisites.** Ask the user what the reader already knows. These concepts are **grounded** from the start. Ground every other concept in a block before a later block uses it. See [Grounding](#grounding).
+3. **Draft 2–3 candidate openings.** Give each opening a different thesis or angle. Show all openings. Ask the user to choose one or compose a hybrid. The selected opening defines the article's work.
+4. **Grow paragraph by paragraph.** After the opening is selected, ask "given this opening, what does the reader need to hear next?" Pull material from the pile. The next block can use only grounded concepts and must ground new concepts as needed. Discuss the block format: paragraph, list, table, callout, quote, or code block. Make each format choice deliberate and defensible.
+5. **Append to the article file as you go.** Do not batch writes. Write each agreed paragraph or block immediately so the user can review the article.
+6. **Repeat step 4 until the article is complete.** The user decides when it is complete.
 
 ## Grounding
 
-Every **concept** has to be **grounded** before a block can lean on it: the reader either walked in knowing it or met it in an earlier block. A block that reaches for an ungrounded concept loses the reader. The unit is the concept, not the word for it — a block can lean on an idea the reader lacks even with no jargon in sight. Where a concept has a name — a **term** — grounding it means landing the idea and the term together.
+Every **concept** must be **grounded** before a block can use it. The reader either knows it at the start or meets it in an earlier block. A block that uses an ungrounded concept can lose the reader. The unit is the concept, not its word. A block can use an idea the reader lacks even without jargon. When a concept has a name, a **term**, ground the idea and term together.
 
-A concept gets grounded one of two ways:
+Ground a concept in one of two ways:
 
-- **Prerequisite** — grounded before the opening. The reader brings it. Fixed at the start.
-- **Introduced** — a block establishes it, and from then on it's grounded for the rest of the article.
+- **Prerequisite** — ground it before the opening. The reader brings it. Set it at the start.
+- **Introduced** — establish it in a block. It remains grounded for the rest of the article.
 
-Keep a running list of what's grounded. When you ask "what does the reader need to hear next?", an ungrounded concept the next move needs is itself the answer: ground it first — here or in an earlier block — or you can't make the move. This is the gap-naming of [Pulling from the pile](#pulling-from-the-pile) one level up: there the pile is missing material; here the article is missing a foundation.
+Keep a list of grounded concepts. When you ask "what does the reader need to hear next?", check whether the next block needs an ungrounded concept. If it does, ground that concept first in the current or an earlier block. This is the gap-naming step in [Pulling from the pile](#pulling-from-the-pile): the pile lacks material there, while the article lacks a foundation here.
 
-The lever is what you make a prerequisite versus what you ground inside the article. Demand too much up front and you shut readers out; ground too much inside and the opening drowns in definitions. Settle it with the user when you establish prerequisites.
+Choose what is a prerequisite and what to ground inside the article. Too many prerequisites exclude readers. Too many definitions make the opening difficult to read. Settle this choice with the user when establishing prerequisites.
 
 ## Conversational feel
 
-This is a grilling session inverted. In ideation, the question was "what are you actually noticing?" Here it's "what is this article actually arguing, and in what order does the reader need to hear it?" Push back. Refuse to let weak transitions slide. If a paragraph doesn't earn its place, cut it.
+This is an inverted grilling session. In ideation, the question was "what are you actually noticing?" Here it is "what is this article arguing, and in what order must the reader hear it?" Challenge weak transitions. Cut a paragraph that does not earn its place.
 
 Specific moves to keep using:
 
@@ -52,13 +52,13 @@ Specific moves to keep using:
 
 ## Pulling from the pile
 
-Treat the raw material as a quarry, not a script. Pull a fragment, rework it to fit the surrounding paragraph, and place it. A fragment may be split across multiple paragraphs, merged with another, or paraphrased. The pile's job is to be mined; the article's job is to read as one voice.
+Treat the raw material as source material, not a script. Select a fragment, adapt it to the surrounding paragraph, and place it. Split, merge, or paraphrase fragments as needed. The article must read as one voice.
 
-If the pile lacks something the article needs, name the gap explicitly: "We need an example here and the pile doesn't have one — give me one now or we cut this section."
+If the pile lacks material that the article needs, state the gap: "We need an example here and the pile doesn't have one — give me one now or we cut this section."
 
 ## Format arguments to actually have
 
-When choosing how to render a block, weigh these tradeoffs out loud with the user, not silently:
+When choosing a block format, discuss these trade-offs with the user:
 
 - **Prose vs. list.** Prose carries argument; lists carry parallel items. If items aren't truly parallel, prose is better. If they are, a list is faster to scan.
 - **Inline vs. callout.** Tips, warnings, and asides go in callouts (`> [!TIP]`, `> [!NOTE]`) — but only if they'd genuinely derail the main argument inline. Otherwise leave them inline.
@@ -68,12 +68,12 @@ When choosing how to render a block, weigh these tradeoffs out loud with the use
 
 ## Writing rhythm
 
-Append to the article file as each block is agreed. Re-read the file from disk before every write — the user may have edited between turns. Never overwrite blindly. If the user wants a paragraph rewritten, edit that specific paragraph in place; leave the rest alone.
+Append each agreed block to the article file. Reread the file from disk before every write because the user may have edited it. Never overwrite blindly. If the user requests a rewrite, edit only that paragraph and leave the rest unchanged.
 
 ## Out of scope
 
-- Mining for new fragments that aren't in the pile (handle gaps as in "Pulling from the pile").
+- Mining for fragments not in the pile. Handle gaps as described in "Pulling from the pile".
 - Editing the raw material file.
-- Publishing, formatting for a specific platform, or adding frontmatter the user didn't ask for.
+- Publishing, formatting for a specific platform, or adding frontmatter without a user request.
 
 </supporting-info>

@@ -1,6 +1,6 @@
 # Prime-board commands
 
-Set the connection first:
+Set the connection before running other commands:
 
 ```bash
 export PRIME_BOARD_TEAM="${PRIME_BOARD_TEAM:-PB}"
@@ -24,7 +24,7 @@ pb issue update PRB-123 --state started --assignee me --json
 ```
 
 Use the team's actual state names or semantic state types. Do not assume that every Team uses
-`PRB` or has the same visible state names.
+`PRB` or displays the same state names.
 
 ## Report evidence and resolve
 
@@ -33,8 +33,8 @@ pb issue comment PRB-123 --body -
 pb issue update PRB-123 --state completed --json
 ```
 
-A comment should state the delivered behavior, validation commands, and remaining gaps. If a
-new bug appears while working, create a separate issue first and reference it in the fix.
+A comment must state the delivered behavior, validation commands, and remaining gaps. If a
+new bug appears, create a separate issue before fixing it and reference that issue in the fix.
 
 ## Native dependencies
 
@@ -43,5 +43,5 @@ pb issue link PRB-123 --blocked-by PRB-122
 pb issue list --team "$PRIME_BOARD_TEAM" --unblocked --json
 ```
 
-Use `--related` for context without a dependency and `--duplicate-of` when an issue is
-redundant. Do not encode blocking only in prose.
+Use `--related` for context without a dependency. Use `--duplicate-of` when an issue is
+redundant. Record blocking relationships with links, not only in prose.

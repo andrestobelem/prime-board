@@ -1,6 +1,6 @@
-# Guía de uso para agentes
+# Guía de operación para agentes
 
-> Cómo operar prime-board de punta a punta siendo un agente (o un humano con terminal).
+> Cómo operar prime-board de principio a fin como agente o como persona con terminal.
 
 ## 1. Levantar el server
 
@@ -9,8 +9,8 @@ bun install
 bun run server
 ```
 
-En un **workspace nuevo de desarrollo** el server siembra datos demo (team `PB`, actor `admin`); el workspace migrado opera con team `PRB`.
-En modo `api-key` imprime la API key de admin **una única vez**:
+En un **Workspace nuevo de desarrollo**, el server crea datos demo (Team `PB`, Actor `admin`). Un Workspace migrado opera con el Team `PRB`.
+En modo `api-key`, el server imprime la API key de admin **una sola vez**:
 
 ```
 First run: workspace seeded.
@@ -18,22 +18,22 @@ Admin API key (save it now, it will not be shown again): pb_xxxxxxxx
 prime-board server listening on http://localhost:3333
 ```
 
-Config por env: `PRIME_BOARD_PORT` (default 3333) y `PRIME_BOARD_DB`
+Configuración por variable de entorno: `PRIME_BOARD_PORT` (default 3333) y `PRIME_BOARD_DB`
 (default `~/.prime-board/prime-board.db`).
 
-Para una instancia de desarrollo solo local, se puede desactivar el pedido de API key:
+Para una instancia de desarrollo local, desactiva la solicitud de API key:
 
 ```bash
 PRIME_BOARD_AUTH_MODE=local bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto
 ```
 
-Este modo fuerza el servidor a `127.0.0.1`, autentica como el Workspace Admin y da acceso completo.
-No lo uses detrás de un proxy ni en una interfaz de red compartida.
+Este modo fija el server en `127.0.0.1`, autentica como Workspace Admin y concede acceso completo.
+Úsalo solo en la máquina local. No lo ejecutes detrás de un proxy ni en una interfaz de red compartida.
 El modo normal (`api-key`) no cambia.
 
 ### Instancia aislada para otro proyecto
 
-Si prime-board se usa para un repositorio externo, arrancá una instancia por proyecto desde el
+Para usar prime-board con un repositorio externo, inicia una instancia por proyecto desde el
 clon de prime-board:
 
 ```bash
@@ -42,15 +42,15 @@ bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto
 
 El launcher usa una DB independiente en `~/.prime-board/projects/`, configura
 `PRIME_BOARD_REPO=/ruta/a/mi-proyecto` y escribe la réplica `.prime-board/` en ese proyecto.
-Podés cambiar el puerto o la DB con `--port` y `--db`. Para cargar la configuración en una
-shell sin arrancar otra instancia:
+Puedes cambiar el puerto o la DB con `--port` y `--db`. Para cargar la configuración en una
+shell sin iniciar otra instancia:
 
 ```bash
 eval "$(bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto --print-env)"
 ```
 
-Copiá `.agents/skills/prime-board-workflow` al proyecto consumidor para que el agente conozca
-el ciclo de crear, reclamar, validar, comentar evidencia y resolver issues.
+Copia `.agents/skills/prime-board-workflow` al proyecto consumidor para que el agente conozca
+el ciclo de crear, reclamar, validar, comentar evidencia y resolver Issues.
 
 ### Datos de demo (opcional)
 
@@ -58,28 +58,27 @@ el ciclo de crear, reclamar, validar, comentar evidencia y resolver issues.
 bun run seed
 ```
 
-Crea un proyecto, 4 issues (con sub-issue, labels, comentarios) y un actor
+Crea un Project, cuatro Issues (con Sub-issue, Labels y Comments) y un Actor
 `demo-agent` con su propia API key — ideal para probar los clientes. Es idempotente:
-si ya hay issues, no hace nada.
+si ya hay Issues, no hace nada.
 
 ## 2. Conceptos en 30 segundos
 
-- **Actores**: humanos y agentes son iguales ante la API (`type: HUMAN | AGENT`).
-  Cada uno tiene su **API key** (`pb_...`) y toda acción queda atribuida a quien la hizo.
-  Los agentes se identifican por un nombre operativo elegido por el equipo, no por el
-  modelo o LLM que los ejecute; ese nombre puede cambiar sin rotar su key.
-- **Identificadores legibles**: los issues operativos se referencian como `PRB-153` en toda la API.
-- **Estados con tipo semántico**: cada team define sus estados, pero todos tienen un
-  tipo portable (`triage|backlog|unstarted|started|completed|canceled`) — filtrá por
-  tipo y tu código funciona en cualquier team.
+- **Actors**: personas y agentes son iguales ante la API (`type: HUMAN | AGENT`).
+  Cada Actor tiene su **API key** (`pb_...`) y toda acción queda atribuida a quien la ejecuta.
+  El equipo identifica a cada agente por un nombre operativo, no por el modelo o LLM que lo ejecuta.
+  El nombre puede cambiar sin rotar la key.
+- **Identifiers legibles**: la API referencia las Issues operativas como `PRB-153`.
+- **Workflow States con tipo semántico**: cada Team define sus estados, pero todos tienen un
+  tipo portable (`triage|backlog|unstarted|started|completed|canceled`). Filtra por tipo y tu código funciona en cualquier Team.
 - **Paridad total**: GraphQL, CLI y MCP pueden hacer exactamente lo mismo.
-- **Workspace vs Team**: el Workspace es el contenedor único de la instalación y tiene un nombre
-  editable por Workspace Admins. Cada Team conserva su `key` (`PRB`) y su nombre propios; renombrar
-  el Workspace no cambia keys, identifiers (`PRB-153`), IDs ni referencias históricas.
+- **Workspace vs Team**: el Workspace es el contenedor de la instalación y tiene un nombre
+  editable por Workspace Admins. Cada Team conserva su `key` (`PRB`) y su nombre. Renombrar
+  el Workspace no cambia las keys, los Identifiers (`PRB-153`), los IDs ni las referencias históricas.
 
 ## 3. Darse de alta como agente
 
-Con la key de admin, creá un actor con nombre operativo y su key (¡se muestra una sola vez!):
+Con la key de admin, crea un Actor con nombre operativo y su key. El server muestra la key una sola vez:
 
 ```bash
 curl -s http://localhost:3333/graphql \
@@ -99,16 +98,16 @@ curl -s http://localhost:3333/graphql \
   -d '{"query": "mutation { actorUpdate(id: \"<ID>\", input: { name: \"nuevo-nombre\" }) { actor { id name } } }"}'
 ```
 
-El `id` del actor es estable y las keys se asocian a ese id; por eso un renombrado no
-rompe la autenticación ni la auditoría. Repetí `actorCreate` y `apiKeyCreate` para agregar
+El `id` del Actor es estable y las keys se asocian a ese ID. Por eso renombrarlo no
+rompe la autenticación ni la auditoría. Repite `actorCreate` y `apiKeyCreate` para agregar
 agentes adicionales.
 
 ## 4. GraphQL directo
 
-Endpoint único: `POST /graphql` con `authorization: Bearer pb_...`.
-GraphiQL disponible en `http://localhost:3333/graphql` (en dev).
+Usa `POST /graphql` con `authorization: Bearer pb_...` como endpoint único.
+GraphiQL está disponible en `http://localhost:3333/graphql` (en dev).
 
-La query estrella — _mis issues urgentes sin empezar que mencionen webhooks_:
+La query de ejemplo devuelve mis Issues urgentes, aún no iniciadas y que mencionan webhooks:
 
 ```graphql
 query ($me: ID!) {
@@ -139,7 +138,7 @@ tokens literales, nunca como sintaxis FTS5. Estas entradas no exponen errores in
 y conservan el comportamiento de filtros anidados y paginación.
 
 Ciclo de vida completo: `issueCreate` → `issueUpdate` (estado/prioridad/assignee/labels/
-parent/project) → `commentCreate` → `issueArchive`. Todo queda en `Issue.activity`.
+parent/project) → `commentCreate` → `issueArchive`. La operación registra la Activity en `Issue.activity`.
 
 ## 5. CLI `pb`
 
@@ -189,7 +188,7 @@ Además de issues, el MCP ofrece `archive_project`, `unarchive_project`,
 `list_milestones`, `save_milestone`, `delete_milestone`, `list_project_updates`,
 `save_project_update` y `delete_project_update` para completar el ciclo de vida de planificación.
 
-Para renombrar el Workspace, usá `save_workspace` con `{ "name": "Mi Workspace" }`;
+Para renombrar el Workspace, usa `save_workspace` con `{ "name": "Mi Workspace" }`;
 la API rechaza la operación para actors con rol `MEMBER`. El nombre es independiente de las keys y
 nombres de Teams.
 
@@ -218,7 +217,7 @@ Config para un cliente MCP (Claude Desktop, prime-agent, etc.):
 
 ## 7. Webhooks: enterarse de las cosas
 
-Registrá una URL y recibí un POST por cada evento
+Registra una URL y recibe un POST por cada evento
 (`issue.created`, `issue.updated`, `issue.archived`, `comment.created`,
 `project.created`, `project.updated`, `team.deleted`):
 
@@ -230,7 +229,7 @@ pb webhook create --url http://localhost:9999/hook --events issue.created,commen
 Payload: `{ event, actor: {id,name,type}, data, changes?, createdAt }` —
 en `issue.updated`, `changes` trae `{ campo: { from, to } }`.
 
-El `secret` se muestra **una sola vez**, al crear el webhook: guardalo en el receptor.
+El `secret` se muestra **una sola vez**, al crear el webhook: guárdalo en el receptor.
 Cada request lleva `X-PrimeBoard-Signature`, un HMAC-SHA256 en hexadecimal minúscula
 calculado sobre el **body crudo exacto** (los bytes antes de parsearlo como JSON). No
 reserialices el payload antes de verificar: cambios de espacios, orden de claves o saltos
@@ -250,17 +249,16 @@ function verify(secret: string, rawBody: string, received: string): boolean {
   );
 }
 
-// Verificá rawBody antes de hacer: const payload = JSON.parse(rawBody);
+// Verifica rawBody antes de ejecutar: const payload = JSON.parse(rawBody);
 ```
 
-Los nombres de los headers HTTP no distinguen mayúsculas de minúsculas. Entrega con 3
-reintentos y backoff (1s/5s/25s). Si tu receptor estuvo caído más que eso, reconstruí el
-estado consultando la API (la actividad por issue es completa).
+Los nombres de los headers HTTP no distinguen mayúsculas de minúsculas. El server intenta la entrega tres veces, con backoff de 1 s, 5 s y 25 s. Si el receptor sigue caído después de esos intentos, reconstruye el
+estado mediante la API (la actividad por issue es completa).
 
 ## 8. Exportar y reconstruir con seguridad
 
 La DB es la fuente operativa y `.prime-board/` es su réplica versionada. No edites la
-réplica a mano: exportá desde la DB y revisá los cambios antes de commitearlos.
+réplica a mano: exportá desde la DB y revisa los cambios antes de commitearlos.
 
 ```bash
 bun run export                         # export completo a la raíz del repo
@@ -271,16 +269,13 @@ bun run rebuild --from /tmp/pb-export --allow-partial  # reemplazo parcial expl�
 
 `bun run rebuild` rechaza un export con `meta/export.json` de alcance `team:KEY` si no se
 pasa `--allow-partial`. El flag no fusiona: confirma que se reemplazará el índice por el
-alcance parcial y que los teams ausentes no se recuperan. No ejecutes `rebuild` sobre la
-DB operativa sin revisar antes el export y contar con un backup.
+alcance parcial y que los teams ausentes no se recuperan. No ejecutes `rebuild` sobre la DB operativa sin revisar el export y confirmar que existe un backup.
 
 Los exports no contienen API keys ni secretos de webhooks. El rebuild puede volver a
 asociar keys locales por nombre de actor, pero la réplica nunca es un mecanismo para
 transportar credenciales.
 
-La receta anterior fue verificada contra una DB temporal: un export completo se reconstruye
-con `--from`, un export `team:PRB` termina con error sin `--allow-partial` y se reconstruye
-con éxito al pasar ese flag. La prueba no usa ni reemplaza la DB operativa.
+Verificamos la receta anterior contra una DB temporal: un export completo se reconstruye con `--from`; un export `team:PRB` falla sin `--allow-partial` y se reconstruye con éxito al pasar ese flag. La prueba no usa ni reemplaza la DB operativa.
 
 ## 9. Receta completa para un agente nuevo
 
@@ -310,7 +305,7 @@ team-scoped archivados fallan con `VALIDATION_FAILED` hasta restaurar el Team.
 
 ### Borrado definitivo de Teams
 
-`archive` es reversible; `delete` es definitivo y no sustituye al archivado. Solo un Workspace Admin puede borrar un Team y debe confirmar exactamente su key:
+`archive` es reversible; `delete` es definitivo y no sustituye al archivado. Solo un Workspace Admin puede borrar un Team. Debe confirmar exactamente su key:
 
 ```bash
 pb team delete EMPTY --confirm EMPTY --json

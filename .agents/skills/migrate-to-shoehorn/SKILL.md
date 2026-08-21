@@ -7,15 +7,15 @@ description: Migrate test files from `as` type assertions to @total-typescript/s
 
 ## Why shoehorn?
 
-`shoehorn` lets you pass partial data in tests while keeping TypeScript happy. It replaces `as` assertions with type-safe alternatives.
+`shoehorn` lets tests pass partial data while keeping TypeScript type-safe. It replaces `as` assertions with type-safe alternatives.
 
 **Test code only.** Never use shoehorn in production code.
 
 Problems with `as` in tests:
 
-- Trained not to use it
-- Must manually specify target type
-- Double-as (`as unknown as Type`) for intentionally wrong data
+- Tests are trained not to use it.
+- Tests must specify the target type manually.
+- Tests use double-as (`as unknown as Type`) for intentionally wrong data.
 
 ## Install
 
@@ -104,10 +104,10 @@ getUser(fromAny({ body: { id: 123 } }));
 
 ## Workflow
 
-1. **Gather requirements** - ask user:
-   - What test files have `as` assertions causing problems?
-   - Are they dealing with large objects where only some properties matter?
-   - Do they need to pass intentionally wrong data for error testing?
+1. **Gather requirements** — ask the user:
+   - Which test files have problematic `as` assertions?
+   - Do the tests use large objects where only some properties matter?
+   - Do the tests need intentionally wrong data for error testing?
 
 2. **Install and migrate**:
    - [ ] Install: `npm i @total-typescript/shoehorn`
@@ -115,4 +115,4 @@ getUser(fromAny({ body: { id: 123 } }));
    - [ ] Replace `as Type` with `fromPartial()`
    - [ ] Replace `as unknown as Type` with `fromAny()`
    - [ ] Add imports from `@total-typescript/shoehorn`
-   - [ ] Run type check to verify
+   - [ ] Run the type check to verify

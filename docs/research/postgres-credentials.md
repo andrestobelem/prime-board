@@ -6,26 +6,17 @@
 
 ## Contrato
 
-Bearer keys se normalizan y hashean con el mismo SHA-256 que SQLite; la
-resolución cruza `api_keys` con `actors`, rechaza keys revocadas, expiradas o de
-actors no activos, actualiza `last_used_at` y carga scopes/límites desde
-PostgreSQL. Si una key no tiene filas de scopes se conserva el fallback legacy
-(read/write/admin), y si no tiene límites conserva el acceso global.
+El adaptador normaliza y hashea las Bearer keys con el mismo SHA-256 que SQLite. La resolución cruza `api_keys` con `actors`, rechaza keys revocadas o expiradas y las de Actors no activos, actualiza `last_used_at` y carga Scopes y límites desde PostgreSQL. Si una key no tiene filas de Scopes, el adaptador conserva el fallback legacy (read/write/admin). Si no tiene límites, conserva el acceso global.
 
 Creación, rotación y revocación mantienen la semántica existente:
 
-- Solo actors activos reciben keys.
-- El plaintext se devuelve únicamente en el payload de creación/rotación/
-  aceptación; solo se persiste el hash.
-- Scopes y Team limits se normalizan, validan contra las tablas PG y no pueden
-  exceder las capacidades de la key padre.
-- Rotación inserta la reemplazante y revoca la anterior en una única transacción;
-  una carrera no puede dejar dos keys activas para la misma operación.
-- Borrar una key es idempotente para una key existente y conserva su fila para
-  trazabilidad.
+- Solo los Actors activos reciben keys.
+- El sistema devuelve el plaintext solo en el payload de creación, rotación o aceptación. Solo persiste el hash.
+- El sistema normaliza los Scopes y Team limits, los valida contra las tablas PG y no permite superar las capacidades de la key padre.
+- La rotación inserta la key reemplazante y revoca la anterior en una sola transacción. Una carrera no puede dejar dos keys activas para la misma operación.
+- Borrar una key existente es idempotente y conserva su fila para trazabilidad.
 
-Las operaciones API key no migradas ya no caen en el SQLite efímero cuando el
-backend es PostgreSQL. Las operaciones restantes se rechazan antes de tocarlo.
+Cuando el backend es PostgreSQL, las operaciones API key no migradas ya no usan el SQLite efímero. El adaptador rechaza las operaciones restantes antes de tocarlo.
 
 ## Invitaciones concurrentes
 
@@ -37,14 +28,11 @@ el estado dentro de la transacción, crea actor y key, y enlaza `actor_id` y
 `accepted_at`. Si falla cualquier paso, el rollback deja la invitación pendiente
 y no deja actor/key parciales.
 
-La key creada al aceptar usa el mismo hash y se puede usar inmediatamente para
-resolver `viewer`. La segunda aceptación del token recibe `UNAUTHORIZED`.
+La key que crea la aceptación usa el mismo hash y puede resolver `viewer` de inmediato. La segunda aceptación del token recibe `UNAUTHORIZED`.
 
 ## Seguridad operativa
 
-No se escriben keys plaintext en logs, exportaciones ni metadata; las scripts de
-validación tampoco imprimen payloads. La URL PostgreSQL solo entra por
-`PRIME_BOARD_POSTGRES_URL`/secretos del entorno.
+El sistema no escribe keys plaintext en logs, exportaciones ni metadata. Las scripts de validación tampoco imprimen payloads. La URL PostgreSQL solo entra por `PRIME_BOARD_POSTGRES_URL` o secretos del entorno.
 
 ## Validación reproducible
 
@@ -53,7 +41,7 @@ PRIME_BOARD_POSTGRES_URL='postgres://...' \
 bun run scripts/validate-postgres-actors.ts
 ```
 
-La validación contra PostgreSQL efímero cubre auth positiva/negativa,
+La validación contra PostgreSQL efímero cubre autenticación positiva y negativa,
 expiración, scopes, límite de Team, rotación, revocación, aceptación concurrente,
 creación concurrente de invitaciones y la key resultante:
 

@@ -4,19 +4,19 @@ description: Turn the current conversation into a spec and publish it to the pro
 disable-model-invocation: true
 ---
 
-This skill takes the current conversation context and codebase understanding and produces a spec. Do NOT interview the user — just synthesize what you already know.
+Use the current conversation context and codebase understanding to produce a spec. Do NOT interview the user. Synthesize only what you already know.
 
-The issue tracker and triage label vocabulary should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
+Use the provided issue tracker and triage label vocabulary. If either is missing, tell the user to run `/setup-matt-pocock-skills`.
 
 ## Process
 
-1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary throughout the spec, and respect any ADRs in the area you're touching.
+1. Explore the repository if you have not already done so. Understand its current state. Use the project's domain glossary throughout the spec and respect ADRs in the area you will change.
 
-2. Sketch out the seams at which you're going to test the feature. Existing seams should be preferred to new ones. Use the highest seam possible. If new seams are needed, propose them at the highest point you can. The fewer seams across the codebase, the better - the ideal number is one.
+2. Identify the seams where you will test the feature. Prefer existing seams. Use the highest possible seam. If you need new seams, propose them at the highest possible point. Prefer one seam across the codebase.
 
-Check with the user that these seams match their expectations.
+Confirm with the user that the seams match their expectations.
 
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
+3. Write the spec with the template below. Publish it to the project issue tracker. Apply the `ready-for-agent` triage label. Do not run additional triage.
 
 <spec-template>
 

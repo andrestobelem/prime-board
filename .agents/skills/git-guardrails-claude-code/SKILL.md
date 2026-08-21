@@ -5,7 +5,7 @@ description: Set up Claude Code hooks to block dangerous git commands (push, res
 
 # Setup Git Guardrails
 
-Sets up a PreToolUse hook that intercepts and blocks dangerous git commands before Claude executes them.
+Set up a PreToolUse hook that intercepts and blocks dangerous git commands before Claude executes them.
 
 ## What Gets Blocked
 
@@ -15,28 +15,28 @@ Sets up a PreToolUse hook that intercepts and blocks dangerous git commands befo
 - `git branch -D`
 - `git checkout .` / `git restore .`
 
-When blocked, Claude sees a message telling it that it does not have authority to access these commands.
+When a command is blocked, Claude receives a message that it does not have authority to run the command.
 
 ## Steps
 
 ### 1. Ask scope
 
-Ask the user: install for **this project only** (`.claude/settings.json`) or **all projects** (`~/.claude/settings.json`)?
+Ask the user whether to install the hook for **this project only** (`.claude/settings.json`) or **all projects** (`~/.claude/settings.json`).
 
 ### 2. Copy the hook script
 
-The bundled script is at: [scripts/block-dangerous-git.sh](scripts/block-dangerous-git.sh)
+The bundled script is [scripts/block-dangerous-git.sh](scripts/block-dangerous-git.sh).
 
-Copy it to the target location based on scope:
+Copy it to the location for the selected scope:
 
 - **Project**: `.claude/hooks/block-dangerous-git.sh`
 - **Global**: `~/.claude/hooks/block-dangerous-git.sh`
 
-Make it executable with `chmod +x`.
+Make the copied script executable with `chmod +x`.
 
 ### 3. Add hook to settings
 
-Add to the appropriate settings file:
+Add the hook to the settings file for the selected scope:
 
 **Project** (`.claude/settings.json`):
 
@@ -78,11 +78,11 @@ Add to the appropriate settings file:
 }
 ```
 
-If the settings file already exists, merge the hook into existing `hooks.PreToolUse` array — don't overwrite other settings.
+If the settings file exists, merge the hook into its `hooks.PreToolUse` array. Do not overwrite other settings.
 
 ### 4. Ask about customization
 
-Ask if user wants to add or remove any patterns from the blocked list. Edit the copied script accordingly.
+Ask whether the user wants to add or remove patterns from the blocked list. Edit the copied script accordingly.
 
 ### 5. Verify
 
@@ -92,4 +92,4 @@ Run a quick test:
 echo '{"tool_input":{"command":"git push origin main"}}' | <path-to-script>
 ```
 
-Should exit with code 2 and print a BLOCKED message to stderr.
+The command must exit with code 2 and print a BLOCKED message to stderr.

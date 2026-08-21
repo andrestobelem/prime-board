@@ -3,12 +3,12 @@
 > Ticket: [PRB-421](http://localhost:3333/issue/PRB-421)
 > Épica relacionada: [Soporte multi-workspace](http://localhost:3333/project/01a0193e-16e4-7000-9836-0e8495aafea6)
 > Fecha del relevamiento: 2026-08-19
-> Estado: documento canónico de comparación; no implica paridad total ni replica de cada función de Linear.
+> Estado: documento canónico de comparación. No promete paridad total ni replica todas las funciones de Linear.
 
 ## Propósito
 
-Este documento consolida las notas anteriores sobre diferencias entre prime-board y Linear. Su objetivo es
-separar cuatro casos que no deben mezclarse:
+Este documento consolida las notas anteriores sobre las diferencias entre prime-board y Linear. Clasifica cada
+diferencia en uno de cuatro casos:
 
 - **Implementado:** prime-board ofrece una capacidad equivalente para su modelo.
 - **Parcial:** existe el concepto, pero faltan campos, operaciones o una superficie de cliente.
@@ -16,15 +16,15 @@ separar cuatro casos que no deben mezclarse:
 - **Divergencia intencional / fuera de alcance:** la diferencia es una decisión de producto, no una deuda
   que haya que cerrar para llamar “completo” al board para agentes.
 
-La comparación toma como referencia el Linear actual documentado públicamente y el código vigente de
-prime-board. Los documentos anteriores siguen siendo útiles como auditorías detalladas y se enlazan al
-final; este archivo es el índice de decisión.
+La comparación usa como referencias el Linear actual documentado públicamente y el código vigente de
+prime-board. Las auditorías anteriores siguen siendo útiles y aparecen enlazadas al final. Este archivo es
+el índice de decisión.
 
 ## Método y fuentes
 
 ### Fuentes de Linear
 
-Se usaron fuentes primarias de Linear, consultadas el 2026-08-19:
+Consultamos estas fuentes primarias de Linear el 2026-08-19:
 
 - [Workspaces](https://linear.app/docs/workspaces)
 - [Login methods](https://linear.app/docs/login-methods)
@@ -48,16 +48,16 @@ Se usaron fuentes primarias de Linear, consultadas el 2026-08-19:
 - [Project milestones](https://linear.app/docs/project-milestones)
 - [Schema GraphQL público actual](https://studio.apollographql.com/public/Linear-API/schema/reference?variant=current)
 
-El endpoint GraphQL público documentado por Linear es `https://api.linear.app/graphql`. Su introspección
+El endpoint GraphQL público documentado por Linear es `https://api.linear.app/graphql`. La introspección
 identifica `Organization` como el objeto que la documentación de producto llama Workspace y lo describe
 como el contenedor raíz de teams, usuarios, proyectos, issues y settings. En el snapshot read-only de esta
 fecha se observaron 161 queries, 361 mutations, 85 campos de `Issue`, 76 de `Project`, 4 de `PageInfo`,
 75 de `Organization`, 43 de `User`, 82 de `Team`, 28 de `CustomView`, 27 de `Notification` y 14 de
-`Webhook`. El endpoint es cambiante; estos números son únicamente una referencia fechada.
+`Webhook`. El endpoint puede cambiar. Estos números solo sirven como referencia fechada.
 
 ### Evidencia local
 
-Se revisaron el SDL, las migraciones, los dominios, los resolvers y las superficies GraphQL/CLI/MCP/UI.
+Revisamos el SDL, las migraciones, los dominios, los resolvers y las superficies GraphQL/CLI/MCP/UI.
 El snapshot local verificable de esta revisión contiene 25 campos de `Query`, 62 de `Mutation`, 24
 campos de `Issue`, 13 de `Project` y 2 de `PageInfo`. Las referencias principales son:
 
@@ -71,23 +71,22 @@ campos de `Issue`, 13 de `Project` y 2 de `PageInfo`. Las referencias principale
 - `apps/web/src/components/Sidebar.tsx`, `App.tsx`, `router.tsx`, `api.ts` y `ui-context.ts`
 
 Linear.app estaba instalado y el proceso `Linear.app` (versión observada: 1.32.1) estaba activo. También
-se verificó que existía almacenamiento local de `linear.app`, solo en lectura, pero no se usó su contenido
-como contrato ni se incorporaron identificadores del Workspace al documento. La observación de accesibilidad
-solo expuso una ventana de preferencias/una ventana sin nombre y la captura
-de pantalla foreground mostró otra aplicación; no fue posible navegar de forma confiable el board de
-Linear sin automatizar ni alterar la cuenta. No se hicieron clicks, mutaciones ni cambios en Linear. Por
-eso, las afirmaciones de producto se basan en la documentación oficial y el esquema público; la auditoría
-visual existente queda como evidencia complementaria, no como una suposición de una sesión de usuario.
+comprobamos que existía almacenamiento local de `linear.app`. Lo tratamos como solo lectura y no usamos su
+contenido como contrato ni incorporamos identificadores del Workspace al documento. La observación de accesibilidad solo mostró una ventana de preferencias y otra sin nombre. La captura de
+pantalla en primer plano mostró otra aplicación. No pudimos navegar de forma confiable el board de Linear
+sin automatizar ni alterar la cuenta. No hicimos clicks, mutaciones ni cambios en Linear. Por eso, las
+afirmaciones de producto se basan en la documentación oficial y el esquema público. La auditoría visual
+existente es evidencia complementaria, no una suposición sobre una sesión de usuario.
 
 ## Resumen ejecutivo
 
-prime-board ya cubre el núcleo que necesitamos para un gestor agent-first: Teams, Issues, workflow,
+prime-board ya cubre el núcleo necesario para un gestor agent-first: Teams, Issues, workflow,
 labels, asignación de humanos y agentes, comentarios, actividad, Projects, ciclos, milestones, filtros,
 CLI, MCP, API keys y webhooks. No es un cliente drop-in de Linear: el contrato GraphQL, los nombres, la
 paginación y la cobertura son distintos.
 
-La diferencia estructural más importante para esta épica es que Linear soporta varias Workspaces por
-cuenta y cada dato queda dentro de una frontera de Workspace. prime-board todavía tiene una tabla
+La diferencia estructural más importante para esta épica es la frontera de Workspace: Linear permite varias
+Workspaces por cuenta y asigna cada dato a una de ellas. prime-board todavía tiene una tabla
 `workspace` tratada como singleton y recursos sin `workspace_id`; sus tickets de implementación son
 PRB-411 a PRB-420. La decisión de multi-workspace de prime-board se limita a una DB/proceso compartido,
 con aislamiento estricto; no convierte al producto en un servicio hosted ni obliga a copiar OAuth, billing
@@ -157,14 +156,14 @@ o todos los roles de Linear.
 - **No hay cross-workspace:** no se permiten búsquedas, relaciones, movimientos de Issues, Projects
   compartidos ni referencias transitivas entre Workspaces.
 
-La habilitación queda detrás de PRB-420. El proyecto [Soporte multi-workspace](http://localhost:3333/project/01a0193e-16e4-7000-9836-0e8495aafea6)
+PRB-420 bloquea la habilitación. El proyecto [Soporte multi-workspace](http://localhost:3333/project/01a0193e-16e4-7000-9836-0e8495aafea6)
 contiene los tickets de implementación y sus dependencias nativas.
 
 ## Cobertura por superficie
 
-La existencia de una entidad en el backend no implica que esté expuesta igual en todos los clientes.
-Esta separación evita cerrar un ticket de API creyendo que la UI ya tiene paridad, o confundir una
-pérdida del importer con una ausencia del modelo.
+Una entidad puede existir en el backend y no tener la misma superficie en todos los clientes. Esta separación
+evita cerrar un ticket de API suponiendo que la UI ya tiene paridad. También evita confundir una pérdida del
+importer con una ausencia del modelo.
 
 | Superficie          | Prime-board hoy                                                                             | Diferencia relevante frente a Linear                                                            | Alcance de multi-workspace                                                          |
 | ------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -176,8 +175,8 @@ pérdida del importer con una ausencia del modelo.
 | Export/rebuild      | Repository Replica Git (`.prime-board`), metadata y rebuild local; no exporta secretos.     | No hay equivalente directo en Linear. Algunos datos de importación tienen política de pérdida.  | PRB-417 separa namespaces y evita rebuild destructivo de vecinos.                   |
 | Auditoría/operación | Activity de Issue, webhooks, comentarios e Inbox receipts.                                  | Linear separa history, notifications y audit entries con más canales.                           | PRB-416 mantiene el modelo compacto, pero scoped por Workspace.                     |
 
-Los documentos de migración (`docs/specs/migracion-linear.md`) deben leerse como política del importer:
-que una entidad no se importe o se convierta no significa que esté ausente del dominio operativo.
+Lee los documentos de migración (`docs/specs/migracion-linear.md`) como política del importer. Que una
+entidad no se importe o se convierta no significa que falte en el dominio operativo.
 
 ## Diferencias que no deben tratarse como bugs
 
@@ -196,7 +195,7 @@ copiar Linear:
 
 ## Gaps que sí quedan registrados
 
-Los gaps de paridad general siguen su backlog propio (por ejemplo PRB-376, PRB-377 y los tickets que
+Los gaps de paridad general mantienen su backlog propio (por ejemplo PRB-376, PRB-377 y los tickets que
 esas auditorías derivaron). Los gaps que bloquean específicamente varios Workspaces son:
 
 | Gap                                            | Ticket  |
@@ -236,7 +235,7 @@ esas auditorías derivaron). Los gaps que bloquean específicamente varios Works
 
 ## Regla de actualización
 
-Actualizar esta comparación cuando cambie el schema público de Linear, se inspeccione la aplicación con
-acceso verificable o se cierre una diferencia relevante en prime-board. No usar los conteos de campos como
-objetivo de calidad: la decisión es mantener semántica útil, aislamiento y una interfaz agent-first, no
-convertir prime-board en una copia completa de Linear.
+Actualiza esta comparación cuando cambie el schema público de Linear, inspeccionemos la aplicación con
+acceso verificable o cerremos una diferencia relevante en prime-board. No uses los conteos de campos como
+objetivo de calidad. La decisión prioriza semántica útil, aislamiento e interfaz agent-first, no una copia
+completa de Linear.

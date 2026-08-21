@@ -1,6 +1,6 @@
 # RESOURCES.md Format
 
-`RESOURCES.md` is the curated set of trusted sources for this topic. Knowledge for explainers should be drawn from here, not from parametric guesses. Wisdom comes from the communities listed here.
+`RESOURCES.md` is the curated set of trusted sources for the topic. Use it as the source for explainer knowledge, not model guesses. Use the listed communities for wisdom.
 
 ## Structure
 
@@ -24,9 +24,9 @@
 
 ## Rules
 
-- **High-trust only.** Prefer primary sources, recognised experts, peer-reviewed work, and communities with strong moderation. If a resource is marketing dressed as education, leave it out.
-- **Annotate every entry.** A bare link is useless in three months. Add one line: what it covers and when to reach for it.
-- **Group by Knowledge / Wisdom.** Mirrors the philosophy in [SKILL.md](./SKILL.md). It is fine for a resource to appear in only one group.
-- **Surface gaps explicitly.** If no good resource exists for an area the mission needs, write a `## Gaps` section listing what is missing. This drives future search.
-- **Prune ruthlessly.** A resource that turned out to be wrong, shallow, or off-mission should be removed, not buried. Better five sharp sources than thirty mediocre ones.
-- **Record community preferences.** If the user has opted out of joining communities, note it here so future sessions don't keep proposing them.
+- **Use high-trust sources only.** Prefer primary sources, recognized experts, peer-reviewed work, and strongly moderated communities. Exclude marketing presented as education.
+- **Annotate every entry.** A link without context loses value. Add one line that states what it covers and when to use it.
+- **Group by Knowledge / Wisdom.** Follow the philosophy in [SKILL.md](./SKILL.md). Put each resource in one group.
+- **Record gaps explicitly.** If no good resource covers an area required by the mission, add a `## Gaps` section with the missing topic. Use it to guide future searches.
+- **Remove weak resources.** Remove resources that are wrong, shallow, or outside the mission. Prefer five strong sources to thirty weak sources.
+- **Record community preferences.** If the user does not want to join communities, record that choice so future sessions do not suggest them.

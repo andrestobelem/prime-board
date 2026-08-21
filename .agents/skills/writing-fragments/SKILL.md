@@ -6,15 +6,15 @@ disable-model-invocation: true
 
 <what-to-do>
 
-This is pure **explore**: widen the space of what could be written without committing to structure — committing is _exploit_, a separate skill's job. Run a grilling session that produces fragments, interviewing the user relentlessly about whatever they want to write about. Imposing phases, outlines, or article structure is out of scope here.
+This skill performs only **explore**. Expand possible content without choosing a structure. Choosing a structure is _exploit_ and belongs to another skill. Run a grilling session that produces fragments. Interview the user about the subject they want to write about. Do not impose phases, outlines, or article structure.
 
-As fragments emerge from either side of the conversation, append them to a single markdown file.
+As either participant produces fragments, append them to one Markdown file.
 
-If the user did not pass a path, ask once where to save the document, then remember it for the rest of the session.
+If the user did not provide a path, ask once where to save the document. Remember the path for the rest of the session.
 
-Capture fragments from the very first thing the user says, including the initial prompt.
+Capture fragments from the user's first message, including the initial prompt.
 
-On first write, put a single H1 at the top with a working title (it can change later) and nothing else — no metadata, no TOC, no date.
+On the first write, add one H1 with a working title. The title can change later. Add nothing else: no metadata, TOC, or date.
 
 </what-to-do>
 
@@ -22,9 +22,9 @@ On first write, put a single H1 at the top with a working title (it can change l
 
 ## What is a fragment
 
-A fragment is any piece of text that might survive into the final article. It must be _readable by the author_ — the author can tell what it means — but it does not need to define its terms or be comprehensible to a cold reader. The bar is "is this a piece of good writing?", not "is this a self-contained argument?"
+A fragment is text that might remain in the final article. It must be _readable by the author_, who can tell what it means. It does not need to define its terms or make sense to a new reader. Evaluate it as writing, not as a complete argument.
 
-Fragments are deliberately heterogeneous. Examples of what could be a fragment:
+Fragments can have different forms. Examples include:
 
 - A sharp sentence you'd want to deploy somewhere but don't yet know where.
 - A claim with a one-line justification.
@@ -35,9 +35,9 @@ Fragments are deliberately heterogeneous. Examples of what could be a fragment:
 - A complaint, a confession, a punchline.
 - A **leading word** — a compact metaphor or coinage the whole piece can hang on (one term that names the idea, the way _tracer bullets_ or _fog of war_ names a whole pattern).
 
-Of these, the leading word is the most valuable fragment to land. It is load-bearing: name the right one in explore and it shapes the structure, the transitions, and the title later — paying dividends through the entire exploit phase. When the conversation circles a recurring idea, push to coin a word for it.
+A leading word is the most valuable fragment. It is load-bearing: the right word can shape the later structure, transitions, and title. When the conversation returns to one idea, try to create a word for it.
 
-The novelist's diary is the model: years of unstructured noticings that later get mined for raw material. Fragments are noticings.
+Use a novelist's diary as the model: collect unstructured observations that can later provide raw material. Fragments are observations.
 
 ## File format
 
@@ -66,14 +66,14 @@ A reaction to it.
 - And want to be near each other
 ```
 
-Fragments are separated by a horizontal rule (`\n---\n`). No headings inside the body. No tags. No order beyond the order they were added.
+Separate fragments with a horizontal rule (`\n---\n`). Do not use headings inside the body or tags. Keep fragments in the order added.
 
 ## Writing rhythm
 
-Append silently. Don't ask permission for each fragment. Mention what you added in passing ("adding that"), but don't interrupt the conversation with save dialogs.
+Append without asking permission for each fragment. Mention the addition in passing ("adding that"). Do not interrupt the conversation with save dialogs.
 
-Before every write: re-read the file from disk. The user may have edited, reordered, or deleted fragments between turns — preserve their changes. Never overwrite the file; only append (or, if the user asks, edit a specific fragment in place).
+Before every write, reread the file from disk. The user may have edited, reordered, or deleted fragments. Preserve those changes. Never overwrite the file. Append only, unless the user asks you to edit a specific fragment in place.
 
-The user can say "cut the last one", "rewrite that one sharper", "merge those two" at any time. Treat those as first-class instructions.
+Treat "cut the last one", "rewrite that one sharper", and "merge those two" as first-class instructions at any time.
 
 </supporting-info>

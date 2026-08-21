@@ -2,15 +2,10 @@
 status: aceptada — el rol de SQLite fue acotado por ADR-0004
 ---
 
-# Bun + TypeScript + SQLite, y no PostgreSQL
+# Bun + TypeScript + SQLite, no PostgreSQL
 
-prime-board corre local-first en la máquina del usuario, igual que prime-agent, así que la
-premisa es **un solo proceso y cero configuración**. Bun trae SQLite integrado (`bun:sqlite`)
-y sirve la API y la UI desde el mismo proceso, con persistencia ACID en un archivo único.
+prime-board funciona local-first en la máquina del usuario, igual que prime-agent. La premisa es **un solo proceso y cero configuración**. Bun incluye SQLite (`bun:sqlite`) y sirve la API y la UI desde el mismo proceso. SQLite mantiene la persistencia ACID en un archivo único.
 
-Se evaluó PostgreSQL el 2026-08-14 y se **ratificó SQLite puro**: con single-tenant el único
-escritor es el proceso Bun, así que la limitación de concurrencia de SQLite no aplica, el
-volumen esperado es trivial, y Postgres rompería la premisa de cero configuración.
+El equipo evaluó PostgreSQL el 2026-08-14 y **ratificó SQLite puro**. En el modo single-tenant, el proceso Bun es el único escritor. Por eso la limitación de concurrencia de SQLite no aplica. El volumen esperado es trivial y PostgreSQL rompería la premisa de cero configuración.
 
-Se reabre solo si la visión cambia a hosteado/multi-tenant, si hay múltiples instancias del
-server, o si aparecen escritores externos directos a la base.
+Reabriremos esta decisión si la visión cambia a un servicio alojado o multi-tenant, si ejecutamos varias instancias del server o si aparecen escritores externos directos a la base.

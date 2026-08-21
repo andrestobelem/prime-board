@@ -8,38 +8,24 @@
 
 ## Procedimiento
 
-Se ejecutó `scripts/validate-bun-sql.ts` contra un PostgreSQL local levantado
-con credenciales efímeras. La URL se recibió únicamente por
-`PRIME_BOARD_POSTGRES_URL`; no se guardó ni se imprimió ningún secreto. El
-contenedor y su volumen fueron temporales y se eliminaron al terminar la
-validación.
+El equipo ejecutó `scripts/validate-bun-sql.ts` contra un PostgreSQL local con credenciales efímeras. El proceso recibió la URL solo mediante `PRIME_BOARD_POSTGRES_URL`; no guardó ni imprimió secretos. El equipo eliminó el contenedor y su volumen al terminar la validación.
 
-El script comprueba URL, pool, parámetros interpolados, `RETURNING`, JSONB,
-filas afectadas, rollback, errores, cierre y aislamiento de la conexión de una
-transacción. La opción `max: 2` permite comprobar que una consulta concurrente
-fuera de una transacción obtiene otra conexión mientras la transacción conserva
-la suya.
+El script comprueba la URL, el pool, los parámetros interpolados, `RETURNING`, JSONB, filas afectadas, rollback, errores, cierre y aislamiento de la conexión de una transacción. `max: 2` permite verificar que una query concurrente fuera de una transacción obtiene otra conexión mientras la transacción conserva la suya.
 
 ## Resultado observado
 
-La ejecución terminó con `passed: true`:
+La ejecución terminó con `passed: true` y produjo estos resultados:
 
 - `new Bun.SQL({ url, max, idleTimeout, maxLifetime, connectionTimeout })` se
   conecta correctamente.
-- Los valores interpolados se parametrizan y un objeto JavaScript se inserta y
-  recupera como JSONB.
+- Bun parametriza los valores interpolados y permite insertar y recuperar un objeto JavaScript como JSONB.
 - `INSERT ... RETURNING` devuelve una lista de filas.
 - En Bun 1.3.14 el resultado de una sentencia sin filas expone `count` como la
   cantidad afectada; `affectedRows` aparece en la metadata pero queda `null`.
   El adaptador futuro debe normalizar `count` a `rowCount` del contrato, sin
   depender de `affectedRows`.
-- `sql.begin(async tx => ...)` hace rollback cuando la callback lanza y reserva
-  una conexión dedicada: la consulta concurrente observada usó otro backend
-  PID.
-- Los errores se rechazan como `PostgresError`. El código runtime observado
-  para las sentencias inválidas/violaciones probadas fue
-  `ERR_POSTGRES_SERVER_ERROR`; el adaptador debe conservar el error original
-  como `cause` y no incluir SQL ni parámetros en mensajes normalizados.
+- `sql.begin(async tx => ...)` hace rollback cuando la callback lanza y reserva una conexión dedicada. La query concurrente observada usó otro backend PID.
+- Bun rechaza los errores como `PostgresError`. El código runtime observado para las sentencias inválidas y las violaciones probadas fue `ERR_POSTGRES_SERVER_ERROR`. El adaptador debe conservar el error original como `cause` y excluir SQL y parámetros de los mensajes normalizados.
 - `sql.close({ timeout: 5 })` cierra el pool de forma awaitable.
 
 ## Configuración recomendada para el próximo adaptador
@@ -54,14 +40,10 @@ const sql = new Bun.SQL({
 });
 ```
 
-Los límites son defaults operativos del adaptador, no valores que deban
-quedar embebidos en el dominio. La URL y credenciales deben venir de un canal
-de configuración protegido y nunca de `.prime-board/` ni de documentación
-versionada.
+Estos límites son defaults operativos del adaptador, no valores del dominio. La URL y las credenciales deben provenir de un canal de configuración protegido, nunca de `.prime-board/` ni de documentación versionada.
 
 ## Fuentes primarias
 
 - Bun SQL docs (`oven-sh/bun`, `docs/runtime/sql.mdx`): `Bun.SQL`, opciones de
   pool, `sql.begin`, `sql.reserve` y `sql.close`.
-- Validación reproducible versionada en
-  `scripts/validate-bun-sql.ts`.
+- Validación reproducible y versionada en `scripts/validate-bun-sql.ts`.

@@ -6,17 +6,17 @@ disable-model-invocation: true
 
 <what-to-do>
 
-The user has passed (or will pass) a markdown file of raw material. This is **exploit**: the exploring is done, the pile is fixed — commit to a path through it and mine the pile to fill each beat.
+The user provides a Markdown file of raw material. This is **exploit**: exploration is complete and the input is fixed. Choose a path through it and use the material to fill each beat.
 
-If the user did not say where to save the article, ask once and remember the path.
+If the user did not provide an article path, ask once and remember it.
 
-Then run a beat-by-beat journey, choose-your-own-adventure style:
+Run the article as a beat-by-beat journey. Let the user choose the path:
 
-1. **Establish the prerequisites.** Before any beats, settle with the user what the audience already knows walking in — the concepts that are **grounded** from the start. Everything else must be grounded by a beat before a later beat can use it. See [Grounding](#grounding).
-2. Write 2–3 candidate **starting beats**, drawn from the raw material. Each is a different entry point into the article. Each may only lean on grounded concepts; note what new concepts each one grounds. Show the user the beats before writing to the article file. The user picks one. Preview what beats that pick unlocks — as if the user is seeing a little way down the path.
-3. Once the user picks a starting beat, write **only that beat** to the article file. A beat may be one sentence or several paragraphs — whatever that beat naturally is. Stop there.
-4. Re-read the article file from disk. Then offer 2–3 candidate **next beats** — different directions the journey could pivot to from where the article now stands. Each must be reachable from the current grounded set; note what each one grounds.
-5. Loop steps 3–5 until the article reaches a natural end.
+1. **Establish the prerequisites.** Before any beat, ask what the audience already knows. These concepts are **grounded** from the start. Ground every other concept in a beat before a later beat uses it. See [Grounding](#grounding).
+2. Write 2–3 candidate **starting beats** from the raw material. Each is a different entry point. Each can use only grounded concepts. State which new concepts each beat grounds. Show the beats before writing to the article file. The user chooses one. Preview the beats that choice makes available.
+3. After the user chooses a starting beat, write **only that beat** to the article file. A beat can be one sentence or several paragraphs. Stop after writing it.
+4. Reread the article file from disk. Offer 2–3 candidate **next beats** that take the journey in different directions. Each must be reachable from the current grounded set. State which concepts each beat grounds.
+5. Repeat steps 3–5 until the article reaches a natural end.
 
 </what-to-do>
 
@@ -24,44 +24,44 @@ Then run a beat-by-beat journey, choose-your-own-adventure style:
 
 ## Grounding
 
-Every **concept** has to be **grounded** before a beat can lean on it: the audience either walked in knowing it or met it in an earlier beat. A beat that reaches for an ungrounded concept loses the reader — that is the one move the journey can't make. The unit is the concept, not the word for it: a beat can lean on an idea the reader lacks even with no jargon in sight. Where a concept has a name — a **term** — grounding it means landing the idea and the term together.
+Every **concept** must be **grounded** before a beat can use it. The audience either knows it at the start or meets it in an earlier beat. A beat that uses an ungrounded concept can lose the reader. The journey cannot make that move. The unit is the concept, not its word. A beat can use an idea the reader lacks even without jargon. When a concept has a name, a **term**, ground the idea and term together.
 
-A concept gets grounded one of two ways:
+Ground a concept in one of two ways:
 
-- **Prerequisite** — grounded before the first beat. The audience brings it. Fixed at the start.
-- **Introduced** — a beat establishes it, and from then on it's grounded for every later beat.
+- **Prerequisite** — ground it before the first beat. The audience brings it. Set it at the start.
+- **Introduced** — establish it in a beat. It remains grounded for every later beat.
 
-So each beat does two jobs: it **requires** concepts that are already grounded, and it **grounds** new ones. Keep a running list of what's grounded so far, and update it each time a beat lands.
+Each beat has two jobs: it **requires** already grounded concepts and **grounds** new concepts. Keep a list of grounded concepts and update it after each beat.
 
-This is what shapes the choose-your-own-adventure. A candidate beat is only reachable if everything it requires is already grounded; picking a beat that grounds concept X unlocks every beat that was waiting on X. When you offer next beats, they must all be reachable from the current grounded set — and say what each one grounds, so the user can see which paths it opens.
+This rule shapes the user-selected path. A candidate beat is reachable only when all required concepts are grounded. A beat that grounds concept X enables every beat that requires X. When offering next beats, include only reachable beats and state what each beat grounds so the user can see which paths it enables.
 
-The big lever is what you make a prerequisite versus what you ground inside the piece. Demand too much up front and you shut out readers who don't have it; ground too much inside and the early beats drown in definitions. Settle this with the user when you establish prerequisites, and revisit it whenever a tempting beat turns out to require a concept nothing has grounded yet — the fix is either a grounding beat before it, or promoting the concept to a prerequisite.
+Choose what is a prerequisite and what to ground inside the article. Too many prerequisites exclude readers. Too many definitions make early beats difficult to read. Settle this with the user when establishing prerequisites. Revisit it when a candidate beat requires an ungrounded concept. Add a grounding beat or promote the concept to a prerequisite.
 
 ## What is a beat
 
-A beat is one move in the journey. It does one thing — sets a scene, lands a point, asks a question, drops an aside, twists the angle. Then it stops, leaving the reader at a place where the next beat can pivot.
+A beat is one move in the journey. It performs one action: set a scene, land a point, ask a question, add an aside, or change the angle. Then stop. Leave the reader at a point where the next beat can change direction.
 
-A beat is sized by what it needs:
+Size a beat according to its needs:
 
 - A single sentence if that's all the move is ("And then nothing happened for three weeks.").
 - A short paragraph if the move needs setup.
 - Multiple paragraphs if the beat is a self-contained vignette, argument, or example.
 
-If a "beat" needs five paragraphs and three subheadings, it's not a beat — it's two beats glued together. Split it.
+If a "beat" needs five paragraphs and three subheadings, it is not one beat. It is two beats joined together. Split it.
 
 ## Pulling from the pile
 
-Pull material from the raw pile to populate each beat. You can paraphrase, split, recombine, or quote. The pile is a quarry.
+Pull material from the raw input for each beat. You can paraphrase, split, recombine, or quote. Treat the input as source material.
 
 ## Ending the journey
 
-The article ends when the journey is complete — not when the pile is empty. Most piles will have leftover fragments that don't make it in. That is fine; that is the point of having more raw material than you need.
+End the article when the journey is complete, not when the input is empty. Some fragments will remain unused. That is expected; extra raw material gives you options.
 
 ## Writing rhythm
 
-- Append one beat at a time. Never write ahead.
-- Re-read the article file from disk before every write. Preserve user edits absolutely.
-- If the user edits a previous beat substantially, let it change what comes next.
-- If the user says "rewrite that beat" or "go back and try a different beat 3", do it — edit in place, leave the rest alone.
+- Append one beat at a time. Never write future beats early.
+- Reread the article file from disk before every write. Preserve user edits.
+- If the user substantially edits an earlier beat, use the edit to guide later beats.
+- If the user says "rewrite that beat" or "go back and try a different beat 3", edit that beat in place and leave the rest unchanged.
 
 </supporting-info>

@@ -1,6 +1,6 @@
 # GLOSSARY.md Format
 
-`GLOSSARY.md` is the canonical language for this teaching workspace. All explainers, exercises, and learning records should adhere to its terminology. Building it is itself part of learning: compressing a concept into a tight definition is evidence the user understands it.
+`GLOSSARY.md` is the canonical language for this teaching workspace. Use its terminology in all explainers, exercises, and learning records. Building the glossary is also learning: a concise definition shows that the user understands the concept.
 
 ## Structure
 
@@ -26,10 +26,10 @@ _Avoid_: Effort score, intensity rating
 
 ## Rules
 
-- **Add a term only when the user understands it.** The glossary is a record of compressed knowledge, not a dictionary the user reads to learn. If the user has just been introduced to a concept, wait until they can use it correctly before promoting it here.
-- **Be opinionated.** When several words exist for the same concept, pick the best one and list the rest as aliases to avoid. This is how language compresses.
-- **Keep definitions tight.** One or two sentences. Define what the term IS, not what it does or how to do it.
-- **Use the glossary's own terms inside definitions.** Once a term is in the glossary, prefer it everywhere — including inside other definitions. This is what makes complex terms easier to grasp later.
-- **Group under subheadings** when natural clusters emerge (e.g. `## Anatomy`, `## Programming`). A flat list is fine when terms cohere.
-- **Flag ambiguities explicitly.** If a term is used loosely in the wider field, note the resolution: "In this workspace, 'set' always means a working set — warm-ups are tracked separately."
-- **Revise as understanding deepens.** A definition the user wrote in week one may be wrong by week six. Update in place; do not leave stale entries.
+- **Add a term only when the user understands it.** The glossary records compressed knowledge. It is not a dictionary for first exposure. Wait until the user can use a new concept correctly before adding it.
+- **Be opinionated.** When several words describe one concept, choose the best word and list the others as aliases to avoid. This compresses the language.
+- **Keep definitions tight.** Use one or two sentences. Define what the term IS, not what it does or how to use it.
+- **Use glossary terms inside definitions.** After adding a term, prefer it everywhere, including in other definitions. This makes complex terms easier to understand.
+- **Group under subheadings** when natural clusters emerge (for example, `## Anatomy` or `## Programming`). Use a flat list when terms form one group.
+- **Flag ambiguities explicitly.** If a term has a broad meaning in the field, record the chosen meaning: "In this workspace, 'set' always means a working set — warm-ups are tracked separately."
+- **Revise as understanding deepens.** A definition written in week one may be wrong by week six. Update it in place. Do not leave stale entries.

@@ -5,33 +5,33 @@ description: Create exercise directory structures with sections, problems, solut
 
 # Scaffold Exercises
 
-Create exercise directory structures that pass `pnpm ai-hero-cli internal lint`, then commit with `git commit`.
+Create exercise directory structures that pass `pnpm ai-hero-cli internal lint`. Then commit with `git commit`.
 
 ## Directory naming
 
-- **Sections**: `XX-section-name/` inside `exercises/` (e.g., `01-retrieval-skill-building`)
-- **Exercises**: `XX.YY-exercise-name/` inside a section (e.g., `01.03-retrieval-with-bm25`)
-- Section number = `XX`, exercise number = `XX.YY`
-- Names are dash-case (lowercase, hyphens)
+- **Sections**: `XX-section-name/` inside `exercises/` (for example, `01-retrieval-skill-building`).
+- **Exercises**: `XX.YY-exercise-name/` inside a section (for example, `01.03-retrieval-with-bm25`).
+- The section number is `XX`. The exercise number is `XX.YY`.
+- Use dash-case names with lowercase letters and hyphens.
 
 ## Exercise variants
 
 Each exercise needs at least one of these subfolders:
 
-- `problem/` - student workspace with TODOs
-- `solution/` - reference implementation
-- `explainer/` - conceptual material, no TODOs
+- `problem/` — student workspace with TODOs
+- `solution/` — reference implementation
+- `explainer/` — conceptual material with no TODOs
 
-When stubbing, default to `explainer/` unless the plan specifies otherwise.
+When creating stubs, use `explainer/` unless the plan specifies another variant.
 
 ## Required files
 
 Each subfolder (`problem/`, `solution/`, `explainer/`) needs a `readme.md` that:
 
-- Is **not empty** (must have real content, even a single title line works)
-- Has no broken links
+- Is **not empty**. It must contain real content; a title line is sufficient.
+- Has no broken links.
 
-When stubbing, create a minimal readme with a title and a description:
+When creating a stub, write a minimal readme with a title and description:
 
 ```md
 # Exercise Title
@@ -39,15 +39,15 @@ When stubbing, create a minimal readme with a title and a description:
 Description here
 ```
 
-If the subfolder has code, it also needs a `main.ts` (>1 line). But for stubs, a readme-only exercise is fine.
+If a subfolder has code, it also needs a `main.ts` (>1 line). A readme-only exercise is valid for stubs.
 
 ## Workflow
 
-1. **Parse the plan** - extract section names, exercise names, and variant types
-2. **Create directories** - `mkdir -p` for each path
-3. **Create stub readmes** - one `readme.md` per variant folder with a title
-4. **Run lint** - `pnpm ai-hero-cli internal lint` to validate
-5. **Fix any errors** - iterate until lint passes
+1. **Parse the plan** — extract section names, exercise names, and variant types.
+2. **Create directories** — run `mkdir -p` for each path.
+3. **Create stub readmes** — write one `readme.md` per variant folder with a title.
+4. **Run lint** — run `pnpm ai-hero-cli internal lint`.
+5. **Fix errors** — repeat until lint passes.
 
 ## Lint rules summary
 
@@ -66,9 +66,9 @@ The linter (`pnpm ai-hero-cli internal lint`) checks:
 
 When renumbering or moving exercises:
 
-1. Use `git mv` (not `mv`) to rename directories - preserves git history
-2. Update the numeric prefix to maintain order
-3. Re-run lint after moves
+1. Use `git mv` (not `mv`) to rename directories. This preserves git history.
+2. Update the numeric prefix to preserve order.
+3. Run lint again after moving files.
 
 Example:
 

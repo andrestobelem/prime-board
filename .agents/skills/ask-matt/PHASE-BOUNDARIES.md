@@ -1,8 +1,8 @@
 # Phase boundaries
 
-A **phase** is a chunk of work inside a session — the grilling, the implementation, the QA. The definition is fuzzy on purpose: a phase ends when you think *"ok, we're done with that"*.
+A **phase** is one unit of work in a session, such as grilling, implementation, or QA. Use a practical boundary: a phase ends when that unit of work is complete.
 
-The **phase boundary** is the gap between two phases, and it is the only place this decision belongs. Mid-phase there is no decision to make — continue, or split the work that's left into subagents. Compacting mid-phase makes the agent lose the thread.
+The **phase boundary** is the point between two phases. Make this context decision only at that point. During a phase, continue the work or split the remaining work into subagents. Do not compact during a phase because the agent can lose context.
 
 ## The five options
 
@@ -16,40 +16,40 @@ The **phase boundary** is the gap between two phases, and it is the only place t
 
 ## The tree
 
-Work top to bottom at the boundary. The first **yes** wins.
+At the boundary, evaluate the options from top to bottom. Choose the first option whose answer is **yes**.
 
-**1. Can you continue in this session?** Two things make the answer yes: the next phase needs this phase as a **primary source**, or you have enough [smart zone](https://www.aihero.dev/ai-coding-dictionary/smart-zone) left (~150k tokens) for the next phase to fit. Grilling → implementation is the standard yes: the implementation wants the reasoning verbatim, not a summary of it. Continue costs nothing and loses nothing, so rule it out before anything else.
+**1. Can you continue in this session?** Answer yes when either condition is true: the next phase needs this phase as a **primary source**, or the remaining [smart zone](https://www.aihero.dev/ai-coding-dictionary/smart-zone) (~150k tokens) can hold the next phase. Grilling → implementation is the standard yes because implementation needs the reasoning verbatim, not as a summary. Continuing avoids a context switch, so evaluate it first.
 
-**2. Is the context irrelevant to what comes next?** Is everything in this session — the exploration, the decisions, the dead ends — disposable? If so, **`/clear`**. It is the cheapest move on the board: it takes no time and hands back the whole window. `/clear` also isn't terminal — the old session stays resumable.
+**2. Is the context irrelevant to what comes next?** Decide whether all session content — exploration, decisions, and dead ends — can be discarded. If yes, use **`/clear`**. It returns the full context window without a context summary. `/clear` is not terminal; the old session remains resumable.
 
-The cost of getting this wrong is one-way. Clear a *relevant* context and you lose the **why** behind what you built, and no amount of reading the diff back gets it returned.
+This decision is not reversible. If you clear *relevant* context, you lose the reasons behind the work. Reading the diff later cannot restore those reasons.
 
-**3. Do you need to hand off?** `/handoff` is narrow. You need it only when you are:
+**3. Do you need to hand off?** Use `/handoff` only for these cases:
 
 - swapping to a **new harness** (Claude → Codex),
 - moving to a **new directory** or repo,
 - sending the work to a **colleague**,
 - or forking a side task you found **mid-phase** without derailing what you're doing.
 
-That list is the whole clause. What `/handoff` buys is **portability** — a file that travels. If nothing is travelling, you don't need it.
+This list is complete. `/handoff` provides **portability** through a file that can move between sessions. If no content must move, do not use it.
 
-**4. Can the task be done AFK?** Is it scoped tightly enough to run with you away from the keyboard, no steering? Then send it to a **subagent** and leave this session untouched. Automated review is the standard case: the agent reads the diff and reports, and you aren't needed while it does.
+**4. Can the task be done AFK?** Decide whether the task has a narrow scope and can run without steering. If yes, send it to a **subagent** and leave this session unchanged. Automated review is a standard case: the agent reads the diff and reports while you are away.
 
-**5. Otherwise, `/compact`.** Relevant context, same harness, same directory, and you need to stay in the loop — this is where the tree lands, and it lands here often. Pass it an instruction (`/compact we're going to QA this area`) so the summary keeps what the next phase needs.
+**5. Otherwise, use `/compact`.** Use it when the context is relevant, the harness and directory stay the same, and you must remain involved. Pass an instruction (`/compact we're going to QA this area`) so the summary retains what the next phase needs.
 
-`/compact` is the **default, not the first reach**. It sits at the bottom because the four questions above it are all cheaper or more precise. The failure mode when people start here is a fresh session that is confidently wrong about a decision the summary flattened.
+`/compact` is the **default, not the first option**. It is last because the four options above are cheaper or more precise. Using it first can create a fresh session with an incorrect understanding of a decision that the summary simplified.
 
 ## Primary and secondary sources
 
-Every move except **Continue** turns a **primary source** into a **secondary source** — the session as it happened, replaced by a summary of it. The trade is always the same shape:
+Every option except **Continue** changes the session from a **primary source** to a **secondary source**. The session is replaced by a summary. The trade-off is:
 
 | Source                            | Information | Noise | Room to move |
 | --------------------------------- | ----------- | ----- | ------------ |
 | Primary (Continue)                | Full        | Lots  | Little       |
 | Secondary (`/compact`, `/handoff`) | Lossy       | Less  | Lots         |
 
-This is why question 1 comes first. You only pay the lossiness when staying costs more than it saves.
+This is why question 1 comes first. Accept information loss only when continuing costs more than it saves.
 
 ## These are judgement calls
 
-The questions are not objective — each has taste in it, and the same boundary can go two ways on two days. The value is in asking them **in order**, at the boundary rather than in the middle of the work.
+These questions require judgment. The same boundary can produce different choices on different days. Always ask the questions **in order** and make the choice at the boundary, not during the phase.

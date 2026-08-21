@@ -2,11 +2,11 @@
 
 > Ticket: [PRB-377](http://localhost:3333/issue/PRB-377)  
 > Fecha: 2026-08-18  
-> Alcance: entidades, relaciones y responsabilidades del modelo; no implementación de correcciones.
+> Alcance: entidades, relaciones y responsabilidades del modelo; no incluye la implementación de correcciones.
 
 ## Método y fuentes
 
-Se revisaron el SDL vigente en `packages/schema/src/sdl.ts` y las migraciones de SQLite `apps/server/src/db/migrations/0001_init.sql` a `0018_team_archive.sql`. La referencia externa fue la documentación oficial de Linear:
+Revisamos el SDL vigente en `packages/schema/src/sdl.ts` y las migraciones de SQLite `apps/server/src/db/migrations/0001_init.sql` a `0018_team_archive.sql`. Usamos como referencia externa la documentación oficial de Linear:
 
 - [Modelo conceptual](https://linear.app/docs/conceptual-model)
 - [Teams](https://linear.app/docs/teams)
@@ -19,13 +19,13 @@ Se revisaron el SDL vigente en `packages/schema/src/sdl.ts` y las migraciones de
 - [Documents](https://linear.app/docs/documents)
 - [Modelo exportable de Linear/Airbyte](https://linear.app/docs/airbyte)
 
-La comparación busca distinguir **paridad conceptual**, **divergencias intencionales** y **gaps pendientes**. No toda diferencia con Linear es un defecto.
+La comparación distingue **paridad conceptual**, **divergencias intencionales** y **gaps pendientes**. Una diferencia con Linear no es necesariamente un defecto.
 
 ## Veredicto
 
-El núcleo jerárquico de Prime Board está bien alineado con Linear: un workspace contiene teams y actores; los teams contienen issues y workflow states; projects, cycles y milestones organizan el trabajo; initiatives agrupan projects; y labels, relaciones, comentarios, vistas e Inbox completan la operación.
+El núcleo jerárquico de prime-board se alinea con Linear: un Workspace contiene Teams y Actors; los Teams contienen Issues y Workflow States; Projects, Cycles y Milestones organizan el trabajo; Initiatives agrupan Projects; y Labels, Relations, Comments, Saved Views e Inbox completan la operación.
 
-Prime Board no pretende ser una réplica completa del modelo actual de Linear. Su diferencia principal es el enfoque local y agent-first: un único workspace, actores humanos/agentes, API keys por actor, CLI, MCP y webhooks.
+Prime Board no pretende replicar todo el modelo actual de Linear. Su diferencia principal es el enfoque local y agent-first: un solo Workspace, Actors humanos y agentes, API keys por Actor, CLI, MCP y webhooks.
 
 ## Mapa de entidades y relaciones
 
@@ -102,4 +102,4 @@ InboxItem = Activity relevante + InboxReceipt por Actor
 4. Añadir miembros y dependencias de Project.
 5. Evaluar releases e integraciones solo después de definir el alcance del producto agent-first.
 
-Esta auditoría no implica que los gaps deban implementarse todos: son un mapa para priorizar futuras decisiones de producto.
+Esta auditoría no exige implementar todos los gaps. Los usa como mapa para priorizar decisiones futuras de producto.

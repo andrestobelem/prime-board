@@ -5,28 +5,28 @@ disable-model-invocation: true
 argument-hint: "A workflow to design, or nothing to go find one"
 ---
 
-Run a stateful `/grilling` session whose only output is **workflow** specs. Use the grilling discipline — relentless, a round of questions at a time, a recommended answer attached to each — aimed at the vocabulary and goal below. Create, edit, and delete specs as the grilling resolves things.
+Run a stateful `/grilling` session. Produce only **workflow** specs. Use the grilling discipline: ask one round of questions at a time and include a recommended answer for each question. Focus on the vocabulary and goal below. Create, edit, or delete specs as the answers resolve them.
 
 ## The loop lens
 
-A **loop** is a recurring pattern in the user's life: their career, their week, their morning, a single repeated activity. Picturing a life as loops within loops reveals how predictable its activities really are — which is what makes them worth **delegating**. Use the lens to find loops worth specifying, and propose ones the user hasn't noticed.
+A **loop** is a recurring pattern in the user's life: a career activity, a weekly activity, a morning activity, or one repeated task. Modeling a life as nested loops shows which activities are predictable and suitable for **delegation**. Use this lens to find loops worth specifying and to propose loops the user has not identified.
 
 A **workflow** is the spec of one loop, made real. You run a workflow on a loop — the loop is its running instantiation. Workflows live in `workflows/*.md` and are the source of truth.
 
 ## Vocabulary
 
-A shared language, reached for only when a workflow calls for it — never a checklist. **Mandate nothing structural**: a workflow needs no AI, no checkpoint, and no schedule unless the grilling shows it does.
+Use this shared language only when a workflow needs it. It is not a checklist. **Define no structure by default**: a workflow needs no AI, checkpoint, or schedule unless the grilling shows that it does.
 
-- **Trigger** — what fires each run: an **event** (a new email, a new issue) or a **schedule** (every morning). Event-triggering is usually the more efficient.
+- **Trigger** — what starts each run: an **event** (a new email, a new issue) or a **schedule** (every morning). An event trigger is usually more efficient.
 - **Checkpoint** — a human-in-the-loop point where the user is asked to verify or decide. Some workflows have none and run autonomously; some use no AI at all.
-- **Push right** — defer the checkpoint as far as it will go. Do maximal work before involving the human, so they are asked once, late, with everything prepared.
-- **Brief** — what a checkpoint presents: a tight, decision-ready summary — what was produced, why, and a link down to the asset itself — never the raw output. The user reads a brief, not a draft. Speed of review is imperative.
+- **Push right** — defer the checkpoint as far as possible. Do the maximum work before involving the human. Ask once, late, with everything prepared.
+- **Brief** — what a checkpoint presents: a concise, decision-ready summary of what was produced and why, with a link to the asset. Never present the raw output. The user reads a brief, not a draft. Keep review fast.
 
 ## Definition of done
 
-A workflow spec is done when an implementer agent could build it without asking a single question. Grill until then; nothing is done while a question remains.
+A workflow spec is complete when an implementer agent can build it without asking a question. Continue grilling until this condition is true.
 
 ## The workspace
 
 - `workflows/*.md` — one spec per workflow.
-- `NOTES.md` — raw notes on the user's world: the tools they use, the channels they process, and their own terminology for both. When it is empty or thin, interview them about their world before specifying anything. Sharpen fuzzy terms into canonical ones as they surface, and record them here.
+- `NOTES.md` — raw notes about the user's world: the tools they use, the channels they process, and their terminology for both. If it is empty or incomplete, interview the user before specifying anything. Replace vague terms with canonical terms as they appear, and record them here.

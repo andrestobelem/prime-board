@@ -1,40 +1,39 @@
-# Domain Docs
+# Documentación del dominio
 
-How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+Cómo deben consumir las skills de ingeniería la documentación del dominio al explorar el código.
 
-## Before exploring, read these
+## Lectura inicial
 
-- **`CONTEXT.md`** at the repo root, or
-- **`CONTEXT-MAP.md`** at the repo root if it exists — it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
-- **`docs/adr/`** — read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
+Antes de explorar, lee uno de estos archivos:
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
+- **`CONTEXT.md`** en la raíz del repositorio; o
+- **`CONTEXT-MAP.md`** en la raíz, si existe. Este archivo apunta a un `CONTEXT.md` por contexto. Lee cada contexto relacionado con el tema.
+- **`docs/adr/`**. Lee los ADR que afecten el área que vas a modificar. En un repositorio con varios contextos, revisa también `src/<context>/docs/adr/` para las decisiones específicas del contexto.
 
-## File structure
+Si alguno de estos archivos no existe, continúa sin informar la ausencia y sin proponer su creación. La skill `/domain-modeling` (a la que llegan `/grill-with-docs` y `/improve-codebase-architecture`) los crea de forma diferida cuando una decisión o un término del dominio lo requiere.
 
-Este repo es **single-context**: `apps/*` y `packages/*` son capas de un mismo
-producto (server, web, cli, mcp, schema), no dominios separados.
+## Estructura de archivos
 
-```
+Este repositorio es **single-context**: `apps/*` y `packages/*` son capas de un mismo producto (server, web, CLI, MCP y schema), no dominios separados.
+
+```text
 /
-├── CONTEXT.md          ← glosario del dominio (se crea cuando haga falta)
+├── CONTEXT.md          ← glosario del dominio (se crea cuando hace falta)
 ├── docs/adr/           ← decisiones de arquitectura
 ├── apps/{server,web,cli,mcp}
 └── packages/schema
 ```
 
-Si algún día un paquete desarrolla su propio lenguaje de dominio, se migra a
-multi-context con un `CONTEXT-MAP.md` en la raíz apuntando a un `CONTEXT.md` por
-contexto.
+Si un paquete desarrolla su propio lenguaje de dominio, migra el repositorio a multi-context y crea un `CONTEXT-MAP.md` en la raíz. El mapa debe apuntar a un `CONTEXT.md` por contexto.
 
-## Use the glossary's vocabulary
+## Vocabulario del glosario
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+Cuando tu salida nombre un concepto del dominio (por ejemplo, en el título de un issue, una propuesta de refactor, una hipótesis o un nombre de test), usa el término definido en `CONTEXT.md`. No lo sustituyas por un sinónimo que el glosario marque como no recomendado.
 
-If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
+Si el concepto que necesitas no aparece en el glosario, trátalo como una señal. Tal vez estás inventando un término que el proyecto no usa. Si existe una carencia real, anótala para `/domain-modeling`.
 
-## Flag ADR conflicts
+## Conflictos con ADR
 
-If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
+Si tu salida contradice un ADR existente, informa el conflicto de forma explícita. No lo sobrescribas sin mencionarlo:
 
-> _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
+> _Contradice ADR-0007 (Memberships y alcance de Initiatives); conviene reabrirlo porque…_

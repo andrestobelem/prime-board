@@ -5,9 +5,9 @@ argument-hint: "What will the next session be used for?"
 disable-model-invocation: true
 ---
 
-Write a handoff summary of the current conversation so a fresh agent can continue the work. Instead of saving it, launch a background agent seeded with the summary as its prompt: `claude --bg --name "<descriptive name>" "<handoff summary>"`. It starts in the current working directory and returns immediately; the user manages it with `claude agents`.
+Write a handoff summary of the current conversation for a new agent. Do not save the summary. Launch a background agent with the summary as its prompt: `claude --bg --name "<descriptive name>" "<handoff summary>"`. It starts in the current working directory and returns immediately. The user manages it with `claude agents`.
 
-Always pass `-n`/`--name` with a descriptive name (e.g. `--name "Fix login bug"`) — it sets the display name shown in the job list, session picker, and terminal title.
+Always pass `-n`/`--name` with a descriptive name, for example `--name "Fix login bug"`. This sets the display name in the job list, session picker, and terminal title.
 
 Include a "suggested skills" section in the summary, naming which skills the next agent should call the Skill tool for.
 
@@ -15,4 +15,4 @@ Do not duplicate content already captured in other artifacts (specs, plans, ADRs
 
 Redact any sensitive information, such as API keys, passwords, or personally identifiable information — the summary becomes the agent's prompt.
 
-If the user passed arguments, treat them as a description of what the next session will focus on and tailor the summary accordingly.
+If the user passed arguments, use them to define the next session's focus and tailor the summary accordingly.
