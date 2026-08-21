@@ -14,3 +14,4 @@
 {"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-499"},"ts":"2026-08-21T20:55:12.058Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-500"},"ts":"2026-08-21T20:55:12.290Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-502"},"ts":"2026-08-21T20:57:30.770Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-503"},"ts":"2026-08-21T20:58:35.104Z","type":"relation_added"}
