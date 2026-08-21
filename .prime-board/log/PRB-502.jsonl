@@ -2,3 +2,5 @@
 {"actor":"admin","issue":"PRB-502","payload":{"type":"blocks","issue":"PRB-412"},"ts":"2026-08-21T20:57:30.707Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-502","payload":{"type":"related","issue":"PRB-472"},"ts":"2026-08-21T20:57:30.770Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-502","payload":{"type":"related","issue":"PRB-496"},"ts":"2026-08-21T20:57:30.827Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-502","payload":{"body":"Corregido en `677fb26`: la normalización legacy obtiene candidatos mediante `workspace_memberships`, escribe `workspace_id` y evita el producto cartesiano entre Actors y Teams.\n\nSe agregó una regresión con dos Workspaces y `team_memberships` vacío."},"ts":"2026-08-21T21:20:07.845Z","type":"commented"}
+{"actor":"admin","issue":"PRB-502","payload":{"from":"Needs Triage","to":"Ready for Human"},"ts":"2026-08-21T21:20:24.816Z","type":"state_changed"}

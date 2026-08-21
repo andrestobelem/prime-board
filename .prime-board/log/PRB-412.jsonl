@@ -22,3 +22,5 @@
 {"actor":"admin","issue":"PRB-412","payload":{"type":"blocked_by","issue":"PRB-500"},"ts":"2026-08-21T20:55:12.237Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-412","payload":{"type":"blocked_by","issue":"PRB-502"},"ts":"2026-08-21T20:57:30.707Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-412","payload":{"type":"blocked_by","issue":"PRB-503"},"ts":"2026-08-21T20:58:35.044Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-412","payload":{"type":"blocked_by","issue":"PRB-504"},"ts":"2026-08-21T21:09:37.343Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-412","payload":{"type":"blocked_by","issue":"PRB-505"},"ts":"2026-08-21T21:14:20.507Z","type":"relation_added"}
