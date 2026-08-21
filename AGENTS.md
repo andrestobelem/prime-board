@@ -18,10 +18,9 @@ para que lo usen agentes (en principio prime-agent, aunque debería poder usarse
   mensajes de commit y todo lo demás.
 - **En inglés:** la aplicación en sí (código, identificadores, mensajes de la app,
   API pública) y todo lo que sea parte de ella.
-- **Redacción técnica:** los textos técnicos en inglés adhieren directamente a `ASD-STE100
-  Simplified Technical English`. Los textos técnicos en español aplican los mismos principios
-  de claridad, brevedad, voz activa y terminología consistente, con la salvedad de que el idioma
-  es español.
+- **Redacción técnica:** aplique los principios de `ASD-STE100` adaptados al español en los
+  textos técnicos en español. En los textos técnicos en inglés, aplique directamente `ASD-STE100
+  Simplified Technical English`.
 
 ## Commits
 
