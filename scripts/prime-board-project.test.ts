@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { rmSync } from "node:fs";
 import {
   acquireInstanceLock,
   classifyInstance,
   deriveProjectIdentity,
   chooseAvailablePort,
+  reserveAvailablePort,
 } from "./prime-board-project-lib.ts";
 
 describe("project instance identity", () => {
@@ -70,5 +72,61 @@ describe("project instance ports", () => {
     await expect(chooseAvailablePort(3333, true, async () => false)).rejects.toThrow(
       "Port 3333 is already in use",
     );
+  });
+});
+
+describe("atomic project port reservations", () => {
+  test("serializes implicit selection across concurrent projects", async () => {
+    const home = `/tmp/prime-board-port-test-${crypto.randomUUID()}`;
+    let probeStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      probeStarted = resolve;
+    });
+    let releaseProbe!: () => void;
+    const probeReleased = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+
+    try {
+      const firstPromise = reserveAvailablePort(3333, false, home, async (port) => {
+        if (port === 3333) {
+          probeStarted();
+          await probeReleased;
+        }
+        return true;
+      });
+      await started;
+
+      const second = await reserveAvailablePort(3333, false, home, async () => true);
+      expect(second.port).toBe(3334);
+      releaseProbe();
+      const first = await firstPromise;
+      expect(first.port).toBe(3333);
+
+      first.release();
+      second.release();
+      expect(
+        await reserveAvailablePort(3333, true, home, async () => true).then(({ port, release }) => {
+          release();
+          return port;
+        }),
+      ).toBe(3333);
+    } finally {
+      releaseProbe?.();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the explicit occupied-port error for another reservation", async () => {
+    const home = `/tmp/prime-board-port-test-${crypto.randomUUID()}`;
+    const reservation = await reserveAvailablePort(3333, false, home, async () => true);
+    try {
+      await expect(reserveAvailablePort(3333, true, home, async () => true)).rejects.toThrow(
+        "Port 3333 is already in use",
+      );
+    } finally {
+      reservation.release();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
