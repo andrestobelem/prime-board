@@ -213,13 +213,21 @@ export const projectResolvers = {
     projectArchive: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       assertCanManageProject(context.db, viewer, args.id);
+      const projectBefore = requireProject(context, args.id);
       const archived = mapProject(archiveProject(context.db, args.id, true));
+      context.events.emit("project.updated", viewer, archived, {
+        archivedAt: { from: projectBefore.archived_at, to: archived.archivedAt },
+      });
       return { success: true, project: archived };
     },
     projectUnarchive: (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       assertCanManageProject(context.db, viewer, args.id);
+      const projectBefore = requireProject(context, args.id);
       const restored = mapProject(archiveProject(context.db, args.id, false));
+      context.events.emit("project.updated", viewer, restored, {
+        archivedAt: { from: projectBefore.archived_at, to: restored.archivedAt },
+      });
       return { success: true, project: restored };
     },
     milestoneCreate: (
