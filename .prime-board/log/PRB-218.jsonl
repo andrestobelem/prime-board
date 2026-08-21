@@ -1,5 +1,5 @@
 {"actor":"admin","issue":"PRB-218","payload":{"title":"UI: filtros en My issues (estado/proyecto)","description":"## Origen\n\nCriterio de PRB-202: My issues con filtros por estado/proyecto; la UI solo lista assignee=viewer.\n\n## Criterios\n\n- En `#/my`, filtrar por estado (tipo o id) y por proyecto\n- Combinar con assignee = viewer","number":218,"priority":0,"team":"PRB","state":"Needs Triage","assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-16T14:11:14.856Z","type":"created"}
-{"actor":"admin","issue":"PRB-218","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-16T14:12:25.793Z","type":"state_changed"}
-{"actor":"admin","issue":"PRB-218","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-16T14:12:25.853Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-218","payload":{"from":"Needs Triage","to":"PRB/Ready for Agent"},"ts":"2026-08-16T14:12:25.793Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-218","payload":{"from":"PRB/Ready for Agent","to":"PRB/In Progress"},"ts":"2026-08-16T14:12:25.853Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-218","payload":{"body":"My issues: filtros por stateType y project en la UI."},"ts":"2026-08-16T14:14:03.116Z","type":"commented"}
-{"actor":"admin","issue":"PRB-218","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-16T14:14:03.174Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-218","payload":{"from":"PRB/In Progress","to":"PRB/Done"},"ts":"2026-08-16T14:14:03.174Z","type":"state_changed"}

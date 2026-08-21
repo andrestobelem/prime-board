@@ -1,5 +1,5 @@
 {"actor":"admin","issue":"PRB-209","payload":{"title":"Vistas: export/import y CLI/MCP","description":"## Origen\n\nVertical slice de PRB-201 no cubre clientes ni snapshot del repo.\n\n## Criterios\n\n- Exportar/importar vistas sin pérdidas silenciosas\n- CLI/MCP para listar/crear/actualizar/borrar vistas","number":209,"priority":0,"team":"PRB","state":"Needs Triage","assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-16T13:24:58.173Z","type":"created"}
-{"actor":"admin","issue":"PRB-209","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-16T13:58:11.178Z","type":"state_changed"}
-{"actor":"admin","issue":"PRB-209","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-16T13:58:11.241Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-209","payload":{"from":"Needs Triage","to":"PRB/Ready for Agent"},"ts":"2026-08-16T13:58:11.178Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-209","payload":{"from":"PRB/Ready for Agent","to":"PRB/In Progress"},"ts":"2026-08-16T13:58:11.241Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-209","payload":{"body":"Implementado:\n- Export `meta/saved-views.json` + import en rebuild (wipe incluye tablas nuevas)\n- CLI: `pb view list|create|update|duplicate|delete`\n- MCP: `list_saved_views`, `save_saved_view`, `delete_saved_view`"},"ts":"2026-08-16T13:59:45.409Z","type":"commented"}
-{"actor":"admin","issue":"PRB-209","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-16T13:59:45.466Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-209","payload":{"from":"PRB/In Progress","to":"PRB/Done"},"ts":"2026-08-16T13:59:45.466Z","type":"state_changed"}

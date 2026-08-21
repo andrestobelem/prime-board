@@ -7,11 +7,11 @@
 {"actor":"admin","issue":"PRB-243","payload":{"type":"blocked_by","issue":"PRB-240"},"ts":"2026-08-16T18:57:29.369Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-243","payload":{"type":"blocked_by","issue":"PRB-241"},"ts":"2026-08-16T18:57:29.370Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-243","payload":{"type":"blocked_by","issue":"PRB-242"},"ts":"2026-08-16T18:57:29.370Z","type":"relation_added"}
-{"actor":"admin","issue":"PRB-243","payload":{"from":"Needs Triage","to":"Backlog"},"ts":"2026-08-16T18:57:29.404Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-243","payload":{"from":"Needs Triage","to":"PRB/Backlog"},"ts":"2026-08-16T18:57:29.404Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-243","payload":{"type":"blocked_by","issue":"PRB-244"},"ts":"2026-08-16T19:05:50.704Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-243","payload":{"type":"blocked_by","issue":"PRB-245"},"ts":"2026-08-16T19:50:37.095Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-243","payload":{"type":"blocked_by","issue":"PRB-246"},"ts":"2026-08-16T19:52:38.108Z","type":"relation_added"}
-{"actor":"admin","issue":"PRB-243","payload":{"from":"Backlog","to":"In Progress"},"ts":"2026-08-16T20:44:24.396Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-243","payload":{"from":"PRB/Backlog","to":"PRB/In Progress"},"ts":"2026-08-16T20:44:24.396Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-243","payload":{"from":null,"to":"admin"},"ts":"2026-08-16T20:44:24.396Z","type":"assigned"}
 {"actor":"admin","issue":"PRB-243","payload":{"body":"Comparación visual/usabilidad completada contra recorridos locales (viewport 1440×1000 y 390×844) y capturas oficiales de Linear:\n\n- Lista: `/#/team/PRB` vs https://linear.app/docs/select-issues — creada PRB-249 por falta de toolbar Filter/selección.\n- Sidebar: vs https://linear.app/docs/teams — creada PRB-250 por jerarquía workspace/team y Triage ausentes.\n- Detalle: `/#/issue/PRB-240` vs https://linear.app/docs/parent-and-sub-issues — creada PRB-251 por affordances de acciones/navegación.\n- Responsive: creada PRB-252; a 390px el sidebar y el panel de propiedades vuelven ilegible el detalle.\n- Board: la lista devuelve issues pero `/#/board/PRB` renderiza todas las columnas en cero — creada PRB-248.\n- Chrome: creada PRB-253 por mezcla de español e inglés, contraria a la convención del repo.\n\nNo se modificó código durante la comparación. Las divergencias accionables quedaron separadas en tickets con evidencia y criterios de aceptación."},"ts":"2026-08-16T20:46:14.252Z","type":"commented"}
-{"actor":"admin","issue":"PRB-243","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-16T20:46:18.357Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-243","payload":{"from":"PRB/In Progress","to":"PRB/Done"},"ts":"2026-08-16T20:46:18.357Z","type":"state_changed"}

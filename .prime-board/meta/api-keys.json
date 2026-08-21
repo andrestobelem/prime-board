@@ -1,0 +1,205 @@
+[
+  {
+    "actor": "admin",
+    "actorId": "01a00a56-10a7-7007-ad75-1b89ea7ad267",
+    "createdAt": "2026-08-16T11:26:51.823Z",
+    "expiresAt": null,
+    "id": "01a00a56-10db-7005-842a-ab752da24497",
+    "lastUsedAt": "2026-08-21T20:20:11.056Z",
+    "name": "admin operational key",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "admin",
+      "read",
+      "write"
+    ],
+    "teamIds": []
+  },
+  {
+    "actor": "Lucía",
+    "actorId": "01a00a56-10a7-7002-b608-fa26396ec9e1",
+    "createdAt": "2026-08-16T11:27:16.943Z",
+    "expiresAt": null,
+    "id": "01a00a56-10db-7006-b2dc-839a76b69ad2",
+    "lastUsedAt": "2026-08-21T20:15:22.336Z",
+    "name": "Atlas operational key",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "admin",
+      "read",
+      "write"
+    ],
+    "teamIds": []
+  },
+  {
+    "actor": "Carorila",
+    "actorId": "01a00a56-10a7-7004-a964-cec07e019061",
+    "createdAt": "2026-08-16T11:27:16.969Z",
+    "expiresAt": null,
+    "id": "01a00a56-10db-7007-bbbf-76fb38015ac1",
+    "lastUsedAt": "2026-08-21T20:15:22.357Z",
+    "name": "Forja operational key",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "admin",
+      "read",
+      "write"
+    ],
+    "teamIds": []
+  },
+  {
+    "actor": "Sofía",
+    "actorId": "01a00a56-10a7-7006-b0dd-6ffc221921e4",
+    "createdAt": "2026-08-16T11:27:16.995Z",
+    "expiresAt": null,
+    "id": "01a00a56-10db-7008-86d9-8e12af2a57e4",
+    "lastUsedAt": "2026-08-21T20:15:22.377Z",
+    "name": "Lupa operational key",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "admin",
+      "read",
+      "write"
+    ],
+    "teamIds": []
+  },
+  {
+    "actor": "Micaela",
+    "actorId": "01a00a56-10a7-7003-89f6-4dc5debd084e",
+    "createdAt": "2026-08-16T11:27:17.019Z",
+    "expiresAt": null,
+    "id": "01a00a56-10db-7009-a070-626c6ef02b19",
+    "lastUsedAt": "2026-08-21T20:15:22.397Z",
+    "name": "Brujula operational key",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "admin",
+      "read",
+      "write"
+    ],
+    "teamIds": []
+  },
+  {
+    "actor": "Scout",
+    "actorId": "01a012d5-294b-7000-a112-49c690089d94",
+    "createdAt": "2026-08-18T03:05:54.768Z",
+    "expiresAt": null,
+    "id": "01a012d5-2950-7000-b806-9cd27a12d0ca",
+    "lastUsedAt": "2026-08-21T20:15:22.451Z",
+    "name": "Scout operational key",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "admin",
+      "read",
+      "write"
+    ],
+    "teamIds": []
+  },
+  {
+    "actor": "Builder",
+    "actorId": "01a012d5-2952-7000-a996-8f02e2ba4a0d",
+    "createdAt": "2026-08-18T03:05:54.771Z",
+    "expiresAt": null,
+    "id": "01a012d5-2953-7000-ad6e-8d1f5f3768b1",
+    "lastUsedAt": "2026-08-21T20:15:22.425Z",
+    "name": "Builder operational key",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "admin",
+      "read",
+      "write"
+    ],
+    "teamIds": []
+  },
+  {
+    "actor": "ghostty-scout",
+    "actorId": "01a018b2-46fd-7000-8a72-3eb61231d3bb",
+    "createdAt": "2026-08-19T06:26:20.160Z",
+    "expiresAt": null,
+    "id": "01a018b3-0380-7000-96b6-d8d77176dc97",
+    "lastUsedAt": null,
+    "name": "ghostty-scout-read",
+    "revokedAt": "2026-08-19T06:26:37.565Z",
+    "rotatedFromId": null,
+    "scopes": [
+      "read"
+    ],
+    "teamIds": [
+      "PRB"
+    ]
+  },
+  {
+    "actor": "ghostty-scout",
+    "actorId": "01a018b2-46fd-7000-8a72-3eb61231d3bb",
+    "createdAt": "2026-08-19T06:26:37.565Z",
+    "expiresAt": null,
+    "id": "01a018b3-477d-7000-80b1-97e3d38b07d0",
+    "lastUsedAt": "2026-08-19T06:30:18.292Z",
+    "name": "ghostty-scout-write",
+    "revokedAt": "2026-08-19T06:30:19.999Z",
+    "rotatedFromId": "01a018b3-0380-7000-96b6-d8d77176dc97",
+    "scopes": [
+      "write"
+    ],
+    "teamIds": [
+      "PRB"
+    ]
+  },
+  {
+    "actor": "ghostty-scout",
+    "actorId": "01a018b2-46fd-7000-8a72-3eb61231d3bb",
+    "createdAt": "2026-08-19T06:30:27.342Z",
+    "expiresAt": null,
+    "id": "01a018b6-c90e-7000-9823-e531320a6079",
+    "lastUsedAt": null,
+    "name": "ghostty-scout-write",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "write"
+    ],
+    "teamIds": [
+      "PRB"
+    ]
+  },
+  {
+    "actor": "admin",
+    "actorId": "01a00a56-10a7-7007-ad75-1b89ea7ad267",
+    "createdAt": "2026-08-21T16:49:49.970Z",
+    "expiresAt": null,
+    "id": "01a0253a-8f92-7133-8d68-ec0c18832768",
+    "lastUsedAt": "2026-08-21T16:57:09.865Z",
+    "name": "Board browser",
+    "revokedAt": "2026-08-21T16:58:03.040Z",
+    "rotatedFromId": null,
+    "scopes": [
+      "read",
+      "write"
+    ],
+    "teamIds": []
+  },
+  {
+    "actor": "admin",
+    "actorId": "01a00a56-10a7-7007-ad75-1b89ea7ad267",
+    "createdAt": "2026-08-21T16:58:02.890Z",
+    "expiresAt": null,
+    "id": "01a02542-150a-7075-b533-74cad2df5086",
+    "lastUsedAt": "2026-08-21T19:26:29.299Z",
+    "name": "Board browser admin",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "admin",
+      "read",
+      "write"
+    ],
+    "teamIds": []
+  }
+]

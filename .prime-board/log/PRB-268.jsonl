@@ -2,7 +2,7 @@
 {"actor":"admin","issue":"PRB-268","payload":{"label":"db"},"ts":"2026-08-16T22:36:32.991Z","type":"labeled"}
 {"actor":"admin","issue":"PRB-268","payload":{"label":"web"},"ts":"2026-08-16T22:36:32.991Z","type":"labeled"}
 {"actor":"admin","issue":"PRB-268","payload":{"type":"blocks","issue":"PRB-270"},"ts":"2026-08-16T22:36:58.759Z","type":"relation_added"}
-{"actor":"admin","issue":"PRB-268","payload":{"from":"Needs Triage","to":"In Progress"},"ts":"2026-08-17T07:13:12.635Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-268","payload":{"from":"Needs Triage","to":"PRB/In Progress"},"ts":"2026-08-17T07:13:12.635Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-268","payload":{"from":null,"to":"admin"},"ts":"2026-08-17T07:13:12.635Z","type":"assigned"}
 {"actor":"admin","issue":"PRB-268","payload":{"body":"Implementado PRB-268.\n\n- Nueva tabla `favorites` (migración 0017) con owner por actor, FK polimórficas explícitas, exclusividad de target, orden entero e índices únicos.\n- GraphQL: `favorites`, `favoriteCreate`, `favoriteDelete` y `favoriteReorder`; las operaciones son privadas por viewer, con alta/baja idempotentes y reordenamiento estable.\n- Proyectos/vistas archivados se ocultan sin perder la relación; el borrado físico de vistas limpia por `ON DELETE CASCADE`.\n- Export/rebuild conserva favoritos usando claves naturales y omite favoritos fuera del scope en exports parciales; no exporta UUIDs ni credenciales.\n- ADR-0011 y regresiones para dos actores, duplicados, autorización, archivado, FK y round-trip.\n\nVerificado: `bun test` (260 pass), `bun run typecheck`, Prettier y hooks de commit."},"ts":"2026-08-17T07:23:13.488Z","type":"commented"}
-{"actor":"admin","issue":"PRB-268","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-17T07:23:13.528Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-268","payload":{"from":"PRB/In Progress","to":"PRB/Done"},"ts":"2026-08-17T07:23:13.528Z","type":"state_changed"}

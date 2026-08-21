@@ -1,5 +1,7 @@
 [
   {
+    "accessPolicy": "team_members",
+    "archived": false,
     "defaultState": "Backlog",
     "description": null,
     "key": "AT",
@@ -111,9 +113,12 @@
         "position": 8,
         "type": "backlog"
       }
-    ]
+    ],
+    "visibility": "public"
   },
   {
+    "accessPolicy": "team_members",
+    "archived": false,
     "defaultState": "Needs Triage",
     "description": null,
     "key": "PRB",
@@ -161,6 +166,10 @@
         "role": "owner"
       },
       {
+        "actor": "Builder",
+        "role": "member"
+      },
+      {
         "actor": "Carorila",
         "role": "owner"
       },
@@ -177,6 +186,10 @@
         "role": "owner"
       },
       {
+        "actor": "Scout",
+        "role": "member"
+      },
+      {
         "actor": "Sofía",
         "role": "owner"
       },
@@ -191,6 +204,10 @@
       {
         "actor": "demo-agent",
         "role": "owner"
+      },
+      {
+        "actor": "ghostty-scout",
+        "role": "member"
       }
     ],
     "name": "prime-board dev",
@@ -255,6 +272,7 @@
         "position": 7,
         "type": "canceled"
       }
-    ]
+    ],
+    "visibility": "public"
   }
 ]

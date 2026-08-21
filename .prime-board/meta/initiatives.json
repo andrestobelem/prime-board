@@ -10,5 +10,33 @@
     "state": "active",
     "targetDate": null,
     "teams": []
+  },
+  {
+    "archived": false,
+    "description": "## Objetivo\nAlinear la experiencia de Settings de prime-board con los patrones útiles de Linear, sin copiar capacidades que contradigan el modelo local-first, single-tenant y API-first.\n\n## Alcance\n- Workspace, Teams, Members & access, API keys, Preferences, Notifications e Integrations.\n- Seguridad y controles de administración como prioridad.\n- Settings de workflow, triage, templates, cycles, estimates, labels, views, proyectos, auditoría y exportación.\n- SSO/SCIM, billing y capacidades Enterprise quedan registradas como P3/fuera del MVP.\n\n## Criterio rector\nPriorizar control, repetibilidad, seguridad y observabilidad para agentes como actores de primera clase.\nLa iniciativa se ejecuta mediante el proyecto asociado y los issues PRB del mismo.\n\n## Fuente\n`docs/research/linear-settings-parity.md` (PRB-376).\n",
+    "name": "Settings parity con Linear",
+    "owner": "admin",
+    "projects": [
+      "Settings parity con Linear"
+    ],
+    "state": "planned",
+    "targetDate": null,
+    "teams": [
+      "PRB"
+    ]
+  },
+  {
+    "archived": false,
+    "description": "Preparar seams de dominio, autorización, réplica, contratos y aislamiento para una futura migración multi-workspace, manteniendo single-workspace operativo hasta que exista un requisito explícito. Ver PRB-267.",
+    "name": "Preparación multi-workspace",
+    "owner": "admin",
+    "projects": [
+      "Multi-workspace readiness"
+    ],
+    "state": "planned",
+    "targetDate": null,
+    "teams": [
+      "PRB"
+    ]
   }
 ]

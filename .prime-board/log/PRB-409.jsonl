@@ -1,0 +1,3 @@
+{"actor":"admin","issue":"PRB-409","payload":{"title":"1","description":"","number":409,"priority":0,"team":"PRB","state":"Needs Triage","assignee":null,"parent":"PRB-381","project":null,"milestone":null},"ts":"2026-08-19T08:41:19.685Z","type":"created"}
+{"actor":"admin","issue":"PRB-409","payload":{"body":"Auditoría PRB-468: ticket inválido. El título es `1`, la descripción está vacía, no tiene criterios ni evidencia y su padre PRB-381 ya está Done."},"ts":"2026-08-21T18:06:10.664Z","type":"commented"}
+{"actor":"admin","issue":"PRB-409","payload":{"from":"Needs Triage","to":"PRB/Canceled"},"ts":"2026-08-21T18:06:10.739Z","type":"state_changed"}

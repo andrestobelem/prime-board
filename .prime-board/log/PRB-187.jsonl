@@ -3,8 +3,8 @@
 {"actor":"admin","issue":"PRB-187","payload":{"type":"blocks","issue":"PRB-188"},"ts":"2026-08-15T09:59:44.996Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-187","payload":{"type":"blocks","issue":"PRB-189"},"ts":"2026-08-15T09:59:45.040Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-187","payload":{"type":"blocks","issue":"PRB-190"},"ts":"2026-08-15T09:59:45.080Z","type":"relation_added"}
-{"actor":"admin","issue":"PRB-187","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-15T09:59:49.828Z","type":"state_changed"}
-{"actor":"admin","issue":"PRB-187","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-15T10:30:37.837Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-187","payload":{"from":"Needs Triage","to":"PRB/Ready for Agent"},"ts":"2026-08-15T09:59:49.828Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-187","payload":{"from":"PRB/Ready for Agent","to":"PRB/In Progress"},"ts":"2026-08-15T10:30:37.837Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-187","payload":{"from":null,"to":"admin"},"ts":"2026-08-15T10:30:37.837Z","type":"assigned"}
 {"actor":"admin","issue":"PRB-187","payload":{"body":"Hecho en el commit de este momento. Módulo nuevo apps/server/src/domain/activity-schema.ts: ACTIVITY_REFS declara por ActivityType qué campos son referencia y a qué tabla, con dos modos (sparse para state_changed/assigned/project_changed/milestone_changed/parent_changed, dense para created que además renombra teamId->team etc). translateActivityRefs(type, payload, resolve, direction) hace la traducción en cualquier dirección con la misma tabla de campos.\n\n13 tests unitarios, incluida la prueba de que las dos direcciones son inversas exactas (round-trip sin exporter/importer de por medio). bun run typecheck OK. Todavía no reemplaza ningún call site — eso es PRB-188/189/190."},"ts":"2026-08-15T10:30:49.753Z","type":"commented"}
-{"actor":"admin","issue":"PRB-187","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-15T10:30:49.791Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-187","payload":{"from":"PRB/In Progress","to":"PRB/Done"},"ts":"2026-08-15T10:30:49.791Z","type":"state_changed"}

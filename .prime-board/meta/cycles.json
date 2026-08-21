@@ -7,5 +7,14 @@
     "startsAt": "2026-08-16T00:00:00.000Z",
     "state": "upcoming",
     "team": "PRB"
+  },
+  {
+    "archived": false,
+    "endsAt": "2026-09-04",
+    "name": "Ciclo de desarrollo con agentes — prueba",
+    "number": 2,
+    "startsAt": "2026-08-21",
+    "state": "active",
+    "team": "PRB"
   }
 ]

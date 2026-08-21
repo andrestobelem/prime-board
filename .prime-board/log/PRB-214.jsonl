@@ -1,5 +1,5 @@
 {"actor":"admin","issue":"PRB-214","payload":{"title":"Project updates: notificaciones y export/import","description":"## Origen\n\nVertical slice de PRB-207 (CRUD de updates + historial en detalle).\n\n## Criterios\n\n- Notificar a seguidores o miembros relevantes\n- Preservar updates en export/import sin pérdidas","number":214,"priority":0,"team":"PRB","state":"Needs Triage","assignee":null,"parent":null,"project":null,"milestone":null},"ts":"2026-08-16T13:52:54.078Z","type":"created"}
-{"actor":"admin","issue":"PRB-214","payload":{"from":"Needs Triage","to":"Ready for Agent"},"ts":"2026-08-16T14:02:07.669Z","type":"state_changed"}
-{"actor":"admin","issue":"PRB-214","payload":{"from":"Ready for Agent","to":"In Progress"},"ts":"2026-08-16T14:02:07.729Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-214","payload":{"from":"Needs Triage","to":"PRB/Ready for Agent"},"ts":"2026-08-16T14:02:07.669Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-214","payload":{"from":"PRB/Ready for Agent","to":"PRB/In Progress"},"ts":"2026-08-16T14:02:07.729Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-214","payload":{"body":"Implementado:\n* projectUpdateCreate emite webhook project.updated (notificación a suscriptores)\n* Export/import meta/project-updates.json"},"ts":"2026-08-16T14:03:14.253Z","type":"commented"}
-{"actor":"admin","issue":"PRB-214","payload":{"from":"In Progress","to":"Done"},"ts":"2026-08-16T14:03:14.309Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-214","payload":{"from":"PRB/In Progress","to":"PRB/Done"},"ts":"2026-08-16T14:03:14.309Z","type":"state_changed"}

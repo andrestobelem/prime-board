@@ -2,4 +2,4 @@
 {"actor":"admin","issue":"PRB-270","payload":{"label":"web"},"ts":"2026-08-16T22:36:55.300Z","type":"labeled"}
 {"actor":"admin","issue":"PRB-270","payload":{"type":"blocked_by","issue":"PRB-268"},"ts":"2026-08-16T22:36:58.759Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-270","payload":{"body":"Implementado PRB-270.\n\n- Shell query consume `favorites` del viewer y Sidebar muestra sección colapsable, estado vacío y deep-links de proyectos/vistas.\n- Pin/unpin desde los recursos y acciones claras de quitar; reordenamiento con controles arriba/abajo.\n- Las mutaciones actualizan estado local inmediatamente y mantienen drawer responsive; la API sigue aislando por actor.\n\nVerificado: `bun test` (262 pass), `bun run typecheck`, `bun run build` y Prettier."},"ts":"2026-08-17T07:29:52.437Z","type":"commented"}
-{"actor":"admin","issue":"PRB-270","payload":{"from":"Needs Triage","to":"Done"},"ts":"2026-08-17T07:29:52.474Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-270","payload":{"from":"Needs Triage","to":"PRB/Done"},"ts":"2026-08-17T07:29:52.474Z","type":"state_changed"}

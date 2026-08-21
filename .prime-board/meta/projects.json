@@ -43,6 +43,37 @@
     ]
   },
   {
+    "archived": false,
+    "description": "## Destination\nMigrar de SQLite a PostgreSQL ejecutado con Podman sin convertir PostgreSQL en la fuente canónica: el Repository Source será la autoridad del estado compartido.\n\n## Arquitectura objetivo\n- `.prime-board/log/*.jsonl`: event log append-only versionado y canónico.\n- `.prime-board/issues/*.md` y `meta/*.json`: proyecciones derivadas y legibles.\n- PostgreSQL: Operational State proyectado, idempotente y reconstruible.\n- Mutación: append event → commit Git → project PostgreSQL.\n- API keys, webhook secrets, Favorites e Inbox Receipts: fuera del estado compartido canónico.\n\n## Antecedente\nLa investigación está en `docs/research/sqlite-postgresql-podman.md`, la decisión objetivo en `docs/adr/0017-event-log-repo-source-postgresql.md` y el trabajo previo en PRB-410.",
+    "lead": null,
+    "milestones": [
+      {
+        "description": "Ruta completa de transición: contrato del event log, PostgreSQL/Podman, projector reconstruible, importación histórica SQLite → Log, proyección Log → PostgreSQL, validación, cutover y rollback. El Repository Source es la autoridad del estado compartido; Markdown y PostgreSQL son derivados.",
+        "name": "Migración PostgreSQL + Podman",
+        "position": 0,
+        "targetDate": null
+      }
+    ],
+    "name": "Migración SQLite a PostgreSQL con Podman",
+    "state": "planned",
+    "targetDate": null,
+    "teams": [
+      "PRB"
+    ]
+  },
+  {
+    "archived": false,
+    "description": "Preparar la arquitectura para soportar varios Workspaces en el futuro sin habilitar todavía el modo multi-workspace. La instalación sigue operando con un único Workspace por DB/proceso.",
+    "lead": null,
+    "milestones": [],
+    "name": "Multi-workspace readiness",
+    "state": "planned",
+    "targetDate": null,
+    "teams": [
+      "PRB"
+    ]
+  },
+  {
     "archived": true,
     "description": null,
     "lead": "claude",
@@ -153,6 +184,30 @@
     ],
     "name": "Repo como fuente de verdad",
     "state": "completed",
+    "targetDate": null,
+    "teams": [
+      "PRB"
+    ]
+  },
+  {
+    "archived": false,
+    "description": "Proyecto de ejecución para la iniciativa de paridad de Settings con Linear. Contiene los gaps P0–P3 derivados del relevamiento PRB-376; cada issue debe conservar el modelo local-first/API-first y evitar duplicar capacidades ya cerradas.",
+    "lead": null,
+    "milestones": [],
+    "name": "Settings parity con Linear",
+    "state": "planned",
+    "targetDate": null,
+    "teams": [
+      "PRB"
+    ]
+  },
+  {
+    "archived": false,
+    "description": "Épica: habilitar varios Workspaces aislados dentro de una misma DB/proceso SQLite, conservando compatibilidad con la instalación single-workspace existente.\n\n## Decisiones de alcance\n\n- Topología: una DB/proceso puede contener múltiples Workspaces; cada Workspace conserva su identidad, Teams, recursos, miembros, integraciones y réplica.\n- Actor: identidad global (humano o agente) que puede pertenecer a varios Workspaces. Rol y estado de acceso viven en `Workspace Membership`.\n- Credenciales: API keys globales del Actor con grants por Workspace; scopes y límites de Team se validan dentro del Workspace efectivo. Un key legacy se backfillea al Workspace actual.\n- Selección: `WorkspaceContext` se resuelve por credencial + selector validado (`X-Workspace-ID`/perfil/sesión). El selector nunca otorga acceso por sí solo. Sin selector se conserva el Workspace default para compatibilidad; si no es resoluble, la API falla de forma explícita.\n- Aislamiento: todas las consultas, nested resolvers, mutaciones, FTS, eventos, webhooks, export/rebuild y clientes deben filtrar por el Workspace efectivo y rechazar referencias cruzadas.\n- Réplica: cada Workspace tiene namespace estable dentro de `.prime-board`; los exports legacy de una sola instalación siguen siendo legibles.\n- Fuera de alcance: OAuth/SSO/SCIM, billing/planes, hosted multi-tenant, eliminación irreversible de Workspace y paridad completa con Linear no bloquean este esfuerzo.\n\n## Puerta de habilitación\n\nNo se expone `workspaceCreate`/selector ni se permite una segunda fila operativa hasta que estén cerrados los tickets de modelo/migración, auth, aislamiento, API, clientes, réplica y pruebas negativas; la suite debe demostrar que dos Workspaces pueden usar los mismos Team keys, números, labels y nombres sin filtraciones.\n\nEl proyecto histórico `Multi-workspace readiness` (PRB-399–405) contiene la preparación single-workspace y no se duplica: sus entregables son prerequisitos de esta épica.",
+    "lead": null,
+    "milestones": [],
+    "name": "Soporte multi-workspace",
+    "state": "planned",
     "targetDate": null,
     "teams": [
       "PRB"
