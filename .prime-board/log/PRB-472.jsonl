@@ -11,3 +11,5 @@
 {"actor":"Scout","issue":"PRB-472","payload":{"from":"PRB/In Progress","to":"Ready for Human"},"ts":"2026-08-21T20:39:57.360Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-496"},"ts":"2026-08-21T20:50:10.264Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-472","payload":{"body":"Revisión independiente de admin sobre `58fbcc6`:\n\n- `bun test apps/server/src/db/database.test.ts` — 11 pass, 0 fail.\n- `bun run typecheck` — OK.\n- `git merge-tree --write-tree 58fbcc6 5e50b80` — conflicto reproducible en `apps/server/src/db/database.ts`.\n\nLa suite aislada pasa. La integración con PRB-473 queda bloqueada por PRB-496; no se descarta ni se reescribe la implementación de Scout."},"ts":"2026-08-21T20:50:53.553Z","type":"commented"}
+{"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-499"},"ts":"2026-08-21T20:55:12.058Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-500"},"ts":"2026-08-21T20:55:12.290Z","type":"relation_added"}
