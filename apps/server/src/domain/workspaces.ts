@@ -23,7 +23,7 @@ export function getWorkspace(db: Database, id?: string): WorkspaceRow | null {
     )
     .all() as WorkspaceRow[];
   if (workspaces.length > 1) {
-    throw apiError("VALIDATION_FAILED", "Workspace selection is required");
+    throw apiError("WORKSPACE_REQUIRED", "A Workspace selector is required");
   }
   return workspaces[0] ?? null;
 }

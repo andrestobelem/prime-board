@@ -1,5 +1,6 @@
-// Resuelve el actor autenticado a partir del header Authorization (spec §5).
+// Resuelve el actor autenticado y su Workspace efectivo a partir del header Authorization.
 import type { Database } from "bun:sqlite";
+import { apiError } from "../graphql/errors.ts";
 import { hashApiKey } from "./keys.ts";
 import { now } from "../db/util.ts";
 import type { ApiKeyScope } from "../domain/actors.ts";
@@ -19,7 +20,10 @@ export interface ActorRow {
 export interface AuthContext {
   actor: ActorRow;
   keyId: string;
+  /** Workspace elegido por el grant y la Membership, nunca por un input GraphQL. */
+  workspaceId: string;
   scopes: ApiKeyScope[];
+  /** Límites de Team del grant efectivo; null significa todos los Teams del Workspace. */
   teamIds: string[] | null;
   expiresAt: string | null;
 }
@@ -30,50 +34,93 @@ function listScopes(db: Database, keyId: string): ApiKeyScope[] {
       "SELECT scope FROM api_key_scopes WHERE api_key_id = ?1 ORDER BY CASE scope WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 END",
     )
     .all(keyId) as Array<{ scope: ApiKeyScope }>;
-  // Bases creadas manualmente antes de la migración se tratan como legacy-full.
+  // Bases creadas antes de la migración se tratan como legacy-full.
   return rows.length ? rows.map((row) => row.scope) : ["read", "write", "admin"];
 }
 
-function listTeamIds(db: Database, keyId: string): string[] | null {
+function listTeamIds(db: Database, keyId: string, workspaceId: string): string[] | null {
   const rows = db
-    .query("SELECT team_id FROM api_key_team_limits WHERE api_key_id = ?1 ORDER BY team_id")
-    .all(keyId) as Array<{ team_id: string }>;
+    .query(
+      "SELECT team_id FROM api_key_team_limits WHERE api_key_id = ?1 AND workspace_id = ?2 ORDER BY team_id",
+    )
+    .all(keyId, workspaceId) as Array<{ team_id: string }>;
   return rows.length ? rows.map((row) => row.team_id) : null;
 }
 
 /**
- * Resolves the seeded Workspace Admin for a loopback-only local instance.
- *
- * Local mode has no credential to scope, so it grants the same full access as
- * the local bootstrap key while keeping the actor visible in activity records.
+ * Selecciona un grant que también tenga una Membership activa del Actor.
+ * Un selector no concedido usa el mismo mensaje que un selector inválido para
+ * no revelar si existe otro Workspace en la base.
  */
+function resolveWorkspaceGrant(
+  db: Database,
+  keyId: string,
+  actorId: string,
+  selector: string | null,
+): string {
+  const rows = db
+    .query(
+      `SELECT grants.workspace_id, grants.is_default
+       FROM api_key_workspaces AS grants
+       JOIN workspace AS workspaces ON workspaces.id = grants.workspace_id
+       JOIN workspace_memberships AS memberships
+         ON memberships.workspace_id = grants.workspace_id
+        AND memberships.actor_id = ?2
+        AND memberships.status = 'active'
+       WHERE grants.api_key_id = ?1
+         AND (?3 IS NULL OR workspaces.id = ?3 OR workspaces.url_key = ?3)
+       ORDER BY grants.is_default DESC, grants.workspace_id`,
+    )
+    .all(keyId, actorId, selector) as Array<{ workspace_id: string; is_default: number }>;
+
+  if (selector !== null) {
+    if (rows.length !== 1) throw apiError("UNAUTHORIZED", "Workspace access is not granted");
+    return rows[0]!.workspace_id;
+  }
+
+  if (rows.length === 0) throw apiError("UNAUTHORIZED", "Workspace access is not granted");
+  if (rows.length === 1) return rows[0]!.workspace_id;
+
+  const defaults = rows.filter((row) => row.is_default === 1);
+  if (defaults.length === 1) return defaults[0]!.workspace_id;
+  throw apiError("WORKSPACE_REQUIRED", "A Workspace selector is required");
+}
+
+/** Resuelve el admin local solo cuando la instalación tiene un Workspace inequívoco. */
 export function resolveLocalAuth(db: Database): AuthContext | null {
   const actors = db
     .query(
-      "SELECT * FROM actors WHERE workspace_role = 'admin' AND status = 'active' ORDER BY created_at, id",
+      `SELECT actors.*, workspace.id AS workspace_id
+       FROM actors CROSS JOIN workspace
+       WHERE actors.workspace_role = 'admin' AND actors.status = 'active'
+       ORDER BY actors.created_at, actors.id`,
     )
-    .all() as ActorRow[];
-  // El modo local no tiene credencial ni selector de Workspace. No elige un
-  // admin arbitrario cuando la instalación deja de ser inequívoca.
-  if (actors.length !== 1) return null;
+    .all() as Array<ActorRow & { workspace_id: string }>;
+  // No elige un admin arbitrario cuando la instalación deja de ser inequívoca.
+  const workspaces = db.query("SELECT id FROM workspace").all() as Array<{ id: string }>;
+  if (actors.length !== 1 || workspaces.length !== 1) return null;
   const actor = actors[0]!;
   return {
     actor,
     keyId: "local",
+    workspaceId: workspaces[0]!.id,
     scopes: ["read", "write", "admin"],
     teamIds: null,
     expiresAt: null,
   };
 }
 
-export function resolveAuth(db: Database, authorization: string | null): AuthContext | null {
+export function resolveAuth(
+  db: Database,
+  authorization: string | null,
+  workspaceSelector: string | null = null,
+): AuthContext | null {
   if (!authorization) return null;
   const match = authorization.match(/^Bearer\s+(pb_[A-Za-z0-9_-]+)$/);
   if (!match) return null;
 
   const hash = hashApiKey(match[1]!);
-  // Cruzar la key con el actor antes de tocar last_used_at evita que una
-  // credencial suspendida/expirada deje actividad o vuelva a operar.
+  // Validar key, Actor, grant y Membership antes de tocar last_used_at.
   const key = db
     .query(
       `SELECT api_keys.id, api_keys.actor_id, api_keys.expires_at
@@ -88,18 +135,25 @@ export function resolveAuth(db: Database, authorization: string | null): AuthCon
     if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
   }
 
-  db.query("UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2").run(now(), key.id);
+  const workspaceId = resolveWorkspaceGrant(db, key.id, key.actor_id, workspaceSelector);
   const actor = db.query("SELECT * FROM actors WHERE id = ?1").get(key.actor_id) as ActorRow | null;
   if (!actor) return null;
+
+  db.query("UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2").run(now(), key.id);
   return {
     actor,
     keyId: key.id,
+    workspaceId,
     scopes: listScopes(db, key.id),
-    teamIds: listTeamIds(db, key.id),
+    teamIds: listTeamIds(db, key.id, workspaceId),
     expiresAt: key.expires_at,
   };
 }
 
-export function resolveViewer(db: Database, authorization: string | null): ActorRow | null {
-  return resolveAuth(db, authorization)?.actor ?? null;
+export function resolveViewer(
+  db: Database,
+  authorization: string | null,
+  workspaceSelector: string | null = null,
+): ActorRow | null {
+  return resolveAuth(db, authorization, workspaceSelector)?.actor ?? null;
 }
