@@ -12,6 +12,8 @@ import { createRepoSync } from "./export/repo-sync.ts";
 import { trackedRepoSync } from "./graphql/repo-sync-dispatch.ts";
 import { WebhookDispatcher, type DispatcherOptions } from "./webhooks/dispatcher.ts";
 import { resolveWorkspaceContext } from "./domain/workspace-context.ts";
+import { apiError } from "./graphql/errors.ts";
+import { resolveWorkspaceSelection } from "./domain/workspaces.ts";
 import { getPostgresWorkspace } from "./domain/postgres-actors.ts";
 import type { Persistence } from "./db/persistence.ts";
 
@@ -44,11 +46,30 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
             : resolveLocalAuth(db)
           : persistence
             ? await resolvePostgresAuth(persistence, request.headers.get("authorization"))
-            : resolveAuth(db, request.headers.get("authorization"));
+            : resolveAuth(db, request.headers.get("authorization"), false);
+      const requestedWorkspaceId = request.headers.get("x-workspace-id")?.trim() || null;
       const workspace = persistence
-        ? await getPostgresWorkspace(persistence)
-        : resolveWorkspaceContext(db);
+        ? requestedWorkspaceId
+          ? (() => {
+              throw apiError("NOT_FOUND", "Workspace not found");
+            })()
+          : await getPostgresWorkspace(persistence)
+        : auth
+          ? resolveWorkspaceSelection(db, auth.actor.id, auth.keyId, requestedWorkspaceId)
+          : requestedWorkspaceId
+            ? (() => {
+                throw apiError("UNAUTHORIZED", "A valid API key is required");
+              })()
+            : resolveWorkspaceContext(db);
       if (!workspace) throw new Error("Workspace is not initialized");
+      if (!persistence && auth && auth.keyId !== "local") {
+        // resolveAuth updates last_used_at only after the grant and Membership
+        // have resolved. This keeps WORKSPACE_REQUIRED/NOT_FOUND side-effect free.
+        db.query("UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2").run(
+          new Date().toISOString(),
+          auth.keyId,
+        );
+      }
       return {
         db,
         config,

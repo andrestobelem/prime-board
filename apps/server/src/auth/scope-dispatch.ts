@@ -12,6 +12,7 @@ import type { ApiKeyScope } from "../domain/actors.ts";
 import { getIssueByRef } from "../domain/issues.ts";
 
 const ADMIN_MUTATIONS = new Set([
+  "workspaceCreate",
   "workspaceUpdate",
   "teamArchive",
   "teamUnarchive",
@@ -33,6 +34,7 @@ const SAFE_MUTATIONS = new Set(["actorUpdate", "actorLeave", ...KEY_MUTATIONS]);
 const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:viewer",
   "query:workspace",
+  "query:workspaces",
   "query:actors",
   "query:teams",
   "query:team",
@@ -219,6 +221,7 @@ function operationTeamIds(
   switch (field) {
     case "viewer":
     case "workspace":
+    case "workspaces":
     case "teams":
       return [];
     case "team":

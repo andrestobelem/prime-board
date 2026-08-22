@@ -3,7 +3,7 @@ import { GraphQLError } from "graphql";
 import type { Context } from "./context.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 
-export type ErrorCode = "NOT_FOUND" | "UNAUTHORIZED" | "VALIDATION_FAILED";
+export type ErrorCode = "NOT_FOUND" | "UNAUTHORIZED" | "VALIDATION_FAILED" | "WORKSPACE_REQUIRED";
 
 export function apiError(code: ErrorCode, message: string): GraphQLError {
   return new GraphQLError(message, { extensions: { code } });

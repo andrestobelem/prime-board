@@ -67,3 +67,106 @@ describe("workspaceUpdate", () => {
     expect(invalid.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
   });
 });
+
+describe("Workspace GraphQL contract", () => {
+  const lifecycleApp = createTestApp();
+  let secondWorkspaceId = "";
+
+  afterAll(() => lifecycleApp.stop());
+
+  async function gqlWithWorkspace(
+    query: string,
+    workspaceId: string,
+    apiKey = lifecycleApp.apiKey,
+  ) {
+    const response = await fetch(`${lifecycleApp.url}/graphql`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+        "x-workspace-id": workspaceId,
+      },
+      body: JSON.stringify({ query }),
+    });
+    return (await response.json()) as {
+      data?: Record<string, any>;
+      errors?: Array<{ message: string; extensions?: { code?: string } }>;
+    };
+  }
+
+  it("lista el Workspace efectivo con Membership y compatibilidad legacy", async () => {
+    const result = await gql(
+      lifecycleApp,
+      `{ workspaces { id urlKey role status isDefault } viewer { workspaces { id urlKey role status isDefault } } }`,
+    );
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.workspaces).toHaveLength(1);
+    expect(result.data?.workspaces[0]).toMatchObject({
+      urlKey: "prime-board",
+      role: "ADMIN",
+      status: "ACTIVE",
+      isDefault: true,
+    });
+    expect(result.data?.viewer.workspaces).toEqual(result.data?.workspaces);
+  });
+
+  it("crea el segundo Workspace con solo su bootstrap y lo selecciona por header", async () => {
+    const created = await gql(
+      lifecycleApp,
+      `mutation { workspaceCreate(input: { name: "Second Workspace", urlKey: "second" }) { success workspace { id urlKey role status isDefault } } }`,
+    );
+    expect(created.errors).toBeUndefined();
+    expect(created.data?.workspaceCreate.success).toBe(true);
+    secondWorkspaceId = created.data?.workspaceCreate.workspace.id;
+    expect(created.data?.workspaceCreate.workspace).toMatchObject({
+      urlKey: "second",
+      role: "ADMIN",
+      status: "ACTIVE",
+      isDefault: false,
+    });
+    expect(lifecycleApp.db.query("SELECT count(*) AS count FROM teams").get()).toEqual({
+      count: 2,
+    });
+    expect(
+      lifecycleApp.db
+        .query("SELECT count(*) AS count FROM workflow_states WHERE workspace_id = ?1")
+        .get(secondWorkspaceId),
+    ).toEqual({ count: 5 });
+
+    const selected = await gqlWithWorkspace(`{ workspace { id urlKey } }`, secondWorkspaceId);
+    expect(selected.errors).toBeUndefined();
+    expect(selected.data?.workspace).toEqual({ id: secondWorkspaceId, urlKey: "second" });
+
+    const updated = await gqlWithWorkspace(
+      `mutation { workspaceUpdate(input: { name: "Renamed Second" }) { workspace { id name urlKey } } }`,
+      secondWorkspaceId,
+    );
+    expect(updated.errors).toBeUndefined();
+    expect(updated.data?.workspaceUpdate.workspace).toMatchObject({
+      id: secondWorkspaceId,
+      name: "Renamed Second",
+      urlKey: "second",
+    });
+    const legacy = await gql(lifecycleApp, `{ workspace { id name urlKey } }`);
+    expect(legacy.data?.workspace).toMatchObject({ urlKey: "prime-board", name: "workspace" });
+  });
+
+  it("rechaza seleccionar un Workspace sin grant", async () => {
+    const actor = await gql(
+      lifecycleApp,
+      `mutation { actorCreate(input: { name: "scoped-member", type: AGENT }) { actor { id } } }`,
+    );
+    const actorId = actor.data?.actorCreate.actor.id;
+    const key = await gql(
+      lifecycleApp,
+      `mutation($actorId: ID!) { apiKeyCreate(input: { actorId: $actorId, name: "scoped key" }) { key } }`,
+      { actorId },
+    );
+    const denied = await gqlWithWorkspace(
+      `{ workspace { id } }`,
+      secondWorkspaceId,
+      key.data?.apiKeyCreate.key,
+    );
+    expect(denied.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+  });
+});

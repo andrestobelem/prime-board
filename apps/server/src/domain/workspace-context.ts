@@ -14,8 +14,8 @@ export interface WorkspaceContext {
   workspaceId: string;
 }
 
-export function resolveWorkspaceContext(db: Database): WorkspaceContext {
-  const workspace = getWorkspace(db);
+export function resolveWorkspaceContext(db: Database, requestedId?: string): WorkspaceContext {
+  const workspace = getWorkspace(db, requestedId);
   if (!workspace) throw apiError("NOT_FOUND", "Workspace is not initialized");
   return { workspaceId: workspace.id };
 }

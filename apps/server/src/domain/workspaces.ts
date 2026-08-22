@@ -23,18 +23,93 @@ export function getWorkspace(db: Database, id?: string): WorkspaceRow | null {
     )
     .all() as WorkspaceRow[];
   if (workspaces.length > 1) {
-    throw apiError("VALIDATION_FAILED", "Workspace selection is required");
+    throw apiError("WORKSPACE_REQUIRED", "A Workspace selection is required");
   }
   return workspaces[0] ?? null;
 }
 
-export function mapWorkspace(row: WorkspaceRow) {
+export interface WorkspaceAccessRow extends WorkspaceRow {
+  role: "admin" | "member";
+  status: "active" | "suspended" | "left";
+  is_default: number;
+}
+
+export function mapWorkspace(row: WorkspaceRow & Partial<WorkspaceAccessRow>) {
   return {
     id: row.id,
     name: row.name,
     urlKey: row.url_key,
     createdAt: row.created_at,
+    role: row.role ?? "member",
+    status: row.status ?? "active",
+    isDefault: row.is_default === 1,
   };
+}
+
+/** Lista únicamente los Workspaces autorizados por la Membership y la key. */
+export function listWorkspaceAccess(
+  db: Database,
+  actorId: string,
+  keyId: string,
+): WorkspaceAccessRow[] {
+  const query =
+    keyId === "local"
+      ? `SELECT w.id, w.name, w.url_key, w.created_at, w.updated_at,
+              m.role, m.status, 1 AS is_default
+         FROM workspace w
+         JOIN workspace_memberships m ON m.workspace_id = w.id
+        WHERE m.actor_id = ?1 AND m.status = 'active'
+        ORDER BY w.created_at, w.id`
+      : `SELECT w.id, w.name, w.url_key, w.created_at, w.updated_at,
+              m.role, m.status, g.is_default
+         FROM workspace w
+         JOIN api_key_workspaces g ON g.workspace_id = w.id
+         JOIN workspace_memberships m
+           ON m.workspace_id = w.id AND m.actor_id = ?1
+        WHERE g.api_key_id = ?2 AND m.status = 'active'
+        ORDER BY w.created_at, w.id`;
+  return (
+    keyId === "local" ? db.query(query).all(actorId) : db.query(query).all(actorId, keyId)
+  ) as WorkspaceAccessRow[];
+}
+
+/** Resuelve selección explícita o fallback legacy sin tratar un ID como autoridad. */
+export function resolveWorkspaceSelection(
+  db: Database,
+  actorId: string | null,
+  keyId: string | null,
+  requestedId?: string | null,
+): WorkspaceContextRow {
+  const workspaces = db
+    .query(
+      "SELECT id, name, url_key, created_at, updated_at FROM workspace ORDER BY created_at, id",
+    )
+    .all() as WorkspaceRow[];
+  if (workspaces.length === 0) throw apiError("NOT_FOUND", "Workspace is not initialized");
+  if (!actorId || !keyId) {
+    if (requestedId) throw apiError("UNAUTHORIZED", "A valid API key is required");
+    if (workspaces.length > 1)
+      throw apiError("WORKSPACE_REQUIRED", "A Workspace selection is required");
+    return { workspaceId: workspaces[0]!.id, explicit: false };
+  }
+  const access = listWorkspaceAccess(db, actorId, keyId);
+  if (requestedId) {
+    if (!access.some((row) => row.id === requestedId && row.status === "active")) {
+      throw apiError("NOT_FOUND", "Workspace not found");
+    }
+    return { workspaceId: requestedId, explicit: true };
+  }
+  const active = access.filter((row) => row.status === "active");
+  const defaults = active.filter((row) => row.is_default === 1);
+  if (defaults.length === 1) return { workspaceId: defaults[0]!.id, explicit: false };
+  if (active.length === 1) return { workspaceId: active[0]!.id, explicit: false };
+  if (active.length === 0) throw apiError("UNAUTHORIZED", "Workspace access is not active");
+  throw apiError("WORKSPACE_REQUIRED", "A Workspace selection is required");
+}
+
+export interface WorkspaceContextRow {
+  workspaceId: string;
+  explicit: boolean;
 }
 
 export interface WorkspaceUpdateInput {
