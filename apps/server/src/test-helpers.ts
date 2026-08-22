@@ -48,9 +48,11 @@ export async function gql(
   query: string,
   variables: Record<string, unknown> = {},
   apiKey: string | null = app.apiKey,
+  workspaceSelector: string | null = null,
 ) {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+  if (workspaceSelector) headers["x-workspace-id"] = workspaceSelector;
   const response = await fetch(`${app.url}/graphql`, {
     method: "POST",
     headers,

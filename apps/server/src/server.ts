@@ -37,17 +37,22 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
     // no se pisan el rastreo de "¿ya sincronizó?" — delega en el mismo `repo`
     // singleton, así que la escritura en sí sigue siendo una sola por mutation.
     context: async ({ request }): Promise<Context> => {
+      const workspaceSelector = request.headers.get("x-workspace-id")?.trim() || null;
       const auth =
         config.authMode === "local"
           ? persistence
             ? await resolveLocalPostgresAuth(persistence)
             : resolveLocalAuth(db)
           : persistence
-            ? await resolvePostgresAuth(persistence, request.headers.get("authorization"))
-            : resolveAuth(db, request.headers.get("authorization"));
+            ? await resolvePostgresAuth(
+                persistence,
+                request.headers.get("authorization"),
+                workspaceSelector,
+              )
+            : resolveAuth(db, request.headers.get("authorization"), workspaceSelector);
       const workspace = persistence
-        ? await getPostgresWorkspace(persistence)
-        : resolveWorkspaceContext(db);
+        ? await getPostgresWorkspace(persistence, auth?.workspaceId)
+        : resolveWorkspaceContext(db, auth?.workspaceId);
       if (!workspace) throw new Error("Workspace is not initialized");
       return {
         db,

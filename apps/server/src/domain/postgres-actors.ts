@@ -224,7 +224,7 @@ export async function getPostgresWorkspace(persistence: Persistence, id?: string
     updated_at: string;
   }>(query);
   if (workspaces.length > 1) {
-    throw apiError("VALIDATION_FAILED", "Workspace selection is required");
+    throw apiError("WORKSPACE_REQUIRED", "A Workspace selector is required");
   }
   return workspaces[0] ?? null;
 }
