@@ -139,29 +139,68 @@ export function mapApiKey(row: ApiKeyRow, db?: Database, workspaceId?: string) {
   };
 }
 
-export function listApiKeys(db: Database, actorId: string, includeRevoked = false): ApiKeyRow[] {
-  return db
-    .query(
-      `SELECT * FROM api_keys WHERE actor_id = ?1
+export function listApiKeys(
+  db: Database,
+  actorId: string,
+  includeRevoked = false,
+  workspaceId?: string,
+): ApiKeyRow[] {
+  const query = workspaceId
+    ? `SELECT api_keys.* FROM api_keys
+       JOIN api_key_workspaces grants
+         ON grants.api_key_id = api_keys.id AND grants.workspace_id = ?2
+       WHERE api_keys.actor_id = ?1
+       ${includeRevoked ? "" : "AND api_keys.revoked_at IS NULL"}
+       ORDER BY api_keys.created_at`
+    : `SELECT * FROM api_keys WHERE actor_id = ?1
        ${includeRevoked ? "" : "AND revoked_at IS NULL"}
-       ORDER BY created_at`,
-    )
-    .all(actorId) as ApiKeyRow[];
+       ORDER BY created_at`;
+  return (
+    workspaceId ? db.query(query).all(actorId, workspaceId) : db.query(query).all(actorId)
+  ) as ApiKeyRow[];
 }
 
 export function getApiKey(db: Database, id: string): ApiKeyRow | null {
   return db.query("SELECT * FROM api_keys WHERE id = ?1").get(id) as ApiKeyRow | null;
 }
 
-export function deleteApiKey(db: Database, id: string): boolean {
+export function deleteApiKey(db: Database, id: string, workspaceId?: string): boolean {
   const existing = db.query("SELECT id, revoked_at FROM api_keys WHERE id = ?1").get(id) as {
     id: string;
     revoked_at: string | null;
   } | null;
   if (!existing) throw apiError("NOT_FOUND", "API key not found");
-  if (!existing.revoked_at) {
-    db.query("UPDATE api_keys SET revoked_at = ?1 WHERE id = ?2").run(now(), id);
+  if (!workspaceId) {
+    if (!existing.revoked_at) {
+      db.query("UPDATE api_keys SET revoked_at = ?1 WHERE id = ?2").run(now(), id);
+    }
+    return true;
   }
+
+  const resolvedWorkspaceId = resolveApiKeyWorkspace(db, workspaceId);
+  if (
+    !db
+      .query("SELECT 1 FROM api_key_workspaces WHERE api_key_id = ?1 AND workspace_id = ?2")
+      .get(id, resolvedWorkspaceId)
+  ) {
+    throw apiError("NOT_FOUND", "API key is not available in this Workspace");
+  }
+  const timestamp = now();
+  db.transaction(() => {
+    db.query("DELETE FROM api_key_team_limits WHERE api_key_id = ?1 AND workspace_id = ?2").run(
+      id,
+      resolvedWorkspaceId,
+    );
+    db.query("DELETE FROM api_key_workspaces WHERE api_key_id = ?1 AND workspace_id = ?2").run(
+      id,
+      resolvedWorkspaceId,
+    );
+    db.query(
+      `UPDATE api_keys SET revoked_at = ?1
+       WHERE id = ?2 AND revoked_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM api_key_workspaces WHERE api_key_id = ?2)`,
+    ).run(timestamp, id);
+  })();
   return true;
 }
 
@@ -268,13 +307,17 @@ export function createApiKey(
     workspaceId?: string;
   },
 ): { row: ApiKeyRow; key: string } {
+  const workspaceId = resolveApiKeyWorkspace(db, input.workspaceId);
   const actor = getActor(db, input.actorId);
   if (!actor) throw apiError("NOT_FOUND", "Actor not found");
-  if (actor.status !== "active") {
+  const membership = db
+    .query("SELECT status FROM workspace_memberships WHERE workspace_id = ?1 AND actor_id = ?2")
+    .get(workspaceId, input.actorId) as { status: "active" | "suspended" | "left" } | null;
+  if (!membership) throw apiError("NOT_FOUND", "Actor not found in this Workspace");
+  if (membership.status !== "active") {
     throw apiError("UNAUTHORIZED", "Only active actors can receive API keys");
   }
   if (!input.name.trim()) throw apiError("VALIDATION_FAILED", "API key name cannot be empty");
-  const workspaceId = resolveApiKeyWorkspace(db, input.workspaceId);
   const metadata = apiKeyMetadata(db, input, workspaceId);
   const key = generateApiKey();
   const id = newId();
@@ -346,10 +389,19 @@ export function rotateApiKey(
       timestamp,
     );
     insertApiKeyMetadata(db, replacementId, metadata, workspaceId, timestamp);
-    const revoked = db
-      .query("UPDATE api_keys SET revoked_at = ?1 WHERE id = ?2 AND revoked_at IS NULL")
-      .run(timestamp, id);
-    if (revoked.changes !== 1) throw apiError("VALIDATION_FAILED", "API key is already revoked");
+    db.query("DELETE FROM api_key_team_limits WHERE api_key_id = ?1 AND workspace_id = ?2").run(
+      id,
+      workspaceId,
+    );
+    db.query("DELETE FROM api_key_workspaces WHERE api_key_id = ?1 AND workspace_id = ?2").run(
+      id,
+      workspaceId,
+    );
+    db.query(
+      `UPDATE api_keys SET revoked_at = ?1
+       WHERE id = ?2 AND revoked_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM api_key_workspaces WHERE api_key_id = ?2)`,
+    ).run(timestamp, id);
   })();
   return {
     row: db.query("SELECT * FROM api_keys WHERE id = ?1").get(replacementId) as ApiKeyRow,
@@ -373,12 +425,19 @@ export interface ActorInvitationRow {
   expires_at: string;
   accepted_at: string | null;
   revoked_at: string | null;
+  workspace_id?: string | null;
 }
 
 function invitationStatus(db: Database, row: ActorInvitationRow): ActorInvitationRow {
   if (row.status === "pending" && Date.parse(row.expires_at) <= Date.now()) {
-    db.query("UPDATE actor_invitations SET status = 'expired' WHERE id = ?1").run(row.id);
-    return { ...row, status: "expired" };
+    const expired = db
+      .query("UPDATE actor_invitations SET status = 'expired' WHERE id = ?1 AND status = 'pending'")
+      .run(row.id);
+    if (expired.changes === 1) return { ...row, status: "expired" };
+    const current = db
+      .query("SELECT * FROM actor_invitations WHERE id = ?1")
+      .get(row.id) as ActorInvitationRow | null;
+    return current ?? { ...row, status: "expired" };
   }
   return row;
 }
@@ -406,21 +465,35 @@ export function mapActorInvitation(row: ActorInvitationRow) {
   };
 }
 
-export function getActorInvitation(db: Database, id: string): ActorInvitationRow | null {
-  const row = db
-    .query("SELECT * FROM actor_invitations WHERE id = ?1")
-    .get(id) as ActorInvitationRow | null;
+export function getActorInvitation(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+): ActorInvitationRow | null {
+  const query = workspaceId
+    ? "SELECT * FROM actor_invitations WHERE id = ?1 AND workspace_id = ?2"
+    : "SELECT * FROM actor_invitations WHERE id = ?1";
+  const row = (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as ActorInvitationRow | null;
   return row ? invitationStatus(db, row) : null;
 }
 
-export function listActorInvitations(db: Database, includeRevoked = false): ActorInvitationRow[] {
-  const rows = db
-    .query(
-      `SELECT * FROM actor_invitations
-       ${includeRevoked ? "" : "WHERE status = 'pending'"}
-       ORDER BY created_at, id`,
-    )
-    .all() as ActorInvitationRow[];
+export function listActorInvitations(
+  db: Database,
+  includeRevoked = false,
+  workspaceId?: string,
+): ActorInvitationRow[] {
+  const conditions = [
+    ...(workspaceId ? ["workspace_id = ?1"] : []),
+    ...(!includeRevoked ? [workspaceId ? "status = 'pending'" : "status = 'pending'"] : []),
+  ];
+  const query = `SELECT * FROM actor_invitations
+    ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+    ORDER BY created_at, id`;
+  const rows = (
+    workspaceId ? db.query(query).all(workspaceId) : db.query(query).all()
+  ) as ActorInvitationRow[];
   const current = rows.map((row) => invitationStatus(db, row));
   return includeRevoked ? current : current.filter((row) => row.status === "pending");
 }
@@ -440,7 +513,18 @@ export function createActorInvitation(
     expiresAt?: string | null;
     metadata?: unknown;
   },
+  workspaceId?: string,
 ): { row: ActorInvitationRow; token: string } {
+  const resolvedWorkspaceId = resolveApiKeyWorkspace(db, workspaceId);
+  const inviterMembership = db
+    .query(
+      `SELECT status FROM workspace_memberships
+       WHERE workspace_id = ?1 AND actor_id = ?2`,
+    )
+    .get(resolvedWorkspaceId, invitedBy) as { status: "active" | "suspended" | "left" } | null;
+  if (!inviterMembership || inviterMembership.status !== "active") {
+    throw apiError("UNAUTHORIZED", "The inviter is not active in this Workspace");
+  }
   const email = normalizedOptional(input.email);
   const name = normalizedOptional(input.name);
   const type = input.type?.toLowerCase() || null;
@@ -450,9 +534,10 @@ export function createActorInvitation(
   if (email) {
     const existing = db
       .query(
-        "SELECT id FROM actor_invitations WHERE lower(email) = lower(?1) AND status = 'pending'",
+        `SELECT id FROM actor_invitations
+         WHERE lower(email) = lower(?1) AND workspace_id = ?2 AND status = 'pending'`,
       )
-      .get(email);
+      .get(email, resolvedWorkspaceId);
     if (existing)
       throw apiError("VALIDATION_FAILED", "A pending invitation already exists for this email");
   }
@@ -473,39 +558,67 @@ export function createActorInvitation(
   const timestamp = now();
   db.query(
     `INSERT INTO actor_invitations
-      (id, email, name, type, token_hash, status, invited_by, metadata_json, created_at, expires_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9)`,
-  ).run(id, email, name, type, hashApiKey(token), invitedBy, metadata, timestamp, expiresAt);
-  return { row: getActorInvitation(db, id)!, token };
+      (id, email, name, type, token_hash, status, invited_by, metadata_json, created_at, expires_at, workspace_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9, ?10)`,
+  ).run(
+    id,
+    email,
+    name,
+    type,
+    hashApiKey(token),
+    invitedBy,
+    metadata,
+    timestamp,
+    expiresAt,
+    resolvedWorkspaceId,
+  );
+  return { row: getActorInvitation(db, id, resolvedWorkspaceId)!, token };
 }
 
-export function revokeActorInvitation(db: Database, id: string): ActorInvitationRow {
-  const existing = getActorInvitation(db, id);
+export function revokeActorInvitation(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+): ActorInvitationRow {
+  const resolvedWorkspaceId = resolveApiKeyWorkspace(db, workspaceId);
+  const existing = getActorInvitation(db, id, resolvedWorkspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Actor invitation not found");
   if (existing.status !== "pending") {
     throw apiError("VALIDATION_FAILED", "Only pending invitations can be revoked");
   }
-  db.query("UPDATE actor_invitations SET status = 'revoked', revoked_at = ?1 WHERE id = ?2").run(
-    now(),
-    id,
-  );
-  return getActorInvitation(db, id)!;
+  const revoked = db
+    .query(
+      `UPDATE actor_invitations
+       SET status = 'revoked', revoked_at = ?1
+       WHERE id = ?2 AND workspace_id = ?3 AND status = 'pending'`,
+    )
+    .run(now(), id, resolvedWorkspaceId);
+  if (revoked.changes !== 1) {
+    const current = getActorInvitation(db, id, resolvedWorkspaceId);
+    if (!current) throw apiError("NOT_FOUND", "Actor invitation not found");
+    throw apiError("VALIDATION_FAILED", "Only pending invitations can be revoked");
+  }
+  return getActorInvitation(db, id, resolvedWorkspaceId)!;
 }
 
 export function acceptActorInvitation(
   db: Database,
   token: string,
   input: { name?: string | null; type?: string | null },
+  workspaceId?: string,
 ): { actor: ActorRow; invitation: ActorInvitationRow; key: string } {
+  const resolvedWorkspaceId = resolveApiKeyWorkspace(db, workspaceId);
   let result: { actor: ActorRow; invitation: ActorInvitationRow; key: string } | null = null;
   db.transaction(() => {
     const row = db
-      .query("SELECT * FROM actor_invitations WHERE token_hash = ?1")
-      .get(hashApiKey(token)) as ActorInvitationRow | null;
+      .query("SELECT * FROM actor_invitations WHERE token_hash = ?1 AND workspace_id = ?2")
+      .get(hashApiKey(token), resolvedWorkspaceId) as ActorInvitationRow | null;
     if (!row) throw apiError("UNAUTHORIZED", "Invalid actor invitation token");
     if (row.status !== "pending" || Date.parse(row.expires_at) <= Date.now()) {
       if (row.status === "pending") {
-        db.query("UPDATE actor_invitations SET status = 'expired' WHERE id = ?1").run(row.id);
+        db.query(
+          "UPDATE actor_invitations SET status = 'expired' WHERE id = ?1 AND status = 'pending'",
+        ).run(row.id);
       }
       throw apiError("UNAUTHORIZED", "Invalid actor invitation token");
     }
@@ -531,8 +644,19 @@ export function acceptActorInvitation(
       throw apiError("VALIDATION_FAILED", `Invalid actor type: ${input.type}`);
     }
     const actor = createActor(db, { name, type, email: row.email });
-    const { key } = createApiKey(db, { actorId: actor.id, name: "invitation key" });
+    const invitationWorkspaceId = row.workspace_id ?? resolvedWorkspaceId;
     const timestamp = now();
+    db.query(
+      `INSERT INTO workspace_memberships
+       (id, workspace_id, actor_id, role, status, created_at, updated_at)
+       VALUES (?1, ?2, ?3, 'member', 'active', ?4, ?4)
+       ON CONFLICT (workspace_id, actor_id) DO NOTHING`,
+    ).run(newId(), invitationWorkspaceId, actor.id, timestamp);
+    const { key } = createApiKey(db, {
+      actorId: actor.id,
+      name: "invitation key",
+      workspaceId: invitationWorkspaceId,
+    });
     db.query("UPDATE actor_invitations SET actor_id = ?1, accepted_at = ?2 WHERE id = ?3").run(
       actor.id,
       timestamp,
@@ -552,13 +676,104 @@ function activeAdminCount(db: Database): number {
   return row.count;
 }
 
+interface ActorWorkspaceMembershipRow {
+  workspace_id: string;
+  actor_id: string;
+  role: "admin" | "member";
+  status: "active" | "suspended" | "left";
+  suspended_at: string | null;
+  suspended_by: string | null;
+  left_at: string | null;
+  updated_at: string;
+}
+
+function actorWorkspaceMembership(
+  db: Database,
+  actorId: string,
+  workspaceId: string,
+): ActorWorkspaceMembershipRow | null {
+  return db
+    .query(
+      `SELECT workspace_id, actor_id, role, status, suspended_at, suspended_by, left_at, updated_at
+       FROM workspace_memberships
+       WHERE actor_id = ?1 AND workspace_id = ?2`,
+    )
+    .get(actorId, workspaceId) as ActorWorkspaceMembershipRow | null;
+}
+
+function actorInWorkspace(db: Database, actorId: string, workspaceId: string): ActorRow {
+  const actor = actorOrNotFound(db, actorId);
+  const membership = actorWorkspaceMembership(db, actorId, workspaceId);
+  if (!membership) throw apiError("NOT_FOUND", "Actor not found");
+  return { ...actor, workspace_role: membership.role, status: membership.status };
+}
+
+function activeWorkspaceAdminCount(db: Database, workspaceId: string): number {
+  const row = db
+    .query(
+      `SELECT count(*) AS count FROM workspace_memberships
+       WHERE workspace_id = ?1 AND role = 'admin' AND status = 'active'`,
+    )
+    .get(workspaceId) as { count: number };
+  return row.count;
+}
+
+/** Keeps legacy actor status useful while the database still has one Workspace. */
+function syncLegacyActorStatus(
+  db: Database,
+  actorId: string,
+  membership: ActorWorkspaceMembershipRow,
+): void {
+  const row = db.query("SELECT count(*) AS count FROM workspace").get() as { count: number };
+  if (row.count !== 1) return;
+  db.query(
+    `UPDATE actors
+     SET status = ?1, suspended_at = ?2, suspended_by = ?3, left_at = ?4, updated_at = ?5
+     WHERE id = ?6`,
+  ).run(
+    membership.status,
+    membership.suspended_at,
+    membership.suspended_by,
+    membership.left_at,
+    membership.updated_at,
+    actorId,
+  );
+}
+
 function actorOrNotFound(db: Database, id: string): ActorRow {
   const actor = getActor(db, id);
   if (!actor) throw apiError("NOT_FOUND", "Actor not found");
   return actor;
 }
 
-export function suspendActor(db: Database, id: string, suspendedBy: string): ActorRow {
+export function suspendActor(
+  db: Database,
+  id: string,
+  suspendedBy: string,
+  workspaceId?: string,
+): ActorRow {
+  if (workspaceId) {
+    return db.transaction(() => {
+      const membership = actorWorkspaceMembership(db, id, workspaceId);
+      if (!membership) throw apiError("NOT_FOUND", "Actor not found");
+      if (membership.status === "left")
+        throw apiError("VALIDATION_FAILED", "A left actor cannot be suspended");
+      if (membership.status === "suspended") return actorInWorkspace(db, id, workspaceId);
+      if (membership.role === "admin" && activeWorkspaceAdminCount(db, workspaceId) <= 1) {
+        throw apiError("VALIDATION_FAILED", "Cannot suspend the last workspace admin");
+      }
+      const timestamp = now();
+      db.query(
+        `UPDATE workspace_memberships
+         SET status = 'suspended', suspended_at = ?1, suspended_by = ?2, left_at = NULL, updated_at = ?1
+         WHERE actor_id = ?3 AND workspace_id = ?4`,
+      ).run(timestamp, suspendedBy, id, workspaceId);
+      const updated = actorWorkspaceMembership(db, id, workspaceId)!;
+      syncLegacyActorStatus(db, id, updated);
+      return actorInWorkspace(db, id, workspaceId);
+    })();
+  }
+
   const actor = actorOrNotFound(db, id);
   if (actor.status === "left")
     throw apiError("VALIDATION_FAILED", "A left actor cannot be suspended");
@@ -575,7 +790,26 @@ export function suspendActor(db: Database, id: string, suspendedBy: string): Act
   return actorOrNotFound(db, id);
 }
 
-export function reactivateActor(db: Database, id: string): ActorRow {
+export function reactivateActor(db: Database, id: string, workspaceId?: string): ActorRow {
+  if (workspaceId) {
+    return db.transaction(() => {
+      const membership = actorWorkspaceMembership(db, id, workspaceId);
+      if (!membership) throw apiError("NOT_FOUND", "Actor not found");
+      if (membership.status === "left")
+        throw apiError("VALIDATION_FAILED", "A left actor cannot be reactivated");
+      if (membership.status === "active") return actorInWorkspace(db, id, workspaceId);
+      const timestamp = now();
+      db.query(
+        `UPDATE workspace_memberships
+         SET status = 'active', suspended_at = NULL, suspended_by = NULL, updated_at = ?1
+         WHERE actor_id = ?2 AND workspace_id = ?3`,
+      ).run(timestamp, id, workspaceId);
+      const updated = actorWorkspaceMembership(db, id, workspaceId)!;
+      syncLegacyActorStatus(db, id, updated);
+      return actorInWorkspace(db, id, workspaceId);
+    })();
+  }
+
   const actor = actorOrNotFound(db, id);
   if (actor.status === "left")
     throw apiError("VALIDATION_FAILED", "A left actor cannot be reactivated");
@@ -586,7 +820,50 @@ export function reactivateActor(db: Database, id: string): ActorRow {
   return actorOrNotFound(db, id);
 }
 
-function markActorLeft(db: Database, id: string): ActorRow {
+function markActorLeft(db: Database, id: string, workspaceId?: string): ActorRow {
+  if (workspaceId) {
+    return db.transaction(() => {
+      const membership = actorWorkspaceMembership(db, id, workspaceId);
+      if (!membership) throw apiError("NOT_FOUND", "Actor not found");
+      if (membership.status === "left") return actorInWorkspace(db, id, workspaceId);
+      if (
+        membership.status === "active" &&
+        membership.role === "admin" &&
+        activeWorkspaceAdminCount(db, workspaceId) <= 1
+      ) {
+        throw apiError("VALIDATION_FAILED", "Cannot revoke the last workspace admin");
+      }
+      const timestamp = now();
+      db.query(
+        `UPDATE workspace_memberships
+         SET status = 'left', suspended_at = NULL, suspended_by = NULL, left_at = ?1, updated_at = ?1
+         WHERE actor_id = ?2 AND workspace_id = ?3`,
+      ).run(timestamp, id, workspaceId);
+      db.query(
+        `DELETE FROM api_key_team_limits
+         WHERE workspace_id = ?1
+           AND api_key_id IN (SELECT id FROM api_keys WHERE actor_id = ?2)`,
+      ).run(workspaceId, id);
+      db.query(
+        `DELETE FROM api_key_workspaces
+         WHERE workspace_id = ?1
+           AND api_key_id IN (SELECT id FROM api_keys WHERE actor_id = ?2)`,
+      ).run(workspaceId, id);
+      db.query(
+        `UPDATE api_keys
+         SET revoked_at = ?1
+         WHERE actor_id = ?2 AND revoked_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM api_key_workspaces grants
+             WHERE grants.api_key_id = api_keys.id
+           )`,
+      ).run(timestamp, id);
+      const updated = actorWorkspaceMembership(db, id, workspaceId)!;
+      syncLegacyActorStatus(db, id, updated);
+      return actorInWorkspace(db, id, workspaceId);
+    })();
+  }
+
   const actor = actorOrNotFound(db, id);
   if (actor.status === "left") return actor;
   if (actor.status === "active" && actor.workspace_role === "admin" && activeAdminCount(db) <= 1) {
@@ -605,11 +882,11 @@ function markActorLeft(db: Database, id: string): ActorRow {
 }
 
 /** Revoca permanentemente el acceso de un actor sin borrar su identidad ni autoría. */
-export function revokeActor(db: Database, id: string): ActorRow {
-  return markActorLeft(db, id);
+export function revokeActor(db: Database, id: string, workspaceId?: string): ActorRow {
+  return markActorLeft(db, id, workspaceId);
 }
 
 /** Un actor puede salir por sí mismo; la operación conserva sus referencias históricas. */
-export function leaveActor(db: Database, id: string): ActorRow {
-  return markActorLeft(db, id);
+export function leaveActor(db: Database, id: string, workspaceId?: string): ActorRow {
+  return markActorLeft(db, id, workspaceId);
 }

@@ -11,11 +11,13 @@ export interface WorkspaceRow {
   updated_at: string;
 }
 
-export function getWorkspace(db: Database, id?: string): WorkspaceRow | null {
-  if (id) {
+export function getWorkspace(db: Database, idOrUrlKey?: string): WorkspaceRow | null {
+  if (idOrUrlKey) {
     return db
-      .query("SELECT id, name, url_key, created_at, updated_at FROM workspace WHERE id = ?1")
-      .get(id) as WorkspaceRow | null;
+      .query(
+        "SELECT id, name, url_key, created_at, updated_at FROM workspace WHERE id = ?1 OR url_key = ?1",
+      )
+      .get(idOrUrlKey) as WorkspaceRow | null;
   }
   const workspaces = db
     .query(

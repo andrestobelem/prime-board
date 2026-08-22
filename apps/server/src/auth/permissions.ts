@@ -136,9 +136,21 @@ export function assertCanManageActor(viewer: ActorRow, actorId: string): void {
   }
 }
 
-export function assertCanManageApiKey(db: Database, viewer: ActorRow, keyId: string): void {
+export function assertCanManageApiKey(
+  db: Database,
+  viewer: ActorRow,
+  keyId: string,
+  workspaceId?: string,
+): void {
   const key = getApiKey(db, keyId);
-  if (!key || isWorkspaceAdmin(viewer) || key.actor_id === viewer.id) return;
+  if (!key) return;
+  if (workspaceId) {
+    const grant = db
+      .query("SELECT 1 FROM api_key_workspaces WHERE api_key_id = ?1 AND workspace_id = ?2")
+      .get(keyId, workspaceId);
+    if (!grant) throw apiError("NOT_FOUND", "API key is not available in this Workspace");
+  }
+  if (isWorkspaceAdmin(viewer) || key.actor_id === viewer.id) return;
   throw apiError("UNAUTHORIZED", "You can only manage your own API keys");
 }
 

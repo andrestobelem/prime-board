@@ -8,7 +8,6 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { getWorkspace } from "./workspaces.ts";
 import { assertWorkspaceId, type WorkspaceContext } from "./workspace-context.ts";
-import { getActor } from "./actors.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 import { getIssue, getIssueByRef, listChildren, listIssues, type IssueRow } from "./issues.ts";
 import { getProject, type ProjectRow } from "./projects.ts";
@@ -154,12 +153,20 @@ export function requireProject(context: WorkspaceLookupContext, id: string): Pro
 }
 
 export function lookupActor(context: WorkspaceLookupContext, id: string): ActorRow | null {
-  const row = getActor(context.db, id);
-  if (!row) {
-    assertActiveWorkspace(context);
-    return null;
-  }
-  return scopeWorkspaceRow(context, row);
+  assertActiveWorkspace(context);
+  const row = context.db
+    .query(
+      `SELECT actors.id, actors.name, actors.email, actors.type,
+              memberships.role AS workspace_role, memberships.status AS status,
+              actors.avatar_url, actors.created_at, actors.updated_at
+       FROM actors
+       JOIN workspace_memberships AS memberships
+         ON memberships.actor_id = actors.id
+        AND memberships.workspace_id = ?2
+       WHERE actors.id = ?1`,
+    )
+    .get(id, context.workspace.workspaceId) as ActorRow | null;
+  return row ? scopeWorkspaceRow(context, row) : null;
 }
 
 export function requireActor(context: WorkspaceLookupContext, id: string): ActorRow {

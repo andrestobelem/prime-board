@@ -12,7 +12,6 @@ import { createRepoSync } from "./export/repo-sync.ts";
 import { trackedRepoSync } from "./graphql/repo-sync-dispatch.ts";
 import { WebhookDispatcher, type DispatcherOptions } from "./webhooks/dispatcher.ts";
 import { resolveWorkspaceContext } from "./domain/workspace-context.ts";
-import { apiError } from "./graphql/errors.ts";
 import { getPostgresWorkspace } from "./domain/postgres-actors.ts";
 import type { Persistence } from "./db/persistence.ts";
 
@@ -51,12 +50,10 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
                 workspaceSelector,
               )
             : resolveAuth(db, request.headers.get("authorization"), workspaceSelector);
-      if (!auth && workspaceSelector) {
-        throw apiError("UNAUTHORIZED", "A valid API key is required");
-      }
+      const selectedWorkspaceId = auth?.workspaceId ?? workspaceSelector ?? undefined;
       const workspace = persistence
-        ? await getPostgresWorkspace(persistence, auth?.workspaceId)
-        : resolveWorkspaceContext(db, auth?.workspaceId);
+        ? await getPostgresWorkspace(persistence, selectedWorkspaceId)
+        : resolveWorkspaceContext(db, selectedWorkspaceId);
       if (!workspace) throw new Error("Workspace is not initialized");
       return {
         db,
