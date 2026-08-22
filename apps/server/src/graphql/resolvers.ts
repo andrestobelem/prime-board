@@ -382,7 +382,7 @@ export const resolvers = {
           : [];
       }
       return canAccessTeam(context.db, viewer, team.id)
-        ? listLabels(context.db, team.id).map(mapLabel)
+        ? scopeWorkspaceRows(context, listLabels(context.db, team.id)).map(mapLabel)
         : [];
     },
     projects: (team: { id: string }, _args: unknown, context: Context) => {

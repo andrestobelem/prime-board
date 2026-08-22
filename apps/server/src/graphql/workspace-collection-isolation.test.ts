@@ -7,6 +7,13 @@ afterAll(() => app.stop());
 
 describe("aislamiento de colecciones por Workspace", () => {
   it("crea y lista recursos solo en el Workspace seleccionado", async () => {
+    const defaultWorkspaceLabel = await gql(
+      app,
+      `mutation { labelCreate(input: { name: "default-workspace-label" }) { label { id } } }`,
+    );
+    expect(defaultWorkspaceLabel.errors).toBeUndefined();
+    const defaultWorkspaceLabelId = defaultWorkspaceLabel.data!.labelCreate.label.id;
+
     const createdWorkspace = await gql(
       app,
       `mutation {
@@ -89,13 +96,17 @@ describe("aislamiento de colecciones por Workspace", () => {
 
     const selected = await gql(
       app,
-      `{ teams { id } projects { id } labels { id } savedViews { id } initiatives { id } webhooks { id } actors { id } }`,
+      `{ teams { id labels { id } } projects { id } labels { id } savedViews { id } initiatives { id } webhooks { id } actors { id } }`,
       {},
       app.apiKey,
       "collections-other",
     );
     expect(selected.errors).toBeUndefined();
     expect(selected.data!.teams.map((row: { id: string }) => row.id)).toEqual([teamId]);
+    expect(selected.data!.teams[0].labels.map((row: { id: string }) => row.id)).toContain(labelId);
+    expect(selected.data!.teams[0].labels.map((row: { id: string }) => row.id)).not.toContain(
+      defaultWorkspaceLabelId,
+    );
     expect(selected.data!.projects.map((row: { id: string }) => row.id)).toContain(projectId);
     expect(selected.data!.labels.map((row: { id: string }) => row.id)).toContain(labelId);
     expect(selected.data!.savedViews.map((row: { id: string }) => row.id)).toContain(savedViewId);
