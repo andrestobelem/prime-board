@@ -1,140 +1,21 @@
 ---
 name: teach
-description: Teach the user a new skill or concept, within this workspace.
+description: "Explain a body of work plainly so a person actually understands it. Runs the `how` and `why` skills and weaves what they find into one clear explanation. Use for 'teach me this', 'help me really understand X', 'explain this change or subsystem to me'."
 disable-model-invocation: true
-argument-hint: "What would you like to learn about?"
 ---
 
-The user wants to learn a topic across multiple sessions. Treat this as a stateful request.
+# Teach
 
-## Teaching Workspace
+**You explain what a thing is, how it works, and why it's built that way, in one plain account at the person's pace. The goal is that they understand it, not that you change anything.** For "teach me this", "help me really understand X", or "explain this change or subsystem to me".
 
-Treat the current directory as the teaching workspace. Store the state of the user's learning in these files:
+Teach sits on top of `how` and `why`. Get your bearings on what the work is and what it touches, then run `how` for how it works and `why` for why it's that way. Those are real skill invocations that do their own digging. Blend what they find into one plain explanation, lead with what matters to the person, and go deeper when they ask. Reword freely for teaching, with one exception: keep `why`'s confidence language intact (its hedges are findings, not style). Let those skills do the investigation. Don't redo it by hand.
 
-- `MISSION.md`: records the _reason_ the user wants to learn the topic. Use it to ground all teaching. Follow [MISSION-FORMAT.md](./MISSION-FORMAT.md).
-- `./reference/*.html`: stores reference materials. These materials compress lesson content into cheat sheets, reference algorithms, syntax, yoga poses, and glossaries. Make them readable, printable, and suitable for quick reference.
-- `RESOURCES.md`: lists resources that provide contextual knowledge and wisdom. Follow [RESOURCES-FORMAT.md](./RESOURCES-FORMAT.md).
-- `./learning-records/*.md`: stores what the user has learned. These records are similar to architectural decision records: they capture non-obvious lessons and key insights that may change or guide later sessions. Use them to calculate the zone of proximal development. Name files `0001-<dash-case-name>.md`, incrementing the number each time. Follow [LEARNING-RECORD-FORMAT.md](./LEARNING-RECORD-FORMAT.md).
-- `./lessons/*.html`: stores lessons. A **lesson** is one self-contained HTML file that teaches one tightly scoped topic tied to the mission. It is the primary teaching unit.
-- `./assets/*`: stores reusable **components** shared by lessons. See [Assets](#assets).
-- `NOTES.md`: stores user preferences and working notes.
+1. Decide the few things they should walk away understanding. Choose them from why they're asking (about to change it, reviewing it, debugging it, new to it) and what they already know, both read from the conversation, not quizzed out of them. Skip what they plainly already know. Put the depth where their question is.
+2. Let `how` and `why` do the work, don't redo it. Read the code yourself to get oriented, then run `how` for how it works and `why` for why. Run them in parallel and combine the results. Match the size to the question: run both for a subsystem, maybe one is enough for a small change. Keep `why` narrow by default since its full sweep is slow: put the narrowing in the ask itself (a scoped question, git plus a source or two) so `why` records the skipped categories per its own contract, and widen it only when the reasons are the point.
+3. Start with a plain definition. Name the thing and say what it is in general terms, the way a senior engineer would say it out loud, with its common name if it has one. Then tie it to the case in front of you ("in X, we use this to ...") and build from there: how it works, the deeper reasons, the edge cases. Explain how it works, don't just name it. For each part, explain the idea so it clicks: the problem it solves and how it actually works. Walk through what happens as the person does the thing (opens a long chat, scrolls up) when that is what makes it land. Listing functions and constants is reference, not teaching. Don't print framing labels ("the one idea to hold onto", "the thing to walk away with", "the key insight", "at its core", "TL;DR"). Give the smallest complete answer first, a sentence or two, not a dense paragraph, then stop. Add layers when they ask. Never a wall of text.
+4. Keep it a conversation, not a lecture or a performance. Offer to go deeper or move on, and follow their lead. No quizzes. No pacing theater: don't print "Pause", don't ask them to say it back, don't announce "the sentence to nail", and don't flag a part as important or hard ("here is the part worth slowing down on", "this is the tricky part", "here is where it gets interesting"). Just say it. When you would pause, stop and let them respond. Running one-shot with no live human, deliver it cleanly and put any offer to go deeper at the end.
+5. Show, don't only tell, and build the picture up diagram by diagram. Open the diff, the code, or the debugger when that is the fastest way to land it. Draw when a picture lands faster than words. For anything with three or more moving parts, do not draw one diagram with all of them at once. Draw a short series instead, where each diagram redraws the last and adds a single part, so the reader watches the system assemble. That series is not a wall. It is the opposite of one, since each step is small and adds exactly one idea. A single all-at-once diagram, especially one saved for the end, is a reference, not teaching. Concretely, to teach a flow from A to B to C, draw it three times. First A to B. Then redraw and add C. Then redraw and add the return edge or the next piece. Three small growing diagrams beat one crowded diagram. Match the medium to the idea, and use both kinds when both help. A mermaid diagram fits a flow or structure where the labels carry the meaning. When the idea is spatial, like layout, overlap, scroll position, or a before and after, reach for the image-generation tool and draw it marker-on-whiteboard style with a few short labels, since image models garble long text. Generate that picture, don't settle for describing it in words. The build-up rule holds for generated images too. A single simple point needs no figure. A visual earns its place by teaching, not decorating.
 
-## Philosophy
+Write every response through the **unslop** skill, in plain spoken English, the way you'd explain it to a colleague. Be tight, not terse: cut filler and hedging, keep the part that makes it click. Padding is the enemy, not ideas. Don't list functions and constants like a changelog. State the concrete mechanism, not a metaphor, a framing, or a preview of what is coming. This is the target density: "Virtualization runs in two parts, one for rendering and one for loading from disk. When an item scrolls out past the buffer, both its DOM node and its in-memory data are evicted." Normal sentence case, not all-lowercase. No em dashes. Prefer periods over commas. Keep each sentence to one or two commas. If clauses pile up, split them into separate sentences. Give each concept one name and keep it, since switching between synonyms for the same thing (bubble, message, row) makes the reader re-derive that they are the same. Avoid mirror sentences ("A without B, or B without A") and tidy closers ("the rest follows", "it all falls out"). The words in these steps are directions to you, not labels to print. Don't echo the scaffolding as headers or stock phrases.
 
-For deep learning, provide three things:
-
-- **Knowledge**, captured from high-quality, high-trust resources
-- **Skills**, acquired through highly-relevant interactive lessons devised by you, based on the knowledge
-- **Wisdom**, which comes from interacting with other learners and practitioners
-
-Before `RESOURCES.md` is complete, focus on finding high-quality resources that help the user acquire knowledge. Do not rely on model memory as the source.
-
-Some topics require more skill practice than knowledge. Theoretical physics is often knowledge-based. Yoga is often skill-based.
-
-### Fluency vs Storage Strength
-
-Distinguish two types of learning:
-
-- **Fluency strength**: in-the-moment retrieval of knowledge
-- **Storage strength**: long-term retention of knowledge
-
-Fluency can give the user a false sense of mastery. Storage strength is the goal. Design lessons that build long-term retention through desirable difficulty:
-
-- Using retrieval practice (recall from memory)
-- Spacing (distributing practice over time)
-- Interleaving (mixing up different but related topics in practice - for skills practice only)
-
-## Lessons
-
-A lesson is the main output. It delivers knowledge and skills to the user. Save each lesson as one self-contained HTML file in `./lessons/`. Name it `0001-<dash-case-name>.html`, incrementing the number each time.
-
-Make each lesson **beautiful** with clean, readable typography and layout. The user will return to it for review. Use Tufte as a visual reference.
-
-Keep the lesson short and quick to complete. Working memory is limited. Give the user one tangible result that they can build on. Tie the lesson directly to the mission and keep it within the user's zone of proximal development.
-
-When possible, open the lesson file for the user with a CLI command.
-
-Link each lesson to related lessons and reference documents with HTML anchors.
-
-Each lesson should recommend one primary source for the user to read or watch. Choose the highest-quality, high-trust resource found for the topic.
-
-Each lesson should remind the user to ask follow-up questions. The agent is the teacher and can explain unclear points.
-
-## Assets
-
-Build lessons from reusable **components** in `./assets/`: stylesheets, quiz widgets, simulators, diagram helpers, and other material a later lesson can reuse.
-
-Reuse components by default. Before writing a lesson, read `./assets/` and use its existing components. When a lesson needs new reusable material, write it as a component in `./assets/` and link to it. Do not inline code that a future lesson would duplicate.
-
-Create a shared stylesheet as the first component. Link it from every lesson so the lessons form one consistent course. Grow the component library as the workspace grows.
-
-## The Mission
-
-Tie every lesson to the mission, the reason the user wants to learn the topic.
-
-If the mission is unclear or `MISSION.md` is empty, first ask the user why they want to learn the topic.
-
-Without a clear mission, learning is not grounded in real-world goals. Lessons become abstract, and you cannot choose the next useful lesson.
-
-The mission may change as the user gains skills and knowledge. Update `MISSION.md` and add a learning record when it changes. Confirm the change with the user first.
-
-## Zone Of Proximal Development
-
-Each lesson should challenge the user 'just enough'.
-
-The user may specify exactly what to learn. If they do not, identify the zone of proximal development by:
-
-- Read `learning-records`.
-- Choose the topic that best matches the mission.
-- Teach the most relevant topic that fits the zone of proximal development.
-
-## Knowledge
-
-Design each lesson around one skill the user will learn. Include only the knowledge required for that skill. Teach the knowledge first, then let the user practice through an interactive feedback loop.
-
-Gather knowledge from trusted resources first. Track them in `RESOURCES.md`. Cite claims in lessons with links to external resources. Citations increase trust in the lesson.
-
-For knowledge acquisition, reduce unnecessary difficulty. Unnecessary difficulty uses working memory needed for understanding.
-
-## Skills
-
-Knowledge focuses on acquisition. Skills focus on durable and flexible use. Design practice that makes knowledge stick.
-
-For skill acquisition, difficulty is the tool. Effortful retrieval is what builds storage strength. Skills should be taught through interactive lessons. There are several tools at your disposal:
-
-- Interactive lessons, using quizzes and light in-browser tasks
-- Lessons which guide the user through a list of real-world steps to take (for instance, yoga poses)
-
-Base each activity on a **feedback loop** that gives the user feedback on performance. Keep the loop tight. Give feedback immediately and, when possible, automatically.
-
-For quizzes, make each answer the same number of words and, when possible, the same number of characters. Do not reveal answers through formatting.
-
-## Acquiring Wisdom
-
-Wisdom comes from real-world interaction: test skills outside the learning environment.
-
-When a question requires wisdom, first attempt to answer. Ultimately direct the user to a **community**.
-
-A community is an online or offline place where the user can test skills in real situations. It can be a forum, subreddit, real-world class (when the budget permits), or local interest group.
-
-Find reputable communities the user can join. Respect a user preference not to join a community.
-
-## Reference Documents
-
-Create reference documents while creating lessons. Lessons can link to these documents, which track knowledge used across lessons.
-
-Users may rarely revisit lessons, but they will revisit reference documents. Compress each lesson's essential content into a quick-reference format.
-
-Some learning topics lend themselves to reference:
-
-- Syntax and code snippets for programming
-- Algorithms and flowcharts for processes
-- Yoga poses and sequences for yoga
-- Exercises and routines for fitness
-- Glossaries for any topic with its own nomenclature
-
-A glossary is an essential reference. After creating one, use its terminology in every lesson.
-
-## `NOTES.md`
-
-Record user preferences about teaching and other working notes in `NOTES.md`. Read these notes when designing lessons or working with the user.
+**Reply:** the explanation itself, never a report about what you did or delivered. Lead with the main point, then the plain account of what it is, how it works, and why, and the threads worth chasing with `how` or `why`.
