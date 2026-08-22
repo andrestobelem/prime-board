@@ -12,12 +12,12 @@ import {
 import { UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
 
-const IDENTITY_QUERY = `{
+export const IDENTITY_QUERY = `{
   viewer { id name type }
   workspace { id name urlKey }
 }`;
 
-function effectiveContext(data: any): EffectiveWorkspaceContext {
+export function effectiveContext(data: any): EffectiveWorkspaceContext {
   if (!data.viewer?.id || !data.workspace?.id) {
     throw new Error("The server did not return an effective Workspace context");
   }

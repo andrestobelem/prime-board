@@ -146,6 +146,8 @@ parent/project) → `commentCreate` → `issueArchive`. La operación registra l
 alias pb="bun /ruta/a/prime-board/apps/cli/src/index.ts"
 
 pb auth login --url http://localhost:3333 --key pb_xxx
+pb workspace list --json
+pb workspace use <workspace-id|urlKey> --json
 pb workspace view --json
 pb workspace update --name "Mi Workspace" --json  # requiere Workspace Admin
 pb issue list --team PRB --state started --assignee me --json
@@ -160,6 +162,10 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
 ```
 
 - `--json` en todo comando de lectura → salida estable para parsear.
+- `pb workspace list` devuelve solo los Workspaces que la API concede a la key. `pb workspace use`
+  valida la referencia contra esa lista, guarda `workspaceId` y `workspaceUrlKey` en el perfil
+  actual y envía `X-Workspace-ID` en las requests siguientes. Un perfil legacy sin selector no
+  agrega el header y conserva el comportamiento singleton.
 - El CLI también expone `project archive|unarchive`, `milestone-list|create|update|delete` y
   `update-list|create|delete`; los comandos de creación aceptan referencias por ID y los cuerpos
   pueden leerse desde stdin con `--body -` o `--description -`.

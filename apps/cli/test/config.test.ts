@@ -57,7 +57,7 @@ describe("CLI credential configuration", () => {
     try {
       const script = `
         import { listProfiles, loadConfig, saveConfig, selectProfile } from "./apps/cli/src/config.ts";
-        await saveConfig({ url: "http://one.invalid", apiKey: "pb_one" }, "one");
+        await saveConfig({ url: "http://one.invalid", apiKey: "pb_one", workspaceId: "workspace-one", workspaceUrlKey: "one" }, "one");
         await saveConfig({ url: "http://two.invalid", apiKey: "pb_two" }, "two");
         const before = await loadConfig("one");
         await selectProfile("two");
@@ -78,6 +78,8 @@ describe("CLI credential configuration", () => {
         profile: "one",
         url: "http://one.invalid",
         apiKey: "pb_one",
+        workspaceId: "workspace-one",
+        workspaceUrlKey: "one",
       });
       expect(output.after).toMatchObject({
         profile: "two",
@@ -88,6 +90,12 @@ describe("CLI credential configuration", () => {
         "one",
         "two",
       ]);
+      expect(output.profiles[0]).toMatchObject({
+        name: "one",
+        workspaceId: "workspace-one",
+        workspaceUrlKey: "one",
+      });
+      expect(JSON.stringify(output.profiles)).not.toContain("pb_one");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

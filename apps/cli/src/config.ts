@@ -29,6 +29,9 @@ export interface CliConfig {
   apiKey: string;
   /** Perfil efectivo usado para resolver la credencial. */
   profile?: string;
+  /** Workspace seleccionado explícitamente por el operador. */
+  workspaceId?: string;
+  workspaceUrlKey?: string;
   /** Contexto obtenido del endpoint, no una selección de Workspace. */
   context?: EffectiveWorkspaceContext;
 }
@@ -36,6 +39,8 @@ export interface CliConfig {
 interface StoredProfile {
   url: string;
   apiKey: string;
+  workspaceId?: string;
+  workspaceUrlKey?: string;
   context?: EffectiveWorkspaceContext;
 }
 
@@ -46,6 +51,8 @@ interface StoredConfig {
   // Compatibilidad con cli.json de antes de PRB-405.
   url?: string;
   apiKey?: string;
+  workspaceId?: string;
+  workspaceUrlKey?: string;
   context?: EffectiveWorkspaceContext;
 }
 
@@ -79,7 +86,13 @@ function profileFromStored(stored: StoredConfig, name: string): StoredProfile | 
   if (profile?.url && profile.apiKey) return profile;
   // Lee las credenciales heredadas del nivel superior solo para el perfil default.
   if (name === DEFAULT_PROFILE && !stored.profiles && stored.url && stored.apiKey) {
-    return { url: stored.url, apiKey: stored.apiKey, context: stored.context };
+    return {
+      url: stored.url,
+      apiKey: stored.apiKey,
+      workspaceId: stored.workspaceId,
+      workspaceUrlKey: stored.workspaceUrlKey,
+      context: stored.context,
+    };
   }
   return undefined;
 }
@@ -107,21 +120,39 @@ export async function loadConfig(profile?: string): Promise<CliConfig> {
     url,
     apiKey,
     profile: selected,
+    workspaceId: hasExplicitCredential ? undefined : saved?.workspaceId,
+    workspaceUrlKey: hasExplicitCredential ? undefined : saved?.workspaceUrlKey,
     context: hasExplicitCredential ? undefined : saved?.context,
   };
 }
 
 export async function listProfiles(): Promise<
-  Array<{ name: string; context?: EffectiveWorkspaceContext }>
+  Array<{
+    name: string;
+    workspaceId?: string;
+    workspaceUrlKey?: string;
+    context?: EffectiveWorkspaceContext;
+  }>
 > {
   const stored = await readStoredConfig();
   const profiles = { ...(stored.profiles ?? {}) };
   if (!stored.profiles && stored.url && stored.apiKey) {
-    profiles[DEFAULT_PROFILE] = { url: stored.url, apiKey: stored.apiKey, context: stored.context };
+    profiles[DEFAULT_PROFILE] = {
+      url: stored.url,
+      apiKey: stored.apiKey,
+      workspaceId: stored.workspaceId,
+      workspaceUrlKey: stored.workspaceUrlKey,
+      context: stored.context,
+    };
   }
   return Object.entries(profiles)
     .filter(([, value]) => Boolean(value?.url && value?.apiKey))
-    .map(([name, value]) => ({ name, context: value.context }));
+    .map(([name, value]) => ({
+      name,
+      workspaceId: value.workspaceId,
+      workspaceUrlKey: value.workspaceUrlKey,
+      context: value.context,
+    }));
 }
 
 export async function currentProfile(): Promise<string> {
@@ -136,7 +167,13 @@ export async function saveConfig(config: CliConfig, requestedProfile?: string): 
   const profile = profileName(requestedProfile ?? config.profile ?? DEFAULT_PROFILE);
   const existing = await readStoredConfig();
   const profiles = { ...(existing.profiles ?? {}) };
-  profiles[profile] = { url: config.url, apiKey: config.apiKey, context: config.context };
+  profiles[profile] = {
+    url: config.url,
+    apiKey: config.apiKey,
+    workspaceId: config.workspaceId,
+    workspaceUrlKey: config.workspaceUrlKey,
+    context: config.context,
+  };
   const payload: StoredConfig = {
     version: 2,
     currentProfile: profile,
@@ -144,6 +181,8 @@ export async function saveConfig(config: CliConfig, requestedProfile?: string): 
     // Conserva la forma anterior para binarios viejos, pero solo refleja el perfil seleccionado.
     url: config.url,
     apiKey: config.apiKey,
+    workspaceId: config.workspaceId,
+    workspaceUrlKey: config.workspaceUrlKey,
     context: config.context,
   };
 
