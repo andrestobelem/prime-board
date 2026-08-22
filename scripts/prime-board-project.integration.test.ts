@@ -24,11 +24,16 @@ async function streamText(stream: ReturnType<typeof Bun.spawn>["stdout"]): Promi
   return await new Response(stream).text();
 }
 
+interface LauncherOptions {
+  port?: number;
+  db?: string;
+  captureOutput?: boolean;
+}
+
 async function runLauncher(
   project: string,
   home: string,
-  port?: number,
-  db?: string,
+  { port, db, captureOutput = false }: LauncherOptions = {},
 ): Promise<ReturnType<typeof Bun.spawn>> {
   const env = { ...process.env };
   delete env.PRIME_BOARD_REPO;
@@ -39,7 +44,8 @@ async function runLauncher(
   const args = [process.execPath, "scripts/prime-board-project.ts", "--project", project];
   if (port !== undefined) args.push("--port", String(port));
   if (db !== undefined) args.push("--db", db);
-  return Bun.spawn(args, { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" });
+  const output: "pipe" | "ignore" = captureOutput ? "pipe" : "ignore";
+  return Bun.spawn(args, { cwd: repoRoot, env, stdout: output, stderr: output });
 }
 
 async function waitForInstance(
@@ -65,11 +71,11 @@ describe("project launcher lifecycle", () => {
     mkdirSync(project, { recursive: true });
     Bun.spawnSync(["git", "init", "-q", project]);
 
-    const launcher = await runLauncher(project, home, port);
+    const launcher = await runLauncher(project, home, { port });
     try {
       await waitForHealth(port);
 
-      const second = await runLauncher(project, home, port);
+      const second = await runLauncher(project, home, { port, captureOutput: true });
       const secondOutput = `${await streamText(second.stdout)}${await streamText(second.stderr)}`;
       expect(await second.exited).toBe(0);
       expect(secondOutput).toContain("already running");
@@ -124,7 +130,7 @@ test("libera la reserva y el lock si el servidor no puede arrancar", async () =>
   mkdirSync(project, { recursive: true });
   Bun.spawnSync(["git", "init", "-q", project]);
 
-  const failed = await runLauncher(project, home, port, "/dev/null/prime-board.db");
+  const failed = await runLauncher(project, home, { port, db: "/dev/null/prime-board.db" });
   try {
     expect(await failed.exited).not.toBe(0);
   } finally {
@@ -137,7 +143,7 @@ test("libera la reserva y el lock si el servidor no puede arrancar", async () =>
   mkdirSync(retryHome, { recursive: true });
   mkdirSync(retryProject, { recursive: true });
   Bun.spawnSync(["git", "init", "-q", retryProject]);
-  const retry = await runLauncher(retryProject, retryHome, port);
+  const retry = await runLauncher(retryProject, retryHome, { port });
   try {
     await waitForHealth(port);
   } finally {
