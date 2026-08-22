@@ -153,6 +153,13 @@ export function setEffectiveWorkspaceContext(context: EffectiveWorkspaceContext)
   store.setItem(CREDENTIAL_MARKER_KEY, fallback ?? target);
 }
 
+/** Clears only the effective Workspace while preserving per-Workspace state. */
+export function clearEffectiveWorkspaceContext(): void {
+  const store = storage();
+  if (!store) return;
+  store.removeItem(CONTEXT_KEY);
+}
+
 /** Remove visible anonymous state on logout; namespaced data remains isolated. */
 export function clearAnonymousUiState(): void {
   const store = storage();

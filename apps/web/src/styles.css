@@ -162,6 +162,20 @@ select:focus {
   background: var(--surface-hover);
   color: var(--text);
 }
+.sidebar .workspace-options {
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar .workspace-option.active {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.sidebar .workspace-url-key {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+}
 .sidebar .section {
   color: var(--text-faint);
   font-size: 11px;

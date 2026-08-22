@@ -2,7 +2,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRequestGate } from "./request-generation.ts";
 import {
+  clearEffectiveWorkspaceContext,
   clearUiStateWithoutCredential,
+  credentialNamespace,
   prepareCredentialChange,
   setEffectiveWorkspaceContext,
   type EffectiveWorkspaceContext,
@@ -59,17 +61,39 @@ export class GqlError extends Error {
   }
 }
 
+function getSelectedWorkspaceIdForRequest(): string | null {
+  const key = localStorage.getItem("pb.apiKey")?.trim();
+  if (!key) return null;
+  return localStorage.getItem(`pb.workspace.selection.${credentialNamespace(key)}`);
+}
+
+let workspaceGeneration = 0;
+
+/** Invalidates in-flight UI work before changing the effective Workspace. */
+export function invalidateWorkspaceContext(): void {
+  workspaceGeneration += 1;
+  clearEffectiveWorkspaceContext();
+  notifyDataChanged();
+}
+
+export function getWorkspaceGeneration(): number {
+  return workspaceGeneration;
+}
+
 export async function gql<T = any>(
   query: string,
   variables: Record<string, unknown> = {},
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; workspaceHeader?: boolean } = {},
 ): Promise<T> {
+  const workspaceId = options.workspaceHeader === false ? null : getSelectedWorkspaceIdForRequest();
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    authorization: `Bearer ${getApiKey()}`,
+  };
+  if (workspaceId) headers["x-workspace-id"] = workspaceId;
   const response = await fetch("/graphql", {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${getApiKey()}`,
-    },
+    headers,
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
     signal: options.signal,
@@ -113,24 +137,34 @@ export interface QueryState<T> {
 export function useQuery<T = any>(
   query: string,
   variables: Record<string, unknown> = {},
+  options: { enabled?: boolean } = {},
 ): QueryState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<GqlError | null>(null);
   const [loading, setLoading] = useState(true);
   const key = JSON.stringify(variables);
+  const enabled = options.enabled !== false;
   const requestGate = useRef(createRequestGate());
   const authGeneration = useRef(getCredentialGeneration());
+  const workspaceGenerationRef = useRef(getWorkspaceGeneration());
   const abortRef = useRef<AbortController | null>(null);
 
   const run = useCallback(() => {
+    if (!enabled) return;
     const generation = requestGate.current.next();
     const requestAuthGeneration = getCredentialGeneration();
+    const requestWorkspaceGeneration = getWorkspaceGeneration();
     if (requestAuthGeneration !== authGeneration.current) {
-      // No deben quedar visibles issues, favoritos o Inbox obsoletos mientras carga la nueva key.
+      setData(null);
+      setError(null);
+    }
+    if (requestWorkspaceGeneration !== workspaceGenerationRef.current) {
+      // Nunca mostrar resultados del Workspace anterior mientras se resuelve el nuevo.
       setData(null);
       setError(null);
     }
     authGeneration.current = requestAuthGeneration;
+    workspaceGenerationRef.current = requestWorkspaceGeneration;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -140,7 +174,8 @@ export function useQuery<T = any>(
         if (
           !requestGate.current.isCurrent(generation) ||
           authGeneration.current !== getCredentialGeneration() ||
-          requestAuthGeneration !== getCredentialGeneration()
+          requestAuthGeneration !== getCredentialGeneration() ||
+          requestWorkspaceGeneration !== getWorkspaceGeneration()
         )
           return;
         setData(result);
@@ -150,6 +185,7 @@ export function useQuery<T = any>(
         if (
           !requestGate.current.isCurrent(generation) ||
           requestAuthGeneration !== getCredentialGeneration() ||
+          requestWorkspaceGeneration !== getWorkspaceGeneration() ||
           (err as { name?: string }).name === "AbortError"
         )
           return;
@@ -158,14 +194,21 @@ export function useQuery<T = any>(
       .finally(() => {
         if (
           requestGate.current.isCurrent(generation) &&
-          requestAuthGeneration === getCredentialGeneration()
+          requestAuthGeneration === getCredentialGeneration() &&
+          requestWorkspaceGeneration === getWorkspaceGeneration()
         )
           setLoading(false);
       });
-  }, [query, key]);
+  }, [enabled, query, key]);
 
   useEffect(() => {
-    // Variables changing means old data belongs to a different route/filter.
+    if (!enabled) {
+      abortRef.current?.abort();
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setData(null);
     setError(null);
     run();
@@ -175,7 +218,7 @@ export function useQuery<T = any>(
       requestGate.current.next();
       abortRef.current?.abort();
     };
-  }, [run]);
+  }, [enabled, run]);
 
   return { data, error, loading, refetch: run };
 }
