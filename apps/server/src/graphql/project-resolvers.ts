@@ -187,7 +187,9 @@ export const projectResolvers = {
       assertCanCreateProject(context.db, viewer, args.input.teamIds);
       if (args.input.leadId) requireActor(context, args.input.leadId);
       for (const teamId of args.input.teamIds ?? []) requireTeam(context, { id: teamId });
-      const project = mapProject(createProject(context.db, args.input));
+      const project = mapProject(
+        createProject(context.db, args.input, context.workspace.workspaceId),
+      );
       context.events.emit("project.created", viewer, project);
       return { success: true, project };
     },

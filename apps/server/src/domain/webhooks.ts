@@ -7,6 +7,17 @@ import { isWebhookEventName } from "../webhooks/events.ts";
 import { canAccessTeam } from "../auth/permissions.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 
+type ViewerRef = string | ActorRow;
+
+function resolveViewer(db: Database, viewer: ViewerRef): ActorRow | null {
+  if (typeof viewer !== "string") return viewer;
+  return db.query("SELECT * FROM actors WHERE id = ?1").get(viewer) as ActorRow | null;
+}
+
+function viewerId(viewer: ViewerRef): string {
+  return typeof viewer === "string" ? viewer : viewer.id;
+}
+
 export function mapWebhook(row: WebhookRow) {
   return {
     id: row.id,
@@ -18,14 +29,29 @@ export function mapWebhook(row: WebhookRow) {
   };
 }
 
-export function listWebhooks(db: Database, actorId: string, isAdmin: boolean): WebhookRow[] {
+export function listWebhooks(
+  db: Database,
+  viewer: ViewerRef,
+  isAdmin: boolean,
+  workspaceId?: string,
+): WebhookRow[] {
+  const actorId = viewerId(viewer);
+  const query = workspaceId
+    ? isAdmin
+      ? "SELECT * FROM webhooks WHERE workspace_id = ?1 ORDER BY created_at"
+      : "SELECT * FROM webhooks WHERE owner_id = ?1 AND workspace_id = ?2 ORDER BY created_at"
+    : isAdmin
+      ? "SELECT * FROM webhooks ORDER BY created_at"
+      : "SELECT * FROM webhooks WHERE owner_id = ?1 ORDER BY created_at";
   const rows = (
-    isAdmin
-      ? db.query("SELECT * FROM webhooks ORDER BY created_at").all()
-      : db.query("SELECT * FROM webhooks WHERE owner_id = ?1 ORDER BY created_at").all(actorId)
+    workspaceId
+      ? isAdmin
+        ? db.query(query).all(workspaceId)
+        : db.query(query).all(actorId, workspaceId)
+      : db.query(query).all(actorId)
   ) as WebhookRow[];
   if (isAdmin) return rows;
-  const actor = db.query("SELECT * FROM actors WHERE id = ?1").get(actorId) as ActorRow | null;
+  const actor = resolveViewer(db, viewer);
   return rows.filter(
     (row) => !row.team_id || Boolean(actor && canAccessTeam(db, actor, row.team_id)),
   );
@@ -33,9 +59,11 @@ export function listWebhooks(db: Database, actorId: string, isAdmin: boolean): W
 
 export function createWebhook(
   db: Database,
-  ownerId: string,
+  ownerRef: ViewerRef,
   input: { url: string; secret?: string | null; events?: string[] | null; teamId?: string | null },
+  workspaceId?: string,
 ): { row: WebhookRow; secret: string } {
+  const ownerId = viewerId(ownerRef);
   let parsed: URL;
   try {
     parsed = new URL(input.url);
@@ -59,19 +87,39 @@ export function createWebhook(
 
   const id = newId();
   db.query(
-    "INSERT INTO webhooks (id, url, secret, events, enabled, created_at, owner_id, team_id) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7)",
-  ).run(id, input.url, secret, JSON.stringify(events), now(), ownerId, input.teamId ?? null);
-  const row = db.query("SELECT * FROM webhooks WHERE id = ?1").get(id) as WebhookRow;
+    "INSERT INTO webhooks (id, url, secret, events, enabled, created_at, owner_id, team_id, workspace_id) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)",
+  ).run(
+    id,
+    input.url,
+    secret,
+    JSON.stringify(events),
+    now(),
+    ownerId,
+    input.teamId ?? null,
+    workspaceId ?? null,
+  );
+  const row = (
+    workspaceId
+      ? db.query("SELECT * FROM webhooks WHERE id = ?1 AND workspace_id = ?2").get(id, workspaceId)
+      : db.query("SELECT * FROM webhooks WHERE id = ?1").get(id)
+  ) as WebhookRow;
   return { row, secret };
 }
 
 export function deleteWebhook(
   db: Database,
   id: string,
-  actorId: string,
+  viewer: ViewerRef,
   isAdmin: boolean,
+  workspaceId?: string,
 ): boolean {
-  const existing = db.query("SELECT id, owner_id FROM webhooks WHERE id = ?1").get(id) as {
+  const actorId = viewerId(viewer);
+  const query = workspaceId
+    ? "SELECT id, owner_id FROM webhooks WHERE id = ?1 AND workspace_id = ?2"
+    : "SELECT id, owner_id FROM webhooks WHERE id = ?1";
+  const existing = (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as {
     id: string;
     owner_id: string | null;
   } | null;
@@ -79,6 +127,10 @@ export function deleteWebhook(
   if (!isAdmin && existing.owner_id !== actorId) {
     throw apiError("UNAUTHORIZED", "You can only manage your own webhooks");
   }
-  db.query("DELETE FROM webhooks WHERE id = ?1").run(id);
+  if (workspaceId) {
+    db.query("DELETE FROM webhooks WHERE id = ?1 AND workspace_id = ?2").run(id, workspaceId);
+  } else {
+    db.query("DELETE FROM webhooks WHERE id = ?1").run(id);
+  }
   return true;
 }

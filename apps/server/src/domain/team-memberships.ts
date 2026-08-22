@@ -41,7 +41,14 @@ export function isTeamMember(db: Database, teamId: string, actorId: string): boo
   return Boolean(
     db
       .query(
-        "SELECT 1 FROM team_memberships JOIN actors ON actors.id = team_memberships.actor_id WHERE team_memberships.team_id = ?1 AND team_memberships.actor_id = ?2 AND actors.status = 'active'",
+        `SELECT 1
+         FROM team_memberships
+         JOIN teams ON teams.id = team_memberships.team_id
+         JOIN workspace_memberships
+           ON workspace_memberships.workspace_id = teams.workspace_id
+          AND workspace_memberships.actor_id = team_memberships.actor_id
+          AND workspace_memberships.status = 'active'
+         WHERE team_memberships.team_id = ?1 AND team_memberships.actor_id = ?2`,
       )
       .get(teamId, actorId),
   );
@@ -51,7 +58,16 @@ export function isTeamOwner(db: Database, teamId: string, actorId: string): bool
   return Boolean(
     db
       .query(
-        "SELECT 1 FROM team_memberships JOIN actors ON actors.id = team_memberships.actor_id WHERE team_memberships.team_id = ?1 AND team_memberships.actor_id = ?2 AND team_memberships.role = 'owner' AND actors.status = 'active'",
+        `SELECT 1
+         FROM team_memberships
+         JOIN teams ON teams.id = team_memberships.team_id
+         JOIN workspace_memberships
+           ON workspace_memberships.workspace_id = teams.workspace_id
+          AND workspace_memberships.actor_id = team_memberships.actor_id
+          AND workspace_memberships.status = 'active'
+         WHERE team_memberships.team_id = ?1
+           AND team_memberships.actor_id = ?2
+           AND team_memberships.role = 'owner'`,
       )
       .get(teamId, actorId),
   );
@@ -74,7 +90,8 @@ export function createTeamMembership(
   input: { teamId: string; actorId: string; role?: string | null },
   allowAdmin = false,
 ): TeamMembershipRow {
-  if (!getTeam(db, { id: input.teamId })) throw apiError("NOT_FOUND", "Team not found");
+  const team = getTeam(db, { id: input.teamId });
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
   assertTeamActive(db, input.teamId);
   if (!getActor(db, input.actorId)) throw apiError("NOT_FOUND", "Actor not found");
   assertTeamOwner(db, input.teamId, viewerId, allowAdmin);
@@ -88,8 +105,15 @@ export function createTeamMembership(
   if (duplicate) throw apiError("VALIDATION_FAILED", "Actor is already a team member");
   const id = newId();
   db.query(
-    "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-  ).run(id, input.teamId, input.actorId, role, now());
+    "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+  ).run(
+    id,
+    input.teamId,
+    input.actorId,
+    role,
+    now(),
+    (team as { workspace_id?: string | null }).workspace_id ?? null,
+  );
   return getTeamMembership(db, id)!;
 }
 

@@ -7,6 +7,7 @@ import { canAccessTeam } from "../auth/permissions.ts";
 import type { ActivityRow } from "./activity.ts";
 
 export interface InboxActivityRow extends ActivityRow {
+  workspace_id?: string | null;
   is_read: number;
   is_archived: number;
   issue_assignee_id: string | null;
@@ -44,37 +45,53 @@ function activityBody(row: ActivityRow): string {
  * Excluye actividad generada por el propio viewer.
  */
 type InboxListOptions = { first?: number; includeArchived?: boolean };
+type ViewerRef = string | ActorRow;
+
+function resolveViewer(db: Database, viewer: ViewerRef): ActorRow | null {
+  if (typeof viewer !== "string") return viewer;
+  return db.query("SELECT * FROM actors WHERE id = ?1").get(viewer) as ActorRow | null;
+}
+
+function viewerId(viewer: ViewerRef): string {
+  return typeof viewer === "string" ? viewer : viewer.id;
+}
 
 function listInboxActivityInternal(
   db: Database,
-  viewerId: string,
+  viewerRef: ViewerRef,
   opts: InboxListOptions,
   limit: number | null,
+  workspaceId?: string,
 ): InboxActivityRow[] {
   const includeArchived = Boolean(opts.includeArchived);
-  const viewer = db.query("SELECT * FROM actors WHERE id = ?1").get(viewerId) as ActorRow | null;
+  const viewer = resolveViewer(db, viewerRef);
   if (!viewer) return [];
+  const actorId = viewer.id;
 
   // La asignación efectiva del issue no alcanza para decidir la relevancia de
   // un evento histórico: una transferencia posterior no debe borrar una
   // notificación que todavía no fue leída. Recuperamos todos los eventos que
   // pueden alimentar el inbox y reconstruimos el assignee al momento de cada
   // evento a partir del log append-only.
-  const rows = db
-    .query(
-      `SELECT a.*,
+  const workspaceCondition = workspaceId ? "AND i.workspace_id = ?3" : "";
+  const rowsQuery = `SELECT a.*,
               i.assignee_id AS issue_assignee_id,
               i.team_id AS issue_team_id,
+              i.workspace_id AS workspace_id,
               CASE WHEN r.read_at IS NOT NULL THEN 1 ELSE 0 END AS is_read,
               CASE WHEN r.archived_at IS NOT NULL THEN 1 ELSE 0 END AS is_archived
        FROM activity a
        JOIN issues i ON i.id = a.issue_id
        LEFT JOIN inbox_receipts r ON r.activity_id = a.id AND r.actor_id = ?1
        WHERE (?2 = 1 OR r.archived_at IS NULL)
+         ${workspaceCondition}
          AND a.type IN ('created', 'assigned', 'commented', 'state_changed', 'priority_changed')
-       ORDER BY a.created_at DESC, a.id DESC`,
-    )
-    .all(viewerId, includeArchived ? 1 : 0) as InboxActivityRow[];
+       ORDER BY a.created_at DESC, a.id DESC`;
+  const rows = (
+    workspaceId
+      ? db.query(rowsQuery).all(actorId, includeArchived ? 1 : 0, workspaceId)
+      : db.query(rowsQuery).all(actorId, includeArchived ? 1 : 0)
+  ) as InboxActivityRow[];
   const visibleRows = rows.filter((row) => canAccessTeam(db, viewer, row.issue_team_id));
 
   const historicalAssignee = new Map<string, string | null>();
@@ -117,24 +134,25 @@ function listInboxActivityInternal(
   }
 
   const relevant = visibleRows.filter((row) => {
-    if (row.actor_id === viewerId) return false;
+    if (row.actor_id === actorId) return false;
     const recipient = historicalAssignee.get(row.id);
-    if (row.type === "created" || row.type === "assigned") return recipient === viewerId;
+    if (row.type === "created" || row.type === "assigned") return recipient === actorId;
     if (row.type === "state_changed" || row.type === "priority_changed") {
-      return recipient === viewerId;
+      return recipient === actorId;
     }
-    return recipient === viewerId || mentionsActor(activityBody(row), viewer.name);
+    return recipient === actorId || mentionsActor(activityBody(row), viewer.name);
   });
   return limit === null ? relevant : relevant.slice(0, limit);
 }
 
 export function listInboxActivity(
   db: Database,
-  viewerId: string,
+  viewer: ViewerRef,
   opts: InboxListOptions = {},
+  workspaceId?: string,
 ): InboxActivityRow[] {
   const limit = Math.min(Math.max(opts.first ?? 50, 1), 100);
-  return listInboxActivityInternal(db, viewerId, opts, limit);
+  return listInboxActivityInternal(db, viewer, opts, limit, workspaceId);
 }
 
 export interface InboxActivityPage {
@@ -164,11 +182,12 @@ function decodeInboxCursor(cursor: string): [string, string] | null {
 /** Cursor pagination for the inbox without the legacy 100-item list cap. */
 export function listInboxActivityPage(
   db: Database,
-  viewerId: string,
+  viewer: ViewerRef,
   opts: { first?: number; after?: string | null; includeArchived?: boolean } = {},
+  workspaceId?: string,
 ): InboxActivityPage {
   const first = Math.min(Math.max(opts.first ?? 50, 1), 250);
-  const all = listInboxActivityInternal(db, viewerId, opts, null);
+  const all = listInboxActivityInternal(db, viewer, opts, null, workspaceId);
   let start = 0;
   if (opts.after) {
     const cursor = decodeInboxCursor(opts.after);
@@ -185,46 +204,68 @@ export function listInboxActivityPage(
   };
 }
 
-export function countUnreadInboxActivity(db: Database, viewerId: string): number {
-  return listInboxActivityInternal(db, viewerId, { includeArchived: false }, null).filter(
-    (row) => !row.is_read,
-  ).length;
+export function countUnreadInboxActivity(
+  db: Database,
+  viewer: ViewerRef,
+  workspaceId?: string,
+): number {
+  return listInboxActivityInternal(
+    db,
+    viewer,
+    { includeArchived: false },
+    null,
+    workspaceId,
+  ).filter((row) => !row.is_read).length;
 }
 
 function findInboxActivity(
   db: Database,
-  viewerId: string,
+  viewer: ViewerRef,
   activityId: string,
+  workspaceId?: string,
 ): InboxActivityRow | undefined {
-  return listInboxActivityInternal(db, viewerId, { includeArchived: true }, null).find(
+  return listInboxActivityInternal(db, viewer, { includeArchived: true }, null, workspaceId).find(
     (row) => row.id === activityId,
   );
 }
 
-function ensureReceipt(db: Database, activityId: string, actorId: string): void {
+function ensureReceipt(
+  db: Database,
+  activityId: string,
+  actorId: string,
+  workspaceId?: string,
+): void {
   const activity = db.query("SELECT id FROM activity WHERE id = ?1").get(activityId);
   if (!activity) throw apiError("NOT_FOUND", "Inbox item not found");
   db.query(
-    `INSERT INTO inbox_receipts (activity_id, actor_id, read_at, archived_at)
-     VALUES (?1, ?2, NULL, NULL)
+    `INSERT INTO inbox_receipts (activity_id, actor_id, read_at, archived_at, workspace_id)
+     VALUES (?1, ?2, NULL, NULL, ?3)
      ON CONFLICT(activity_id, actor_id) DO NOTHING`,
-  ).run(activityId, actorId);
+  ).run(activityId, actorId, workspaceId ?? null);
 }
 
-export function markInboxRead(db: Database, activityId: string, actorId: string): InboxActivityRow {
+export function markInboxRead(
+  db: Database,
+  activityId: string,
+  viewer: ViewerRef,
+  workspaceId?: string,
+): InboxActivityRow {
+  const actorId = viewerId(viewer);
   // Validar pertenencia/relevancia antes de crear el receipt evita escrituras
   // huérfanas cuando el id es una actividad ajena o ya no corresponde al inbox.
-  if (!findInboxActivity(db, actorId, activityId)) {
+  if (!findInboxActivity(db, viewer, activityId, workspaceId)) {
     throw apiError("NOT_FOUND", "Inbox item not found");
   }
   db.transaction(() => {
-    ensureReceipt(db, activityId, actorId);
+    ensureReceipt(db, activityId, actorId, workspaceId);
     db.query(
       `UPDATE inbox_receipts SET read_at = COALESCE(read_at, ?3)
-       WHERE activity_id = ?1 AND actor_id = ?2`,
-    ).run(activityId, actorId, now());
+       WHERE activity_id = ?1 AND actor_id = ?2${workspaceId ? " AND workspace_id = ?4" : ""}`,
+    ).run(
+      ...(workspaceId ? [activityId, actorId, now(), workspaceId] : [activityId, actorId, now()]),
+    );
   })();
-  const row = findInboxActivity(db, actorId, activityId);
+  const row = findInboxActivity(db, viewer, activityId, workspaceId);
   if (!row) throw apiError("NOT_FOUND", "Inbox item not found");
   return row;
 }
@@ -232,21 +273,27 @@ export function markInboxRead(db: Database, activityId: string, actorId: string)
 export function archiveInboxItem(
   db: Database,
   activityId: string,
-  actorId: string,
+  viewer: ViewerRef,
+  workspaceId?: string,
 ): InboxActivityRow {
-  if (!findInboxActivity(db, actorId, activityId)) {
+  const actorId = viewerId(viewer);
+  if (!findInboxActivity(db, viewer, activityId, workspaceId)) {
     throw apiError("NOT_FOUND", "Inbox item not found");
   }
   db.transaction(() => {
-    ensureReceipt(db, activityId, actorId);
+    ensureReceipt(db, activityId, actorId, workspaceId);
     const timestamp = now();
     db.query(
       `UPDATE inbox_receipts
        SET archived_at = ?3, read_at = COALESCE(read_at, ?3)
-       WHERE activity_id = ?1 AND actor_id = ?2`,
-    ).run(activityId, actorId, timestamp);
+       WHERE activity_id = ?1 AND actor_id = ?2${workspaceId ? " AND workspace_id = ?4" : ""}`,
+    ).run(
+      ...(workspaceId
+        ? [activityId, actorId, timestamp, workspaceId]
+        : [activityId, actorId, timestamp]),
+    );
   })();
-  const row = findInboxActivity(db, actorId, activityId);
+  const row = findInboxActivity(db, viewer, activityId, workspaceId);
   if (!row) throw apiError("NOT_FOUND", "Inbox item not found");
   return row;
 }

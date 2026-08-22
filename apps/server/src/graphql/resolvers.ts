@@ -469,8 +469,8 @@ export const resolvers = {
     savedView: (favorite: { savedViewId: string | null }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
       if (!favorite.savedViewId) return null;
-      const view = getSavedView(context.db, favorite.savedViewId);
-      return view && canAccessSavedView(context.db, view, viewer.id) ? mapSavedView(view) : null;
+      const view = getSavedView(context.db, favorite.savedViewId, context.workspace.workspaceId);
+      return view && canAccessSavedView(context.db, view, viewer) ? mapSavedView(view) : null;
     },
   },
 
@@ -807,9 +807,7 @@ export const resolvers = {
       },
       webhooks: (_parent: unknown, _args: unknown, context: Context) => {
         const viewer = requireViewer(context);
-        return listWebhooksInWorkspace(context, viewer.id, isWorkspaceAdmin(viewer)).map(
-          mapWebhook,
-        );
+        return listWebhooksInWorkspace(context, viewer).map(mapWebhook);
       },
       savedViews: (
         _parent: unknown,
@@ -823,20 +821,29 @@ export const resolvers = {
         }
         return scopeWorkspaceRows(
           context,
-          listSavedViews(context.db, viewer.id, args.teamId, Boolean(args.includeArchived)),
+          listSavedViews(
+            context.db,
+            viewer,
+            args.teamId,
+            Boolean(args.includeArchived),
+            context.workspace.workspaceId,
+          ),
         ).map(mapSavedView);
       },
       savedView: (_parent: unknown, args: { id: string }, context: Context) => {
         const viewer = requireViewer(context);
-        const row = getSavedView(context.db, args.id);
+        const row = getSavedView(context.db, args.id, context.workspace.workspaceId);
         if (!row) return null;
         scopeWorkspaceRow(context, row);
-        if (!canAccessSavedView(context.db, row, viewer.id)) return null;
+        if (!canAccessSavedView(context.db, row, viewer)) return null;
         return mapSavedView(row);
       },
       favorites: (_parent: unknown, _args: unknown, context: Context) => {
         const viewer = requireViewer(context);
-        return scopeWorkspaceRows(context, listFavorites(context.db, viewer.id)).map(mapFavorite);
+        return scopeWorkspaceRows(
+          context,
+          listFavorites(context.db, viewer, context.workspace.workspaceId),
+        ).map(mapFavorite);
       },
       inbox: (
         _parent: unknown,
@@ -846,10 +853,15 @@ export const resolvers = {
         const viewer = requireViewer(context);
         return scopeWorkspaceRows(
           context,
-          listInboxActivity(context.db, viewer.id, {
-            first: args.first ?? 50,
-            includeArchived: Boolean(args.includeArchived),
-          }),
+          listInboxActivity(
+            context.db,
+            viewer,
+            {
+              first: args.first ?? 50,
+              includeArchived: Boolean(args.includeArchived),
+            },
+            context.workspace.workspaceId,
+          ),
         ).map((row) => ({
           ...mapActivity(row),
           issueId: row.issue_id,
@@ -863,11 +875,16 @@ export const resolvers = {
         context: Context,
       ) => {
         const viewer = requireViewer(context);
-        const page = listInboxActivityPage(context.db, viewer.id, {
-          first: args.first ?? 50,
-          after: args.after,
-          includeArchived: Boolean(args.includeArchived),
-        });
+        const page = listInboxActivityPage(
+          context.db,
+          viewer,
+          {
+            first: args.first ?? 50,
+            after: args.after,
+            includeArchived: Boolean(args.includeArchived),
+          },
+          context.workspace.workspaceId,
+        );
         return {
           nodes: scopeWorkspaceRows(context, page.rows).map((row) => ({
             ...mapActivity(row),
@@ -880,7 +897,7 @@ export const resolvers = {
       },
       inboxUnreadCount: (_parent: unknown, _args: unknown, context: Context) => {
         const viewer = requireViewer(context);
-        return countUnreadInboxActivity(context.db, viewer.id);
+        return countUnreadInboxActivity(context.db, viewer, context.workspace.workspaceId);
       },
       cycles: (
         _parent: unknown,
@@ -1568,7 +1585,12 @@ export const resolvers = {
               );
             }
           }
-          const { row, secret } = createWebhook(context.db, viewer.id, args.input);
+          const { row, secret } = createWebhook(
+            context.db,
+            viewer,
+            args.input,
+            context.workspace.workspaceId,
+          );
           return { success: true, webhook: mapWebhook(row), secret };
         },
         webhookDelete: (_parent: unknown, args: { id: string }, context: Context) => {
@@ -1589,7 +1611,13 @@ export const resolvers = {
             }
           }
           return {
-            success: deleteWebhook(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)),
+            success: deleteWebhook(
+              context.db,
+              args.id,
+              viewer,
+              isWorkspaceAdmin(viewer),
+              context.workspace.workspaceId,
+            ),
           };
         },
         labelCreate: async (
@@ -1610,7 +1638,9 @@ export const resolvers = {
           } else {
             assertWorkspaceAdmin(viewer);
           }
-          const label = mapLabel(createLabel(context.db, args.input));
+          const label = mapLabel(
+            createLabel(context.db, args.input, context.workspace.workspaceId),
+          );
           return { success: true, label };
         },
         workflowStateUpdate: async (
@@ -1789,7 +1819,9 @@ export const resolvers = {
           if (args.input.scope.toLowerCase() === "team") {
             assertCanManageIssue(context.db, viewer, args.input.teamId);
           }
-          const savedView = mapSavedView(createSavedView(context.db, viewer.id, args.input));
+          const savedView = mapSavedView(
+            createSavedView(context.db, viewer, args.input, context.workspace.workspaceId),
+          );
           return { success: true, savedView };
         },
         savedViewUpdate: (
@@ -1808,34 +1840,38 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
-          const existing = getSavedView(context.db, args.id);
-          if (existing?.team_id && canAccessSavedView(context.db, existing, viewer.id)) {
+          const existing = getSavedView(context.db, args.id, context.workspace.workspaceId);
+          if (existing?.team_id && canAccessSavedView(context.db, existing, viewer)) {
             assertTeamActive(context.db, existing.team_id);
             assertCanManageIssue(context.db, viewer, existing.team_id);
           }
           const savedView = mapSavedView(
-            updateSavedView(context.db, args.id, viewer.id, args.input),
+            updateSavedView(context.db, args.id, viewer, args.input, context.workspace.workspaceId),
           );
           return { success: true, savedView };
         },
         savedViewDuplicate: (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
-          const existing = getSavedView(context.db, args.id);
-          if (existing?.team_id && canAccessSavedView(context.db, existing, viewer.id)) {
+          const existing = getSavedView(context.db, args.id, context.workspace.workspaceId);
+          if (existing?.team_id && canAccessSavedView(context.db, existing, viewer)) {
             assertTeamActive(context.db, existing.team_id);
             assertCanManageIssue(context.db, viewer, existing.team_id);
           }
-          const savedView = mapSavedView(duplicateSavedView(context.db, args.id, viewer.id));
+          const savedView = mapSavedView(
+            duplicateSavedView(context.db, args.id, viewer, context.workspace.workspaceId),
+          );
           return { success: true, savedView };
         },
         savedViewDelete: (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
-          const existing = getSavedView(context.db, args.id);
-          if (existing?.team_id && canAccessSavedView(context.db, existing, viewer.id)) {
+          const existing = getSavedView(context.db, args.id, context.workspace.workspaceId);
+          if (existing?.team_id && canAccessSavedView(context.db, existing, viewer)) {
             assertTeamActive(context.db, existing.team_id);
             assertCanManageIssue(context.db, viewer, existing.team_id);
           }
-          return { success: deleteSavedView(context.db, args.id, viewer.id) };
+          return {
+            success: deleteSavedView(context.db, args.id, viewer, context.workspace.workspaceId),
+          };
         },
         favoriteCreate: (
           _parent: unknown,
@@ -1850,19 +1886,27 @@ export const resolvers = {
             }
           }
           if (args.input.savedViewId) {
-            const savedView = getSavedView(context.db, args.input.savedViewId);
-            if (!savedView || !canAccessSavedView(context.db, savedView, viewer.id)) {
+            const savedView = getSavedView(
+              context.db,
+              args.input.savedViewId,
+              context.workspace.workspaceId,
+            );
+            if (!savedView || !canAccessSavedView(context.db, savedView, viewer)) {
               throw apiError("NOT_FOUND", "Saved view not found");
             }
           }
           return {
             success: true,
-            favorite: mapFavorite(createFavorite(context.db, viewer.id, args.input)),
+            favorite: mapFavorite(
+              createFavorite(context.db, viewer, args.input, context.workspace.workspaceId),
+            ),
           };
         },
         favoriteDelete: (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
-          return { success: deleteFavorite(context.db, viewer.id, args.id) };
+          return {
+            success: deleteFavorite(context.db, viewer.id, args.id, context.workspace.workspaceId),
+          };
         },
         favoriteReorder: (
           _parent: unknown,
@@ -1872,7 +1916,15 @@ export const resolvers = {
           const viewer = requireViewer(context);
           return {
             success: true,
-            favorite: mapFavorite(reorderFavorite(context.db, viewer.id, args.id, args.position)),
+            favorite: mapFavorite(
+              reorderFavorite(
+                context.db,
+                viewer.id,
+                args.id,
+                args.position,
+                context.workspace.workspaceId,
+              ),
+            ),
           };
         },
         cycleCreate: (
@@ -2050,7 +2102,7 @@ export const resolvers = {
         },
         inboxMarkRead: (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
-          const row = markInboxRead(context.db, args.id, viewer.id);
+          const row = markInboxRead(context.db, args.id, viewer, context.workspace.workspaceId);
           return {
             success: true,
             inboxItem: {
@@ -2063,7 +2115,7 @@ export const resolvers = {
         },
         inboxArchive: (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
-          const row = archiveInboxItem(context.db, args.id, viewer.id);
+          const row = archiveInboxItem(context.db, args.id, viewer, context.workspace.workspaceId);
           return {
             success: true,
             inboxItem: {

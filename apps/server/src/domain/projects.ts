@@ -16,6 +16,7 @@ export const PROJECT_STATES = [
 
 export interface ProjectRow {
   id: string;
+  workspace_id: string | null;
   name: string;
   description: string | null;
   state: (typeof PROJECT_STATES)[number];
@@ -93,7 +94,12 @@ export function projectIncludesTeam(db: Database, projectId: string, teamId: str
   );
 }
 
-function setProjectTeams(db: Database, projectId: string, teamIds: string[]): void {
+function setProjectTeams(
+  db: Database,
+  projectId: string,
+  teamIds: string[],
+  workspaceId?: string,
+): void {
   if (teamIds.length === 0) {
     throw apiError("VALIDATION_FAILED", "A project must belong to at least one team");
   }
@@ -101,20 +107,28 @@ function setProjectTeams(db: Database, projectId: string, teamIds: string[]): vo
     const team = db.query("SELECT id FROM teams WHERE id = ?1").get(teamId);
     if (!team) throw apiError("NOT_FOUND", `Team not found: ${teamId}`);
   }
-  db.query("DELETE FROM project_teams WHERE project_id = ?1").run(projectId);
-  for (const teamId of new Set(teamIds)) {
-    db.query("INSERT INTO project_teams (project_id, team_id) VALUES (?1, ?2)").run(
+  if (workspaceId) {
+    db.query("DELETE FROM project_teams WHERE project_id = ?1 AND workspace_id = ?2").run(
       projectId,
-      teamId,
+      workspaceId,
     );
+  } else {
+    db.query("DELETE FROM project_teams WHERE project_id = ?1").run(projectId);
+  }
+  for (const teamId of new Set(teamIds)) {
+    db.query(
+      "INSERT INTO project_teams (project_id, team_id, workspace_id) VALUES (?1, ?2, ?3)",
+    ).run(projectId, teamId, workspaceId ?? null);
   }
 }
 
-function allTeamIds(db: Database): string[] {
-  return db
-    .query("SELECT id FROM teams WHERE archived_at IS NULL")
-    .values()
-    .map((row) => row[0] as string);
+function allTeamIds(db: Database, workspaceId?: string): string[] {
+  const query = workspaceId
+    ? "SELECT id FROM teams WHERE archived_at IS NULL AND workspace_id = ?1"
+    : "SELECT id FROM teams WHERE archived_at IS NULL";
+  return (workspaceId ? db.query(query).values(workspaceId) : db.query(query).values()).map(
+    (row) => row[0] as string,
+  );
 }
 
 function validate(
@@ -140,6 +154,7 @@ export function createProject(
     targetDate?: string | null;
     teamIds?: string[] | null;
   },
+  workspaceId?: string,
 ): ProjectRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Project name cannot be empty");
@@ -149,8 +164,8 @@ export function createProject(
   db.transaction(() => {
     const timestamp = now();
     db.query(
-      `INSERT INTO projects (id, name, description, state, lead_id, target_date, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
+      `INSERT INTO projects (id, name, description, state, lead_id, target_date, created_at, updated_at, workspace_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
     ).run(
       id,
       name,
@@ -159,10 +174,11 @@ export function createProject(
       input.leadId ?? null,
       input.targetDate ?? null,
       timestamp,
+      workspaceId ?? null,
     );
     // Sin teamIds explícitos, el proyecto se asocia a todos los teams actuales
     // (compatibilidad con clientes previos a AT-152).
-    setProjectTeams(db, id, input.teamIds ?? allTeamIds(db));
+    setProjectTeams(db, id, input.teamIds ?? allTeamIds(db, workspaceId), workspaceId);
   })();
   return getProject(db, id)!;
 }

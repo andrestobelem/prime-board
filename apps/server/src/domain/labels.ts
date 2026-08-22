@@ -7,6 +7,7 @@ import type { IssueRow } from "./issues.ts";
 
 export interface LabelRow {
   id: string;
+  workspace_id: string | null;
   name: string;
   color: string;
   team_id: string | null;
@@ -24,6 +25,7 @@ export function getLabel(db: Database, id: string): LabelRow | null {
 export function createLabel(
   db: Database,
   input: { name: string; color?: string | null; teamId?: string | null },
+  workspaceId?: string,
 ): LabelRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
@@ -39,9 +41,13 @@ export function createLabel(
 
   const id = newId();
   db.query(
-    "INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-  ).run(id, name, input.color ?? "#95a2b3", input.teamId ?? null, now());
-  return db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow;
+    "INSERT INTO labels (id, name, color, team_id, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+  ).run(id, name, input.color ?? "#95a2b3", input.teamId ?? null, now(), workspaceId ?? null);
+  return (
+    workspaceId
+      ? db.query("SELECT * FROM labels WHERE id = ?1 AND workspace_id = ?2").get(id, workspaceId)
+      : db.query("SELECT * FROM labels WHERE id = ?1").get(id)
+  ) as LabelRow;
 }
 
 export function updateLabel(

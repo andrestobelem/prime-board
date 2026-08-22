@@ -197,10 +197,17 @@ export function listActorsInWorkspace(
  */
 export function listWebhooksInWorkspace(
   context: WorkspaceLookupContext,
-  actorId: string,
-  isAdmin: boolean,
+  viewer: ActorRow,
 ): WebhookRow[] {
-  return scopeWorkspaceRows(context, listWebhooks(context.db, actorId, isAdmin));
+  return scopeWorkspaceRows(
+    context,
+    listWebhooks(
+      context.db,
+      viewer,
+      viewer.workspace_role === "admin",
+      context.workspace.workspaceId,
+    ),
+  );
 }
 
 export function lookupWebhook(context: WorkspaceLookupContext, id: string): WebhookRow | null {
