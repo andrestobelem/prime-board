@@ -187,11 +187,6 @@ export async function resolveLabels(
       candidates = candidates.filter((label: any) =>
         isWorkspace ? label.teamId === null : label.teamId === teamId,
       );
-    } else {
-      const teamLabels = candidates.filter((label: any) => label.teamId === teamId);
-      candidates = teamLabels.length
-        ? teamLabels
-        : candidates.filter((label: any) => !label.teamId);
     }
     if (!candidates.length) throw new ApiError(`Label not found: ${name}`, "NOT_FOUND");
     if (candidates.length > 1) {

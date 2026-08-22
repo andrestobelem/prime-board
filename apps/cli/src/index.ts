@@ -38,7 +38,7 @@ Commands:
   initiative list|view|create|update|delete Manage initiatives
   inbox list|read|archive                  Manage personal inbox
   favorite list|create|delete|reorder      Manage actor favorites
-  workspace view|update                   View or rename the workspace
+  workspace list|view|use|update          List, select, view or rename the workspace
 
 Run \`pb <command>\` without arguments for detailed usage.
 Environment: PRIME_BOARD_URL, PRIME_BOARD_API_KEY, PRIME_BOARD_PROFILE override the saved config.`;

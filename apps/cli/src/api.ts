@@ -14,6 +14,7 @@ export async function gqlRequest(
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${config.apiKey}`,
+        ...(config.workspaceId ? { "X-Workspace-ID": config.workspaceId } : {}),
       },
       body: JSON.stringify({ query, variables }),
     });
