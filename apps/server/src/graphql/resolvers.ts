@@ -206,7 +206,13 @@ import {
   listTeamMemberships,
   mapTeamMembership,
 } from "../domain/team-memberships.ts";
-import { getWorkspace, mapWorkspace, updateWorkspace } from "../domain/workspaces.ts";
+import {
+  getWorkspace,
+  listWorkspaceAccess,
+  mapWorkspace,
+  updateWorkspace,
+} from "../domain/workspaces.ts";
+import { seedWorkspace } from "../db/seed.ts";
 import {
   createPostgresLabel,
   deletePostgresLabel,
@@ -238,6 +244,20 @@ const JSONScalar = new GraphQLScalarType({
   serialize: (value) => value,
   parseValue: (value) => value,
 });
+
+function assertWorkspaceAdminInContext(
+  context: Context,
+  viewer: ReturnType<typeof requireViewer>,
+): void {
+  assertWorkspaceAdmin(viewer);
+  if (context.persistence) return;
+  const access = listWorkspaceAccess(context.db, viewer.id, context.auth?.keyId ?? "local").find(
+    (workspace) => workspace.id === context.workspace.workspaceId,
+  );
+  if (!access || access.status !== "active" || access.role !== "admin") {
+    throw apiError("UNAUTHORIZED", "Workspace admin permission is required");
+  }
+}
 
 function emitBulkIssueUpdates(
   context: Context,
@@ -538,6 +558,29 @@ export const resolvers = {
         mapApiKey(row, context.db, context.workspace.workspaceId),
       );
     },
+    workspaces: async (actor: { id: string }, _args: unknown, context: Context) => {
+      const viewer = requireViewer(context);
+      if (viewer.id !== actor.id && !isWorkspaceAdmin(viewer)) return [];
+      if (context.persistence) {
+        const row = await getPostgresWorkspace(context.persistence, context.workspace.workspaceId);
+        return row
+          ? [
+              {
+                id: row.id,
+                name: row.name,
+                urlKey: row.url_key,
+                createdAt: row.created_at,
+                role: viewer.workspace_role,
+                status: viewer.status,
+                isDefault: true,
+              },
+            ]
+          : [];
+      }
+      return listWorkspaceAccess(context.db, actor.id, context.auth?.keyId ?? "local").map(
+        mapWorkspace,
+      );
+    },
   },
 
   ActorInvitation: {
@@ -564,19 +607,58 @@ export const resolvers = {
       ...projectResolvers.Query,
       viewer: (_parent: unknown, _args: unknown, context: Context) =>
         mapActor(requireViewer(context)),
+      workspaces: async (_parent: unknown, _args: unknown, context: Context) => {
+        const viewer = requireViewer(context);
+        if (context.persistence) {
+          const row = await getPostgresWorkspace(
+            context.persistence,
+            context.workspace.workspaceId,
+          );
+          return row
+            ? [
+                {
+                  id: row.id,
+                  name: row.name,
+                  urlKey: row.url_key,
+                  createdAt: row.created_at,
+                  role: viewer.workspace_role,
+                  status: viewer.status,
+                  isDefault: true,
+                },
+              ]
+            : [];
+        }
+        return listWorkspaceAccess(context.db, viewer.id, context.auth?.keyId ?? "local").map(
+          mapWorkspace,
+        );
+      },
       workspace: async (_parent: unknown, _args: unknown, context: Context) => {
-        requireViewer(context);
+        const viewer = requireViewer(context);
         if (context.persistence) {
           const row = await getPostgresWorkspace(
             context.persistence,
             context.workspace.workspaceId,
           );
           if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
-          return { id: row.id, name: row.name, urlKey: row.url_key, createdAt: row.created_at };
+          return {
+            id: row.id,
+            name: row.name,
+            urlKey: row.url_key,
+            createdAt: row.created_at,
+            role: viewer.workspace_role,
+            status: viewer.status,
+            isDefault: true,
+          };
         }
         const row = getWorkspace(context.db, context.workspace.workspaceId);
         if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
-        return mapWorkspace(row);
+        const access = listWorkspaceAccess(
+          context.db,
+          viewer.id,
+          context.auth?.keyId ?? "local",
+        ).find((item) => item.id === row.id);
+        if (!access) throw apiError("NOT_FOUND", "Workspace not found");
+        return mapWorkspace(access);
       },
       teams: async (
         _parent: unknown,
@@ -953,13 +1035,50 @@ export const resolvers = {
           });
           return { success: true };
         },
+        workspaceCreate: async (
+          _parent: unknown,
+          args: { input: { name: string; urlKey: string } },
+          context: Context,
+        ) => {
+          const viewer = requireViewer(context);
+          assertWorkspaceAdminInContext(context, viewer);
+          if (context.persistence) {
+            throw apiError(
+              "VALIDATION_FAILED",
+              "Workspace creation is not migrated to PostgreSQL yet",
+            );
+          }
+          const urlKey = args.input.urlKey.trim();
+          if (!urlKey) throw apiError("VALIDATION_FAILED", "Workspace url key cannot be empty");
+          try {
+            const created = seedWorkspace(context.db, {
+              name: args.input.name,
+              urlKey,
+              adminActorId: viewer.id,
+            });
+            const row = getWorkspace(context.db, created.workspaceId);
+            if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
+            const access = listWorkspaceAccess(
+              context.db,
+              viewer.id,
+              context.auth?.keyId ?? "local",
+            ).find((item) => item.id === row.id);
+            return { success: true, workspace: mapWorkspace(access ?? row) };
+          } catch (error) {
+            if (error && typeof error === "object" && "extensions" in error) throw error;
+            throw apiError(
+              "VALIDATION_FAILED",
+              error instanceof Error ? error.message : "Workspace could not be created",
+            );
+          }
+        },
         workspaceUpdate: async (
           _parent: unknown,
           args: { input: { name: string } },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
-          assertWorkspaceAdmin(viewer);
+          assertWorkspaceAdminInContext(context, viewer);
           if (context.persistence) {
             const row = await updatePostgresWorkspace(
               context.persistence,
@@ -973,15 +1092,19 @@ export const resolvers = {
                 name: row.name,
                 urlKey: row.url_key,
                 createdAt: row.created_at,
+                role: viewer.workspace_role,
+                status: viewer.status,
+                isDefault: true,
               },
             };
           }
-          return {
-            success: true,
-            workspace: mapWorkspace(
-              updateWorkspace(context.db, args.input, context.workspace.workspaceId),
-            ),
-          };
+          const updated = updateWorkspace(context.db, args.input, context.workspace.workspaceId);
+          const access = listWorkspaceAccess(
+            context.db,
+            viewer.id,
+            context.auth?.keyId ?? "local",
+          ).find((item) => item.id === updated.id);
+          return { success: true, workspace: mapWorkspace(access ?? updated) };
         },
         teamCreate: async (
           _parent: unknown,

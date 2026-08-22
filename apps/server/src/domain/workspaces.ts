@@ -28,13 +28,49 @@ export function getWorkspace(db: Database, id?: string): WorkspaceRow | null {
   return workspaces[0] ?? null;
 }
 
-export function mapWorkspace(row: WorkspaceRow) {
+export interface WorkspaceAccessRow extends WorkspaceRow {
+  role: "admin" | "member";
+  status: "active" | "suspended" | "left";
+  is_default: number;
+}
+
+export function mapWorkspace(row: WorkspaceRow & Partial<WorkspaceAccessRow>) {
   return {
     id: row.id,
     name: row.name,
     urlKey: row.url_key,
     createdAt: row.created_at,
+    role: row.role ?? "member",
+    status: row.status ?? "active",
+    isDefault: row.is_default === 1,
   };
+}
+
+/** Lista únicamente los Workspaces autorizados por la Membership y la key. */
+export function listWorkspaceAccess(
+  db: Database,
+  actorId: string,
+  keyId: string,
+): WorkspaceAccessRow[] {
+  const query =
+    keyId === "local"
+      ? `SELECT w.id, w.name, w.url_key, w.created_at, w.updated_at,
+              m.role, m.status, 1 AS is_default
+         FROM workspace w
+         JOIN workspace_memberships m ON m.workspace_id = w.id
+        WHERE m.actor_id = ?1 AND m.status = 'active'
+        ORDER BY w.created_at, w.id`
+      : `SELECT w.id, w.name, w.url_key, w.created_at, w.updated_at,
+              m.role, m.status, g.is_default
+         FROM workspace w
+         JOIN api_key_workspaces g ON g.workspace_id = w.id
+         JOIN workspace_memberships m
+           ON m.workspace_id = w.id AND m.actor_id = ?1
+        WHERE g.api_key_id = ?2 AND m.status = 'active'
+        ORDER BY w.created_at, w.id`;
+  return (
+    keyId === "local" ? db.query(query).all(actorId) : db.query(query).all(actorId, keyId)
+  ) as WorkspaceAccessRow[];
 }
 
 export interface WorkspaceUpdateInput {

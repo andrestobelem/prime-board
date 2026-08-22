@@ -44,6 +44,10 @@ export const typeDefs = /* GraphQL */ `
     workspaceRole: ActorWorkspaceRole!
     status: ActorStatus!
     apiKeys: [ApiKey!]!
+    """
+    Workspaces granted to this Actor through the current credential.
+    """
+    workspaces: [Workspace!]!
     createdAt: DateTime!
   }
 
@@ -52,6 +56,14 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     urlKey: String!
     createdAt: DateTime!
+    role: ActorWorkspaceRole!
+    status: ActorStatus!
+    isDefault: Boolean!
+  }
+
+  input WorkspaceCreateInput {
+    name: String!
+    urlKey: String!
   }
 
   input WorkspaceUpdateInput {
@@ -1011,6 +1023,10 @@ export const typeDefs = /* GraphQL */ `
     """
     viewer: Actor!
     workspace: Workspace!
+    """
+    Workspaces accessible to the current Actor and credential.
+    """
+    workspaces: [Workspace!]!
     teams(includeArchived: Boolean = false): [Team!]!
     team(id: ID, key: String, includeArchived: Boolean = false): Team
     actors(type: ActorType): [Actor!]!
@@ -1063,7 +1079,13 @@ export const typeDefs = /* GraphQL */ `
     initiative(id: ID!): Initiative
   }
 
+  type WorkspaceCreatePayload {
+    success: Boolean!
+    workspace: Workspace!
+  }
+
   type Mutation {
+    workspaceCreate(input: WorkspaceCreateInput!): WorkspaceCreatePayload!
     workspaceUpdate(input: WorkspaceUpdateInput!): WorkspacePayload!
     teamArchive(id: ID!): TeamPayload!
     teamUnarchive(id: ID!): TeamPayload!
