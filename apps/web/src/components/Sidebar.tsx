@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Link, useRoute } from "../router.tsx";
 import { Icon } from "./icons.tsx";
 import { getDefaultTeamPath, type NavigationView } from "../navigation.ts";
+import type { AccessibleWorkspace } from "../workspace.ts";
 
 export interface SidebarFavorite {
   id: string;
@@ -16,6 +17,10 @@ type FavoriteTarget = { projectId?: string; savedViewId?: string };
 
 interface SidebarProps {
   workspace: { name: string } | null;
+  workspaces?: AccessibleWorkspace[];
+  activeWorkspaceId?: string;
+  workspaceSwitcherEnabled?: boolean;
+  onSelectWorkspace?: (workspace: AccessibleWorkspace) => void;
   teams: Array<{
     id: string;
     key: string;
@@ -54,6 +59,10 @@ const CLOSED_STATES = ["COMPLETED", "CANCELED"];
 
 export function Sidebar({
   workspace,
+  workspaces = [],
+  activeWorkspaceId,
+  workspaceSwitcherEnabled = false,
+  onSelectWorkspace,
   teams,
   views = [],
   initiatives = [],
@@ -166,6 +175,27 @@ export function Sidebar({
           </button>
           {workspaceMenuOpen && (
             <div id="workspace-menu" className="workspace-menu-popup" role="menu">
+              {workspaceSwitcherEnabled && workspaces.length > 0 && (
+                <div className="workspace-options" aria-label="Accessible Workspaces">
+                  {workspaces.map((candidate) => (
+                    <button
+                      key={candidate.id}
+                      className={`workspace-menu-item workspace-option${candidate.id === activeWorkspaceId ? " active" : ""}`}
+                      role="menuitem"
+                      aria-current={candidate.id === activeWorkspaceId ? "true" : undefined}
+                      onClick={() => {
+                        setWorkspaceMenuOpen(false);
+                        if (candidate.id !== activeWorkspaceId) onSelectWorkspace?.(candidate);
+                      }}
+                    >
+                      <Icon name="workspace" size={14} />
+                      <span>{candidate.name}</span>
+                      <span className="workspace-url-key">{candidate.urlKey}</span>
+                      {candidate.id === activeWorkspaceId && <Icon name="check" size={14} />}
+                    </button>
+                  ))}
+                </div>
+              )}
               <Link
                 to="/settings"
                 className="workspace-menu-item"

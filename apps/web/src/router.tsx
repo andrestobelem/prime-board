@@ -1,5 +1,5 @@
-// Router por hash: #/team/PB, #/board/PB, #/issue/PB-1, #/project/<id>,
-// #/project-board/<id>, #/settings.
+// Router por hash. Las rutas legacy siguen funcionando; cuando el servidor soporta
+// varios Workspaces se puede anteponer `workspace/<urlKey>` a cualquier deep-link.
 import {
   useEffect,
   useState,
@@ -8,8 +8,41 @@ import {
   type ReactNode,
 } from "react";
 
+export interface ParsedRoute {
+  workspaceKey?: string;
+  segments: string[];
+}
+
+export function parseRoute(hash: string): ParsedRoute {
+  const segments = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (segments[0]?.toLowerCase() !== "workspace") return { segments };
+  const workspaceKey = segments[1];
+  if (!workspaceKey) return { segments };
+  return { workspaceKey: decodeURIComponent(workspaceKey), segments: segments.slice(2) };
+}
+
+export function getWorkspaceKeyFromHash(hash: string = window.location.hash): string | undefined {
+  return parseRoute(hash).workspaceKey;
+}
+
+export function workspacePath(workspaceKey: string, path: string): string {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  if (
+    normalized === `/workspace/${workspaceKey}` ||
+    normalized.startsWith(`/workspace/${workspaceKey}/`)
+  ) {
+    return normalized;
+  }
+  return `/workspace/${encodeURIComponent(workspaceKey)}${normalized}`;
+}
+
+function preserveWorkspace(path: string): string {
+  const workspaceKey = getWorkspaceKeyFromHash();
+  return workspaceKey && !path.startsWith("/workspace/") ? workspacePath(workspaceKey, path) : path;
+}
+
 export function useRoute(): string[] {
-  const parse = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const parse = () => parseRoute(window.location.hash).segments;
   const [route, setRoute] = useState<string[]>(parse);
   useEffect(() => {
     const onChange = () => setRoute(parse());
@@ -20,7 +53,8 @@ export function useRoute(): string[] {
 }
 
 export function navigate(path: string): void {
-  window.location.hash = path.startsWith("/") ? `#${path}` : `#/${path}`;
+  const target = preserveWorkspace(path);
+  window.location.hash = target.startsWith("/") ? `#${target}` : `#/${target}`;
 }
 
 export function Link(props: {
@@ -31,13 +65,14 @@ export function Link(props: {
   role?: string;
   children: ReactNode;
 }) {
+  const target = preserveWorkspace(props.to);
   return (
     <a
       className={props.className}
       style={props.style}
       onClick={props.onClick}
       role={props.role}
-      href={`#${props.to.startsWith("/") ? props.to : `/${props.to}`}`}
+      href={`#${target.startsWith("/") ? target : `/${target}`}`}
     >
       {props.children}
     </a>

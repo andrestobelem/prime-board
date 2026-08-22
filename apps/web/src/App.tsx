@@ -2,6 +2,7 @@
 // Atajos globales: C crea un issue, ⌘K abre el command palette (AT-148).
 import { useEffect, useState } from "react";
 import { getApiKey, getServerAuthMode, mutate, useQuery, type ServerAuthMode } from "./api.ts";
+import { getEffectiveWorkspaceContext, getUiStorageKey } from "./ui-context.ts";
 import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueList.tsx";
 import { DisplayOptions, type IssueColumn, type IssueOrder } from "./components/DisplayOptions.tsx";
 import { ErrorState } from "./components/AsyncState.tsx";
@@ -11,7 +12,7 @@ import { Icon } from "./components/icons.tsx";
 import { Sidebar, type SidebarFavorite } from "./components/Sidebar.tsx";
 import { EntityModal } from "./components/EntityModal.tsx";
 import { Switcher } from "./components/Switcher.tsx";
-import { Link, useRoute } from "./router.tsx";
+import { getWorkspaceKeyFromHash, Link, navigate, useRoute, workspacePath } from "./router.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 import { BoardView } from "./views/BoardView.tsx";
 import { IssueView } from "./views/IssueView.tsx";
@@ -29,6 +30,14 @@ import { TeamHomeView } from "./views/TeamHomeView.tsx";
 import { TeamsView } from "./views/TeamsView.tsx";
 import { ProjectsView } from "./views/ProjectsView.tsx";
 import { buildNavigation, getDefaultTeamPath, getTeamKeyForRoute } from "./navigation.ts";
+import {
+  clearSelectedWorkspaceId,
+  getWorkspaceContract,
+  listAccessibleWorkspaces,
+  selectWorkspace,
+  setSelectedWorkspaceId,
+  type AccessibleWorkspace,
+} from "./workspace.ts";
 
 const SHELL_QUERY = `{
   workspace { id name }
@@ -78,7 +87,7 @@ export interface ShellData {
 }
 
 function loadGroupBy(): GroupBy {
-  const value = localStorage.getItem("pb.group-by");
+  const value = localStorage.getItem(getUiStorageKey("pb.group-by"));
   return value === "state" || value === "milestone" || value === "assignee" || value === "priority"
     ? value
     : "state";
@@ -86,7 +95,7 @@ function loadGroupBy(): GroupBy {
 
 const DEFAULT_COLUMNS: IssueColumn[] = ["priority", "labels", "assignee"];
 function loadOrderBy(): IssueOrder {
-  const value = localStorage.getItem("pb.order-by");
+  const value = localStorage.getItem(getUiStorageKey("pb.order-by"));
   return value === "CREATED_ASC" ||
     value === "CREATED_DESC" ||
     value === "UPDATED_ASC" ||
@@ -96,18 +105,79 @@ function loadOrderBy(): IssueOrder {
 }
 function loadColumns(): IssueColumn[] {
   try {
-    const value = JSON.parse(localStorage.getItem("pb.visible-columns") ?? "null");
+    const value = JSON.parse(localStorage.getItem(getUiStorageKey("pb.visible-columns")) ?? "null");
     return Array.isArray(value) && value.length ? value : DEFAULT_COLUMNS;
   } catch {
     return DEFAULT_COLUMNS;
   }
 }
 
+type WorkspaceGateState =
+  | { status: "loading" }
+  | {
+      status: "ready";
+      supported: boolean;
+      workspaces: AccessibleWorkspace[];
+      active: AccessibleWorkspace | null;
+    }
+  | { status: "error"; message: string };
+
+function useWorkspaceGate(
+  routeWorkspaceKey: string | undefined,
+  enabled: boolean,
+): WorkspaceGateState {
+  const [state, setState] = useState<WorkspaceGateState>({ status: "loading" });
+  useEffect(() => {
+    if (!enabled) return;
+    let mounted = true;
+    setState({ status: "loading" });
+    (async () => {
+      try {
+        const contract = await getWorkspaceContract();
+        if (!contract.supported) {
+          clearSelectedWorkspaceId();
+          if (routeWorkspaceKey) {
+            throw new Error("This server does not support Workspace deep-links.");
+          }
+          if (mounted)
+            setState({ status: "ready", supported: false, workspaces: [], active: null });
+          return;
+        }
+        const workspaces = await listAccessibleWorkspaces();
+        const active = selectWorkspace(workspaces, routeWorkspaceKey);
+        if (!active) throw new Error("The requested Workspace is not accessible.");
+        setSelectedWorkspaceId(active.id);
+        if (mounted) setState({ status: "ready", supported: true, workspaces, active });
+      } catch (error) {
+        if (mounted) {
+          setState({
+            status: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [enabled, routeWorkspaceKey]);
+  return state;
+}
+
 export function App() {
   const route = useRoute();
+  const routeWorkspaceKey = getWorkspaceKeyFromHash();
   const [hasKey, setHasKey] = useState(() => Boolean(getApiKey()));
   const [serverAuthMode, setServerAuthMode] = useState<ServerAuthMode | null>(null);
-  const shell = useQuery<ShellData>(SHELL_QUERY);
+  const authenticated = serverAuthMode !== null && (hasKey || serverAuthMode === "local");
+  const workspaceGate = useWorkspaceGate(routeWorkspaceKey, authenticated);
+  const shell = useQuery<ShellData>(
+    SHELL_QUERY,
+    {},
+    {
+      enabled: authenticated && workspaceGate.status === "ready",
+    },
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -126,15 +196,28 @@ export function App() {
   const [groupBy, setGroupBy] = useState<GroupBy>(loadGroupBy);
   const [orderBy, setOrderBy] = useState<IssueOrder>(loadOrderBy);
   const [visibleColumns, setVisibleColumns] = useState<IssueColumn[]>(loadColumns);
+  const [preferencesWorkspaceId, setPreferencesWorkspaceId] = useState<string | null>(null);
 
   useEffect(() => {
-    localStorage.setItem("pb.group-by", groupBy);
-    localStorage.setItem("pb.order-by", orderBy);
-    localStorage.setItem("pb.visible-columns", JSON.stringify(visibleColumns));
-  }, [groupBy, orderBy, visibleColumns]);
+    const workspaceId = shell.data?.workspace.id;
+    if (!workspaceId || workspaceId === preferencesWorkspaceId) return;
+    // Load preferences only after the server validates the new Workspace context.
+    setGroupBy(loadGroupBy());
+    setOrderBy(loadOrderBy());
+    setVisibleColumns(loadColumns());
+    setPreferencesWorkspaceId(workspaceId);
+  }, [preferencesWorkspaceId, shell.data?.workspace.id]);
 
   useEffect(() => {
-    if (shell.data) setFavorites(shell.data.favorites);
+    if (!shell.data || getEffectiveWorkspaceContext()?.workspaceId !== shell.data.workspace.id)
+      return;
+    localStorage.setItem(getUiStorageKey("pb.group-by"), groupBy);
+    localStorage.setItem(getUiStorageKey("pb.order-by"), orderBy);
+    localStorage.setItem(getUiStorageKey("pb.visible-columns"), JSON.stringify(visibleColumns));
+  }, [groupBy, orderBy, visibleColumns, shell.data]);
+
+  useEffect(() => {
+    setFavorites(shell.data?.favorites ?? []);
   }, [shell.data]);
 
   useEffect(() => {
@@ -238,6 +321,24 @@ export function App() {
             <span className="title">Welcome to prime-board</span>
           </div>
           <SettingsView localAuth={localAuth} />
+        </div>
+      </div>
+    );
+  }
+
+  if (workspaceGate.status === "loading") {
+    return <div className="loading">Loading Workspace…</div>;
+  }
+  if (workspaceGate.status === "error") {
+    return (
+      <div className="app">
+        <div className="main">
+          <div className="topbar">
+            <span className="title">Workspace unavailable</span>
+          </div>
+          <div className="content">
+            <div className="empty">{workspaceGate.message}</div>
+          </div>
         </div>
       </div>
     );
@@ -496,13 +597,23 @@ export function App() {
   return (
     <div className="app">
       <Sidebar
-        workspace={shell.data?.workspace ?? null}
+        workspace={shell.data?.workspace ?? workspaceGate.active}
+        workspaces={workspaceGate.workspaces}
+        activeWorkspaceId={workspaceGate.active?.id}
+        workspaceSwitcherEnabled={workspaceGate.supported}
+        onSelectWorkspace={(next) => {
+          setSelectedWorkspaceId(next.id);
+          const currentPath = route.length
+            ? `/${route.join("/")}`
+            : getDefaultTeamPath(defaultTeam ?? "");
+          navigate(workspacePath(next.urlKey, currentPath));
+        }}
         teams={teams.map((team) => ({
           ...team,
           views: navigation.teams.find((candidate) => candidate.id === team.id)?.views ?? [],
         }))}
         views={navigation.workspaceViews}
-        favorites={favorites}
+        favorites={shell.data ? favorites : []}
         unreadInboxCount={shell.data?.inboxUnreadCount ?? 0}
         onToggleFavorite={toggleFavorite}
         onReorderFavorite={reorderFavorite}
