@@ -131,6 +131,7 @@ import {
 import { withRepoSyncDispatch } from "./repo-sync-dispatch.ts";
 import { withApiKeyScopes } from "../auth/scope-dispatch.ts";
 import { parseDateTime } from "../domain/datetime.ts";
+import { newId } from "../db/util.ts";
 import { issueEventData, issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
 import {
@@ -1224,8 +1225,26 @@ export const resolvers = {
             );
             return { success: true, actor };
           }
-          const actor = mapActor(createActor(context.db, args.input));
-          return { success: true, actor };
+          const actor = context.db.transaction(() => {
+            const created = createActor(context.db, args.input);
+            context.db
+              .query(
+                `INSERT INTO workspace_memberships
+                 (id, workspace_id, actor_id, role, status, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                 ON CONFLICT (workspace_id, actor_id) DO NOTHING`,
+              )
+              .run(
+                newId(),
+                context.workspace.workspaceId,
+                created.id,
+                created.workspace_role,
+                created.status,
+                created.created_at,
+              );
+            return created;
+          })();
+          return { success: true, actor: mapActor(actor) };
         },
         actorUpdate: async (
           _parent: unknown,

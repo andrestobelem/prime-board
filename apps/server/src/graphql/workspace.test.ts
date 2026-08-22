@@ -141,6 +141,17 @@ describe("Workspace GraphQL contract", () => {
     expect(selectedTeams.errors).toBeUndefined();
     expect(selectedTeams.data?.teams).toEqual([{ key: "WS" }]);
 
+    const createdInSecond = await gqlWithWorkspace(
+      `mutation { actorCreate(input: { name: "second-member", type: AGENT }) { success actor { id } } }`,
+      secondWorkspaceId,
+    );
+    expect(createdInSecond.errors).toBeUndefined();
+    const secondActors = await gqlWithWorkspace(`{ actors { name } }`, secondWorkspaceId);
+    expect(secondActors.errors).toBeUndefined();
+    expect(secondActors.data?.actors.map((actor: { name: string }) => actor.name)).toContain(
+      "second-member",
+    );
+
     const updated = await gqlWithWorkspace(
       `mutation { workspaceUpdate(input: { name: "Renamed Second" }) { workspace { id name urlKey } } }`,
       secondWorkspaceId,
