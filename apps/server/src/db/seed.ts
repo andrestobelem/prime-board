@@ -158,6 +158,14 @@ export function seedWorkspace(db: Database, input: WorkspaceSeedInput): Workspac
     ).run(workspaceId, name, urlKey, timestamp);
 
     const admin = findOrCreateAdmin(db, input, timestamp, firstWorkspace);
+    if (
+      input.apiKeyId &&
+      db
+        .query("SELECT 1 FROM api_key_team_limits WHERE api_key_id = ?1 LIMIT 1")
+        .get(input.apiKeyId)
+    ) {
+      throw new Error("A Team-limited API key cannot create a Workspace");
+    }
     // El trigger de compatibilidad crea esta Membership en el primer Workspace.
     // La inserción con conflicto mantiene ambos caminos idempotentes.
     db.query(

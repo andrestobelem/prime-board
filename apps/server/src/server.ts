@@ -43,7 +43,7 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
         config.authMode === "local"
           ? persistence
             ? await resolveLocalPostgresAuth(persistence)
-            : resolveLocalAuth(db)
+            : resolveLocalAuth(db, workspaceSelector)
           : persistence
             ? await resolvePostgresAuth(
                 persistence,

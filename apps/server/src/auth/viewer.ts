@@ -97,37 +97,41 @@ function resolveWorkspaceGrant(
 }
 
 /** Resuelve el admin local solo cuando la instalación tiene un Workspace inequívoco. */
-export function resolveLocalAuth(db: Database): AuthContext | null {
+export function resolveLocalAuth(
+  db: Database,
+  workspaceSelector: string | null = null,
+): AuthContext | null {
   const actors = db
     .query(
       `SELECT actors.*, workspace.id AS workspace_id, memberships.role AS membership_role
        FROM actors
-       CROSS JOIN workspace
        JOIN workspace_memberships AS memberships
-         ON memberships.workspace_id = workspace.id
-        AND memberships.actor_id = actors.id
-        AND memberships.role = 'admin'
+         ON memberships.actor_id = actors.id
         AND memberships.status = 'active'
+        AND memberships.role = 'admin'
+       JOIN workspace ON workspace.id = memberships.workspace_id
        WHERE actors.status = 'active'
+         AND (?1 IS NULL OR workspace.id = ?1 OR workspace.url_key = ?1)
        ORDER BY actors.created_at, actors.id`,
     )
-    .all() as Array<ActorRow & { workspace_id: string; membership_role: "admin" | "member" }>;
+    .all(workspaceSelector) as Array<
+    ActorRow & { workspace_id: string; membership_role: "admin" | "member" }
+  >;
   // No elige un admin arbitrario cuando la instalación deja de ser inequívoca.
   const workspaces = db.query("SELECT id FROM workspace").all() as Array<{ id: string }>;
-  if (actors.length !== 1 || workspaces.length !== 1) return null;
+  if (actors.length !== 1 || (workspaceSelector === null && workspaces.length !== 1)) return null;
   const row = actors[0]!;
   const actor = { ...row, workspace_role: row.membership_role };
   return {
     actor,
     keyId: "local",
-    workspaceId: workspaces[0]!.id,
+    workspaceId: row.workspace_id,
     workspaceRole: row.membership_role,
     scopes: ["read", "write", "admin"],
     teamIds: null,
     expiresAt: null,
   };
 }
-
 export function resolveAuth(
   db: Database,
   authorization: string | null,

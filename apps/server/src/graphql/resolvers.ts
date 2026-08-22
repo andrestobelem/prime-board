@@ -1042,6 +1042,7 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdminInContext(context, viewer);
+          assertUnrestrictedApiKey(context);
           if (context.persistence) {
             throw apiError(
               "VALIDATION_FAILED",
