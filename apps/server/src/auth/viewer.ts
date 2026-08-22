@@ -24,6 +24,8 @@ export interface AuthContext {
   workspaceId: string;
   /** Rol de la Membership activa en el Workspace efectivo. */
   workspaceRole: "admin" | "member";
+  /** Estado de la Membership activa en el Workspace efectivo. */
+  workspaceStatus: "active" | "suspended" | "left";
   scopes: ApiKeyScope[];
   /** Límites de Team del grant efectivo; null significa todos los Teams del Workspace. */
   teamIds: string[] | null;
@@ -59,10 +61,14 @@ function resolveWorkspaceGrant(
   keyId: string,
   actorId: string,
   selector: string | null,
-): { workspaceId: string; workspaceRole: "admin" | "member" } {
+): {
+  workspaceId: string;
+  workspaceRole: "admin" | "member";
+  workspaceStatus: "active" | "suspended" | "left";
+} {
   const rows = db
     .query(
-      `SELECT grants.workspace_id, grants.is_default, memberships.role
+      `SELECT grants.workspace_id, grants.is_default, memberships.role, memberships.status
        FROM api_key_workspaces AS grants
        JOIN workspace AS workspaces ON workspaces.id = grants.workspace_id
        JOIN workspace_memberships AS memberships
@@ -77,21 +83,27 @@ function resolveWorkspaceGrant(
     workspace_id: string;
     is_default: number;
     role: "admin" | "member";
+    status: "active" | "suspended" | "left";
   }>;
+  const access = (row: (typeof rows)[number]) => ({
+    workspaceId: row.workspace_id,
+    workspaceRole: row.role,
+    workspaceStatus: row.status,
+  });
 
   if (selector !== null) {
     if (rows.length !== 1) throw apiError("UNAUTHORIZED", "Workspace access is not granted");
-    return { workspaceId: rows[0]!.workspace_id, workspaceRole: rows[0]!.role };
+    return access(rows[0]!);
   }
 
   if (rows.length === 0) throw apiError("UNAUTHORIZED", "Workspace access is not granted");
   if (rows.length === 1) {
-    return { workspaceId: rows[0]!.workspace_id, workspaceRole: rows[0]!.role };
+    return access(rows[0]!);
   }
 
   const defaults = rows.filter((row) => row.is_default === 1);
   if (defaults.length === 1) {
-    return { workspaceId: defaults[0]!.workspace_id, workspaceRole: defaults[0]!.role };
+    return access(defaults[0]!);
   }
   throw apiError("WORKSPACE_REQUIRED", "A Workspace selector is required");
 }
@@ -103,30 +115,40 @@ export function resolveLocalAuth(
 ): AuthContext | null {
   const actors = db
     .query(
-      `SELECT actors.*, workspace.id AS workspace_id, memberships.role AS membership_role
+      `SELECT actors.*, workspace.id AS workspace_id,
+              memberships.role AS membership_role,
+              memberships.status AS membership_status
        FROM actors
        JOIN workspace_memberships AS memberships
          ON memberships.actor_id = actors.id
         AND memberships.status = 'active'
         AND memberships.role = 'admin'
        JOIN workspace ON workspace.id = memberships.workspace_id
-       WHERE actors.status = 'active'
-         AND (?1 IS NULL OR workspace.id = ?1 OR workspace.url_key = ?1)
+       WHERE (?1 IS NULL OR workspace.id = ?1 OR workspace.url_key = ?1)
        ORDER BY actors.created_at, actors.id`,
     )
     .all(workspaceSelector) as Array<
-    ActorRow & { workspace_id: string; membership_role: "admin" | "member" }
+    ActorRow & {
+      workspace_id: string;
+      membership_role: "admin" | "member";
+      membership_status: "active" | "suspended" | "left";
+    }
   >;
   // No elige un admin arbitrario cuando la instalación deja de ser inequívoca.
   const workspaces = db.query("SELECT id FROM workspace").all() as Array<{ id: string }>;
   if (actors.length !== 1 || (workspaceSelector === null && workspaces.length !== 1)) return null;
   const row = actors[0]!;
-  const actor = { ...row, workspace_role: row.membership_role };
+  const actor = {
+    ...row,
+    workspace_role: row.membership_role,
+    status: row.membership_status,
+  };
   return {
     actor,
     keyId: "local",
     workspaceId: row.workspace_id,
     workspaceRole: row.membership_role,
+    workspaceStatus: row.membership_status,
     scopes: ["read", "write", "admin"],
     teamIds: null,
     expiresAt: null,
@@ -147,8 +169,7 @@ export function resolveAuth(
     .query(
       `SELECT api_keys.id, api_keys.actor_id, api_keys.expires_at
        FROM api_keys JOIN actors ON actors.id = api_keys.actor_id
-       WHERE api_keys.hash = ?1 AND api_keys.revoked_at IS NULL
-         AND actors.status = 'active'`,
+       WHERE api_keys.hash = ?1 AND api_keys.revoked_at IS NULL`,
     )
     .get(hash) as { id: string; actor_id: string; expires_at: string | null } | null;
   if (!key) return null;
@@ -162,7 +183,11 @@ export function resolveAuth(
     .query("SELECT * FROM actors WHERE id = ?1")
     .get(key.actor_id) as ActorRow | null;
   if (!actorRow) return null;
-  const actor = { ...actorRow, workspace_role: grant.workspaceRole };
+  const actor = {
+    ...actorRow,
+    workspace_role: grant.workspaceRole,
+    status: grant.workspaceStatus,
+  };
 
   db.query("UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2").run(now(), key.id);
   return {
@@ -170,6 +195,7 @@ export function resolveAuth(
     keyId: key.id,
     workspaceId: grant.workspaceId,
     workspaceRole: grant.workspaceRole,
+    workspaceStatus: grant.workspaceStatus,
     scopes: listScopes(db, key.id),
     teamIds: listTeamIds(db, key.id, grant.workspaceId),
     expiresAt: key.expires_at,

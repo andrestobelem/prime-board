@@ -24,6 +24,18 @@ export interface InitiativeRow {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  workspace_id: string | null;
+}
+
+type ViewerRef = string | ActorRow;
+
+function resolveViewer(db: Database, viewer: ViewerRef): ActorRow | null {
+  if (typeof viewer !== "string") return viewer;
+  return db.query("SELECT * FROM actors WHERE id = ?1").get(viewer) as ActorRow | null;
+}
+
+function viewerId(viewer: ViewerRef): string {
+  return typeof viewer === "string" ? viewer : viewer.id;
 }
 
 export function mapInitiative(row: InitiativeRow) {
@@ -40,35 +52,62 @@ export function mapInitiative(row: InitiativeRow) {
   };
 }
 
-export function getInitiative(db: Database, id: string): InitiativeRow | null {
-  return db.query("SELECT * FROM initiatives WHERE id = ?1").get(id) as InitiativeRow | null;
+export function getInitiative(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+): InitiativeRow | null {
+  const query = workspaceId
+    ? "SELECT * FROM initiatives WHERE id = ?1 AND workspace_id = ?2"
+    : "SELECT * FROM initiatives WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as InitiativeRow | null;
 }
 
 export function listInitiatives(
   db: Database,
   includeArchived = false,
-  viewerId?: string,
+  viewer?: ViewerRef,
+  workspaceId?: string,
 ): InitiativeRow[] {
+  const conditions = includeArchived ? [] : ["archived_at IS NULL"];
+  if (workspaceId) conditions.push("workspace_id = ?1");
+  const query = `SELECT * FROM initiatives${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""} ORDER BY created_at`;
   const rows = (
-    includeArchived
-      ? db.query("SELECT * FROM initiatives ORDER BY created_at").all()
-      : db.query("SELECT * FROM initiatives WHERE archived_at IS NULL ORDER BY created_at").all()
+    workspaceId ? db.query(query).all(workspaceId) : db.query(query).all()
   ) as InitiativeRow[];
-  return viewerId ? rows.filter((row) => canViewInitiative(db, row.id, viewerId)) : rows;
+  return viewer ? rows.filter((row) => canViewInitiative(db, row.id, viewer, workspaceId)) : rows;
 }
 
-export function listInitiativeTeamIds(db: Database, initiativeId: string): string[] {
-  return db
-    .query("SELECT team_id FROM initiative_teams WHERE initiative_id = ?1 ORDER BY team_id")
-    .values(initiativeId)
-    .map((row) => row[0] as string);
+export function listInitiativeTeamIds(
+  db: Database,
+  initiativeId: string,
+  workspaceId?: string,
+): string[] {
+  const query = workspaceId
+    ? "SELECT team_id FROM initiative_teams WHERE initiative_id = ?1 AND workspace_id = ?2 ORDER BY team_id"
+    : "SELECT team_id FROM initiative_teams WHERE initiative_id = ?1 ORDER BY team_id";
+  return (
+    workspaceId
+      ? db.query(query).values(initiativeId, workspaceId)
+      : db.query(query).values(initiativeId)
+  ).map((row) => row[0] as string);
 }
 
-export function listInitiativeProjectIds(db: Database, initiativeId: string): string[] {
-  return db
-    .query("SELECT project_id FROM initiative_projects WHERE initiative_id = ?1")
-    .values(initiativeId)
-    .map((row) => row[0] as string);
+export function listInitiativeProjectIds(
+  db: Database,
+  initiativeId: string,
+  workspaceId?: string,
+): string[] {
+  const query = workspaceId
+    ? "SELECT project_id FROM initiative_projects WHERE initiative_id = ?1 AND workspace_id = ?2"
+    : "SELECT project_id FROM initiative_projects WHERE initiative_id = ?1";
+  return (
+    workspaceId
+      ? db.query(query).values(initiativeId, workspaceId)
+      : db.query(query).values(initiativeId)
+  ).map((row) => row[0] as string);
 }
 
 function resolveState(state: string): InitiativeState {
@@ -84,32 +123,57 @@ function resolveState(state: string): InitiativeState {
   return normalized;
 }
 
-function setTeams(db: Database, initiativeId: string, teamIds: string[], viewerId: string): void {
-  const viewer = db.query("SELECT * FROM actors WHERE id = ?1").get(viewerId) as ActorRow | null;
+function setTeams(
+  db: Database,
+  initiativeId: string,
+  teamIds: string[],
+  viewerRef: ViewerRef,
+  workspaceId?: string,
+): void {
+  const viewer = resolveViewer(db, viewerRef);
   if (!viewer) throw apiError("NOT_FOUND", "Actor not found");
   for (const teamId of new Set(teamIds)) {
     assertCanManageIssue(db, viewer, teamId);
   }
-  db.query("DELETE FROM initiative_teams WHERE initiative_id = ?1").run(initiativeId);
-  const insert = db.query("INSERT INTO initiative_teams (initiative_id, team_id) VALUES (?1, ?2)");
-  for (const teamId of new Set(teamIds)) insert.run(initiativeId, teamId);
+  if (workspaceId) {
+    db.query("DELETE FROM initiative_teams WHERE initiative_id = ?1 AND workspace_id = ?2").run(
+      initiativeId,
+      workspaceId,
+    );
+  } else {
+    db.query("DELETE FROM initiative_teams WHERE initiative_id = ?1").run(initiativeId);
+  }
+  const insert = db.query(
+    "INSERT INTO initiative_teams (initiative_id, team_id, workspace_id) VALUES (?1, ?2, ?3)",
+  );
+  for (const teamId of new Set(teamIds)) insert.run(initiativeId, teamId, workspaceId ?? null);
 }
 
-export function canViewInitiative(db: Database, initiativeId: string, viewerId: string): boolean {
-  const viewer = db.query("SELECT * FROM actors WHERE id = ?1").get(viewerId) as ActorRow | null;
+export function canViewInitiative(
+  db: Database,
+  initiativeId: string,
+  viewerRef: ViewerRef,
+  workspaceId?: string,
+): boolean {
+  const viewer = resolveViewer(db, viewerRef);
   if (!viewer) return false;
-  const teamIds = new Set(listInitiativeTeamIds(db, initiativeId));
-  for (const projectId of listInitiativeProjectIds(db, initiativeId)) {
+  const teamIds = new Set(listInitiativeTeamIds(db, initiativeId, workspaceId));
+  for (const projectId of listInitiativeProjectIds(db, initiativeId, workspaceId)) {
     for (const teamId of listProjectTeamIds(db, projectId)) teamIds.add(teamId);
     if (!canAccessProject(db, viewer, projectId)) return false;
   }
   return [...teamIds].every(
-    (teamId) => viewer.workspace_role === "admin" || isTeamMember(db, teamId, viewerId),
+    (teamId) => viewer.workspace_role === "admin" || isTeamMember(db, teamId, viewer.id),
   );
 }
 
-function assertCanAccess(db: Database, existing: InitiativeRow, viewerId: string): void {
-  if (!canViewInitiative(db, existing.id, viewerId)) {
+function assertCanAccess(
+  db: Database,
+  existing: InitiativeRow,
+  viewerRef: ViewerRef,
+  workspaceId?: string,
+): void {
+  if (!canViewInitiative(db, existing.id, viewerRef, workspaceId)) {
     throw apiError("NOT_FOUND", "Initiative not found");
   }
 }
@@ -118,26 +182,34 @@ function setProjects(
   db: Database,
   initiativeId: string,
   projectIds: string[],
-  viewerId: string,
+  viewerRef: ViewerRef,
+  workspaceId?: string,
 ): void {
+  const viewer = resolveViewer(db, viewerRef);
+  if (!viewer) throw apiError("NOT_FOUND", "Actor not found");
   for (const projectId of projectIds) {
     if (!getProject(db, projectId)) throw apiError("NOT_FOUND", `Project not found: ${projectId}`);
-    const viewer = db.query("SELECT * FROM actors WHERE id = ?1").get(viewerId) as ActorRow | null;
-    if (!viewer) throw apiError("NOT_FOUND", "Actor not found");
     assertCanManageProject(db, viewer, projectId);
   }
-  db.query("DELETE FROM initiative_projects WHERE initiative_id = ?1").run(initiativeId);
+  if (workspaceId) {
+    db.query("DELETE FROM initiative_projects WHERE initiative_id = ?1 AND workspace_id = ?2").run(
+      initiativeId,
+      workspaceId,
+    );
+  } else {
+    db.query("DELETE FROM initiative_projects WHERE initiative_id = ?1").run(initiativeId);
+  }
   const insert = db.query(
-    "INSERT INTO initiative_projects (initiative_id, project_id) VALUES (?1, ?2)",
+    "INSERT INTO initiative_projects (initiative_id, project_id, workspace_id) VALUES (?1, ?2, ?3)",
   );
   for (const projectId of projectIds) {
-    insert.run(initiativeId, projectId);
+    insert.run(initiativeId, projectId, workspaceId ?? null);
   }
 }
 
 export function createInitiative(
   db: Database,
-  ownerId: string,
+  ownerRef: ViewerRef,
   input: {
     name: string;
     description?: string | null;
@@ -146,30 +218,46 @@ export function createInitiative(
     projectIds?: string[] | null;
     teamIds?: string[] | null;
   },
+  workspaceId?: string,
 ): InitiativeRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Initiative name cannot be empty");
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
+  const ownerId = viewerId(ownerRef);
   const id = newId();
   const timestamp = now();
   const state = input.state ? resolveState(input.state) : "planned";
   db.transaction(() => {
     db.query(
       `INSERT INTO initiatives
-        (id, name, description, state, target_date, owner_id, created_at, updated_at, archived_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, NULL)`,
-    ).run(id, name, input.description ?? null, state, input.targetDate ?? null, ownerId, timestamp);
-    if (input.projectIds?.length) setProjects(db, id, input.projectIds, ownerId);
+        (id, name, description, state, target_date, owner_id, created_at, updated_at, archived_at, workspace_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, NULL, ?8)`,
+    ).run(
+      id,
+      name,
+      input.description ?? null,
+      state,
+      input.targetDate ?? null,
+      ownerId,
+      timestamp,
+      workspaceId ?? null,
+    );
+    if (input.projectIds?.length) setProjects(db, id, input.projectIds, ownerRef, workspaceId);
     if (input.teamIds !== undefined && input.teamIds !== null)
-      setTeams(db, id, input.teamIds, ownerId);
+      setTeams(db, id, input.teamIds, ownerRef, workspaceId);
   })();
-  return getInitiative(db, id)!;
+  return getInitiative(db, id, workspaceId)!;
 }
 
-function assertCanMutate(db: Database, existing: InitiativeRow, viewerId: string): void {
-  assertCanAccess(db, existing, viewerId);
+function assertCanMutate(
+  db: Database,
+  existing: InitiativeRow,
+  viewerRef: ViewerRef,
+  workspaceId?: string,
+): void {
+  assertCanAccess(db, existing, viewerRef, workspaceId);
   // Sin dueño (datos migrados): cualquier viewer autenticado puede mutar.
-  if (existing.owner_id && existing.owner_id !== viewerId) {
+  if (existing.owner_id && existing.owner_id !== viewerId(viewerRef)) {
     throw apiError("NOT_FOUND", "Initiative not found");
   }
 }
@@ -177,7 +265,7 @@ function assertCanMutate(db: Database, existing: InitiativeRow, viewerId: string
 export function updateInitiative(
   db: Database,
   id: string,
-  viewerId: string,
+  viewerRef: ViewerRef,
   input: {
     name?: string | null;
     description?: string | null;
@@ -187,10 +275,11 @@ export function updateInitiative(
     teamIds?: string[] | null;
     archived?: boolean | null;
   },
+  workspaceId?: string,
 ): InitiativeRow {
-  const existing = getInitiative(db, id);
+  const existing = getInitiative(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Initiative not found");
-  assertCanMutate(db, existing, viewerId);
+  assertCanMutate(db, existing, viewerRef, workspaceId);
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
 
   const sets: string[] = [];
@@ -215,53 +304,98 @@ export function updateInitiative(
     if (sets.length > 0) {
       push("updated_at", now());
       params.push(id);
-      db.query(`UPDATE initiatives SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
-        ...(params as never[]),
-      );
+      if (workspaceId) {
+        params.push(workspaceId);
+        db.query(
+          `UPDATE initiatives SET ${sets.join(", ")} WHERE id = ?${params.length - 1} AND workspace_id = ?${params.length}`,
+        ).run(...(params as never[]));
+      } else {
+        db.query(`UPDATE initiatives SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
+          ...(params as never[]),
+        );
+      }
     }
     if (input.projectIds !== undefined && input.projectIds !== null) {
-      setProjects(db, id, input.projectIds, viewerId);
+      setProjects(db, id, input.projectIds, viewerRef, workspaceId);
       if (sets.length === 0) {
-        db.query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2").run(now(), id);
+        workspaceId
+          ? db
+              .query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2 AND workspace_id = ?3")
+              .run(now(), id, workspaceId)
+          : db.query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2").run(now(), id);
       }
     }
     if (input.teamIds !== undefined && input.teamIds !== null) {
-      setTeams(db, id, input.teamIds, viewerId);
+      setTeams(db, id, input.teamIds, viewerRef, workspaceId);
       if (sets.length === 0 && input.projectIds === undefined) {
-        db.query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2").run(now(), id);
+        workspaceId
+          ? db
+              .query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2 AND workspace_id = ?3")
+              .run(now(), id, workspaceId)
+          : db.query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2").run(now(), id);
       }
     }
   })();
 
-  return getInitiative(db, id)!;
+  return getInitiative(db, id, workspaceId)!;
 }
 
-export function deleteInitiative(db: Database, id: string, viewerId: string): boolean {
-  const existing = getInitiative(db, id);
+export function deleteInitiative(
+  db: Database,
+  id: string,
+  viewerRef: ViewerRef,
+  workspaceId?: string,
+): boolean {
+  const existing = getInitiative(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Initiative not found");
-  assertCanMutate(db, existing, viewerId);
-  db.query("DELETE FROM initiative_projects WHERE initiative_id = ?1").run(id);
-  db.query("DELETE FROM initiative_teams WHERE initiative_id = ?1").run(id);
-  db.query("DELETE FROM initiatives WHERE id = ?1").run(id);
+  assertCanMutate(db, existing, viewerRef, workspaceId);
+  if (workspaceId) {
+    db.query("DELETE FROM initiative_projects WHERE initiative_id = ?1 AND workspace_id = ?2").run(
+      id,
+      workspaceId,
+    );
+    db.query("DELETE FROM initiative_teams WHERE initiative_id = ?1 AND workspace_id = ?2").run(
+      id,
+      workspaceId,
+    );
+    db.query("DELETE FROM initiatives WHERE id = ?1 AND workspace_id = ?2").run(id, workspaceId);
+  } else {
+    db.query("DELETE FROM initiative_projects WHERE initiative_id = ?1").run(id);
+    db.query("DELETE FROM initiative_teams WHERE initiative_id = ?1").run(id);
+    db.query("DELETE FROM initiatives WHERE id = ?1").run(id);
+  }
   return true;
 }
 
 export function initiativeProgress(
   db: Database,
   initiativeId: string,
+  workspaceId?: string,
 ): { totalIssues: number; completedIssues: number; progress: number } {
-  const row = db
-    .query(
-      `SELECT count(*) AS total,
+  const query = workspaceId
+    ? `SELECT count(*) AS total,
+              sum(CASE WHEN workflow_states.type IN ('completed', 'canceled') THEN 1 ELSE 0 END) AS done
+       FROM issues
+       JOIN workflow_states ON workflow_states.id = issues.state_id
+       WHERE issues.archived_at IS NULL
+         AND issues.workspace_id = ?2
+         AND issues.project_id IN (
+           SELECT project_id FROM initiative_projects WHERE initiative_id = ?1 AND workspace_id = ?2
+         )`
+    : `SELECT count(*) AS total,
               sum(CASE WHEN workflow_states.type IN ('completed', 'canceled') THEN 1 ELSE 0 END) AS done
        FROM issues
        JOIN workflow_states ON workflow_states.id = issues.state_id
        WHERE issues.archived_at IS NULL
          AND issues.project_id IN (
            SELECT project_id FROM initiative_projects WHERE initiative_id = ?1
-         )`,
-    )
-    .get(initiativeId) as { total: number; done: number | null };
+         )`;
+  const row = db
+    .query(query)
+    .get(...(workspaceId ? [initiativeId, workspaceId] : [initiativeId])) as {
+    total: number;
+    done: number | null;
+  };
   const totalIssues = row.total;
   const completedIssues = row.done ?? 0;
   return {

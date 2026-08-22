@@ -250,7 +250,9 @@ function assertWorkspaceAdminInContext(
   context: Context,
   viewer: ReturnType<typeof requireViewer>,
 ): void {
-  assertWorkspaceAdmin(viewer);
+  if (context.auth?.workspaceRole !== "admin") {
+    throw apiError("UNAUTHORIZED", "Workspace admin permission is required");
+  }
   if (context.persistence) return;
   const access = listWorkspaceAccess(context.db, viewer.id, context.auth?.keyId ?? "local").find(
     (workspace) => workspace.id === context.workspace.workspaceId,
@@ -516,14 +518,14 @@ export const resolvers = {
   Initiative: {
     projects: (initiative: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
-      return listInitiativeProjectIds(context.db, initiative.id)
+      return listInitiativeProjectIds(context.db, initiative.id, context.workspace.workspaceId)
         .map((projectId) => lookupProject(context, projectId))
         .filter((row) => row && canAccessProject(context.db, viewer, row.id))
         .map((row) => mapProject(row!));
     },
     teams: (initiative: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
-      return listInitiativeTeamIds(context.db, initiative.id)
+      return listInitiativeTeamIds(context.db, initiative.id, context.workspace.workspaceId)
         .map((teamId) => lookupTeam(context, { id: teamId }))
         .filter((row) => row && canAccessTeam(context.db, viewer, row.id))
         .map((row) => mapTeam(row!));
@@ -531,11 +533,11 @@ export const resolvers = {
     owner: (initiative: { ownerId: string | null }, _args: unknown, context: Context) =>
       initiative.ownerId ? mapActor(lookupActor(context, initiative.ownerId)!) : null,
     progress: (initiative: { id: string }, _args: unknown, context: Context) =>
-      initiativeProgress(context.db, initiative.id).progress,
+      initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).progress,
     completedIssues: (initiative: { id: string }, _args: unknown, context: Context) =>
-      initiativeProgress(context.db, initiative.id).completedIssues,
+      initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).completedIssues,
     totalIssues: (initiative: { id: string }, _args: unknown, context: Context) =>
-      initiativeProgress(context.db, initiative.id).totalIssues,
+      initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).totalIssues,
   },
 
   ApiKey: {
@@ -963,15 +965,22 @@ export const resolvers = {
         const viewer = requireViewer(context);
         return scopeWorkspaceRows(
           context,
-          listInitiatives(context.db, Boolean(args.includeArchived), viewer.id),
+          listInitiatives(
+            context.db,
+            Boolean(args.includeArchived),
+            viewer,
+            context.workspace.workspaceId,
+          ),
         ).map(mapInitiative);
       },
       initiative: (_parent: unknown, args: { id: string }, context: Context) => {
         const viewer = requireViewer(context);
-        const row = getInitiative(context.db, args.id);
+        const row = getInitiative(context.db, args.id, context.workspace.workspaceId);
         if (!row) return null;
         scopeWorkspaceRow(context, row);
-        return canViewInitiative(context.db, row.id, viewer.id) ? mapInitiative(row) : null;
+        return canViewInitiative(context.db, row.id, viewer, context.workspace.workspaceId)
+          ? mapInitiative(row)
+          : null;
       },
     },
     "query",
@@ -1998,7 +2007,9 @@ export const resolvers = {
           const viewer = requireViewer(context);
           return {
             success: true,
-            initiative: mapInitiative(createInitiative(context.db, viewer.id, args.input)),
+            initiative: mapInitiative(
+              createInitiative(context.db, viewer, args.input, context.workspace.workspaceId),
+            ),
           };
         },
         initiativeUpdate: (
@@ -2020,12 +2031,22 @@ export const resolvers = {
           const viewer = requireViewer(context);
           return {
             success: true,
-            initiative: mapInitiative(updateInitiative(context.db, args.id, viewer.id, args.input)),
+            initiative: mapInitiative(
+              updateInitiative(
+                context.db,
+                args.id,
+                viewer,
+                args.input,
+                context.workspace.workspaceId,
+              ),
+            ),
           };
         },
         initiativeDelete: (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
-          return { success: deleteInitiative(context.db, args.id, viewer.id) };
+          return {
+            success: deleteInitiative(context.db, args.id, viewer, context.workspace.workspaceId),
+          };
         },
         inboxMarkRead: (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
