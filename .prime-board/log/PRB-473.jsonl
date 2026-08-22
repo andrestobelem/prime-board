@@ -14,3 +14,5 @@
 {"actor":"admin","issue":"PRB-473","payload":{"type":"related","issue":"PRB-499"},"ts":"2026-08-21T20:55:12.108Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-473","payload":{"type":"related","issue":"PRB-500"},"ts":"2026-08-21T20:55:12.345Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-473","payload":{"type":"related","issue":"PRB-505"},"ts":"2026-08-21T21:14:20.625Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-473","payload":{"body":"## Validación humana\n\nLa migración de grants, seed e idempotencia está integrada en `677fb26`, incluido en `HEAD`.\n\nValidación ejecutada desde `apps/server`:\n- `bun test src/db/database.test.ts` — 15 pass, 0 fail.\n- `bun test` — 344 pass, 0 fail.\n- `bun run typecheck` — pasa.\n\nResultado: pasan el backfill de grants y límites, el seed de un Workspace adicional, la idempotencia y la preservación de hashes. No quedan gaps conocidos en el alcance de esta Issue."},"ts":"2026-08-22T16:46:33.788Z","type":"commented"}
+{"actor":"admin","issue":"PRB-473","payload":{"from":"Ready for Human","to":"PRB/Done"},"ts":"2026-08-22T16:46:33.868Z","type":"state_changed"}

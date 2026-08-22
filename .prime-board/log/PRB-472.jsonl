@@ -17,3 +17,5 @@
 {"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-503"},"ts":"2026-08-21T20:58:35.104Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-504"},"ts":"2026-08-21T21:09:37.402Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-472","payload":{"type":"related","issue":"PRB-505"},"ts":"2026-08-21T21:14:20.575Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-472","payload":{"body":"## Validación humana\n\nLa implementación de unicidades y FKs está integrada en `677fb26`, incluido en `HEAD`.\n\nValidación ejecutada desde `apps/server`:\n- `bun test src/db/database.test.ts` — 15 pass, 0 fail.\n- `bun test` — 344 pass, 0 fail.\n- `bun run typecheck` — pasa.\n\nResultado: pasan las pruebas de unicidad local por Workspace, nombres y keys iguales entre Workspaces, referencias cross-Workspace y backfill atómico. No quedan gaps conocidos en el alcance de esta Issue."},"ts":"2026-08-22T16:46:33.623Z","type":"commented"}
+{"actor":"admin","issue":"PRB-472","payload":{"from":"Ready for Human","to":"PRB/Done"},"ts":"2026-08-22T16:46:33.707Z","type":"state_changed"}
