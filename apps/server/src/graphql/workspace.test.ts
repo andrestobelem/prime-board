@@ -202,3 +202,23 @@ describe("Workspace GraphQL contract", () => {
     expect(denied.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
   });
 });
+
+describe("Local multi-Workspace selection", () => {
+  const localApp = createTestApp(undefined, "local");
+
+  afterAll(() => localApp.stop());
+
+  it("uses the local Workspace selection without an API key", async () => {
+    const created = await gql(
+      localApp,
+      `mutation { workspaceCreate(input: { name: "Local Second", urlKey: "local-second" }) { workspace { id urlKey } } }`,
+      {},
+      null,
+    );
+    expect(created.errors).toBeUndefined();
+    const secondId = created.data?.workspaceCreate.workspace.id as string;
+    const selected = await gql(localApp, `{ workspace { id urlKey } }`, {}, null, secondId);
+    expect(selected.errors).toBeUndefined();
+    expect(selected.data?.workspace).toEqual({ id: secondId, urlKey: "local-second" });
+  });
+});
