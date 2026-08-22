@@ -22,4 +22,19 @@ describe("server config", () => {
       "Invalid PRIME_BOARD_AUTH_MODE",
     );
   });
+
+  it("loads the initial Workspace and Team identity from environment variables", () => {
+    const config = loadConfig({
+      PRIME_BOARD_WORKSPACE_NAME: "  Agents  ",
+      PRIME_BOARD_WORKSPACE_URL_KEY: "agents-workspace",
+      PRIME_BOARD_TEAM_NAME: "  Runtime  ",
+      PRIME_BOARD_TEAM_KEY: " rt ",
+    });
+    expect(config.bootstrap).toEqual({
+      workspaceName: "Agents",
+      workspaceUrlKey: "agents-workspace",
+      teamName: "Runtime",
+      teamKey: "RT",
+    });
+  });
 });

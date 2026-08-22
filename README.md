@@ -52,7 +52,25 @@ bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto
 
 El launcher deriva una DB independiente en `~/.prime-board/projects/`, configura
 `PRIME_BOARD_REPO` con la raíz del proyecto y escribe allí la réplica `.prime-board/`.
-Usa `--port` y `--db` para personalizar la instancia. Para obtener solo las variables:
+Usa `--port` y `--db` para personalizar la instancia. Puedes elegir la identidad que se
+siembra en una base nueva:
+
+```bash
+bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto \
+  --workspace-name "Mi Workspace" \
+  --workspace-url-key mi-workspace \
+  --team-name "Mi Team" \
+  --team-key MT
+```
+
+Los flags equivalen a `PRIME_BOARD_WORKSPACE_NAME`, `PRIME_BOARD_WORKSPACE_URL_KEY`,
+`PRIME_BOARD_TEAM_NAME` y `PRIME_BOARD_TEAM_KEY`. Un flag tiene prioridad sobre su variable.
+Los defaults son `workspace`, `prime-board`, `Prime Board` y `PB`. La configuración solo se
+aplica durante el primer arranque. Reiniciar una base existente conserva sus nombres y keys.
+El `urlKey` usa minúsculas, números y guiones. La `key` del Team tiene entre 1 y 8 caracteres
+alfanuméricos y comienza con una letra.
+
+Para obtener solo las variables:
 
 ```bash
 eval "$(bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto --print-env)"

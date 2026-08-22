@@ -28,7 +28,7 @@ Un selector no concedido devuelve `NOT_FOUND` sin autorizar el Workspace. Una re
 4. los Workflow States default;
 5. la Membership owner del Team y los grants del Actor admin.
 
-`urlKey` es estable y único. La creación no copia Teams, Issues, Projects, Labels ni otros recursos del Workspace activo. `workspaceUpdate` solo cambia el nombre del contexto efectivo.
+`urlKey` es estable y único. En el bootstrap usa minúsculas, números y guiones. La creación no copia Teams, Issues, Projects, Labels ni otros recursos del Workspace activo. `workspaceUpdate` solo cambia el nombre del contexto efectivo.
 
 ## Límites de este corte
 

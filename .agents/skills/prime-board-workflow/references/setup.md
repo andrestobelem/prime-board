@@ -10,7 +10,15 @@ bun scripts/prime-board-project.ts --project /path/to/project
 
 The command derives an isolated database under `~/.prime-board/projects/`, sets
 `PRIME_BOARD_REPO` to the target repository, and starts one instance per project. The default
-port is 3333. If that port is occupied and you did not provide `--port`, the launcher selects
+port is 3333. For a new database, choose the initial Workspace and Team identity with
+`--workspace-name`, `--workspace-url-key`, `--team-name`, and `--team-key`. The matching
+variables are `PRIME_BOARD_WORKSPACE_NAME`, `PRIME_BOARD_WORKSPACE_URL_KEY`,
+`PRIME_BOARD_TEAM_NAME`, and `PRIME_BOARD_TEAM_KEY`; flags override variables. The defaults are
+`workspace`, `prime-board`, `Prime Board`, and `PB`. This identity is applied only on first
+bootstrap. The URL key uses lowercase letters, numbers, and hyphens. The Team key uses 1-8
+alphanumeric characters and starts with a letter.
+
+If that port is occupied and you did not provide `--port`, the launcher selects
 the next free loopback port. An explicitly occupied port causes an error instead of connecting
 to another project. The server writes the target project's `.prime-board/` replica. Do not edit
 that directory directly.

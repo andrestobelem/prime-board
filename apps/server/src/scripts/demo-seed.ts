@@ -9,12 +9,12 @@ import { createComment } from "../domain/comments.ts";
 import { createIssue, updateIssue } from "../domain/issues.ts";
 import { createLabel } from "../domain/labels.ts";
 import { createProject } from "../domain/projects.ts";
-import { getTeam, listTeamStates } from "../domain/teams.ts";
+import { getTeam, listTeamStates, type TeamRow } from "../domain/teams.ts";
 
 const config = loadConfig();
 const db = openDatabase(config.dbPath);
 
-const seeded = bootstrap(db);
+const seeded = bootstrap(db, config.bootstrap);
 if (seeded.created && seeded.adminApiKey) {
   console.log(`Admin API key (save it now, it will not be shown again): ${seeded.adminApiKey}`);
 }
@@ -25,7 +25,10 @@ if (existing.n > 0) {
   process.exit(0);
 }
 
-const team = getTeam(db, { key: "PB" })!;
+const team =
+  getTeam(db, { key: config.bootstrap.teamKey }) ??
+  (db.query("SELECT * FROM teams ORDER BY created_at, id LIMIT 1").get() as TeamRow | null);
+if (!team) throw new Error("Demo seed requires an initialized Team");
 const states = listTeamStates(db, team.id);
 const byType = (type: string) => states.find((state) => state.type === type)!;
 const admin = db.query("SELECT id FROM actors WHERE name = 'admin'").get() as { id: string };
@@ -84,10 +87,18 @@ const done = createIssue(db, admin.id, {
 });
 updateIssue(db, admin.id, done.id, { stateId: byType("completed").id });
 
-createComment(db, agent.id, { issueId: first.id, body: "Starting with the GraphQL tour. **ETA today.**" });
-createComment(db, admin.id, { issueId: first.id, body: "Remember to try `pb issue list --json` too." });
+createComment(db, agent.id, {
+  issueId: first.id,
+  body: "Starting with the GraphQL tour. **ETA today.**",
+});
+createComment(db, admin.id, {
+  issueId: first.id,
+  body: "Remember to try `pb issue list --json` too.",
+});
 
 console.log("Demo data created:");
-console.log(`  team ${team.key} · project "${project.name}" · 4 issues (PB-1..PB-4)`);
+console.log(
+  `  team ${team.key} · project "${project.name}" · 4 issues (${team.key}-1..${team.key}-4)`,
+);
 console.log(`  actors: admin (human), demo-agent (agent)`);
 console.log(`Demo agent API key (save it now, it will not be shown again): ${agentKey.key}`);

@@ -24,26 +24,51 @@ async function streamText(stream: ReturnType<typeof Bun.spawn>["stdout"]): Promi
   return await new Response(stream).text();
 }
 
+interface LauncherIdentity {
+  workspaceName: string;
+  workspaceUrlKey: string;
+  teamName: string;
+  teamKey: string;
+}
+
 interface LauncherOptions {
   port?: number;
   db?: string;
   captureOutput?: boolean;
+  identity?: LauncherIdentity;
+  identityEnv?: LauncherIdentity;
 }
 
 async function runLauncher(
   project: string,
   home: string,
-  { port, db, captureOutput = false }: LauncherOptions = {},
+  { port, db, captureOutput = false, identity, identityEnv }: LauncherOptions = {},
 ): Promise<ReturnType<typeof Bun.spawn>> {
   const env = { ...process.env };
   delete env.PRIME_BOARD_REPO;
   delete env.PRIME_BOARD_DB;
   delete env.PRIME_BOARD_PORT;
+  delete env.PRIME_BOARD_WORKSPACE_NAME;
+  delete env.PRIME_BOARD_WORKSPACE_URL_KEY;
+  delete env.PRIME_BOARD_TEAM_NAME;
+  delete env.PRIME_BOARD_TEAM_KEY;
   env.HOME = home;
   env.PRIME_BOARD_AUTH_MODE = "local";
   const args = [process.execPath, "scripts/prime-board-project.ts", "--project", project];
   if (port !== undefined) args.push("--port", String(port));
   if (db !== undefined) args.push("--db", db);
+  if (identityEnv) {
+    env.PRIME_BOARD_WORKSPACE_NAME = identityEnv.workspaceName;
+    env.PRIME_BOARD_WORKSPACE_URL_KEY = identityEnv.workspaceUrlKey;
+    env.PRIME_BOARD_TEAM_NAME = identityEnv.teamName;
+    env.PRIME_BOARD_TEAM_KEY = identityEnv.teamKey;
+  }
+  if (identity) {
+    args.push("--workspace-name", identity.workspaceName);
+    args.push("--workspace-url-key", identity.workspaceUrlKey);
+    args.push("--team-name", identity.teamName);
+    args.push("--team-key", identity.teamKey);
+  }
   const output: "pipe" | "ignore" = captureOutput ? "pipe" : "ignore";
   return Bun.spawn(args, { cwd: repoRoot, env, stdout: output, stderr: output });
 }
@@ -94,6 +119,69 @@ describe("project launcher lifecycle", () => {
     }
   }, 15_000);
 });
+
+async function readIdentity(port: number): Promise<{
+  workspace: { name: string; urlKey: string };
+  teams: Array<{ name: string; key: string }>;
+}> {
+  const response = await fetch(`http://127.0.0.1:${port}/graphql`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query: "{ workspace { name urlKey } teams { name key } }" }),
+  });
+  const payload = (await response.json()) as { data: any; errors?: unknown[] };
+  if (payload.errors?.length) throw new Error(JSON.stringify(payload.errors));
+  return payload.data;
+}
+
+test("configura la identidad inicial con flags y variables de entorno", async () => {
+  const root = mkdtempSync(join(tmpdir(), "prime-board-identity-launcher-"));
+  const home = join(root, "home");
+  const flagsProject = join(root, "flags-project");
+  const envProject = join(root, "env-project");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(flagsProject, { recursive: true });
+  mkdirSync(envProject, { recursive: true });
+  Bun.spawnSync(["git", "init", "-q", flagsProject]);
+  Bun.spawnSync(["git", "init", "-q", envProject]);
+  const flagsIdentity = {
+    workspaceName: "Flags Workspace",
+    workspaceUrlKey: "flags-workspace",
+    teamName: "Flags Team",
+    teamKey: "FLG",
+  } satisfies LauncherIdentity;
+  const envIdentity = {
+    workspaceName: "Environment Workspace",
+    workspaceUrlKey: "environment-workspace",
+    teamName: "Environment Team",
+    teamKey: "ENV",
+  } satisfies LauncherIdentity;
+  const flagsLauncher = await runLauncher(flagsProject, home, {
+    port: 34933,
+    identity: flagsIdentity,
+    identityEnv: envIdentity,
+  });
+  const envLauncher = await runLauncher(envProject, home, {
+    port: 34934,
+    identityEnv: envIdentity,
+  });
+  try {
+    await Promise.all([waitForHealth(34933), waitForHealth(34934)]);
+    expect(await readIdentity(34933)).toEqual({
+      workspace: { name: "Flags Workspace", urlKey: "flags-workspace" },
+      teams: [{ name: "Flags Team", key: "FLG" }],
+    });
+    expect(await readIdentity(34934)).toEqual({
+      workspace: { name: "Environment Workspace", urlKey: "environment-workspace" },
+      teams: [{ name: "Environment Team", key: "ENV" }],
+    });
+  } finally {
+    flagsLauncher.kill("SIGTERM");
+    envLauncher.kill("SIGTERM");
+    await Promise.all([flagsLauncher.exited, envLauncher.exited]);
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);
 
 test("reserva puertos implícitos distintos para proyectos concurrentes", async () => {
   const root = mkdtempSync(join(tmpdir(), "prime-board-concurrent-launcher-"));

@@ -30,7 +30,7 @@ if (config.persistenceBackend === "postgres") {
   const sql = new Bun.SQL({ url: config.postgresUrl, max: 10, connectionTimeout: 5 });
   await migratePostgres(sql);
   const persistence = createPostgresPersistence(sql);
-  const result = await bootstrapPostgres(persistence);
+  const result = await bootstrapPostgres(persistence, config.bootstrap);
   reportBootstrap(result.created, result.adminApiKey);
 
   // Los dominios todavía no migrados conservan un SQLite efímero como seam de
@@ -49,7 +49,7 @@ if (config.persistenceBackend === "postgres") {
   console.log("database: PostgreSQL");
 } else {
   const db = openDatabase(config.dbPath);
-  const result = bootstrap(db);
+  const result = bootstrap(db, config.bootstrap);
   reportBootstrap(result.created, result.adminApiKey);
 
   const { server } = createApp({ db, config });

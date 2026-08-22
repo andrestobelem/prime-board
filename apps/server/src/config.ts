@@ -2,6 +2,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolvePersistenceBackend, type PersistenceBackend } from "./db/backend.ts";
+import { resolveBootstrapIdentity, type BootstrapIdentity } from "./db/bootstrap-config.ts";
 
 export type AuthMode = "api-key" | "local";
 
@@ -21,6 +22,8 @@ export interface Config {
   webDist: string;
   /** Raíz del repo donde replicar el board en cada escritura (AT-158). */
   repoRoot: string | null;
+  /** Stable identity used only when the first Workspace and Team are seeded. */
+  bootstrap: BootstrapIdentity;
 }
 
 function resolveAuthMode(value: string | undefined): AuthMode {
@@ -41,5 +44,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     dev: env.NODE_ENV !== "production",
     webDist: env.PRIME_BOARD_WEB_DIST ?? join(import.meta.dir, "..", "..", "web", "dist"),
     repoRoot: env.PRIME_BOARD_REPO ?? null,
+    bootstrap: resolveBootstrapIdentity({
+      workspaceName: env.PRIME_BOARD_WORKSPACE_NAME,
+      workspaceUrlKey: env.PRIME_BOARD_WORKSPACE_URL_KEY,
+      teamName: env.PRIME_BOARD_TEAM_NAME,
+      teamKey: env.PRIME_BOARD_TEAM_KEY,
+    }),
   };
 }

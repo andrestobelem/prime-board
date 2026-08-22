@@ -9,9 +9,15 @@ bun scripts/prime-board-project.ts --project /ruta/al/proyecto
 ```
 
 El comando deriva una base aislada bajo `~/.prime-board/projects/`, define `PRIME_BOARD_REPO`
-para el repositorio objetivo e inicia el servidor en el puerto 3333. Usa `--port` o `--db` para
-cambiar estos valores cuando sea necesario. El servidor escribe la réplica `.prime-board/` del
-proyecto. No edites ese directorio directamente.
+para el repositorio objetivo e inicia el servidor en el puerto 3333. En una base nueva puedes
+elegir la identidad inicial con `--workspace-name`, `--workspace-url-key`, `--team-name` y
+`--team-key`. Las variables equivalentes son `PRIME_BOARD_WORKSPACE_NAME`,
+`PRIME_BOARD_WORKSPACE_URL_KEY`, `PRIME_BOARD_TEAM_NAME` y `PRIME_BOARD_TEAM_KEY`; los flags
+preceden a las variables. Los defaults son `workspace`, `prime-board`, `Prime Board` y `PB`.
+La identidad solo se aplica en el primer bootstrap. `urlKey` usa minúsculas, números y guiones.
+La `key` del Team tiene entre 1 y 8 caracteres alfanuméricos y comienza con una letra. Usa
+`--port` o `--db` para cambiar estos valores cuando sea necesario. El servidor escribe la réplica
+`.prime-board/` del proyecto. No edites ese directorio directamente.
 
 Para inspeccionar la configuración sin iniciar el servidor, ejecuta:
 

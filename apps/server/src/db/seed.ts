@@ -1,7 +1,15 @@
 // Bootstrap y seed de Workspaces. Las credenciales se devuelven UNA sola vez.
 import type { Database } from "bun:sqlite";
 import { generateApiKey, hashApiKey } from "../auth/keys.ts";
-import { DEFAULT_WORKFLOW, DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_URL_KEY } from "./defaults.ts";
+import { DEFAULT_TEAM_KEY, DEFAULT_TEAM_NAME, DEFAULT_WORKFLOW } from "./defaults.ts";
+import {
+  normalizeTeamKey,
+  normalizeTeamName,
+  normalizeWorkspaceName,
+  normalizeWorkspaceUrlKey,
+  resolveBootstrapIdentity,
+  type BootstrapIdentityInput,
+} from "./bootstrap-config.ts";
 import { newId, now } from "./util.ts";
 
 export interface BootstrapResult {
@@ -60,7 +68,12 @@ function availableTeamKey(
   workspaceId: string,
   firstWorkspace: boolean,
 ): string {
-  const preferred = requested?.trim().toUpperCase() || (firstWorkspace ? "PB" : "WS");
+  const preferred =
+    requested === undefined
+      ? firstWorkspace
+        ? DEFAULT_TEAM_KEY
+        : "WS"
+      : normalizeTeamKey(requested);
   const exists = (key: string): boolean =>
     Boolean(
       db.query("SELECT id FROM teams WHERE workspace_id = ?1 AND key = ?2").get(workspaceId, key),
@@ -119,10 +132,8 @@ function findOrCreateAdmin(
  * Repetir el mismo urlKey no crea filas ni regenera credenciales.
  */
 export function seedWorkspace(db: Database, input: WorkspaceSeedInput): WorkspaceSeedResult {
-  const name = input.name.trim();
-  const urlKey = input.urlKey.trim();
-  if (!name) throw new Error("Workspace name cannot be empty");
-  if (!urlKey) throw new Error("Workspace url key cannot be empty");
+  const name = normalizeWorkspaceName(input.name);
+  const urlKey = normalizeWorkspaceUrlKey(input.urlKey);
 
   const existing = db.query("SELECT id FROM workspace WHERE url_key = ?1").get(urlKey) as {
     id: string;
@@ -182,7 +193,7 @@ export function seedWorkspace(db: Database, input: WorkspaceSeedInput): Workspac
     ).run(
       teamId,
       workspaceId,
-      input.teamName?.trim() || "Prime Board",
+      normalizeTeamName(input.teamName ?? DEFAULT_TEAM_NAME),
       teamKey,
       "Default team",
       timestamp,
@@ -222,16 +233,17 @@ export function seedWorkspace(db: Database, input: WorkspaceSeedInput): Workspac
 }
 
 /** Crea los datos iniciales si la DB está vacía. Idempotente entre reinicios. */
-export function bootstrap(db: Database): BootstrapResult {
+export function bootstrap(db: Database, input: BootstrapIdentityInput = {}): BootstrapResult {
+  const identity = resolveBootstrapIdentity(input);
   const existing = db.query("SELECT id FROM workspace ORDER BY created_at, id LIMIT 1").get() as {
     id: string;
   } | null;
   if (existing) return { created: false };
   const result = seedWorkspace(db, {
-    name: DEFAULT_WORKSPACE_NAME,
-    urlKey: DEFAULT_WORKSPACE_URL_KEY,
-    teamName: "Prime Board",
-    teamKey: "PB",
+    name: identity.workspaceName,
+    urlKey: identity.workspaceUrlKey,
+    teamName: identity.teamName,
+    teamKey: identity.teamKey,
   });
   return { created: result.created, adminApiKey: result.adminApiKey };
 }

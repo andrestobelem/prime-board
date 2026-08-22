@@ -44,7 +44,11 @@ docs/         # documentación (español)
 
 - **Datos:** un archivo `prime-board.db` (WAL activado). Ubicación por defecto
   `~/.prime-board/prime-board.db`, override con `PRIME_BOARD_DB`.
-- **Config:** variables de entorno con prefijo `PRIME_BOARD_` (`PORT`, `DB`, etc.).
+- **Config:** variables de entorno con prefijo `PRIME_BOARD_` (`PORT`, `DB`, etc.). En el primer
+  arranque, `PRIME_BOARD_WORKSPACE_NAME`, `PRIME_BOARD_WORKSPACE_URL_KEY`,
+  `PRIME_BOARD_TEAM_NAME` y `PRIME_BOARD_TEAM_KEY` eligen la identidad estable y el nombre
+  visible del Workspace y Team. Los defaults son `workspace`, `prime-board`, `Prime Board` y
+  `PB`; un reinicio no cambia una identidad ya persistida.
 
 ## 3. Modelo de datos
 
@@ -163,7 +167,7 @@ Los `*Payload` devuelven `{ success: Boolean!, <entidad> }` como en Linear.
 
 ## 5. Identidad y auth
 
-- **Bootstrap:** en el primer arranque, el server crea el Workspace, un Team default y el Actor `admin` (human). Imprime su API key por consola una sola vez.
+- **Bootstrap:** en el primer arranque, el server crea el Workspace, un Team default y el Actor `admin` (human). La identidad se puede elegir con las variables de entorno de configuración. Imprime su API key por consola una sola vez.
 - El sistema guarda las keys como hashes SHA-256. Sin key, devuelve `UNAUTHORIZED` (excepto para la UI servida y GraphiQL en dev, que son configurables).
 - Cada agente se registra como `Actor(type: AGENT)` con un nombre operativo, no con el nombre del modelo/LLM, y su propia key. `actorUpdate` permite renombrarlo sin cambiar su identidad. La API atribuye Issues, Comments y Activity al agente real.
 

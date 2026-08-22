@@ -9,6 +9,7 @@ import { bootstrapPostgres } from "../apps/server/src/db/postgres/bootstrap.ts";
 import { migratePostgres } from "../apps/server/src/db/postgres/migrator.ts";
 import { createPostgresPersistence } from "../apps/server/src/db/postgres/persistence.ts";
 import { createApp } from "../apps/server/src/server.ts";
+import { resolveBootstrapIdentity } from "../apps/server/src/db/bootstrap-config.ts";
 import type { Config } from "../apps/server/src/config.ts";
 
 const url = process.env.PRIME_BOARD_POSTGRES_URL;
@@ -32,6 +33,7 @@ const config: Config = {
   dev: false,
   webDist: "/tmp/prime-board-no-web",
   repoRoot: null,
+  bootstrap: resolveBootstrapIdentity({}),
 };
 
 async function graphql(
@@ -55,7 +57,7 @@ let adminKey = "";
 try {
   await migratePostgres(sql);
   persistence = createPostgresPersistence(sql);
-  const seeded = await bootstrapPostgres(persistence);
+  const seeded = await bootstrapPostgres(persistence, config.bootstrap);
   adminKey = seeded.adminApiKey ?? "";
   if (!adminKey) throw new Error("Validation requires a fresh PostgreSQL database");
   const app = createApp({ db, config, persistence });

@@ -133,6 +133,46 @@ describe("bootstrap", () => {
     db.close();
   });
 
+  it("aplica la identidad configurada una sola vez", () => {
+    const path = tempDbPath();
+    const first = openDatabase(path);
+    const created = bootstrap(first, {
+      workspaceName: "Configured Workspace",
+      workspaceUrlKey: "configured-workspace",
+      teamName: "Configured Team",
+      teamKey: "CFG",
+    });
+    expect(created.created).toBe(true);
+    expect(first.query("SELECT name, url_key FROM workspace").get()).toEqual({
+      name: "Configured Workspace",
+      url_key: "configured-workspace",
+    });
+    expect(first.query("SELECT name, key FROM teams").get()).toEqual({
+      name: "Configured Team",
+      key: "CFG",
+    });
+    first.close();
+
+    const second = openDatabase(path);
+    expect(
+      bootstrap(second, {
+        workspaceName: "Changed Workspace",
+        workspaceUrlKey: "changed-workspace",
+        teamName: "Changed Team",
+        teamKey: "CHG",
+      }).created,
+    ).toBe(false);
+    expect(second.query("SELECT name, url_key FROM workspace").get()).toEqual({
+      name: "Configured Workspace",
+      url_key: "configured-workspace",
+    });
+    expect(second.query("SELECT name, key FROM teams").get()).toEqual({
+      name: "Configured Team",
+      key: "CFG",
+    });
+    second.close();
+  });
+
   it("no duplica datos y persiste entre reinicios", () => {
     const path = tempDbPath();
     const first = openDatabase(path);

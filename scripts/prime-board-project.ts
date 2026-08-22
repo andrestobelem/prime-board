@@ -5,6 +5,10 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
+  resolveBootstrapIdentity,
+  type BootstrapIdentity,
+} from "../apps/server/src/db/bootstrap-config.ts";
+import {
   acquireInstanceLock,
   chooseAvailablePort,
   reserveAvailablePort,
@@ -27,6 +31,10 @@ Options:
   --project PATH  Project repository (default: current directory)
   --port PORT     HTTP port (default: 3333; moves to the next free port when implicit)
   --db PATH       SQLite database path (default: ~/.prime-board/projects/<project>.db)
+  --workspace-name NAME       Initial Workspace display name
+  --workspace-url-key KEY     Initial Workspace URL key (lowercase slug)
+  --team-name NAME            Initial Team display name
+  --team-key KEY              Initial Team key (1-8 alphanumeric characters)
   --status        Show the instance state without starting a server
   --print-env     Print shell exports without starting the server
   --help          Show this help
@@ -93,6 +101,7 @@ function printEnvironment(
   identity: ProjectInstanceIdentity,
   projectRoot: string,
   port: number,
+  bootstrap: BootstrapIdentity,
 ): void {
   const url = `http://127.0.0.1:${port}`;
   console.log(`export PRIME_BOARD_ROOT=${shellQuote(PRIME_BOARD_ROOT)}`);
@@ -100,6 +109,10 @@ function printEnvironment(
   console.log(`export PRIME_BOARD_DB=${shellQuote(identity.databasePath)}`);
   console.log(`export PRIME_BOARD_PORT=${shellQuote(String(port))}`);
   console.log(`export PRIME_BOARD_URL=${shellQuote(url)}`);
+  console.log(`export PRIME_BOARD_WORKSPACE_NAME=${shellQuote(bootstrap.workspaceName)}`);
+  console.log(`export PRIME_BOARD_WORKSPACE_URL_KEY=${shellQuote(bootstrap.workspaceUrlKey)}`);
+  console.log(`export PRIME_BOARD_TEAM_NAME=${shellQuote(bootstrap.teamName)}`);
+  console.log(`export PRIME_BOARD_TEAM_KEY=${shellQuote(bootstrap.teamKey)}`);
 }
 
 const { values } = parseArgs({
@@ -108,6 +121,10 @@ const { values } = parseArgs({
     project: { type: "string" },
     port: { type: "string" },
     db: { type: "string" },
+    "workspace-name": { type: "string" },
+    "workspace-url-key": { type: "string" },
+    "team-name": { type: "string" },
+    "team-key": { type: "string" },
     status: { type: "boolean" },
     "print-env": { type: "boolean" },
     help: { type: "boolean" },
@@ -116,6 +133,12 @@ const { values } = parseArgs({
 });
 if (values.help) usage();
 
+const bootstrap = resolveBootstrapIdentity({
+  workspaceName: values["workspace-name"] ?? process.env.PRIME_BOARD_WORKSPACE_NAME,
+  workspaceUrlKey: values["workspace-url-key"] ?? process.env.PRIME_BOARD_WORKSPACE_URL_KEY,
+  teamName: values["team-name"] ?? process.env.PRIME_BOARD_TEAM_NAME,
+  teamKey: values["team-key"] ?? process.env.PRIME_BOARD_TEAM_KEY,
+});
 const projectPath = resolve(values.project ?? process.cwd());
 const projectRoot = gitProjectRoot(projectPath);
 const inheritedConfigMatches = inheritedProjectMatches(projectRoot);
@@ -135,7 +158,7 @@ if (values.status) {
 
 if (values["print-env"]) {
   if (status.state === "running" && status.record) {
-    printEnvironment(identity, projectRoot, status.record.port);
+    printEnvironment(identity, projectRoot, status.record.port, bootstrap);
     process.exit(0);
   }
   if (status.state === "stale") {
@@ -143,7 +166,7 @@ if (values["print-env"]) {
     process.exit(statusExitCode(status));
   }
   const port = await chooseAvailablePort(requestedPort, portIsExplicit);
-  printEnvironment(identity, projectRoot, port);
+  printEnvironment(identity, projectRoot, port, bootstrap);
   process.exit(0);
 }
 
@@ -217,6 +240,10 @@ const environment = {
   PRIME_BOARD_PORT: String(port),
   PRIME_BOARD_HOST: "127.0.0.1",
   PRIME_BOARD_PERSISTENCE: "sqlite",
+  PRIME_BOARD_WORKSPACE_NAME: bootstrap.workspaceName,
+  PRIME_BOARD_WORKSPACE_URL_KEY: bootstrap.workspaceUrlKey,
+  PRIME_BOARD_TEAM_NAME: bootstrap.teamName,
+  PRIME_BOARD_TEAM_KEY: bootstrap.teamKey,
 };
 let exitCode = 1;
 try {

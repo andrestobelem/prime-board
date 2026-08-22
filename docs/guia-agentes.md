@@ -19,7 +19,11 @@ prime-board server listening on http://localhost:3333
 ```
 
 Configuración por variable de entorno: `PRIME_BOARD_PORT` (default 3333) y `PRIME_BOARD_DB`
-(default `~/.prime-board/prime-board.db`).
+(default `~/.prime-board/prime-board.db`). En una base nueva también puedes elegir la identidad
+inicial con `PRIME_BOARD_WORKSPACE_NAME`, `PRIME_BOARD_WORKSPACE_URL_KEY`,
+`PRIME_BOARD_TEAM_NAME` y `PRIME_BOARD_TEAM_KEY`. Los defaults son `workspace`, `prime-board`,
+`Prime Board` y `PB`. Los nombres se recortan; `urlKey` usa minúsculas, números y guiones; la
+`key` del Team tiene entre 1 y 8 caracteres alfanuméricos y comienza con una letra.
 
 Para una instancia de desarrollo local, desactiva la solicitud de API key:
 
@@ -42,8 +46,17 @@ bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto
 
 El launcher usa una DB independiente en `~/.prime-board/projects/`, configura
 `PRIME_BOARD_REPO=/ruta/a/mi-proyecto` y escribe la réplica `.prime-board/` en ese proyecto.
-Puedes cambiar el puerto o la DB con `--port` y `--db`. Para cargar la configuración en una
-shell sin iniciar otra instancia:
+Puedes cambiar el puerto o la DB con `--port` y `--db`. Para elegir la identidad inicial, usa
+`--workspace-name`, `--workspace-url-key`, `--team-name` y `--team-key`. Estos flags pisan las
+variables de entorno equivalentes y solo afectan una base nueva. Por ejemplo:
+
+```bash
+bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto \
+  --workspace-name "Mi Workspace" --workspace-url-key mi-workspace \
+  --team-name "Mi Team" --team-key MT
+```
+
+Para cargar la configuración en una shell sin iniciar otra instancia:
 
 ```bash
 eval "$(bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto --print-env)"

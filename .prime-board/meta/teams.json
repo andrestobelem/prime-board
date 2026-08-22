@@ -1,7 +1,7 @@
 [
   {
     "accessPolicy": "team_members",
-    "archived": false,
+    "archived": true,
     "defaultState": "Backlog",
     "description": null,
     "key": "AT",

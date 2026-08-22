@@ -1,10 +1,7 @@
 import type { Persistence } from "../persistence.ts";
 import { generateApiKey, hashApiKey } from "../../auth/keys.ts";
-import {
-  DEFAULT_WORKFLOW,
-  DEFAULT_WORKSPACE_NAME,
-  DEFAULT_WORKSPACE_URL_KEY,
-} from "../defaults.ts";
+import { DEFAULT_WORKFLOW } from "../defaults.ts";
+import { resolveBootstrapIdentity, type BootstrapIdentityInput } from "../bootstrap-config.ts";
 import { newId, now } from "../util.ts";
 
 export interface PostgresBootstrapResult {
@@ -15,7 +12,9 @@ export interface PostgresBootstrapResult {
 /** Inicializa el singleton Workspace y su actor admin en PostgreSQL. */
 export async function bootstrapPostgres(
   persistence: Persistence,
+  input: BootstrapIdentityInput = {},
 ): Promise<PostgresBootstrapResult> {
+  const identity = resolveBootstrapIdentity(input);
   const existing = await persistence.one<{ present: boolean }>(
     "SELECT EXISTS (SELECT 1 FROM workspace) AS present",
   );
@@ -36,12 +35,12 @@ export async function bootstrapPostgres(
     await tx.execute(
       `INSERT INTO workspace (id, name, url_key, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $4)`,
-      [workspaceId, DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_URL_KEY, timestamp],
+      [workspaceId, identity.workspaceName, identity.workspaceUrlKey, timestamp],
     );
     await tx.execute(
       `INSERT INTO teams (id, name, key, description, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $5)`,
-      [teamId, "Prime Board", "PB", "Default team", timestamp],
+      [teamId, identity.teamName, identity.teamKey, "Default team", timestamp],
     );
     let firstStateId: string | null = null;
     for (const [index, state] of DEFAULT_WORKFLOW.entries()) {
