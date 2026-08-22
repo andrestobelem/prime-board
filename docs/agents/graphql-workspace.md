@@ -16,7 +16,9 @@ La selección se transporta fuera de GraphQL mediante `X-Workspace-ID`. El servi
 
 Sin header, una instalación con un solo Workspace conserva el fallback legacy. También se usa el único grant activo o el grant default. Si no existe una selección inequívoca, la operación devuelve `WORKSPACE_REQUIRED` antes de ejecutar el resolver.
 
-Un selector no concedido devuelve `NOT_FOUND` sin autorizar el Workspace. Una request sin API key devuelve `UNAUTHORIZED`.
+En modo `api-key`, un selector inexistente o no concedido devuelve `UNAUTHORIZED` sin revelar
+si el Workspace existe. Una request sin API key también devuelve `UNAUTHORIZED`. En modo `local`,
+la selección local puede operar sin API key.
 
 ## Lifecycle
 
@@ -30,6 +32,8 @@ Un selector no concedido devuelve `NOT_FOUND` sin autorizar el Workspace. Una re
 
 `urlKey` es estable y único. En el bootstrap usa minúsculas, números y guiones. La creación no copia Teams, Issues, Projects, Labels ni otros recursos del Workspace activo. `workspaceUpdate` solo cambia el nombre del contexto efectivo.
 
-## Límites de este corte
+## Límites actuales
 
-La resolución profunda de grants, ciclo de Memberships e invitaciones corresponde a `PRB-474`/`PRB-475`. Este contrato conserva el seam explícito y el fallback singleton, pero no agrega selector al CLI (`PRB-484`), UI (`PRB-486`) ni Auth profundo (`PRB-474`). La ruta PostgreSQL de creación multi-Workspace queda pendiente de la migración de Auth y persistencia.
+El CLI y la UI ya permiten seleccionar un Workspace. El CLI usa `pb workspace list` y `pb workspace use <ID|URLKEY|NAME>`. La UI muestra el switcher cuando el servidor expone el contrato `workspaces`.
+
+El ciclo completo de Memberships e invitaciones aún requiere trabajo adicional. La ruta PostgreSQL de creación multi-Workspace queda pendiente de la migración de Auth y persistencia.

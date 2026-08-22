@@ -1,20 +1,30 @@
-# Especificación del MVP de prime-board
+# Especificación histórica del MVP de prime-board
 
 > Convención: la prosa de este doc está en español; todo lo que es parte de la aplicación
 > (esquemas, tipos, comandos, nombres de campos) está en inglés.
-> **Alcance:** esta es la especificación histórica del MVP. Para el contrato vigente de
-> exportación, réplica y reconstrucción, prevalecen [`README.md`](../../README.md),
+> **Alcance:** esta es la especificación histórica del MVP. No la uses como contrato actual.
+> Para el contrato vigente de Workspace, consulta [`docs/agents/graphql-workspace.md`](../agents/graphql-workspace.md).
+> Para exportación, réplica y reconstrucción, prevalecen [`README.md`](../../README.md),
 > [`docs/guia-agentes.md`](../guia-agentes.md) y [ADR-0004](../adr/0004-repo-como-fuente-de-verdad.md).
 
 ## 0. Estado de esta especificación
 
-Esta especificación histórica conserva decisiones útiles para el modelo local-first. El producto vigente también incluye Relations entre Issues, Milestones, Cycles, Inbox, Initiatives, Saved Views y Project Updates. La matriz de clientes y el alcance vigente están documentados en [`docs/alcance-mvp.md`](../alcance-mvp.md). Esa matriz, el schema GraphQL y los tickets `PRB-*` son la referencia actual para distinguir una capacidad implementada de un gap de UI.
+Esta especificación histórica conserva decisiones útiles para el modelo local-first.
+El producto vigente también incluye Relations entre Issues, Milestones, Cycles, Inbox, Initiatives,
+Saved Views y Project Updates. La matriz de clientes y el alcance vigente están documentados en
+[`docs/alcance-mvp.md`](../alcance-mvp.md). Esa matriz, el schema GraphQL y los tickets `PRB-*`
+son la referencia actual para distinguir una capacidad implementada de un gap de UI.
 
-El alcance todavía excluye multi-workspace/multi-tenant, Documents, Timeline/analytics, funcionalidad Enterprise (SSO/SCIM, SLAs) e integraciones que no sean necesarias para el flujo API-first de agentes. Linear funciona como archivo histórico, no como contrato actual del producto.
+El alcance histórico del MVP excluye multi-workspace/multi-tenant, Documents, Timeline/analytics,
+funcionalidad Enterprise (SSO/SCIM, SLAs) e integraciones que no son necesarias para el flujo API-first
+de agentes. Linear funciona como archivo histórico, no como contrato actual del producto.
 
 ## 1. Resumen
 
-prime-board es un clon de Linear para agentes: un gestor de Issues **local-first, single-tenant y API-first**. Un proceso Bun sirve la API GraphQL, la UI web y el dispatcher de Webhooks sobre una base SQLite en disco. Tres clientes consumen esa API: la **UI** (Linear-like), el **CLI `pb`** y el **MCP server**.
+El MVP define prime-board como un clon de Linear para agentes. Es un gestor de Issues
+**local-first, single-tenant y API-first**. Un proceso Bun sirve la API GraphQL, la UI web y el
+dispatcher de Webhooks sobre una base SQLite en disco. Tres clientes consumen esa API: la **UI**
+(Linear-like), el **CLI `pb`** y el **MCP server**.
 
 ```
                     ┌────────────────────────────────────┐
@@ -44,19 +54,21 @@ docs/         # documentación (español)
 
 - **Datos:** un archivo `prime-board.db` (WAL activado). Ubicación por defecto
   `~/.prime-board/prime-board.db`, override con `PRIME_BOARD_DB`.
-- **Config:** variables de entorno con prefijo `PRIME_BOARD_` (`PORT`, `DB`, etc.). En el primer
+- **Config:** variables de entorno con prefijo `PRIME_BOARD_`, como `PORT` y `DB`. En el primer
   arranque, `PRIME_BOARD_WORKSPACE_NAME`, `PRIME_BOARD_WORKSPACE_URL_KEY`,
   `PRIME_BOARD_TEAM_NAME` y `PRIME_BOARD_TEAM_KEY` eligen la identidad estable y el nombre
   visible del Workspace y Team. Los defaults son `workspace`, `prime-board`, `Prime Board` y
-  `PB`; un reinicio no cambia una identidad ya persistida.
+  `PB`. Un reinicio no cambia una identidad ya persistida.
 
 ## 3. Modelo de datos
 
-Todas las entidades usan `id` UUID v7 (ordenable por tiempo) y `createdAt`/`updatedAt` en ISO-8601 UTC. Las entidades que lo requieren usan soft-delete mediante `archivedAt`. El server ejecuta migraciones SQL versionadas al arrancar.
+Todas las entidades usan `id` UUID v7, ordenable por tiempo. También usan `createdAt` y
+`updatedAt` en ISO-8601 UTC. Las entidades que lo requieren usan soft-delete mediante `archivedAt`.
+El server ejecuta migraciones SQL versionadas al arrancar.
 
 | Tabla             | Campos clave                                                                                                                             | Notas                                                                                                                              |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `workspace`       | `id, name, urlKey`                                                                                                                       | Fila única (single-tenant).                                                                                                        |
+| `workspace`       | `id, name, urlKey`                                                                                                                       | Fila única en el modelo histórico del MVP.                                                                                                        |
 | `teams`           | `id, name, key, description, nextIssueNumber`                                                                                            | `key` corta única (`AT`). Al crear un team se siembra el workflow default.                                                         |
 | `actors`          | `id, name, email?, type ('human'\|'agent'), avatarUrl?`                                                                                  | Humanos y agentes en la misma tabla; `type` es informativo y visible en UI/API.                                                    |
 | `api_keys`        | `id, actorId, name, hash, lastUsedAt`                                                                                                    | La key en claro se muestra una sola vez. Formato `pb_<random>`.                                                                    |
@@ -76,7 +88,7 @@ El endpoint único es `POST /graphql`. **Paridad total**: la UI, el CLI y el MCP
 
 ### Convenciones
 
-- **Auth:** header `Authorization: Bearer pb_...`. Toda mutación registra como autor al Actor de la key (en `activity`, `creatorId`, etc.).
+- **Auth:** usa el header `Authorization: Bearer pb_...`. Toda mutación registra al Actor de la key en los campos de autoría, como `activity` y `creatorId`.
 - **Identifiers:** las queries aceptan UUID o Identifier legible (`TEAM-126`) donde corresponda (`issue(id:)`).
 - **Paginación:** cursor-based (`first/after`), estilo Relay simplificado
   (`nodes`, `pageInfo { hasNextPage, endCursor }`).
@@ -167,9 +179,14 @@ Los `*Payload` devuelven `{ success: Boolean!, <entidad> }` como en Linear.
 
 ## 5. Identidad y auth
 
-- **Bootstrap:** en el primer arranque, el server crea el Workspace, un Team default y el Actor `admin` (human). La identidad se puede elegir con las variables de entorno de configuración. Imprime su API key por consola una sola vez.
-- El sistema guarda las keys como hashes SHA-256. Sin key, devuelve `UNAUTHORIZED` (excepto para la UI servida y GraphiQL en dev, que son configurables).
-- Cada agente se registra como `Actor(type: AGENT)` con un nombre operativo, no con el nombre del modelo/LLM, y su propia key. `actorUpdate` permite renombrarlo sin cambiar su identidad. La API atribuye Issues, Comments y Activity al agente real.
+- **Bootstrap:** en el primer arranque, el server crea el Workspace, un Team default y el Actor
+  `admin` (human). Las variables de entorno de configuración pueden elegir la identidad. El server
+  imprime la API key una sola vez.
+- El sistema guarda las keys como hashes SHA-256. Sin key, devuelve `UNAUTHORIZED`, excepto para
+  la UI servida y GraphiQL en dev cuando están configurables.
+- Cada agente se registra como `Actor(type: AGENT)` con un nombre operativo, no con el nombre del
+  modelo o LLM, y su propia key. `actorUpdate` permite renombrarlo sin cambiar su identidad. La API
+  atribuye Issues, Comments y Activity al agente real.
 
 ## 6. Webhooks
 
@@ -178,7 +195,8 @@ Los `*Payload` devuelven `{ success: Boolean!, <entidad> }` como en Linear.
 - **Eventos MVP:** `issue.created`, `issue.updated`, `issue.archived`,
   `comment.created`, `project.created`, `project.updated`.
 - **Payload:** `{ event, actor {id,name,type}, data { ...entidad }, changes? { campo: {from,to} }, createdAt }`.
-- Entrega asíncrona mediante una cola en memoria, con tres reintentos y backoff. El sistema registra los fallos. Las garantías de entrega fuertes quedan fuera del MVP.
+- Entrega asíncrona mediante una cola en memoria, con tres reintentos y backoff.
+  El sistema registra los fallos. Las garantías de entrega fuertes quedan fuera del MVP.
 
 ## 7. CLI (`pb`)
 
@@ -197,12 +215,13 @@ pb team list
 pb webhook create --url http://... --events issue.created,comment.created
 ```
 
-- `--json` en todos los comandos de lectura ⇒ salida estable para agentes.
+- `--json` en todos los comandos de lectura produce una salida estable para agentes.
 - Exit codes: 0 ok, 1 error de API, 2 error de uso.
 
 ## 8. MCP server
 
-El MCP expone tools espejo de la API, con los mismos nombres que el MCP de Linear. Un agente que ya sabe usar Linear puede operar prime-board sin aprender un contrato nuevo:
+El MCP expone tools espejo de la API con los mismos nombres que el MCP de Linear.
+Un agente que ya sabe usar Linear puede operar prime-board sin aprender un contrato nuevo.
 
 `list_issues`, `get_issue`, `save_issue`, `list_comments`, `save_comment`,
 `list_projects`, `get_project`, `save_project`, `list_teams`, `get_team`,
@@ -245,9 +264,9 @@ La UI consume exclusivamente `/graphql` con una key de sesión local. En el MVP,
    al actor real, humano o agente, en API y UI.
 5. Un webhook suscripto a `issue.created` y `comment.created` recibe los eventos
    firmados al ocurrir.
-6. En la UI se puede: navegar teams/proyectos, ver lista y board, crear un issue con
-   `C`, editarlo inline, cambiarle estado por drag & drop, comentar, y operar con
-   `Cmd+K` — con estética Linear-like en dark mode.
+6. En la UI se puede navegar por Teams y Projects, ver la lista y el board, crear un Issue con
+   `C`, editarlo inline, cambiar su estado con drag & drop, comentar y operar con `Cmd+K`.
+   La UI conserva una estética Linear-like en dark mode.
 7. El historial de actividad de un issue reconstruye la secuencia completa de cambios.
 8. Reiniciar el proceso no pierde ningún dato (SQLite WAL en disco).
 

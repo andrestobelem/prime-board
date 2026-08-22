@@ -9,7 +9,7 @@ bun install
 bun run server
 ```
 
-En un **Workspace nuevo de desarrollo**, el server crea datos demo (Team `PB`, Actor `admin`). Un Workspace migrado opera con el Team `PRB`.
+En una base nueva, el server crea el Workspace, un Team inicial, sus Workflow States y el Actor `admin`. Con la configuración predeterminada, el Team usa la key `PB`. Un Workspace migrado opera con el Team `PRB`.
 En modo `api-key`, el server imprime la API key de admin **una sola vez**:
 
 ```
@@ -22,7 +22,7 @@ Configuración por variable de entorno: `PRIME_BOARD_PORT` (default 3333) y `PRI
 (default `~/.prime-board/prime-board.db`). En una base nueva también puedes elegir la identidad
 inicial con `PRIME_BOARD_WORKSPACE_NAME`, `PRIME_BOARD_WORKSPACE_URL_KEY`,
 `PRIME_BOARD_TEAM_NAME` y `PRIME_BOARD_TEAM_KEY`. Los defaults son `workspace`, `prime-board`,
-`Prime Board` y `PB`. Los nombres se recortan; `urlKey` usa minúsculas, números y guiones; la
+`Prime Board` y `PB`. El server recorta los nombres. `urlKey` usa minúsculas, números y guiones. La
 `key` del Team tiene entre 1 y 8 caracteres alfanuméricos y comienza con una letra.
 
 Para una instancia de desarrollo local, desactiva la solicitud de API key:
@@ -71,9 +71,9 @@ el ciclo de crear, reclamar, validar, comentar evidencia y resolver Issues.
 bun run seed
 ```
 
-Crea un Project, cuatro Issues (con Sub-issue, Labels y Comments) y un Actor
-`demo-agent` con su propia API key — ideal para probar los clientes. Es idempotente:
-si ya hay Issues, no hace nada.
+Crea un Project, cuatro Issues con Sub-issue, Labels y Comments, y un Actor
+`demo-agent` con su propia API key. Estos datos sirven para probar los clientes. El seed es
+idempotente. Si la base ya contiene Issues, no crea datos.
 
 ## 2. Conceptos en 30 segundos
 
@@ -145,10 +145,10 @@ query ($me: ID!) {
 ### Semántica de `filter.search`
 
 La búsqueda usa prefijos sobre tokens y frases exactas entre comillas. Una frase vacía
-(`""`) se ignora, por lo que no restringe los resultados; `*` se trata como un token
-literal y normalmente no devuelve resultados. Las comillas sin cerrar se tratan como
-tokens literales, nunca como sintaxis FTS5. Estas entradas no exponen errores internos de SQLite
-y conservan el comportamiento de filtros anidados y paginación.
+(`""`) se ignora y no restringe los resultados. `*` se trata como un token literal y normalmente
+no devuelve resultados. Las comillas sin cerrar se tratan como tokens literales, nunca como
+sintaxis FTS5. Estas entradas no exponen errores internos de SQLite y conservan el comportamiento
+de filtros anidados y paginación.
 
 Ciclo de vida completo: `issueCreate` → `issueUpdate` (estado/prioridad/assignee/labels/
 parent/project) → `commentCreate` → `issueArchive`. La operación registra la Activity en `Issue.activity`.
@@ -160,7 +160,7 @@ alias pb="bun /ruta/a/prime-board/apps/cli/src/index.ts"
 
 pb auth login --url http://localhost:3333 --key pb_xxx
 pb workspace list --json
-pb workspace use <workspace-id|urlKey> --json
+pb workspace use <ID|URLKEY|NAME> --json
 pb workspace view --json
 pb workspace update --name "Mi Workspace" --json  # requiere Workspace Admin
 pb issue list --team PRB --state started --assignee me --json
@@ -174,7 +174,7 @@ pb project update-create --project <id> --health on_track --body -
 pb webhook create --url http://localhost:9999/hook --events issue.created
 ```
 
-- `--json` en todo comando de lectura → salida estable para parsear.
+- `--json` en todo comando de lectura produce una salida estable para parsear.
 - `pb workspace list` devuelve solo los Workspaces que la API concede a la key. `pb workspace use`
   valida la referencia contra esa lista, guarda `workspaceId` y `workspaceUrlKey` en el perfil
   actual y envía `X-Workspace-ID` en las requests siguientes. Un perfil legacy sin selector no
@@ -207,17 +207,17 @@ Además de issues, el MCP ofrece `archive_project`, `unarchive_project`,
 `list_milestones`, `save_milestone`, `delete_milestone`, `list_project_updates`,
 `save_project_update` y `delete_project_update` para completar el ciclo de vida de planificación.
 
-Para renombrar el Workspace, usa `save_workspace` con `{ "name": "Mi Workspace" }`;
-la API rechaza la operación para actors con rol `MEMBER`. El nombre es independiente de las keys y
-nombres de Teams.
+Para renombrar el Workspace, usa `save_workspace` con `{ "name": "Mi Workspace" }`.
+La API rechaza la operación para Actors con rol `MEMBER`. El nombre es independiente de las keys y
+los nombres de los Teams.
 
 Las operaciones administrativas tienen equivalentes explícitos: `archive_issue`, `archive_team`, `unarchive_team`, `delete_team`, `save_team`,
 `list_team_memberships`, `save_team_membership`, `delete_team_membership`, `save_user`,
 `save_api_key`, `delete_api_key`, `save_issue_status`, `delete_issue_status`,
-`save_issue_label` y `delete_issue_label`. Las tools sólo adaptan entradas y salidas; la
-API GraphQL sigue siendo la autoridad para autorización y códigos de error.
+`save_issue_label` y `delete_issue_label`. Las tools solo adaptan entradas y salidas.
+La API GraphQL sigue siendo la autoridad para la autorización y los códigos de error.
 
-Config para un cliente MCP (Claude Desktop, prime-agent, etc.):
+Configura un cliente MCP como Claude Desktop o prime-agent:
 
 ```json
 {
@@ -245,8 +245,8 @@ pb webhook create --url http://localhost:9999/hook --events issue.created,commen
 # imprime el signing secret UNA vez
 ```
 
-Payload: `{ event, actor: {id,name,type}, data, changes?, createdAt }` —
-en `issue.updated`, `changes` trae `{ campo: { from, to } }`.
+Payload: `{ event, actor: {id,name,type}, data, changes?, createdAt }`.
+En `issue.updated`, `changes` trae `{ campo: { from, to } }`.
 
 El `secret` se muestra **una sola vez**, al crear el webhook: guárdalo en el receptor.
 Cada request lleva `X-PrimeBoard-Signature`, un HMAC-SHA256 en hexadecimal minúscula
@@ -271,13 +271,15 @@ function verify(secret: string, rawBody: string, received: string): boolean {
 // Verifica rawBody antes de ejecutar: const payload = JSON.parse(rawBody);
 ```
 
-Los nombres de los headers HTTP no distinguen mayúsculas de minúsculas. El server intenta la entrega tres veces, con backoff de 1 s, 5 s y 25 s. Si el receptor sigue caído después de esos intentos, reconstruye el
-estado mediante la API (la actividad por issue es completa).
+Los nombres de los headers HTTP no distinguen mayúsculas de minúsculas.
+El server intenta la entrega tres veces, con backoff de 1 s, 5 s y 25 s.
+Si el receptor sigue caído después de esos intentos, reconstruye el estado mediante la API.
+La actividad por Issue permanece completa.
 
 ## 8. Exportar y reconstruir con seguridad
 
 La DB es la fuente operativa y `.prime-board/` es su réplica versionada. No edites la
-réplica a mano: exportá desde la DB y revisa los cambios antes de commitearlos.
+réplica a mano. Exporta desde la DB y revisa los cambios antes de hacer commit.
 
 ```bash
 bun run export                         # export completo a la raíz del repo
@@ -286,15 +288,18 @@ bun run rebuild --from /ruta/prime-board       # reemplaza desde un export compl
 bun run rebuild --from /tmp/pb-export --allow-partial  # reemplazo parcial explícito
 ```
 
-`bun run rebuild` rechaza un export con `meta/export.json` de alcance `team:KEY` si no se
-pasa `--allow-partial`. El flag no fusiona: confirma que se reemplazará el índice por el
-alcance parcial y que los teams ausentes no se recuperan. No ejecutes `rebuild` sobre la DB operativa sin revisar el export y confirmar que existe un backup.
+`bun run rebuild` rechaza un export con `meta/export.json` de alcance `team:KEY` si no pasas
+`--allow-partial`. El flag no fusiona datos. Confirma que reemplazarás el índice con el alcance
+parcial y que los Teams ausentes no se recuperarán. No ejecutes `rebuild` sobre la DB operativa sin
+revisar el export y confirmar que existe un backup.
 
 Los exports no contienen API keys ni secretos de webhooks. El rebuild puede volver a
 asociar keys locales por nombre de actor, pero la réplica nunca es un mecanismo para
 transportar credenciales.
 
-Verificamos la receta anterior contra una DB temporal: un export completo se reconstruye con `--from`; un export `team:PRB` falla sin `--allow-partial` y se reconstruye con éxito al pasar ese flag. La prueba no usa ni reemplaza la DB operativa.
+Verificamos la receta anterior contra una DB temporal. Un export completo se reconstruye con
+`--from`. Un export `team:PRB` falla sin `--allow-partial` y se reconstruye con éxito al pasar ese
+flag. La prueba no usa ni reemplaza la DB operativa.
 
 ## 9. Receta completa para un agente nuevo
 
@@ -324,10 +329,13 @@ team-scoped archivados fallan con `VALIDATION_FAILED` hasta restaurar el Team.
 
 ### Borrado definitivo de Teams
 
-`archive` es reversible; `delete` es definitivo y no sustituye al archivado. Solo un Workspace Admin puede borrar un Team. Debe confirmar exactamente su key:
+`archive` es reversible. `delete` es definitivo y no sustituye al archivado. Solo un Workspace
+Admin puede borrar un Team. Debe confirmar exactamente su key:
 
 ```bash
 pb team delete EMPTY --confirm EMPTY --json
 ```
 
-La API rechaza el borrado si existen Issues, Projects, Cycles, Labels, Saved Views o Initiatives, y no deja cambios parciales. Los Workflow States y memberships del Team vacío se eliminan atómicamente con el Team.
+La API rechaza el borrado si existen Issues, Projects, Cycles, Labels, Saved Views o Initiatives.
+La operación no deja cambios parciales. La API elimina los Workflow States y las memberships del
+Team vacío en la misma transacción.
