@@ -1,6 +1,7 @@
 // Configuración del team: estados del workflow y labels.
 import { useState } from "react";
 import { mutate, useQuery } from "../api.ts";
+import { navigate } from "../router.tsx";
 import { LabelChip, StateIcon } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
@@ -98,7 +99,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
       );
       if (!response.teamDelete.success) throw new Error("The Team could not be deleted.");
       setLifecycleAction(null);
-      window.location.hash = "#/settings";
+      navigate("/settings");
       return;
     } else {
       const mutation = lifecycleAction === "archive" ? "teamArchive" : "teamUnarchive";

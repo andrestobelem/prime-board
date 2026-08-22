@@ -63,8 +63,7 @@ export class GqlError extends Error {
 
 function getSelectedWorkspaceIdForRequest(): string | null {
   const key = localStorage.getItem("pb.apiKey")?.trim();
-  if (!key) return null;
-  return localStorage.getItem(`pb.workspace.selection.${credentialNamespace(key)}`);
+  return localStorage.getItem(`pb.workspace.selection.${key ? credentialNamespace(key) : "local"}`);
 }
 
 let workspaceGeneration = 0;
@@ -86,6 +85,8 @@ export async function gql<T = any>(
   options: { signal?: AbortSignal; workspaceHeader?: boolean } = {},
 ): Promise<T> {
   const workspaceId = options.workspaceHeader === false ? null : getSelectedWorkspaceIdForRequest();
+  const requestCredentialGeneration = getCredentialGeneration();
+  const requestWorkspaceGeneration = getWorkspaceGeneration();
   const headers: Record<string, string> = {
     "content-type": "application/json",
     authorization: `Bearer ${getApiKey()}`,
@@ -107,7 +108,13 @@ export async function gql<T = any>(
     throw new GqlError(first.message, first.extensions?.code);
   }
   const resolved = payload.data as any;
-  if (resolved?.viewer?.id && resolved?.workspace?.id) {
+  if (
+    resolved?.viewer?.id &&
+    resolved?.workspace?.id &&
+    requestCredentialGeneration === getCredentialGeneration() &&
+    requestWorkspaceGeneration === getWorkspaceGeneration() &&
+    workspaceId === getSelectedWorkspaceIdForRequest()
+  ) {
     setApiContext({
       workspaceId: resolved.workspace.id,
       workspaceName: resolved.workspace.name,

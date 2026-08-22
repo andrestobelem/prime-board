@@ -40,7 +40,8 @@ import {
 } from "./workspace.ts";
 
 const SHELL_QUERY = `{
-  workspace { id name }
+  viewer { id name type }
+  workspace { id name urlKey }
   teams {
     id key name accessPolicy
     projects { id name state }
@@ -66,7 +67,8 @@ type CreateModal =
   | { kind: "initiative" };
 
 export interface ShellData {
-  workspace: { id: string; name: string };
+  viewer: { id: string; name: string; type: string };
+  workspace: { id: string; name: string; urlKey?: string };
   teams: Array<{
     id: string;
     key: string;
@@ -146,8 +148,9 @@ function useWorkspaceGate(
         const workspaces = await listAccessibleWorkspaces();
         const active = selectWorkspace(workspaces, routeWorkspaceKey);
         if (!active) throw new Error("The requested Workspace is not accessible.");
+        if (!mounted) return;
         setSelectedWorkspaceId(active.id);
-        if (mounted) setState({ status: "ready", supported: true, workspaces, active });
+        setState({ status: "ready", supported: true, workspaces, active });
       } catch (error) {
         if (mounted) {
           setState({
@@ -249,7 +252,7 @@ export function App() {
       `mutation($id: ID!) { issueArchive(id: $id) { success } }`,
       { id: issueRef },
     );
-    window.location.hash = "#/my-issues";
+    navigate("/my-issues");
   }
 
   const toggleFavorite = async (
@@ -587,7 +590,7 @@ export function App() {
       );
   } else if (shell.data) {
     if (defaultTeam) {
-      window.location.hash = `#${getDefaultTeamPath(defaultTeam)}`;
+      navigate(getDefaultTeamPath(defaultTeam));
       content = <div className="loading">Loading…</div>;
     } else {
       content = <div className="empty">No teams yet.</div>;
@@ -603,9 +606,19 @@ export function App() {
         workspaceSwitcherEnabled={workspaceGate.supported}
         onSelectWorkspace={(next) => {
           setSelectedWorkspaceId(next.id);
-          const currentPath = route.length
-            ? `/${route.join("/")}`
-            : getDefaultTeamPath(defaultTeam ?? "");
+          const workspaceScopedSections = new Set([
+            "team",
+            "board",
+            "team-settings",
+            "issue",
+            "project",
+            "project-board",
+            "cycle",
+            "initiative",
+            "view",
+          ]);
+          const currentPath =
+            route[0] && !workspaceScopedSections.has(route[0]) ? `/${route.join("/")}` : "/";
           navigate(workspacePath(next.urlKey, currentPath));
         }}
         teams={teams.map((team) => ({
@@ -765,7 +778,7 @@ export function App() {
               },
             );
             setEntityModal(null);
-            window.location.hash = `#/view/${data.savedViewCreate.savedView.id}`;
+            navigate(`/view/${data.savedViewCreate.savedView.id}`);
           }}
         />
       )}
@@ -807,7 +820,7 @@ export function App() {
               },
             );
             setEntityModal(null);
-            window.location.hash = `#/cycle/${data.cycleCreate.cycle.id}`;
+            navigate(`/cycle/${data.cycleCreate.cycle.id}`);
           }}
         />
       )}
@@ -839,7 +852,7 @@ export function App() {
               { input: { name, state: "ACTIVE", teamIds: values.teamId ? [values.teamId] : [] } },
             );
             setEntityModal(null);
-            window.location.hash = `#/initiative/${data.initiativeCreate.initiative.id}`;
+            navigate(`/initiative/${data.initiativeCreate.initiative.id}`);
           }}
         />
       )}

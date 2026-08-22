@@ -1,4 +1,5 @@
 bunx lint-staged
 bun run typecheck
 ROOT="$(git rev-parse --show-toplevel)"
-bun test --max-concurrency=5 "$ROOT/apps/cli/test/cli.test.ts" "$ROOT/apps/server" "$ROOT/apps/web" "$ROOT/apps/mcp" "$ROOT/packages" "$ROOT/scripts"
+bun test --max-concurrency=5 "$ROOT/apps/cli/test/cli.test.ts" "$ROOT/apps/server" "$ROOT/apps/web" "$ROOT/apps/mcp" "$ROOT/packages"
+bun test --max-concurrency=1 "$ROOT/scripts"

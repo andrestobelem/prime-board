@@ -7,6 +7,7 @@ import {
   shouldUseOnboardingKey,
 } from "../onboarding.ts";
 import { getThemePreference, setThemePreference, type ThemePreference } from "../theme.ts";
+import { navigate } from "../router.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
 import {
   teamDeletionDependencyMessage,
@@ -119,7 +120,7 @@ export function SettingsView({ localAuth = false }: { localAuth?: boolean }) {
       });
       setStatus(`Connected as ${data.viewer.name} (${data.viewer.type.toLowerCase()})`);
       setTimeout(() => {
-        window.location.hash = "#/";
+        navigate("/");
         window.location.reload();
       }, 600);
     } catch (error) {

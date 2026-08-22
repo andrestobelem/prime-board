@@ -29,7 +29,7 @@ function storage(): Storage | null {
 
 function selectionKey(): string | null {
   const key = storage()?.getItem("pb.apiKey")?.trim();
-  return key ? `pb.workspace.selection.${credentialNamespace(key)}` : null;
+  return `pb.workspace.selection.${key ? credentialNamespace(key) : "local"}`;
 }
 
 export function getSelectedWorkspaceId(): string | null {

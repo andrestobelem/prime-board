@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState, EmptyState } from "../components/AsyncState.tsx";
 import { ISSUE_COLUMNS, type IssueColumn, type IssueOrder } from "../components/DisplayOptions.tsx";
 import { gql, GqlError, mutate, useQuery } from "../api.ts";
+import { navigate } from "../router.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
 import {
   IssueList,
@@ -140,7 +141,7 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
     if (!view) return;
     await mutate(`mutation($id: ID!) { savedViewDelete(id: $id) { success } }`, { id: view.id });
     setDeleteOpen(false);
-    window.location.hash = "#/";
+    navigate("/");
   }
 
   if (meta.loading && !meta.data) return <LoadingState />;
@@ -255,7 +256,7 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
                     }`,
                     { id: view.id },
                   );
-                  window.location.hash = `#/view/${data.savedViewDuplicate.savedView.id}`;
+                  navigate(`/view/${data.savedViewDuplicate.savedView.id}`);
                 }}
               >
                 Save as new
@@ -269,7 +270,7 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
                   }`,
                     { id: view.id },
                   );
-                  window.location.hash = "#/";
+                  navigate("/");
                 }}
               >
                 Archive
