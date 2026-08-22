@@ -137,6 +137,10 @@ describe("Workspace GraphQL contract", () => {
     expect(selected.errors).toBeUndefined();
     expect(selected.data?.workspace).toEqual({ id: secondWorkspaceId, urlKey: "second" });
 
+    const selectedTeams = await gqlWithWorkspace(`{ teams { key } }`, secondWorkspaceId);
+    expect(selectedTeams.errors).toBeUndefined();
+    expect(selectedTeams.data?.teams).toEqual([{ key: "WS" }]);
+
     const updated = await gqlWithWorkspace(
       `mutation { workspaceUpdate(input: { name: "Renamed Second" }) { workspace { id name urlKey } } }`,
       secondWorkspaceId,
@@ -147,6 +151,23 @@ describe("Workspace GraphQL contract", () => {
       name: "Renamed Second",
       urlKey: "second",
     });
+
+    const adminActor = lifecycleApp.db
+      .query("SELECT id FROM actors WHERE name = 'admin'")
+      .get() as {
+      id: string;
+    };
+    lifecycleApp.db
+      .query(
+        "UPDATE workspace_memberships SET role = 'member' WHERE workspace_id = ?1 AND actor_id = ?2",
+      )
+      .run(secondWorkspaceId, adminActor.id);
+    const roleDenied = await gqlWithWorkspace(
+      `mutation { teamCreate(input: { name: "Not allowed", key: "NOPE" }) { success } }`,
+      secondWorkspaceId,
+    );
+    expect(roleDenied.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
     const legacy = await gql(lifecycleApp, `{ workspace { id name urlKey } }`);
     expect(legacy.data?.workspace).toMatchObject({ urlKey: "prime-board", name: "workspace" });
   });

@@ -1055,6 +1055,7 @@ export const resolvers = {
               name: args.input.name,
               urlKey,
               adminActorId: viewer.id,
+              apiKeyId: context.auth?.keyId === "local" ? undefined : context.auth?.keyId,
             });
             const row = getWorkspace(context.db, created.workspaceId);
             if (!row) throw apiError("NOT_FOUND", "Workspace is not initialized");
@@ -1063,7 +1064,10 @@ export const resolvers = {
               viewer.id,
               context.auth?.keyId ?? "local",
             ).find((item) => item.id === row.id);
-            return { success: true, workspace: mapWorkspace(access ?? row) };
+            if (!access) {
+              throw apiError("UNAUTHORIZED", "Workspace access is not granted");
+            }
+            return { success: true, workspace: mapWorkspace(access) };
           } catch (error) {
             if (error && typeof error === "object" && "extensions" in error) throw error;
             throw apiError(
@@ -1104,7 +1108,8 @@ export const resolvers = {
             viewer.id,
             context.auth?.keyId ?? "local",
           ).find((item) => item.id === updated.id);
-          return { success: true, workspace: mapWorkspace(access ?? updated) };
+          if (!access) throw apiError("UNAUTHORIZED", "Workspace access is not granted");
+          return { success: true, workspace: mapWorkspace(access) };
         },
         teamCreate: async (
           _parent: unknown,

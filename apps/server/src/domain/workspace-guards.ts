@@ -8,7 +8,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { getWorkspace } from "./workspaces.ts";
 import { assertWorkspaceId, type WorkspaceContext } from "./workspace-context.ts";
-import { getActor, listActors } from "./actors.ts";
+import { getActor } from "./actors.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 import { getIssue, getIssueByRef, listChildren, listIssues, type IssueRow } from "./issues.ts";
 import { getProject, type ProjectRow } from "./projects.ts";
@@ -55,7 +55,12 @@ export function scopeWorkspaceRows<T extends object>(
   context: WorkspaceLookupContext,
   rows: T[],
 ): T[] {
-  return rows.map((row) => scopeWorkspaceRow(context, row));
+  assertActiveWorkspace(context);
+  return rows.filter((row) => {
+    const candidate = row as T & { workspace_id?: unknown; workspaceId?: unknown };
+    const rowWorkspaceId = candidate.workspace_id ?? candidate.workspaceId;
+    return typeof rowWorkspaceId !== "string" || rowWorkspaceId === context.workspace.workspaceId;
+  });
 }
 
 export function lookupIssue(context: WorkspaceLookupContext, ref: string): IssueRow | null {
@@ -167,7 +172,23 @@ export function listActorsInWorkspace(
   context: WorkspaceLookupContext,
   type?: string | null,
 ): ActorRow[] {
-  return scopeWorkspaceRows(context, listActors(context.db, type));
+  assertActiveWorkspace(context);
+  const query = `
+    SELECT actors.id, actors.name, actors.email, actors.type,
+           memberships.role AS workspace_role,
+           memberships.status AS status,
+           actors.avatar_url, actors.created_at, actors.updated_at
+      FROM actors
+      JOIN workspace_memberships AS memberships
+        ON memberships.actor_id = actors.id
+       AND memberships.workspace_id = ?1
+     ${type ? "WHERE actors.type = ?2" : ""}
+     ORDER BY actors.created_at, actors.id`;
+  return (
+    type
+      ? context.db.query(query).all(context.workspace.workspaceId, type)
+      : context.db.query(query).all(context.workspace.workspaceId)
+  ) as ActorRow[];
 }
 
 /**

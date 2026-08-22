@@ -14,6 +14,8 @@ export interface WorkspaceSeedInput {
   urlKey: string;
   /** Actor que administra el Workspace. Por defecto, usa un admin activo existente. */
   adminActorId?: string;
+  /** API key que solicitó el bootstrap del Workspace adicional. */
+  apiKeyId?: string;
   /** Team inicial. Si no se indica, se elige una key disponible. */
   teamName?: string;
   teamKey?: string;
@@ -37,7 +39,17 @@ export function seedTeamWorkflow(db: Database, teamId: string, workspaceId: stri
   DEFAULT_WORKFLOW.forEach((state, index) => {
     const id = newId();
     firstId ??= id;
-    insert.run(id, teamId, state.name, state.type, state.color, index, timestamp, timestamp, workspaceId);
+    insert.run(
+      id,
+      teamId,
+      state.name,
+      state.type,
+      state.color,
+      index,
+      timestamp,
+      timestamp,
+      workspaceId,
+    );
   });
   db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(firstId, teamId);
 }
@@ -172,12 +184,14 @@ export function seedWorkspace(db: Database, input: WorkspaceSeedInput): Workspac
       "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at, workspace_id) VALUES (?1, ?2, ?3, 'owner', ?4, ?5)",
     ).run(newId(), teamId, admin.id, timestamp, workspaceId);
 
-    // Una key accede al nuevo Workspace mediante un grant explícito. Las keys
-    // del admin reciben un grant no default; ninguna key se regenera.
-    db.query(
-      `INSERT OR IGNORE INTO api_key_workspaces (api_key_id, workspace_id, is_default, created_at)
-       SELECT id, ?1, 0, ?2 FROM api_keys WHERE actor_id = ?3`,
-    ).run(workspaceId, timestamp, admin.id);
+    // Solo la credencial que inició la operación recibe el grant del nuevo
+    // Workspace. No se amplían otras credenciales del mismo Actor.
+    if (input.apiKeyId) {
+      db.query(
+        `INSERT OR IGNORE INTO api_key_workspaces (api_key_id, workspace_id, is_default, created_at)
+         SELECT id, ?1, 0, ?2 FROM api_keys WHERE id = ?3 AND actor_id = ?4`,
+      ).run(workspaceId, timestamp, input.apiKeyId, admin.id);
+    }
     if (admin.apiKey) {
       const key = db
         .query(

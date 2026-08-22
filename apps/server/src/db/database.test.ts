@@ -480,11 +480,15 @@ describe("API key Workspace grants and Workspace seed", () => {
     const firstKeyCount = (
       db.query("SELECT count(*) AS count FROM api_keys").get() as { count: number }
     ).count;
+    const firstKey = db.query("SELECT id FROM api_keys ORDER BY created_at, id LIMIT 1").get() as {
+      id: string;
+    };
 
     const second = seedWorkspace(db, {
       name: "Second Workspace",
       urlKey: "second-workspace",
       adminActorId: firstActor.id,
+      apiKeyId: firstKey.id,
       teamKey: "PB",
     });
     expect(second.created).toBe(true);
@@ -510,10 +514,14 @@ describe("API key Workspace grants and Workspace seed", () => {
         .query("SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1")
         .get(second.teamId),
     ).toEqual({ count: 5 });
-    expect(db.query("SELECT key FROM teams WHERE id = ?1").get(second.teamId)).toEqual({ key: "PB" });
+    expect(db.query("SELECT key FROM teams WHERE id = ?1").get(second.teamId)).toEqual({
+      key: "PB",
+    });
     expect(
       db
-        .query("SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1 AND workspace_id = ?2")
+        .query(
+          "SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1 AND workspace_id = ?2",
+        )
         .get(second.teamId, second.workspaceId),
     ).toEqual({ count: 5 });
     expect(

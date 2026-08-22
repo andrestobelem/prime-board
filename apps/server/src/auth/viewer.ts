@@ -22,6 +22,8 @@ export interface AuthContext {
   keyId: string;
   /** Workspace elegido por el grant y la Membership, nunca por un input GraphQL. */
   workspaceId: string;
+  /** Rol de la Membership activa en el Workspace efectivo. */
+  workspaceRole: "admin" | "member";
   scopes: ApiKeyScope[];
   /** Límites de Team del grant efectivo; null significa todos los Teams del Workspace. */
   teamIds: string[] | null;
@@ -57,10 +59,10 @@ function resolveWorkspaceGrant(
   keyId: string,
   actorId: string,
   selector: string | null,
-): string {
+): { workspaceId: string; workspaceRole: "admin" | "member" } {
   const rows = db
     .query(
-      `SELECT grants.workspace_id, grants.is_default
+      `SELECT grants.workspace_id, grants.is_default, memberships.role
        FROM api_key_workspaces AS grants
        JOIN workspace AS workspaces ON workspaces.id = grants.workspace_id
        JOIN workspace_memberships AS memberships
@@ -71,18 +73,26 @@ function resolveWorkspaceGrant(
          AND (?3 IS NULL OR workspaces.id = ?3 OR workspaces.url_key = ?3)
        ORDER BY grants.is_default DESC, grants.workspace_id`,
     )
-    .all(keyId, actorId, selector) as Array<{ workspace_id: string; is_default: number }>;
+    .all(keyId, actorId, selector) as Array<{
+    workspace_id: string;
+    is_default: number;
+    role: "admin" | "member";
+  }>;
 
   if (selector !== null) {
     if (rows.length !== 1) throw apiError("UNAUTHORIZED", "Workspace access is not granted");
-    return rows[0]!.workspace_id;
+    return { workspaceId: rows[0]!.workspace_id, workspaceRole: rows[0]!.role };
   }
 
   if (rows.length === 0) throw apiError("UNAUTHORIZED", "Workspace access is not granted");
-  if (rows.length === 1) return rows[0]!.workspace_id;
+  if (rows.length === 1) {
+    return { workspaceId: rows[0]!.workspace_id, workspaceRole: rows[0]!.role };
+  }
 
   const defaults = rows.filter((row) => row.is_default === 1);
-  if (defaults.length === 1) return defaults[0]!.workspace_id;
+  if (defaults.length === 1) {
+    return { workspaceId: defaults[0]!.workspace_id, workspaceRole: defaults[0]!.role };
+  }
   throw apiError("WORKSPACE_REQUIRED", "A Workspace selector is required");
 }
 
@@ -90,20 +100,28 @@ function resolveWorkspaceGrant(
 export function resolveLocalAuth(db: Database): AuthContext | null {
   const actors = db
     .query(
-      `SELECT actors.*, workspace.id AS workspace_id
-       FROM actors CROSS JOIN workspace
-       WHERE actors.workspace_role = 'admin' AND actors.status = 'active'
+      `SELECT actors.*, workspace.id AS workspace_id, memberships.role AS membership_role
+       FROM actors
+       CROSS JOIN workspace
+       JOIN workspace_memberships AS memberships
+         ON memberships.workspace_id = workspace.id
+        AND memberships.actor_id = actors.id
+        AND memberships.role = 'admin'
+        AND memberships.status = 'active'
+       WHERE actors.status = 'active'
        ORDER BY actors.created_at, actors.id`,
     )
-    .all() as Array<ActorRow & { workspace_id: string }>;
+    .all() as Array<ActorRow & { workspace_id: string; membership_role: "admin" | "member" }>;
   // No elige un admin arbitrario cuando la instalación deja de ser inequívoca.
   const workspaces = db.query("SELECT id FROM workspace").all() as Array<{ id: string }>;
   if (actors.length !== 1 || workspaces.length !== 1) return null;
-  const actor = actors[0]!;
+  const row = actors[0]!;
+  const actor = { ...row, workspace_role: row.membership_role };
   return {
     actor,
     keyId: "local",
     workspaceId: workspaces[0]!.id,
+    workspaceRole: row.membership_role,
     scopes: ["read", "write", "admin"],
     teamIds: null,
     expiresAt: null,
@@ -135,17 +153,21 @@ export function resolveAuth(
     if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
   }
 
-  const workspaceId = resolveWorkspaceGrant(db, key.id, key.actor_id, workspaceSelector);
-  const actor = db.query("SELECT * FROM actors WHERE id = ?1").get(key.actor_id) as ActorRow | null;
-  if (!actor) return null;
+  const grant = resolveWorkspaceGrant(db, key.id, key.actor_id, workspaceSelector);
+  const actorRow = db
+    .query("SELECT * FROM actors WHERE id = ?1")
+    .get(key.actor_id) as ActorRow | null;
+  if (!actorRow) return null;
+  const actor = { ...actorRow, workspace_role: grant.workspaceRole };
 
   db.query("UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2").run(now(), key.id);
   return {
     actor,
     keyId: key.id,
-    workspaceId,
+    workspaceId: grant.workspaceId,
+    workspaceRole: grant.workspaceRole,
     scopes: listScopes(db, key.id),
-    teamIds: listTeamIds(db, key.id, workspaceId),
+    teamIds: listTeamIds(db, key.id, grant.workspaceId),
     expiresAt: key.expires_at,
   };
 }
