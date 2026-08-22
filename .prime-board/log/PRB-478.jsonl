@@ -3,3 +3,6 @@
 {"actor":"admin","issue":"PRB-478","payload":{"type":"blocked_by","issue":"PRB-414"},"ts":"2026-08-21T18:34:55.998Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-478","payload":{"type":"blocks","issue":"PRB-479"},"ts":"2026-08-21T18:34:56.075Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-478","payload":{"type":"blocks","issue":"PRB-415"},"ts":"2026-08-21T18:37:20.700Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-478","payload":{"from":"Needs Triage","to":"PRB/In Progress"},"ts":"2026-08-22T01:32:52.544Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-478","payload":{"from":"admin","to":"Builder"},"ts":"2026-08-22T01:32:52.544Z","type":"assigned"}
+{"actor":"admin","issue":"PRB-478","payload":{"from":null,"to":"PRB/3"},"ts":"2026-08-22T01:32:52.544Z","type":"cycle_changed"}

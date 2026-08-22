@@ -16,5 +16,14 @@
     "startsAt": "2026-08-21",
     "state": "active",
     "team": "PRB"
+  },
+  {
+    "archived": false,
+    "endsAt": "2026-09-05",
+    "name": "Ciclo de desarrollo multiagente — Workspace",
+    "number": 3,
+    "startsAt": "2026-08-22",
+    "state": "active",
+    "team": "PRB"
   }
 ]
