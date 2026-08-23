@@ -38,6 +38,7 @@ const ISSUE_QUERY = `query($id: ID!) {
     milestone { id name }
     relations { id type relatedIssue { identifier title state { id name type } } }
     comments { id body actor { name type } createdAt }
+    documents { id title updatedAt archivedAt }
     activity { id type actor { name type } payload createdAt }
   }
   actors { id name type status }
@@ -194,6 +195,9 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [documentTitle, setDocumentTitle] = useState("");
+  const [documentContent, setDocumentContent] = useState("");
+  const [documentSaving, setDocumentSaving] = useState(false);
 
   useEffect(() => {
     if (issue) {
@@ -290,6 +294,26 @@ export function IssueView({ issueRef }: { issueRef: string }) {
       setSubIssueError((error as Error).message);
     } finally {
       setSubIssueSaving(false);
+    }
+  }
+
+  async function createDocument(): Promise<void> {
+    const titleValue = documentTitle.trim();
+    if (!titleValue) return;
+    setDocumentSaving(true);
+    try {
+      await mutate(
+        `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id } } }`,
+        { input: { title: titleValue, content: documentContent, issueId: issue.id } },
+      );
+      await result.refetch();
+      setDocumentTitle("");
+      setDocumentContent("");
+      setSaveNotice("Document created");
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The document could not be created.");
+    } finally {
+      setDocumentSaving(false);
     }
   }
 
@@ -496,6 +520,39 @@ export function IssueView({ issueRef }: { issueRef: string }) {
                 Add a description…
               </div>
             )}
+          </div>
+
+          <div className="section-title">Resources</div>
+          {issue.documents.map((document: any) => (
+            <div className="sub-issue" key={document.id}>
+              <Icon name="file-text" size={14} />
+              <Link to={`/document/${document.id}`}>{document.title}</Link>
+              <span className="hint" style={{ marginLeft: "auto" }}>
+                Updated {timeAgo(document.updatedAt)}
+              </span>
+            </div>
+          ))}
+          <div className="composer" style={{ marginTop: 8 }}>
+            <input
+              placeholder="Document title…"
+              value={documentTitle}
+              disabled={documentSaving}
+              onChange={(event) => setDocumentTitle(event.target.value)}
+            />
+            <textarea
+              placeholder="Document content (markdown)…"
+              value={documentContent}
+              disabled={documentSaving}
+              onChange={(event) => setDocumentContent(event.target.value)}
+              rows={3}
+            />
+            <button
+              className="btn"
+              disabled={documentSaving || !documentTitle.trim()}
+              onClick={() => void createDocument()}
+            >
+              {documentSaving ? "Creating…" : "Add document"}
+            </button>
           </div>
 
           <div className="section-title">Sub-issues</div>

@@ -85,6 +85,15 @@ beforeAll(async () => {
     `mutation($s: ID!) { issueUpdate(id: "PB-1", input: { stateId: $s }) { success } }`,
     { s: started },
   );
+  const document = await gql(
+    app,
+    `mutation($content: String!) {
+      documentCreate(input: { title: "PB runbook", content: $content, issueId: "PB-1" }) {
+        success
+      }
+    }`,
+    { content: "# Rebuild\n\nKeep the Markdown." },
+  );
 });
 
 afterAll(() => {
@@ -105,6 +114,17 @@ describe("rebuildFromRepo", () => {
     expect(result.issues).toBe(2);
     expect(result.comments).toBe(1);
     expect(result.events).toBeGreaterThan(0);
+    expect(fresh.query("SELECT title, content FROM documents").get()).toEqual({
+      title: "PB runbook",
+      content: "# Rebuild\n\nKeep the Markdown.",
+    });
+    expect(
+      fresh
+        .query(
+          "SELECT teams.key || '-' || issues.number AS issue FROM documents JOIN issues ON issues.id = documents.issue_id JOIN teams ON teams.id = issues.team_id",
+        )
+        .get(),
+    ).toEqual({ issue: "PB-1" });
 
     // Exportar la DB reconstruida produce exactamente los mismos archivos.
     const other = mkdtempSync(join(tmpdir(), "pb-roundtrip-"));
@@ -114,6 +134,59 @@ describe("rebuildFromRepo", () => {
     } finally {
       rmSync(other, { recursive: true, force: true });
       fresh.close();
+    }
+  });
+
+  it("preserva archivedAt exacto de Documents en el round-trip", async () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-document-archive-roundtrip-"));
+    const created = await gql(
+      app,
+      `mutation { documentCreate(input: { title: "Archived document", content: "keep timestamp" }) { document { id } } }`,
+    );
+    const documentId = created.data!.documentCreate.document.id as string;
+    const archived = await gql(
+      app,
+      `mutation($id: ID!) { documentArchive(id: $id) { document { archivedAt } } }`,
+      { id: documentId },
+    );
+    const archivedAt = archived.data!.documentArchive.document.archivedAt as string;
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      rebuildFromRepo(fresh, snapshot);
+      expect(
+        fresh.query("SELECT archived_at FROM documents WHERE title = 'Archived document'").get(),
+      ).toEqual({ archived_at: archivedAt });
+    } finally {
+      app.db.query("DELETE FROM documents WHERE id = ?1").run(documentId);
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  it("conserva como enlace y reporta warning un Document sin contenido", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-document-link-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      const documentsPath = join(snapshot, ".prime-board", "meta", "documents.json");
+      const documents = JSON.parse(readFileSync(documentsPath, "utf8")) as Array<
+        Record<string, unknown>
+      >;
+      documents[0] = { ...documents[0], content: undefined, url: "https://example.test/document" };
+      writeFileSync(documentsPath, `${JSON.stringify(documents)}\n`);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      const result = rebuildFromRepo(fresh, snapshot);
+      expect(result.warnings).toHaveLength(1);
+      expect(fresh.query("SELECT content FROM documents LIMIT 1").get()).toEqual({
+        content: "[Open external document](https://example.test/document)",
+      });
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
     }
   });
 

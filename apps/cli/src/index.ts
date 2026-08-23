@@ -6,6 +6,7 @@ import { authCommand } from "./commands/auth.ts";
 import { actorCommand } from "./commands/actor.ts";
 import { apiKeyCommand } from "./commands/api-key.ts";
 import { cycleCommand } from "./commands/cycle.ts";
+import { documentCommand } from "./commands/document.ts";
 import { favoriteCommand } from "./commands/favorite.ts";
 import { inboxCommand } from "./commands/inbox.ts";
 import { initiativeCommand } from "./commands/initiative.ts";
@@ -34,6 +35,7 @@ Commands:
   api-key create|list|rotate|delete            Manage API keys
   webhook list|create|delete               Manage webhooks
   cycle list|view|create|update|delete     Manage team cycles
+  document list|view|create|update|archive|unarchive  Manage Markdown documents
   review list|view|create|update|delete    Manage reviews
   initiative list|view|create|update|delete Manage initiatives
   inbox list|read|archive                  Manage personal inbox
@@ -66,6 +68,8 @@ async function main(): Promise<void> {
       return apiKeyCommand(rest);
     case "cycle":
       return cycleCommand(rest);
+    case "document":
+      return documentCommand(rest);
     case "review":
       return reviewCommand(rest);
     case "initiative":

@@ -19,6 +19,7 @@ export interface RebuildResult {
   events: number;
   comments: number;
   preservedKeys: number;
+  warnings: string[];
 }
 
 export interface RebuildOptions {
@@ -90,6 +91,46 @@ function validatePartialScope(base: string, teamKey: string): void {
       }
     }
   }
+  const documentsPath = join(base, "meta", "documents.json");
+  if (existsSync(documentsPath)) {
+    const initiativeNames = new Set(
+      (existsSync(initiativesPath)
+        ? (readJson(initiativesPath) as Array<Record<string, any>>)
+        : []
+      ).map((initiative) => String(initiative.name)),
+    );
+    for (const document of readJson(documentsPath) as Array<Record<string, any>>) {
+      const target = document.target;
+      if (target == null) continue;
+      if (!target || typeof target !== "object" || Array.isArray(target)) {
+        throw new Error("Document target must be an object or null");
+      }
+      const entries = Object.entries(target);
+      if (entries.length !== 1) {
+        throw new Error("Document must reference exactly one target");
+      }
+      const [kind, value] = entries[0]!;
+      if (kind === "issue" && !String(value).startsWith(`${teamKey}-`)) {
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope document issue`);
+      }
+      if (kind === "project" && !projectNames.has(String(value))) {
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope document project`);
+      }
+      if (kind === "team" && String(value) !== teamKey) {
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope document team`);
+      }
+      if (kind === "initiative" && !initiativeNames.has(String(value))) {
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope document initiative`);
+      }
+      if (kind === "cycle" && !String(value).startsWith(`${teamKey}/`)) {
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope document cycle`);
+      }
+      if (!["issue", "project", "team", "initiative", "cycle"].includes(kind)) {
+        throw new Error(`Unknown document target: ${kind}`);
+      }
+    }
+  }
+
   const issueIds = new Set(
     readdirSync(join(base, "issues"))
       .filter((file) => file.endsWith(".md"))
@@ -337,7 +378,13 @@ export function rebuildFromRepo(
     )
     .all() as Array<Record<string, unknown>>;
 
-  const result: RebuildResult = { issues: 0, events: 0, comments: 0, preservedKeys: 0 };
+  const result: RebuildResult = {
+    issues: 0,
+    events: 0,
+    comments: 0,
+    preservedKeys: 0,
+    warnings: [],
+  };
 
   db.transaction(() => {
     // `teams.default_state_id` apunta a workflow_states; limpiar la referencia
@@ -346,6 +393,7 @@ export function rebuildFromRepo(
     db.query("UPDATE teams SET default_state_id = NULL").run();
     // 2. Vaciar el índice (orden inverso a las FKs).
     for (const table of [
+      "documents",
       "issue_relations",
       "issue_labels",
       "activity",
@@ -603,8 +651,15 @@ export function rebuildFromRepo(
 
     // 5e. Iniciativas (PRB-216); ausente en exports viejos.
     const initiativesPath = join(base, "meta", "initiatives.json");
+    const initiativeIds = new Map<string, string>();
+    const ambiguousInitiatives = new Set<string>();
     if (existsSync(initiativesPath)) {
       for (const initiative of readJson(initiativesPath) as Array<Record<string, any>>) {
+        const initiativeName = String(initiative.name);
+        if (!ambiguousInitiatives.has(initiativeName) && initiativeIds.has(initiativeName)) {
+          initiativeIds.delete(initiativeName);
+          ambiguousInitiatives.add(initiativeName);
+        }
         const ownerId = initiative.owner ? (actorIds.get(initiative.owner) ?? null) : null;
         if (initiative.owner && !ownerId) {
           throw new Error(
@@ -612,6 +667,7 @@ export function rebuildFromRepo(
           );
         }
         const id = newId();
+        if (!ambiguousInitiatives.has(initiativeName)) initiativeIds.set(initiativeName, id);
         db.query(
           `INSERT INTO initiatives
             (id, name, description, state, target_date, owner_id, created_at, updated_at, archived_at)
@@ -911,6 +967,77 @@ export function rebuildFromRepo(
           review.status,
           review.createdAt ?? timestamp,
           review.updatedAt ?? review.createdAt ?? timestamp,
+        );
+      }
+    }
+
+    // 7c. Documents (PRB-541): el contenido Markdown y los vínculos naturales
+    // se reconstruyen después de todos sus recursos.
+    const documentsPath = join(base, "meta", "documents.json");
+    if (existsSync(documentsPath)) {
+      for (const document of readJson(documentsPath) as Array<Record<string, any>>) {
+        const creatorId = actorIds.get(String(document.creator));
+        if (!creatorId) {
+          throw new Error(
+            `Document "${document.title}" references unknown creator ${document.creator}`,
+          );
+        }
+        const target = document.target;
+        if (target != null && (typeof target !== "object" || Array.isArray(target))) {
+          throw new Error(`Document "${document.title}" target must be an object or null`);
+        }
+        const entries = target == null ? [] : Object.entries(target as Record<string, unknown>);
+        if (entries.length > 1) {
+          throw new Error(`Document "${document.title}" references more than one target`);
+        }
+        const [kind, reference] = entries[0] ?? [];
+        const targetIds: Record<string, string | null> = {
+          issue: kind === "issue" ? (issueIds.get(String(reference)) ?? null) : null,
+          project: kind === "project" ? (projectIds.get(String(reference)) ?? null) : null,
+          team: kind === "team" ? (teamIds.get(String(reference)) ?? null) : null,
+          initiative: kind === "initiative" ? (initiativeIds.get(String(reference)) ?? null) : null,
+          cycle: kind === "cycle" ? (cycleIds.get(String(reference)) ?? null) : null,
+        };
+        if (kind != null && !(kind in targetIds)) {
+          throw new Error(`Document "${document.title}" has unknown target ${kind}`);
+        }
+        if (kind != null && !targetIds[kind]) {
+          throw new Error(
+            `Document "${document.title}" references unknown ${kind} ${String(reference)}`,
+          );
+        }
+        const createdAt = document.createdAt ?? timestamp;
+        const externalUrl = typeof document.url === "string" ? document.url.trim() : "";
+        const content =
+          document.content != null
+            ? String(document.content)
+            : externalUrl
+              ? `[Open external document](${externalUrl})`
+              : "";
+        if (document.content == null && externalUrl) {
+          result.warnings.push(
+            `Document "${String(document.title ?? "")}" was restored as a link because its content was unavailable`,
+          );
+        }
+        db.query(
+          `INSERT INTO documents
+            (id, workspace_id, title, content, creator_id, issue_id, project_id, team_id,
+             initiative_id, cycle_id, created_at, updated_at, archived_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+        ).run(
+          newId(),
+          rebuiltWorkspaceId,
+          String(document.title ?? ""),
+          content,
+          creatorId,
+          targetIds.issue,
+          targetIds.project,
+          targetIds.team,
+          targetIds.initiative,
+          targetIds.cycle,
+          createdAt,
+          document.updatedAt ?? createdAt,
+          document.archivedAt ?? (document.archived ? timestamp : null),
         );
       }
     }

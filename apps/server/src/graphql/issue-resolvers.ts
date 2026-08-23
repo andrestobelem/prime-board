@@ -65,6 +65,7 @@ import {
   archivePostgresIssue,
 } from "../domain/postgres-issues.ts";
 import { getPostgresActor, mapPostgresActor } from "../domain/postgres-actors.ts";
+import { documentResolvers } from "./document-resolvers.ts";
 import { listPostgresIssueLabels, mapPostgresLabel } from "../domain/postgres-labels.ts";
 import { listPostgresRelations, mapPostgresRelation } from "../domain/postgres-relations.ts";
 import {
@@ -343,6 +344,12 @@ export const issueResolvers = {
         : null;
     },
     sortOrder: (issue: MappedIssue) => issue._row.sort_order,
+    documents: (issue: MappedIssue, args: { includeArchived?: boolean }, context: Context) =>
+      documentResolvers.Query.documents(
+        null,
+        { issueId: issue.id, includeArchived: Boolean(args.includeArchived) },
+        context,
+      ),
     comments: (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
         throw apiError(

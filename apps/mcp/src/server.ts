@@ -1595,6 +1595,132 @@ export function createServer(config: McpConfig | McpSession): McpServer {
     },
   );
 
+  const DOCUMENT_FIELDS = `id title content createdAt updatedAt archivedAt url
+    creator { id name type }
+    issue { id identifier title }
+    project { id name }
+    team { id key name }
+    initiative { id name }
+    cycle { id number name }`;
+
+  server.registerTool(
+    "list_documents",
+    {
+      description: "List Markdown documents, optionally filtered by target or text.",
+      inputSchema: {
+        issue: z.string().optional(),
+        project: z.string().optional(),
+        team: z.string().optional().describe("Team key or ID"),
+        initiative: z.string().optional(),
+        cycle: z.string().optional(),
+        search: z.string().optional(),
+        includeArchived: z.boolean().optional(),
+      },
+    },
+    async ({ issue, project, team, initiative, cycle, search, includeArchived }) => {
+      const targets = [issue, project, team, initiative, cycle].filter(Boolean);
+      if (targets.length > 1)
+        throw new Error("VALIDATION_FAILED: a document can have only one target");
+      const teamId = team ? (await resolveTeam(sessionConfig, team)).id : undefined;
+      const data = await gqlRequest(
+        sessionConfig,
+        `query($issueId: ID, $projectId: ID, $teamId: ID, $initiativeId: ID, $cycleId: ID, $search: String, $includeArchived: Boolean) {
+          documents(issueId: $issueId, projectId: $projectId, teamId: $teamId, initiativeId: $initiativeId, cycleId: $cycleId, search: $search, includeArchived: $includeArchived) { ${DOCUMENT_FIELDS} }
+        }`,
+        {
+          issueId: issue,
+          projectId: project,
+          teamId,
+          initiativeId: initiative,
+          cycleId: cycle,
+          search,
+          includeArchived: Boolean(includeArchived),
+        },
+      );
+      return json(data.documents);
+    },
+  );
+
+  server.registerTool(
+    "get_document",
+    { description: "Retrieve a Markdown document by ID.", inputSchema: { id: z.string() } },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `query($id: ID!) { document(id: $id) { ${DOCUMENT_FIELDS} } }`,
+        { id },
+      );
+      if (!data.document) throw new Error(`NOT_FOUND: Document not found: ${id}`);
+      return json(data.document);
+    },
+  );
+
+  server.registerTool(
+    "save_document",
+    {
+      description: "Create or update a Markdown document. Provide id to update, otherwise title.",
+      inputSchema: {
+        id: z.string().optional(),
+        title: z.string().optional(),
+        content: z.string().optional(),
+        issue: z.string().optional(),
+        project: z.string().optional(),
+        team: z.string().optional().describe("Team key or ID"),
+        initiative: z.string().optional(),
+        cycle: z.string().optional(),
+      },
+    },
+    async ({ id, title, content, issue, project, team, initiative, cycle }) => {
+      const input: Record<string, unknown> = {};
+      if (title !== undefined) input.title = title;
+      if (content !== undefined) input.content = content;
+      const targets = {
+        issueId: issue,
+        projectId: project,
+        initiativeId: initiative,
+        cycleId: cycle,
+      };
+      const selected = Object.entries(targets).filter(([, value]) => value !== undefined);
+      if (team !== undefined)
+        selected.push(["teamId", (await resolveTeam(sessionConfig, team)).id]);
+      if (selected.length > 1)
+        throw new Error("VALIDATION_FAILED: a document can have only one target");
+      for (const [key, value] of selected) input[key] = value;
+      if (id) {
+        if (Object.keys(input).some((key) => key.endsWith("Id"))) {
+          throw new Error("VALIDATION_FAILED: document targets cannot be changed after creation");
+        }
+        const data = await gqlRequest(
+          sessionConfig,
+          `mutation($id: ID!, $input: DocumentUpdateInput!) { documentUpdate(id: $id, input: $input) { document { ${DOCUMENT_FIELDS} } } }`,
+          { id, input },
+        );
+        return json(data.documentUpdate.document);
+      }
+      if (!title) throw new Error("VALIDATION_FAILED: `title` is required to create a document");
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { ${DOCUMENT_FIELDS} } } }`,
+        { input },
+      );
+      return json(data.documentCreate.document);
+    },
+  );
+
+  for (const [tool, mutation, description] of [
+    ["archive_document", "documentArchive", "Archive a Markdown document."],
+    ["unarchive_document", "documentUnarchive", "Restore an archived Markdown document."],
+  ] as const) {
+    server.registerTool(tool, { description, inputSchema: { id: z.string() } }, async ({ id }) => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($id: ID!) { ${mutation}(id: $id) { document { ${DOCUMENT_FIELDS} } } }`,
+        { id },
+      );
+      return json(data[mutation].document);
+    });
+  }
+
   server.registerTool(
     "list_projects",
     {

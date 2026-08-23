@@ -42,6 +42,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:issue",
   "query:issues",
   "query:labels",
+  "query:documents",
+  "query:document",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:teamArchive",
@@ -69,6 +71,10 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:labelCreate",
   "mutation:labelUpdate",
   "mutation:labelDelete",
+  "mutation:documentCreate",
+  "mutation:documentUpdate",
+  "mutation:documentArchive",
+  "mutation:documentUnarchive",
   "mutation:issueRelationCreate",
   "mutation:issueRelationDelete",
   "mutation:apiKeyCreate",
@@ -166,6 +172,38 @@ function teamIdsForInitiative(context: Context, initiativeId: unknown): string[]
   return teams.length ? teams : ["__workspace__"];
 }
 
+function teamIdsForDocument(context: Context, documentId: unknown): string[] {
+  const id = scalar(documentId);
+  if (!id) return ["__missing__"];
+  const row = context.db
+    .query(
+      "SELECT issue_id, project_id, team_id, initiative_id, cycle_id FROM documents WHERE id = ?1",
+    )
+    .get(id) as {
+    issue_id: string | null;
+    project_id: string | null;
+    team_id: string | null;
+    initiative_id: string | null;
+    cycle_id: string | null;
+  } | null;
+  if (!row) return ["__missing__"];
+  if (row.issue_id) return teamIdsForIssue(context, row.issue_id);
+  if (row.project_id) return teamIdsForProject(context, row.project_id);
+  if (row.team_id) return [row.team_id];
+  if (row.cycle_id) return teamIdsForCycle(context, row.cycle_id);
+  if (row.initiative_id) return teamIdsForInitiative(context, row.initiative_id);
+  return [];
+}
+
+function teamIdsForDocumentTarget(context: Context, input: Record<string, unknown>): string[] {
+  if (input.issueId) return teamIdsForIssue(context, input.issueId);
+  if (input.projectId) return teamIdsForProject(context, input.projectId);
+  if (input.teamId) return [scalar(input.teamId) ?? "__missing__"];
+  if (input.cycleId) return teamIdsForCycle(context, input.cycleId);
+  if (input.initiativeId) return teamIdsForInitiative(context, input.initiativeId);
+  return [];
+}
+
 function teamIdsForFavorite(context: Context, favoriteId: unknown): string[] {
   const id = scalar(favoriteId);
   if (!id) return [];
@@ -259,6 +297,20 @@ function operationTeamIds(
       return null;
     case "initiative":
       return teamIdsForInitiative(context, args.id);
+    case "document":
+      if (context.persistence) return [];
+      return teamIdsForDocument(context, args.id);
+    case "documents": {
+      if (context.persistence) return [];
+      const target = {
+        issueId: args.issueId,
+        projectId: args.projectId,
+        teamId: args.teamId,
+        initiativeId: args.initiativeId,
+        cycleId: args.cycleId,
+      };
+      return teamIdsForDocumentTarget(context, target);
+    }
     case "initiatives":
     case "webhooks":
     case "favorites":
@@ -409,6 +461,14 @@ function operationTeamIds(
     case "favoriteDelete":
     case "favoriteReorder":
       return teamIdsForFavorite(context, args.id);
+    case "documentCreate":
+      if (context.persistence) return [];
+      return teamIdsForDocumentTarget(context, input);
+    case "documentUpdate":
+    case "documentArchive":
+    case "documentUnarchive":
+      if (context.persistence) return [];
+      return teamIdsForDocument(context, args.id);
     case "initiativeCreate": {
       const teams = [
         ...new Set([

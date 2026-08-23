@@ -86,6 +86,7 @@ describe("exportBoard", () => {
       "actors.json",
       "api-keys.json",
       "cycles.json",
+      "documents.json",
       "export.json",
       "favorites.json",
       "inbox-receipts.json",

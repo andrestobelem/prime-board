@@ -863,6 +863,72 @@ export function exportBoard(
     ),
   );
 
+  // Documents (PRB-541): Markdown + una referencia natural a un único recurso.
+  // Los Documents globales quedan fuera de un export team-scoped porque no
+  // pertenecen al alcance reemplazable de ese team.
+  const documents = db
+    .query(
+      `SELECT d.*, creators.name AS creator_name,
+              issue_teams.key AS issue_team_key, issue_rows.number AS issue_number,
+              projects.name AS project_name,
+              document_teams.key AS document_team_key,
+              initiatives.name AS initiative_name,
+              cycle_teams.key AS cycle_team_key, cycles.number AS cycle_number
+       FROM documents d
+       JOIN actors creators ON creators.id = d.creator_id
+       LEFT JOIN issues issue_rows ON issue_rows.id = d.issue_id
+       LEFT JOIN teams issue_teams ON issue_teams.id = issue_rows.team_id
+       LEFT JOIN projects ON projects.id = d.project_id
+       LEFT JOIN teams document_teams ON document_teams.id = d.team_id
+       LEFT JOIN initiatives ON initiatives.id = d.initiative_id
+       LEFT JOIN cycles ON cycles.id = d.cycle_id
+       LEFT JOIN teams cycle_teams ON cycle_teams.id = cycles.team_id
+       ${
+         teamFilter
+           ? `WHERE issue_rows.team_id = ?1
+                OR EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = d.project_id AND project_teams.team_id = ?1)
+                OR d.team_id = ?1
+                OR EXISTS (SELECT 1 FROM initiative_teams WHERE initiative_teams.initiative_id = d.initiative_id AND initiative_teams.team_id = ?1)
+                OR EXISTS (SELECT 1 FROM initiative_projects JOIN project_teams ON project_teams.project_id = initiative_projects.project_id WHERE initiative_projects.initiative_id = d.initiative_id AND project_teams.team_id = ?1)
+                OR cycles.team_id = ?1`
+           : ""
+       }
+       ORDER BY d.created_at, d.id`,
+    )
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
+  const initiativeNameCounts = new Map<string, number>();
+  for (const row of db
+    .query("SELECT name, count(*) AS count FROM initiatives GROUP BY name")
+    .all() as Array<{ name: string; count: number }>) {
+    initiativeNameCounts.set(row.name, row.count);
+  }
+  for (const document of documents) {
+    if (document.initiative_id && (initiativeNameCounts.get(document.initiative_name) ?? 0) > 1) {
+      throw new Error(
+        `Cannot export documents: ambiguous initiative reference "${document.initiative_name}"`,
+      );
+    }
+  }
+  const documentTarget = (document: Record<string, any>): Record<string, string> | null => {
+    if (document.issue_id) return { issue: `${document.issue_team_key}-${document.issue_number}` };
+    if (document.project_id) return { project: document.project_name };
+    if (document.team_id) return { team: document.document_team_key };
+    if (document.initiative_id) return { initiative: document.initiative_name };
+    if (document.cycle_id) return { cycle: `${document.cycle_team_key}/${document.cycle_number}` };
+    return null;
+  };
+  const documentRows = documents.map((document) => ({
+    title: document.title,
+    content: document.content,
+    creator: document.creator_name,
+    target: documentTarget(document),
+    createdAt: document.created_at,
+    updatedAt: document.updated_at,
+    archived: Boolean(document.archived_at),
+    archivedAt: document.archived_at,
+  }));
+  write(join(base, "meta", "documents.json"), stableStringify(documentRows));
+
   // Reviews (PRB-216): referencian issues por identifier legible.
   const reviews = db
     .query(

@@ -29,6 +29,8 @@ import { TeamView } from "./views/TeamView.tsx";
 import { TeamHomeView } from "./views/TeamHomeView.tsx";
 import { TeamsView } from "./views/TeamsView.tsx";
 import { ProjectsView } from "./views/ProjectsView.tsx";
+import { DocumentsView } from "./views/DocumentsView.tsx";
+import { DocumentView } from "./views/DocumentView.tsx";
 import { buildNavigation, getDefaultTeamPath, getTeamKeyForRoute } from "./navigation.ts";
 import {
   clearSelectedWorkspaceId,
@@ -368,6 +370,12 @@ export function App() {
   } else if (section === "projects") {
     topbar = <span className="title">Projects</span>;
     content = <ProjectsView projects={navigation.projects} />;
+  } else if (section === "documents") {
+    topbar = <span className="title">Documents</span>;
+    content = <DocumentsView />;
+  } else if (section === "document" && param) {
+    topbar = <span className="title">Document</span>;
+    content = <DocumentView documentId={param} />;
   } else if (section === "settings") {
     topbar = <span className="title">Settings</span>;
     content = <SettingsView localAuth={localAuth} />;
@@ -615,6 +623,7 @@ export function App() {
             "project-board",
             "cycle",
             "initiative",
+            "document",
             "view",
           ]);
           const currentPath =

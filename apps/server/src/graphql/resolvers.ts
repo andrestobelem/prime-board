@@ -134,6 +134,15 @@ import { parseDateTime } from "../domain/datetime.ts";
 import { newId } from "../db/util.ts";
 import { issueEventData, issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
+import { documentResolvers } from "./document-resolvers.ts";
+import {
+  getPostgresProject,
+  listPostgresInitiativeProjectIds,
+  listPostgresInitiativeTeamIds,
+  mapPostgresProject,
+  postgresCycleProgress,
+  postgresInitiativeProgress,
+} from "../domain/postgres-planning.ts";
 import {
   createLabel,
   deleteLabel,
@@ -429,6 +438,12 @@ export const resolvers = {
         ? listTeamMemberships(context.db, team.id).map(mapTeamMembership)
         : [];
     },
+    documents: (team: { id: string }, args: { includeArchived?: boolean }, context: Context) =>
+      documentResolvers.Query.documents(
+        null,
+        { teamId: team.id, includeArchived: Boolean(args.includeArchived) },
+        context,
+      ),
   },
 
   TeamMembership: {
@@ -456,6 +471,7 @@ export const resolvers = {
   Milestone: projectResolvers.Milestone,
   Comment: issueResolvers.Comment,
   Activity: issueResolvers.Activity,
+  Document: documentResolvers.Document,
 
   Favorite: {
     project: (favorite: { projectId: string | null }, _args: unknown, context: Context) => {
@@ -493,17 +509,35 @@ export const resolvers = {
   },
 
   Cycle: {
-    team: (cycle: { teamId: string }, _args: unknown, context: Context) => {
+    team: async (cycle: { teamId: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const team = await getPostgresTeam(context.persistence, { id: cycle.teamId });
+        return team && (await canDiscoverPostgresTeam(context.persistence, viewer, team))
+          ? mapPostgresTeam(team)
+          : null;
+      }
       const team = lookupTeam(context, { id: cycle.teamId });
       return team && canAccessTeam(context.db, viewer, team.id) ? mapTeam(team) : null;
     },
-    progress: (cycle: { id: string }, _args: unknown, context: Context) =>
-      cycleProgress(context.db, cycle.id).progress,
-    completedIssues: (cycle: { id: string }, _args: unknown, context: Context) =>
-      cycleProgress(context.db, cycle.id).completedIssues,
-    totalIssues: (cycle: { id: string }, _args: unknown, context: Context) =>
-      cycleProgress(context.db, cycle.id).totalIssues,
+    progress: async (cycle: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresCycleProgress(context.persistence, cycle.id)).progress
+        : cycleProgress(context.db, cycle.id).progress,
+    completedIssues: async (cycle: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresCycleProgress(context.persistence, cycle.id)).completedIssues
+        : cycleProgress(context.db, cycle.id).completedIssues,
+    totalIssues: async (cycle: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresCycleProgress(context.persistence, cycle.id)).totalIssues
+        : cycleProgress(context.db, cycle.id).totalIssues,
+    documents: (cycle: { id: string }, args: { includeArchived?: boolean }, context: Context) =>
+      documentResolvers.Query.documents(
+        null,
+        { cycleId: cycle.id, includeArchived: Boolean(args.includeArchived) },
+        context,
+      ),
   },
 
   Review: {
@@ -516,28 +550,74 @@ export const resolvers = {
   },
 
   Initiative: {
-    projects: (initiative: { id: string }, _args: unknown, context: Context) => {
+    projects: async (initiative: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const ids = await listPostgresInitiativeProjectIds(context.persistence, initiative.id);
+        const rows = await Promise.all(
+          ids.map((id) => getPostgresProject(context.persistence!, id)),
+        );
+        return rows
+          .filter((row): row is NonNullable<typeof row> => row !== null)
+          .map(mapPostgresProject);
+      }
       return listInitiativeProjectIds(context.db, initiative.id, context.workspace.workspaceId)
         .map((projectId) => lookupProject(context, projectId))
         .filter((row) => row && canAccessProject(context.db, viewer, row.id))
         .map((row) => mapProject(row!));
     },
-    teams: (initiative: { id: string }, _args: unknown, context: Context) => {
+    teams: async (initiative: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const ids = await listPostgresInitiativeTeamIds(context.persistence, initiative.id);
+        const rows = await Promise.all(
+          ids.map((id) => getPostgresTeam(context.persistence!, { id })),
+        );
+        const visible = await Promise.all(
+          rows.map(async (row) =>
+            row && (await canDiscoverPostgresTeam(context.persistence!, viewer, row))
+              ? mapPostgresTeam(row)
+              : null,
+          ),
+        );
+        return visible.filter((row): row is NonNullable<typeof row> => row !== null);
+      }
       return listInitiativeTeamIds(context.db, initiative.id, context.workspace.workspaceId)
         .map((teamId) => lookupTeam(context, { id: teamId }))
         .filter((row) => row && canAccessTeam(context.db, viewer, row.id))
         .map((row) => mapTeam(row!));
     },
-    owner: (initiative: { ownerId: string | null }, _args: unknown, context: Context) =>
-      initiative.ownerId ? mapActor(lookupActor(context, initiative.ownerId)!) : null,
-    progress: (initiative: { id: string }, _args: unknown, context: Context) =>
-      initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).progress,
-    completedIssues: (initiative: { id: string }, _args: unknown, context: Context) =>
-      initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).completedIssues,
-    totalIssues: (initiative: { id: string }, _args: unknown, context: Context) =>
-      initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).totalIssues,
+    owner: async (initiative: { ownerId: string | null }, _args: unknown, context: Context) => {
+      if (!initiative.ownerId) return null;
+      if (context.persistence) {
+        const owner = await getPostgresActor(context.persistence, initiative.ownerId);
+        return owner ? mapPostgresActor(owner) : null;
+      }
+      return mapActor(lookupActor(context, initiative.ownerId)!);
+    },
+    progress: async (initiative: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresInitiativeProgress(context.persistence, initiative.id)).progress
+        : initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).progress,
+    completedIssues: async (initiative: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresInitiativeProgress(context.persistence, initiative.id)).completedIssues
+        : initiativeProgress(context.db, initiative.id, context.workspace.workspaceId)
+            .completedIssues,
+    totalIssues: async (initiative: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresInitiativeProgress(context.persistence, initiative.id)).totalIssues
+        : initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).totalIssues,
+    documents: (
+      initiative: { id: string },
+      args: { includeArchived?: boolean },
+      context: Context,
+    ) =>
+      documentResolvers.Query.documents(
+        null,
+        { initiativeId: initiative.id, includeArchived: Boolean(args.includeArchived) },
+        context,
+      ),
   },
 
   ApiKey: {
@@ -608,6 +688,7 @@ export const resolvers = {
     {
       ...issueResolvers.Query,
       ...projectResolvers.Query,
+      ...documentResolvers.Query,
       viewer: (_parent: unknown, _args: unknown, context: Context) =>
         mapActor(requireViewer(context)),
       workspaces: async (_parent: unknown, _args: unknown, context: Context) => {
@@ -1013,6 +1094,7 @@ export const resolvers = {
       {
         ...issueResolvers.Mutation,
         ...projectResolvers.Mutation,
+        ...documentResolvers.Mutation,
         teamArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);

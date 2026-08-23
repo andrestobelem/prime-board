@@ -3,6 +3,7 @@ import baseline from "./0001_baseline.sql" with { type: "text" };
 import workspaceSingleton from "./0002_workspace_singleton.sql" with { type: "text" };
 import actorNameUnique from "./0003_actor_name_unique.sql" with { type: "text" };
 import issueSearch from "./0004_issue_search.sql" with { type: "text" };
+import documents from "./0005_documents.sql" with { type: "text" };
 
 export interface PostgresMigration {
   readonly version: number;
@@ -15,6 +16,7 @@ export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
   { version: 2, name: "workspace_singleton", sql: workspaceSingleton },
   { version: 3, name: "actor_name_unique", sql: actorNameUnique },
   { version: 4, name: "issue_search", sql: issueSearch },
+  { version: 5, name: "documents", sql: documents },
 ];
 
 interface AppliedMigration {

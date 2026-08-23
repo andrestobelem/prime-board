@@ -28,4 +28,5 @@ console.log(
   `Rebuilt ${result.issues} issues, ${result.comments} comments and ${result.events} events`,
 );
 console.log(`${result.preservedKeys} API keys re-linked (credentials never live in the repo)`);
+for (const warning of result.warnings) console.warn(`WARNING: ${warning}`);
 console.log(`database: ${config.dbPath}`);
