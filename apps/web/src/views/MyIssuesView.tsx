@@ -111,6 +111,7 @@ export function MyIssuesView({ groupBy = "state" }: { groupBy?: GroupBy }) {
           <option value="assigned">Assigned</option>
           <option value="created">Created</option>
           <option value="handoff">Assigned or created</option>
+          <option value="subscribed">Subscribed</option>
         </select>
         <input
           aria-label="Search my issues"

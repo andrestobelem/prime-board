@@ -15,6 +15,16 @@ import {
   type IssueUpdateInput,
 } from "../domain/issues.ts";
 import { listActivity, mapActivity } from "../domain/activity.ts";
+import {
+  listIssueSubscribers,
+  subscribeToIssue,
+  unsubscribeFromIssue,
+} from "../domain/subscribers.ts";
+import {
+  listPostgresIssueSubscribers,
+  subscribeToPostgresIssue,
+  unsubscribeFromPostgresIssue,
+} from "../domain/postgres-subscribers.ts";
 import { ACTIVITY_REFS, translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
 import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
@@ -341,6 +351,20 @@ export const issueResolvers = {
         return actor ? mapPostgresActor(actor) : null;
       }
       return mapActor(lookupActor(context, issue._row.creator_id)!);
+    },
+    subscribers: async (issue: MappedIssue, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        return (
+          await listPostgresIssueSubscribers(
+            context.persistence,
+            issue.id,
+            context.workspace.workspaceId,
+          )
+        ).map(mapPostgresActor);
+      }
+      return listIssueSubscribers(context.db, issue.id, context.workspace.workspaceId).map(
+        mapActor,
+      );
     },
     parent: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.parent_id) return null;
@@ -689,6 +713,7 @@ export const issueResolvers = {
           after: args.after,
           orderBy: args.orderBy,
           teamIds,
+          subscriberId: viewer.id,
         });
         return {
           nodes: page.rows.map(mapIssue),
@@ -701,6 +726,7 @@ export const issueResolvers = {
         after: args.after,
         orderBy: args.orderBy,
         teamIds: accessibleTeamIds(context.db, viewer),
+        subscriberId: viewer.id,
       });
       return {
         nodes: page.rows.map(mapIssue),
@@ -815,6 +841,104 @@ export const issueResolvers = {
         context.events.emit("issue.updated", viewer, issueEventData(row), changeMap);
       }
       return { success: true, issue: mapIssue(row) };
+    },
+    issueSubscribe: async (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      if (viewer.status !== "active") throw apiError("UNAUTHORIZED", "Active actor required");
+      if (context.persistence) {
+        const issue = await getPostgresIssueByRef(
+          context.persistence,
+          args.id,
+          context.workspace.workspaceId,
+        );
+        if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${args.id}`);
+        const team = await getPostgresTeam(context.persistence, { id: issue.team_id });
+        if (
+          !team ||
+          team.archived_at ||
+          !(await canDiscoverPostgresTeam(context.persistence, viewer, team))
+        ) {
+          throw apiError("NOT_FOUND", "Issue not found");
+        }
+        if (!apiKeyTeamsWithinLimit(context.auth, [issue.team_id])) {
+          throw apiError("NOT_FOUND", "Issue resource not found");
+        }
+        const result = await subscribeToPostgresIssue(
+          context.persistence,
+          viewer.id,
+          issue.id,
+          context.workspace.workspaceId,
+        );
+        if (result.changed) {
+          context.events.emit("issue.updated", viewer, issueEventData(result.row), {
+            subscribers: { from: null, to: viewer.id },
+          });
+        }
+        return { success: true, issue: mapIssue(result.row) };
+      }
+      const issue = requireIssue(context, args.id);
+      const team = lookupTeam(context, { id: issue.team_id });
+      if (!team || team.archived_at || !canAccessTeam(context.db, viewer, issue.team_id)) {
+        throw apiError("NOT_FOUND", "Issue not found");
+      }
+      const result = subscribeToIssue(
+        context.db,
+        viewer.id,
+        issue.id,
+        context.workspace.workspaceId,
+      );
+      if (result.changed) {
+        context.events.emit("issue.updated", viewer, issueEventData(result.row), {
+          subscribers: { from: null, to: viewer.id },
+        });
+      }
+      return { success: true, issue: mapIssue(result.row) };
+    },
+    issueUnsubscribe: async (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      if (viewer.status !== "active") throw apiError("UNAUTHORIZED", "Active actor required");
+      if (context.persistence) {
+        const issue = await getPostgresIssueByRef(
+          context.persistence,
+          args.id,
+          context.workspace.workspaceId,
+        );
+        if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${args.id}`);
+        const team = await getPostgresTeam(context.persistence, { id: issue.team_id });
+        if (!team || !(await canDiscoverPostgresTeam(context.persistence, viewer, team))) {
+          throw apiError("NOT_FOUND", "Issue not found");
+        }
+        if (!apiKeyTeamsWithinLimit(context.auth, [issue.team_id])) {
+          throw apiError("NOT_FOUND", "Issue resource not found");
+        }
+        const result = await unsubscribeFromPostgresIssue(
+          context.persistence,
+          viewer.id,
+          issue.id,
+          context.workspace.workspaceId,
+        );
+        if (result.changed) {
+          context.events.emit("issue.updated", viewer, issueEventData(result.row), {
+            subscribers: { from: viewer.id, to: null },
+          });
+        }
+        return { success: true, issue: mapIssue(result.row) };
+      }
+      const issue = requireIssue(context, args.id);
+      if (!canAccessTeam(context.db, viewer, issue.team_id))
+        throw apiError("NOT_FOUND", "Issue not found");
+      const result = unsubscribeFromIssue(
+        context.db,
+        viewer.id,
+        issue.id,
+        context.workspace.workspaceId,
+      );
+      if (result.changed) {
+        context.events.emit("issue.updated", viewer, issueEventData(result.row), {
+          subscribers: { from: viewer.id, to: null },
+        });
+      }
+      return { success: true, issue: mapIssue(result.row) };
     },
     issueArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);

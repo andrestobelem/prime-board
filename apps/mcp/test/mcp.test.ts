@@ -141,12 +141,14 @@ describe("mcp tools", () => {
       "save_team_membership",
       "save_user",
       "save_workspace",
+      "subscribe_issue",
       "suspend_user",
       "unarchive_document",
       "unarchive_issue",
       "unarchive_project",
       "unarchive_team",
       "unlink_issues",
+      "unsubscribe_issue",
     ]);
   });
 

@@ -490,6 +490,8 @@ export interface ListIssuesOptions {
   orderBy?: IssueOrder | null;
   /** Team IDs visible to the caller; null means unrestricted. */
   teamIds?: readonly string[] | null;
+  /** Actor used by the subscribed filter. */
+  subscriberId?: string | null;
 }
 
 export interface IssuePage {
@@ -511,7 +513,7 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
     order.column === "issues.updated_at" ? row.updated_at : row.created_at;
   const params = new ParamSink();
   const filter = options.filter ?? {};
-  const clauses = [buildIssueFilter(filter, params)];
+  const clauses = [buildIssueFilter(filter, params, { subscriberId: options.subscriberId })];
   if (options.teamIds) {
     if (options.teamIds.length === 0) {
       clauses.push("1 = 0");
@@ -536,7 +538,9 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
     // otro filtro/orden no reinicia la consulta ni duplica la primera página.
     const cursorParams = new ParamSink();
     const cursorId = cursorParams.add(decoded.id);
-    const cursorClauses = [buildIssueFilter(filter, cursorParams)];
+    const cursorClauses = [
+      buildIssueFilter(filter, cursorParams, { subscriberId: options.subscriberId }),
+    ];
     if (options.teamIds) {
       if (options.teamIds.length === 0) {
         cursorClauses.push("1 = 0");

@@ -85,7 +85,7 @@ function listInboxActivityInternal(
        LEFT JOIN inbox_receipts r ON r.activity_id = a.id AND r.actor_id = ?1
        WHERE (?2 = 1 OR r.archived_at IS NULL)
          ${workspaceCondition}
-         AND a.type IN ('created', 'assigned', 'commented', 'state_changed', 'priority_changed')
+         AND a.type IN ('created', 'assigned', 'commented', 'state_changed', 'priority_changed', 'subscribed', 'unsubscribed')
        ORDER BY a.created_at DESC, a.id DESC`;
   const rows = (
     workspaceId
@@ -95,11 +95,22 @@ function listInboxActivityInternal(
   const visibleRows = rows.filter((row) => canAccessTeam(db, viewer, row.issue_team_id));
 
   const historicalAssignee = new Map<string, string | null>();
+  const historicalSubscribers = new Map<string, Set<string>>();
   const byIssue = new Map<string, InboxActivityRow[]>();
   for (const row of visibleRows) {
     const issueRows = byIssue.get(row.issue_id) ?? [];
     issueRows.push(row);
     byIssue.set(row.issue_id, issueRows);
+  }
+  const currentSubscribers = new Map<string, Set<string>>();
+  for (const row of db
+    .query(
+      `SELECT issue_id, actor_id FROM issue_subscribers${workspaceId ? " WHERE workspace_id = ?1" : ""}`,
+    )
+    .all(...(workspaceId ? [workspaceId] : [])) as Array<{ issue_id: string; actor_id: string }>) {
+    const subscribers = currentSubscribers.get(row.issue_id) ?? new Set<string>();
+    subscribers.add(row.actor_id);
+    currentSubscribers.set(row.issue_id, subscribers);
   }
   for (const issueRows of byIssue.values()) {
     issueRows.sort((a, b) =>
@@ -109,6 +120,12 @@ function listInboxActivityInternal(
     );
     let assignee: string | null = null;
     let sawCreated = false;
+    const hasSubscriptionHistory = issueRows.some(
+      (row) => row.type === "subscribed" || row.type === "unsubscribed",
+    );
+    const subscribers = hasSubscriptionHistory
+      ? new Set<string>()
+      : new Set(currentSubscribers.get(issueRows[0]!.issue_id) ?? []);
     for (const row of issueRows) {
       const payload = JSON.parse(row.payload) as Record<string, unknown>;
       if (!sawCreated && row.type !== "created") {
@@ -130,18 +147,32 @@ function listInboxActivityInternal(
       ) {
         historicalAssignee.set(row.id, assignee);
       }
+      if (row.type === "subscribed" || row.type === "unsubscribed") {
+        const subscriber = payload.actorId;
+        if (typeof subscriber === "string") {
+          if (row.type === "subscribed") subscribers.add(subscriber);
+          else subscribers.delete(subscriber);
+        }
+      } else {
+        historicalSubscribers.set(row.id, new Set(subscribers));
+      }
     }
   }
 
   const relevant = visibleRows.filter((row) => {
     if (row.actor_id === actorId) return false;
+    if (row.type === "subscribed" || row.type === "unsubscribed") return false;
     const recipient = historicalAssignee.get(row.id);
-    if (row.type === "created" || row.type === "assigned") return recipient === actorId;
-    if (row.type === "state_changed" || row.type === "priority_changed") {
-      return recipient === actorId;
+    const subscribed = historicalSubscribers.get(row.id)?.has(actorId) ?? false;
+    if (row.type === "created" || row.type === "assigned") {
+      return recipient === actorId || subscribed;
     }
-    return recipient === actorId || mentionsActor(activityBody(row), viewer.name);
+    if (row.type === "state_changed" || row.type === "priority_changed") {
+      return recipient === actorId || subscribed;
+    }
+    return recipient === actorId || subscribed || mentionsActor(activityBody(row), viewer.name);
   });
+
   return limit === null ? relevant : relevant.slice(0, limit);
 }
 

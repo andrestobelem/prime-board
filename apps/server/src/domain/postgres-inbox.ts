@@ -82,8 +82,12 @@ function activityRecipient(
   return fallback;
 }
 
-function mapHistoricalAssignees(rows: PostgresInboxActivityRow[]): Map<string, string | null> {
-  const historicalAssignee = new Map<string, string | null>();
+function mapHistoricalRecipients(rows: PostgresInboxActivityRow[]): {
+  assignees: Map<string, string | null>;
+  subscribers: Map<string, Set<string>>;
+} {
+  const assignees = new Map<string, string | null>();
+  const subscribersByIssue = new Map<string, Set<string>>();
   const byIssue = new Map<string, PostgresInboxActivityRow[]>();
   for (const row of rows) {
     const issueRows = byIssue.get(row.issue_id) ?? [];
@@ -98,23 +102,49 @@ function mapHistoricalAssignees(rows: PostgresInboxActivityRow[]): Map<string, s
     );
     let assignee: string | null = null;
     let sawCreated = false;
+    const subscribers = new Set<string>();
     for (const row of issueRows) {
-      assignee = activityRecipient(row, assignee, sawCreated);
-      if (row.type === "created") sawCreated = true;
-      historicalAssignee.set(row.id, assignee);
+      const payload = parsePayload(row.payload);
+      if (!sawCreated && row.type !== "created") assignee = row.issue_assignee_id;
+      if (row.type === "created") {
+        assignee =
+          typeof payload.assigneeId === "string" ? payload.assigneeId : row.issue_assignee_id;
+        sawCreated = true;
+        assignees.set(row.id, assignee);
+      } else if (row.type === "assigned" || row.type === "assignee_changed") {
+        assignee = typeof payload.to === "string" ? payload.to : assignee;
+        assignees.set(row.id, assignee);
+      } else if (
+        row.type === "state_changed" ||
+        row.type === "priority_changed" ||
+        row.type === "commented"
+      ) {
+        assignees.set(row.id, assignee);
+      }
+      if (row.type === "subscribed" || row.type === "unsubscribed") {
+        const subscriber = payload.actorId;
+        if (typeof subscriber === "string") {
+          if (row.type === "subscribed") subscribers.add(subscriber);
+          else subscribers.delete(subscriber);
+        }
+      } else {
+        subscribersByIssue.set(row.id, new Set(subscribers));
+      }
     }
   }
-  return historicalAssignee;
+  return { assignees, subscribers: subscribersByIssue };
 }
 
 function relevantRows(
   rows: PostgresInboxActivityRow[],
   viewer: ActorRow,
 ): PostgresInboxActivityRow[] {
-  const historicalAssignee = mapHistoricalAssignees(rows);
+  const recipients = mapHistoricalRecipients(rows);
   return rows.filter((row) => {
     if (row.actor_id === viewerId(viewer)) return false;
-    const recipient = historicalAssignee.get(row.id);
+    if (row.type === "subscribed" || row.type === "unsubscribed") return false;
+    const assignee = recipients.assignees.get(row.id);
+    const subscribed = recipients.subscribers.get(row.id)?.has(viewer.id) ?? false;
     if (
       row.type === "created" ||
       row.type === "assigned" ||
@@ -122,10 +152,10 @@ function relevantRows(
       row.type === "state_changed" ||
       row.type === "priority_changed"
     ) {
-      return recipient === viewer.id;
+      return assignee === viewer.id || subscribed;
     }
     if (row.type === "commented") {
-      return recipient === viewer.id || mentionsActor(activityBody(row), viewer.name);
+      return assignee === viewer.id || subscribed || mentionsActor(activityBody(row), viewer.name);
     }
     return false;
   });
@@ -165,7 +195,7 @@ async function listInboxActivityInternal(
          ON r.activity_id = a.id AND r.actor_id = $1
        WHERE ($2 = TRUE OR r.archived_at IS NULL)
          AND a.type IN ('created', 'assigned', 'assignee_changed', 'commented',
-                        'state_changed', 'priority_changed')${teamFilter}
+                        'state_changed', 'priority_changed', 'subscribed', 'unsubscribed')${teamFilter}
        ORDER BY a.created_at DESC, a.id DESC`,
       params,
     )),

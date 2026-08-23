@@ -101,6 +101,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:issueUpdate",
   "mutation:issueArchive",
   "mutation:issueUnarchive",
+  "mutation:issueSubscribe",
+  "mutation:issueUnsubscribe",
   "mutation:labelCreate",
   "mutation:labelUpdate",
   "mutation:labelDelete",
@@ -477,6 +479,8 @@ async function operationTeamIds(
     }
     case "issueArchive":
     case "issueUnarchive":
+    case "issueSubscribe":
+    case "issueUnsubscribe":
       if (context.persistence) return [];
       return teamIdsForIssue(context, args.id);
     case "commentCreate":
@@ -662,7 +666,8 @@ function wrapResolverMap(map: ResolverMap, kind: "query" | "mutation"): Resolver
             return resolver(...args);
           });
         } else {
-          if (!KEY_MUTATIONS.has(field)) await assertOperationTeams(context, field, resolverArgs, kind);
+          if (!KEY_MUTATIONS.has(field))
+            await assertOperationTeams(context, field, resolverArgs, kind);
           result = resolver(...args);
         }
         const filterAsync = (value: unknown, filter: (items: unknown[]) => unknown[]): unknown => {

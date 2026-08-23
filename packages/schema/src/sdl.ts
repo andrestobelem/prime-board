@@ -241,6 +241,10 @@ export const typeDefs = /* GraphQL */ `
     priority: Int!
     assignee: Actor
     creator: Actor!
+    """
+    Actors that follow this issue.
+    """
+    subscribers: [Actor!]!
     parent: Issue
     children(includeArchived: Boolean = false): [Issue!]!
     labels: [Label!]!
@@ -804,6 +808,10 @@ export const typeDefs = /* GraphQL */ `
     """
     search: String
     """
+    Issues followed by (or not followed by) the authenticated actor.
+    """
+    subscribed: Boolean
+    """
     true: issues abiertos con todos sus bloqueantes cerrados (frontier); false: con al menos un bloqueante abierto.
     """
     unblocked: Boolean
@@ -1180,6 +1188,8 @@ export const typeDefs = /* GraphQL */ `
     issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!
     issueArchive(id: ID!): IssuePayload!
     issueUnarchive(id: ID!): IssuePayload!
+    issueSubscribe(id: ID!): IssuePayload!
+    issueUnsubscribe(id: ID!): IssuePayload!
     labelCreate(input: LabelCreateInput!): LabelPayload!
     labelUpdate(id: ID!, input: LabelUpdateInput!): LabelPayload!
     labelDelete(id: ID!): LabelDeletePayload!

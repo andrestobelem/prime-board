@@ -17,7 +17,8 @@ const ISSUE_NAV_QUERY = `query($teamId: ID, $after: String) {
   }
 }`;
 
-const ISSUE_QUERY = `query($id: ID!) {
+export const ISSUE_QUERY = `query($id: ID!) {
+  viewer { id }
   issue(id: $id) {
     id identifier title description priority url branchName createdAt
     team {
@@ -31,6 +32,7 @@ const ISSUE_QUERY = `query($id: ID!) {
     state { id name type }
     assignee { id name type }
     creator { id name type }
+    subscribers { id name type }
     cycle { id name number state }
     parent { identifier title }
     children { identifier title state { id name type } }
@@ -79,6 +81,8 @@ const ACTIVITY_TEXT: Record<string, (payload: any) => string> = {
   commented: () => "commented",
   archived: () => "archived the issue",
   unarchived: () => "restored the issue",
+  subscribed: () => "started following the issue",
+  unsubscribed: () => "stopped following the issue",
   relation_added: (payload) =>
     `added relation ${RELATION_LABELS[payload.type] ?? payload.type} ${payload.issue}`,
   relation_removed: (payload) =>
@@ -97,6 +101,13 @@ const RELATION_LABELS: Record<string, string> = {
   duplicate_of: "duplicate of",
   duplicated_by: "duplicated by",
 };
+
+export function subscriptionButtonLabel(
+  subscribers: ReadonlyArray<{ id: string }>,
+  viewerId: string | null | undefined,
+): "Follow" | "Unfollow" {
+  return viewerId && subscribers.some((actor) => actor.id === viewerId) ? "Unfollow" : "Follow";
+}
 
 function timeAgo(iso: string): string {
   const seconds = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -201,6 +212,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   const [documentTitle, setDocumentTitle] = useState("");
   const [documentContent, setDocumentContent] = useState("");
   const [documentSaving, setDocumentSaving] = useState(false);
+  const [subscriberSaving, setSubscriberSaving] = useState(false);
 
   useEffect(() => {
     if (issue) {
@@ -374,6 +386,29 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   const toggleLabel = (labelId: string, active: boolean) =>
     runUpdate(active ? { removeLabelIds: [labelId] } : { addLabelIds: [labelId] });
 
+  async function toggleSubscription(): Promise<void> {
+    setSubscriberSaving(true);
+    setSaveError(null);
+    try {
+      const viewerId = result.data?.viewer.id;
+      const subscribed = subscriptionButtonLabel(issue.subscribers, viewerId) === "Unfollow";
+      const mutation = subscribed ? "issueUnsubscribe" : "issueSubscribe";
+      const response = await mutate<any>(
+        `mutation($id: ID!) { ${mutation}(id: $id) { success } }`,
+        { id: issue.id },
+      );
+      if (!response[mutation].success) throw new Error("The subscription could not be changed.");
+      await result.refetch();
+      setSaveNotice(subscribed ? "Stopped following" : "Following issue");
+    } catch (error) {
+      setSaveError(
+        error instanceof Error ? error.message : "The subscription could not be changed.",
+      );
+    } finally {
+      setSubscriberSaving(false);
+    }
+  }
+
   async function archiveIssue(): Promise<void> {
     setSaving(true);
     setSaveError(null);
@@ -462,6 +497,13 @@ export function IssueView({ issueRef }: { issueRef: string }) {
               </div>
             </div>
             <div className="issue-header-actions">
+              <button
+                className="btn secondary"
+                disabled={subscriberSaving}
+                onClick={() => void toggleSubscription()}
+              >
+                {subscriptionButtonLabel(issue.subscribers, result.data?.viewer.id)}
+              </button>
               <button
                 className="issue-icon-button"
                 aria-label="Previous issue"

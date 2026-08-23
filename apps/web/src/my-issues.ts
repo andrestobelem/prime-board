@@ -1,4 +1,4 @@
-export type MyIssuesMode = "assigned" | "created" | "handoff";
+export type MyIssuesMode = "assigned" | "created" | "handoff" | "subscribed";
 
 export interface MyIssuesScopeCopy {
   description: string;
@@ -15,6 +15,7 @@ export function buildMyIssuesOwnerFilter(
   const actor = { eq: viewerId };
   if (mode === "assigned") return { assignee: actor };
   if (mode === "created") return { creator: actor };
+  if (mode === "subscribed") return { subscribed: true };
   return { or: [{ assignee: actor }, { creator: actor }] };
 }
 
@@ -30,6 +31,12 @@ export function getMyIssuesScopeCopy(mode: MyIssuesMode, viewerName: string): My
     return {
       description: `Issues created by ${viewerName}`,
       emptyState: `No issues created by ${viewerName}.`,
+    };
+  }
+  if (mode === "subscribed") {
+    return {
+      description: `Issues followed by ${viewerName}`,
+      emptyState: `No issues followed by ${viewerName}.`,
     };
   }
   return {

@@ -21,6 +21,7 @@ const ISSUE_FIELDS = `id identifier title description priority
   state { id name type } assignee { id name type } creator { id name type }
   labels { id name } project { id name } milestone { id name } cycle { id number name }
   parent { identifier }
+  subscribers { id name type }
   url branchName createdAt updatedAt archivedAt`;
 
 function json(value: unknown) {
@@ -740,6 +741,10 @@ export function createServer(config: McpConfig | McpSession): McpServer {
           .describe(
             "true: open issues whose blockers are all closed (the frontier); false: issues with an open blocker",
           ),
+        subscribed: z
+          .boolean()
+          .optional()
+          .describe("Filter issues followed (or not followed) by the authenticated actor"),
         limit: z.number().int().min(1).max(250).optional(),
         after: z.string().optional().describe("Cursor from pageInfo.endCursor"),
         orderBy: z.enum(["CREATED_ASC", "CREATED_DESC", "UPDATED_ASC", "UPDATED_DESC"]).optional(),
@@ -773,6 +778,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       if (args.query) filter.search = args.query;
       if (args.includeArchived !== undefined) filter.includeArchived = args.includeArchived;
       if (args.unblocked !== undefined) filter.unblocked = args.unblocked;
+      if (args.subscribed !== undefined) filter.subscribed = args.subscribed;
       const data = await gqlRequest(
         sessionConfig,
         `query($filter: IssueFilter, $first: Int, $after: String, $orderBy: IssueOrder) {
@@ -1004,6 +1010,8 @@ export function createServer(config: McpConfig | McpSession): McpServer {
   for (const [toolName, mutation, description] of [
     ["archive_issue", "issueArchive", "Archive an issue by ID or identifier."],
     ["unarchive_issue", "issueUnarchive", "Restore an archived issue by ID or identifier."],
+    ["subscribe_issue", "issueSubscribe", "Follow an issue to receive its activity."],
+    ["unsubscribe_issue", "issueUnsubscribe", "Stop following an issue."],
   ] as const) {
     server.registerTool(
       toolName,
@@ -1027,6 +1035,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       },
     );
   }
+
 
   server.registerTool(
     "list_cycles",

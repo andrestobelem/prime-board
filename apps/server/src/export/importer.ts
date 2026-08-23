@@ -395,6 +395,7 @@ export function rebuildFromRepo(
     for (const table of [
       "documents",
       "issue_relations",
+      "issue_subscribers",
       "issue_labels",
       "activity",
       "comments",
@@ -792,6 +793,16 @@ export function rebuildFromRepo(
         const labelId = resolveLabelId(labelReference, issue);
         db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(id, labelId);
       }
+      for (const subscriber of issue.subscribers ?? []) {
+        const subscriberId = actorIds.get(String(subscriber));
+        if (!subscriberId) {
+          throw new Error(`Issue ${issue.id} references unknown subscriber ${subscriber}`);
+        }
+        db.query(
+          `INSERT INTO issue_subscribers (issue_id, actor_id, created_at)
+           VALUES (?1, ?2, ?3) ON CONFLICT(issue_id, actor_id) DO NOTHING`,
+        ).run(id, subscriberId, issue.createdAt);
+      }
       result.issues += 1;
     }
 
@@ -1125,6 +1136,17 @@ export function rebuildFromRepo(
             "INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
           ).run(newId(), issueId, actorId, event.payload.body as string, event.ts as string);
           result.comments += 1;
+        }
+        if (event.type === "subscribed") {
+          db.query(
+            `INSERT INTO issue_subscribers (issue_id, actor_id, created_at)
+             VALUES (?1, ?2, ?3) ON CONFLICT(issue_id, actor_id) DO NOTHING`,
+          ).run(issueId, actorId, event.ts as string);
+        } else if (event.type === "unsubscribed") {
+          db.query("DELETE FROM issue_subscribers WHERE issue_id = ?1 AND actor_id = ?2").run(
+            issueId,
+            actorId,
+          );
         }
         const activityId = newId();
         activityIds.push(activityId);

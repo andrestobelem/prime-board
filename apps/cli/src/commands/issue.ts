@@ -21,6 +21,7 @@ const ISSUE_FIELDS = `identifier title description priority
   state { id name type }
   assignee { id name type }
   creator { name type }
+  subscribers { id name type }
   labels { id name }
   project { id name }
   milestone { id name }
@@ -29,8 +30,7 @@ const ISSUE_FIELDS = `identifier title description priority
   url branchName createdAt updatedAt archivedAt`;
 
 const USAGE = `Usage:
-  pb issue list [--team KEY] [--state NAME|TYPE] [--assignee me|ID] [--creator ID|NAME]
-                [--priority NAME] [--project ID|NAME] [--milestone ID|NAME] [--cycle ID|NAME]
+  pb issue list [--team KEY] [--state NAME|TYPE] [--assignee me|ID] [--creator ID|NAME] [--subscribed] [--priority NAME] [--project ID|NAME] [--milestone ID|NAME] [--cycle ID|NAME]
                 [--parent REF] [--label NAME ...] [--filter JSON] [--search TEXT] [--unblocked]
                 [--include-archived] [--first N] [--after CURSOR]
                 [--order-by CREATED_ASC|CREATED_DESC|UPDATED_ASC|UPDATED_DESC] [--json]
@@ -43,6 +43,8 @@ const USAGE = `Usage:
                   [--sort-order NUMBER] [--add-label NAME ...] [--remove-label NAME ...] [--json]
   pb issue archive <REF> [--json]
   pb issue unarchive <REF> [--json]
+  pb issue subscribe <REF> [--json]
+  pb issue unsubscribe <REF> [--json]
   pb issue comment <REF> [--body TEXT|-]
   pb issue link <REF> (--blocked-by REF | --blocks REF | --related REF | --duplicate-of REF)... [--json]
   pb issue unlink <REF> (--blocked-by REF | --blocks REF | --related REF | --duplicate-of REF)... [--json]`;
@@ -89,6 +91,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
         "include-archived": { type: "boolean" },
         json: { type: "boolean" },
         unblocked: { type: "boolean" },
+        subscribed: { type: "boolean" },
       },
     });
     let filter: Record<string, unknown> = {};
@@ -135,6 +138,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
     }
     if (values.search) filter.search = values.search;
     if (values.unblocked !== undefined) filter.unblocked = values.unblocked;
+    if (values.subscribed !== undefined) filter.subscribed = values.subscribed;
     if (values["include-archived"]) filter.includeArchived = true;
 
     const first = values.first ? Number(values.first) : 50;
@@ -336,6 +340,24 @@ export async function issueCommand(argv: string[]): Promise<void> {
     if (values.json) return printJson(data.issueUpdate.issue);
     console.log(`Updated ${data.issueUpdate.issue.identifier}`);
     console.log(issueLine(data.issueUpdate.issue));
+    return;
+  }
+
+  if (action === "subscribe" || action === "unsubscribe") {
+    const ref = argv[1];
+    if (!ref) throw new UsageError(USAGE);
+    const { values } = parseArgs({ args: argv.slice(2), options: { json: { type: "boolean" } } });
+    const issue = await resolveIssue(config, ref);
+    const mutation = action === "subscribe" ? "issueSubscribe" : "issueUnsubscribe";
+    const data = await gqlRequest(
+      config,
+      `mutation($id: ID!) { ${mutation}(id: $id) { issue { id ${ISSUE_FIELDS} } } }`,
+      { id: issue.id },
+    );
+    if (values.json) return printJson(data[mutation].issue);
+    console.log(
+      `${action === "subscribe" ? "Following" : "Unfollowed"} ${data[mutation].issue.identifier}`,
+    );
     return;
   }
 

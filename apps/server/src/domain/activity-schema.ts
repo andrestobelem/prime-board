@@ -70,9 +70,11 @@ export const ACTIVITY_REFS: Partial<Record<ActivityType, RefField[]>> = {
     { field: "projectId", exportedAs: "project", table: "projects", mode: "dense" },
     { field: "milestoneId", exportedAs: "milestone", table: "milestones", mode: "dense" },
   ],
+  subscribed: [{ field: "actorId", exportedAs: "actor", table: "actors", mode: "sparse" }],
+  unsubscribed: [{ field: "actorId", exportedAs: "actor", table: "actors", mode: "sparse" }],
 };
 
-/** Los 18 ActivityType existentes — usado por el test que exige cobertura total. */
+/** Los ActivityType existentes — usado por el test que exige cobertura total. */
 export const ALL_ACTIVITY_TYPES: ActivityType[] = [
   "created",
   "title_changed",
@@ -92,6 +94,8 @@ export const ALL_ACTIVITY_TYPES: ActivityType[] = [
   "commented",
   "archived",
   "unarchived",
+  "subscribed",
+  "unsubscribed",
 ];
 
 /**

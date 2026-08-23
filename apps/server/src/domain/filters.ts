@@ -44,6 +44,8 @@ export interface IssueFilter {
   labels?: LabelComparator | null;
   /** Full-text sobre título y descripción (FTS5). */
   search?: string | null;
+  /** true: issues que sigue el actor autenticado; false: issues que no sigue. */
+  subscribed?: boolean | null;
   /**
    * true: issues abiertos cuyos bloqueantes están todos cerrados (el frontier
    * de /wayfinder); false: issues con al menos un bloqueante abierto.
@@ -114,6 +116,8 @@ export function ftsQuery(search: string): string {
 export interface IssueFilterSqlOptions {
   /** Permite a un backend sustituir el predicado FTS sin cambiar el contrato público. */
   searchClause?: (search: string, params: ParamSink) => string;
+  /** Actor autenticado para el filtro subscribed. */
+  subscriberId?: string | null;
 }
 
 export function buildIssueFilter(
@@ -173,6 +177,15 @@ export function buildIssueFilter(
       clauses.push(`NOT ${openBlocker}`);
     } else {
       clauses.push(openBlocker);
+    }
+  }
+
+  if (filter.subscribed != null) {
+    if (!options.subscriberId) {
+      clauses.push(filter.subscribed ? "1 = 0" : "1 = 1");
+    } else {
+      const membership = `EXISTS (SELECT 1 FROM issue_subscribers WHERE issue_subscribers.issue_id = issues.id AND issue_subscribers.actor_id = ${params.add(options.subscriberId)})`;
+      clauses.push(filter.subscribed ? membership : `NOT ${membership}`);
     }
   }
 

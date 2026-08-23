@@ -21,7 +21,9 @@ export type ActivityType =
   | "relation_removed"
   | "commented"
   | "archived"
-  | "unarchived";
+  | "unarchived"
+  | "subscribed"
+  | "unsubscribed";
 
 export interface ActivityRow {
   id: string;

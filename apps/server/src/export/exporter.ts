@@ -369,6 +369,15 @@ function writeIssue(
         )
         .get(issue.cycle_id) as { ref: string } | null)
     : null;
+  const subscribers = db
+    .query(
+      `SELECT actors.name FROM issue_subscribers
+       JOIN actors ON actors.id = issue_subscribers.actor_id
+       WHERE issue_subscribers.issue_id = ?1
+       ORDER BY actors.name, actors.id`,
+    )
+    .all(issue.id)
+    .map((row) => (row as { name: string }).name);
   const frontMatter = {
     id: identifier,
     title: issue.title,
@@ -376,6 +385,7 @@ function writeIssue(
     state: lookups.states.get(issue.state_id) ?? null,
     priority: issue.priority,
     assignee: issue.assignee_id ? (lookups.actors.get(issue.assignee_id) ?? null) : null,
+    ...(subscribers.length > 0 ? { subscribers } : {}),
     creator: creatorName,
     parent: parent?.ident ?? null,
     project: issue.project_id ? (lookups.projects.get(issue.project_id) ?? null) : null,

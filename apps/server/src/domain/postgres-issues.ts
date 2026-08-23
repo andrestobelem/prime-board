@@ -102,7 +102,11 @@ export interface PostgresIssueArchiveMutationResult {
 export async function getPostgresIssue(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  workspaceId?: string,
 ): Promise<IssueRow | null> {
+  // PostgreSQL currently enforces a singleton Workspace (PRB-427). Keep the
+  // optional scope parameter for callers that already carry workspace context.
+  void workspaceId;
   return persistence.one<IssueRow>(`${SELECT_ISSUE} WHERE issues.id = $1`, [id]);
 }
 
@@ -110,15 +114,17 @@ export async function getPostgresIssue(
 export async function getPostgresIssueByRef(
   persistence: Persistence | PersistenceTransaction,
   ref: string,
+  workspaceId?: string,
 ): Promise<IssueRow | null> {
   const match = ref.match(/^([A-Za-z][A-Za-z0-9]{0,7})-(\d+)$/);
   if (match) {
+    void workspaceId;
     return persistence.one<IssueRow>(
       `${SELECT_ISSUE} WHERE teams.key = $1 AND issues.number = $2`,
       [match[1]!.toUpperCase(), Number(match[2])],
     );
   }
-  return getPostgresIssue(persistence, ref);
+  return getPostgresIssue(persistence, ref, workspaceId);
 }
 
 export async function listPostgresChildren(
@@ -163,6 +169,7 @@ export async function listPostgresIssues(
     after?: string | null;
     orderBy?: IssueOrder | null;
     teamIds: readonly string[];
+    subscriberId?: string | null;
   },
 ): Promise<PostgresIssuePage> {
   if (!Number.isInteger(options.first) || options.first < 1 || options.first > 250) {
@@ -175,7 +182,10 @@ export async function listPostgresIssues(
 
   const params = new ParamSink();
   const clauses = [
-    buildIssueFilter(filter, params, POSTGRES_FILTER_OPTIONS),
+    buildIssueFilter(filter, params, {
+      ...POSTGRES_FILTER_OPTIONS,
+      subscriberId: options.subscriberId,
+    }),
     addTeamScope(params, options.teamIds),
     addArchiveScope(filter),
   ];
@@ -188,7 +198,10 @@ export async function listPostgresIssues(
     const cursorParams = new ParamSink();
     const cursorId = cursorParams.add(decoded.id);
     const cursorClauses = [
-      buildIssueFilter(filter, cursorParams, POSTGRES_FILTER_OPTIONS),
+      buildIssueFilter(filter, cursorParams, {
+        ...POSTGRES_FILTER_OPTIONS,
+        subscriberId: options.subscriberId,
+      }),
       addTeamScope(cursorParams, options.teamIds),
       addArchiveScope(filter),
     ];

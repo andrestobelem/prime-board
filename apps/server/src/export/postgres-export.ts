@@ -31,6 +31,7 @@ const TABLES = [
   "initiative_projects",
   "initiative_teams",
   "inbox_receipts",
+  "issue_subscribers",
 ] as const;
 
 function quoteIdentifier(identifier: string): string {
