@@ -57,15 +57,15 @@ Criterio rector: prime-board es **API-first**. Un agente debe poder completar to
 
 ## 4. Proyectos y planificación
 
-| Funcionalidad              | Descripción                                                     | Clasificación | Nota para agentes                                                            |
-| -------------------------- | --------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------- |
-| Proyectos                  | Agrupan issues (multi-team), con lead, estado, fechas objetivo. | 🟢            | Unidad natural para encargarle a un agente un objetivo grande.               |
-| Milestones                 | Hitos ordenados dentro de un proyecto.                          | 🟡            | Lo usamos nosotros mismos en Linear; suma estructura pero no bloquea el MVP. |
-| Status updates de proyecto | Updates periódicos con health (on track / at risk / off track). | 🟡            | Encaja perfecto con agentes que reportan avance; fácil de agregar después.   |
-| Documentos de proyecto     | Docs markdown colgados del proyecto.                            | 🟡            | Los repos ya cumplen ese rol (`docs/`); reevaluar en Parte 2.                |
-| Ciclos (sprints)           | Iteraciones automáticas con cooldown y rollover.                | 🟡            | Tiene sentido cuando hay capacity humana; para agentes es menos central.     |
-| Initiatives                | Agrupan proyectos (nivel estrategia).                           | 🔴            | Capa de management que el MVP no necesita.                                   |
-| Roadmap / timeline         | Vistas Gantt de proyectos.                                      | 🔴            | Visualización pura; sin valor API-first.                                     |
+| Funcionalidad              | Descripción                                                     | Clasificación | Nota para agentes                                                                                |
+| -------------------------- | --------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------ |
+| Proyectos                  | Agrupan issues (multi-team), con lead, estado, fechas objetivo. | 🟢            | Unidad natural para encargarle a un agente un objetivo grande.                                   |
+| Milestones                 | Hitos ordenados dentro de un proyecto.                          | 🟡            | Lo usamos nosotros mismos en Linear; suma estructura pero no bloquea el MVP.                     |
+| Status updates de proyecto | Updates periódicos con health (on track / at risk / off track). | 🟡            | Encaja perfecto con agentes que reportan avance; fácil de agregar después.                       |
+| Documentos de proyecto     | Documents Markdown vinculados a un proyecto.                    | 🟢            | El núcleo agent-first ya permite crear, buscar, editar y archivar documentos por API/CLI/MCP/UI. |
+| Ciclos (sprints)           | Iteraciones automáticas con cooldown y rollover.                | 🟡            | Tiene sentido cuando hay capacity humana; para agentes es menos central.                         |
+| Initiatives                | Agrupan proyectos (nivel estrategia).                           | 🔴            | Capa de management que el MVP no necesita.                                                       |
+| Roadmap / timeline         | Vistas Gantt de proyectos.                                      | 🔴            | Visualización pura; sin valor API-first.                                                         |
 
 ## 5. Búsqueda y vistas
 
@@ -78,10 +78,10 @@ Criterio rector: prime-board es **API-first**. Un agente debe poder completar to
 
 ## 6. Documentos y conocimiento
 
-| Funcionalidad         | Descripción                      | Clasificación | Nota para agentes                                                    |
-| --------------------- | -------------------------------- | ------------- | -------------------------------------------------------------------- |
-| Documents (workspace) | Editor de docs colaborativo.     | 🔴            | Fuera del núcleo issue-tracking; los agentes ya tienen repos/Notion. |
-| Issue documents       | Docs largos embebidos en issues. | 🔴            | La descripción markdown alcanza.                                     |
+| Funcionalidad         | Descripción                                          | Clasificación                       | Nota para agentes                                                                                                                                                                  |
+| --------------------- | ---------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Documents (workspace) | Documentos Markdown globales y vinculados a trabajo. | 🟢 (núcleo) / 🟡 (paridad completa) | PRB-541 cubre CRUD, búsqueda y enlaces a Issues, Projects, Teams, Initiatives y Cycles. Falta colaboración en tiempo real, historial de versiones, comentarios inline y templates. |
+| Issue documents       | Docs largos embebidos en issues.                     | 🟢                                  | Se muestran como Resources del Issue y conservan Markdown independiente de la descripción.                                                                                         |
 
 ## 7. API e integración (la parte más importante para prime-board)
 

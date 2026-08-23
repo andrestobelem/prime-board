@@ -1,8 +1,17 @@
 # Auditoría de paridad visual y usabilidad frente a Linear
 
 > Ticket: [PRB-278](http://localhost:3333/issue/PRB-278)
-> Fecha: 2026-08-17
-> Alcance: UI web actual de `apps/web`, contrato GraphQL vigente y documentación oficial de Linear.
+> Fecha del relevamiento visual: 2026-08-17 (snapshot histórico)
+> Verificación del contrato local vigente: 2026-08-23
+> Commit base de la revisión: `1e9bf7d` (`main`), con cambios locales verificados
+> Alcance: UI web, contrato GraphQL y documentación oficial de Linear; la captura visual no audita todos los backends.
+
+## Estado de la evidencia
+
+Las observaciones visuales y de interacción de este documento pertenecen al snapshot del 2026-08-17.
+Para el contrato vigente, el código actual separa SQLite (predeterminado, con selección de Workspace) de
+PostgreSQL (opcional, singleton y con dominios aún en migración). No uses las frases históricas sobre
+single-workspace, switcher o persistencia como una descripción de ambos backends.
 
 ## Veredicto
 
@@ -26,7 +35,10 @@ La diferencia principal no es la paleta, sino la **profundidad de las interaccio
 
 ### 1. Shell y navegación
 
-**Prime-board está suficientemente cerca** de la referencia visual en la estructura importante: Workspace arriba, recursos globales, Favorites y Teams debajo. No conviene implementar `Switch workspace`: el dominio mantiene single-workspace (ADR-0003 y PRB-267).
+**En el snapshot visual está suficientemente cerca** de la referencia en la estructura importante: Workspace
+arriba, recursos globales, Favorites y Teams debajo. El criterio de no implementar `Switch workspace`
+pertenece a ese snapshot (ADR-0003 y PRB-267). El código vigente tiene un Workspace gate, lista de
+Workspaces y selección por contexto en SQLite; PostgreSQL todavía conserva el singleton.
 
 Diferencias aceptables para nuestro producto:
 
@@ -128,7 +140,8 @@ Incluye estos cambios en la próxima tanda de calidad. No los trates como una re
 
 Estas diferencias con Linear son conscientes y no son bugs del clon:
 
-- multi-workspace/switcher, por el modelo single-tenant;
+- paridad visual completa del multi-Workspace: SQLite ya expone selección y aislamiento incremental,
+  mientras PostgreSQL conserva un singleton; el switcher no representa por sí solo el estado de persistencia;
 - Documents, comentarios inline de documentos, adjuntos ricos y reacciones;
 - Timeline/Roadmap, Insights/analytics y SLAs;
 - Customer Requests/Asks, Releases/Diffs e integraciones enterprise;
@@ -163,7 +176,9 @@ La frontera correcta es copiar **semántica, jerarquía y caminos de operación*
 - `apps/web/src/views/SavedViewPage.tsx`
 - `apps/web/src/issue-filter.ts`
 - `apps/web/src/styles.css`
+- `apps/web/src/workspace.ts`, `apps/web/src/ui-context.ts` y `apps/web/src/router.tsx`
 - `packages/schema/src/sdl.ts`
+- `apps/server/src/config.ts`, `apps/server/src/db/database.ts` y `apps/server/src/db/postgres/migrator.ts`
 - `docs/alcance-mvp.md`, `docs/relevamiento-linear.md`, `docs/adr/0003-local-first-single-tenant.md`, `docs/adr/0011-favoritos-por-actor.md`
 
 ### Fuentes primarias de Linear
