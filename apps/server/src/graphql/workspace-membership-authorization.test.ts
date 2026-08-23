@@ -119,6 +119,45 @@ describe("autorización por Workspace Membership", () => {
     }
   });
 
+  it("crea el Workspace nuevo con Membership activa aunque el Actor global esté suspendido", async () => {
+    const app = createTestApp();
+    try {
+      const currentWorkspaceId = await createWorkspace(app, "membership-create-suspended");
+      const adminId = (
+        app.db.query("SELECT id FROM actors WHERE name = 'admin'").get() as { id: string }
+      ).id;
+      app.db.query("UPDATE actors SET status = 'suspended' WHERE id = ?1").run(adminId);
+
+      const created = await gql(
+        app,
+        `mutation {
+          workspaceCreate(input: { name: "Created while suspended", urlKey: "membership-create-third" }) {
+            success workspace { id role status }
+          }
+        }`,
+        {},
+        app.apiKey,
+        currentWorkspaceId,
+      );
+      expect(created.errors).toBeUndefined();
+      expect(created.data?.workspaceCreate).toMatchObject({
+        success: true,
+        workspace: { role: "ADMIN", status: "ACTIVE" },
+      });
+
+      const createdWorkspaceId = created.data?.workspaceCreate.workspace.id as string;
+      expect(
+        app.db
+          .query(
+            "SELECT role, status FROM workspace_memberships WHERE workspace_id = ?1 AND actor_id = ?2",
+          )
+          .get(createdWorkspaceId, adminId),
+      ).toEqual({ role: "admin", status: "active" });
+    } finally {
+      app.stop();
+    }
+  });
+
   it("no recarga el rol global al crear una iniciativa en otro Workspace", async () => {
     const app = createTestApp();
     try {

@@ -93,14 +93,18 @@ function findOrCreateAdmin(
   createApiKeyForNewActor: boolean,
 ): { id: string; apiKey?: string } {
   if (input.adminActorId) {
-    const actor = db
-      .query("SELECT id, status FROM actors WHERE id = ?1")
-      .get(input.adminActorId) as {
+    const actor = db.query("SELECT id FROM actors WHERE id = ?1").get(input.adminActorId) as {
       id: string;
-      status: string;
     } | null;
     if (!actor) throw new Error("Workspace seed admin Actor not found");
-    if (actor.status !== "active") throw new Error("Workspace seed admin Actor is not active");
+    const activeMembership = db
+      .query(
+        "SELECT 1 FROM workspace_memberships WHERE actor_id = ?1 AND status = 'active' LIMIT 1",
+      )
+      .get(actor.id);
+    if (!activeMembership) {
+      throw new Error("Workspace seed admin Actor has no active Workspace Membership");
+    }
     return { id: actor.id };
   }
   const existing = db
@@ -182,9 +186,9 @@ export function seedWorkspace(db: Database, input: WorkspaceSeedInput): Workspac
     db.query(
       `INSERT INTO workspace_memberships
        (id, workspace_id, actor_id, role, status, created_at, updated_at)
-       SELECT ?1, ?2, id, 'admin', status, created_at, updated_at FROM actors WHERE id = ?3
-       ON CONFLICT (workspace_id, actor_id) DO UPDATE SET role = 'admin'`,
-    ).run(newId(), workspaceId, admin.id);
+       SELECT ?1, ?2, id, 'admin', 'active', ?4, ?4 FROM actors WHERE id = ?3
+       ON CONFLICT (workspace_id, actor_id) DO UPDATE SET role = 'admin', status = 'active', updated_at = ?4`,
+    ).run(newId(), workspaceId, admin.id, timestamp);
 
     const teamId = newId();
     const teamKey = availableTeamKey(db, input.teamKey, workspaceId, firstWorkspace);
