@@ -33,7 +33,7 @@ export interface RefField {
  * Por ActivityType, los campos que son referencias a otra tabla. Los tipos
  * que no aparecen acá no tienen referencias (title_changed, description_changed,
  * priority_changed, sort_order_changed, labeled, unlabeled, relation_added,
- * relation_removed, archived) — o se
+ * relation_removed, archived, unarchived) — o se
  * resuelven aparte por tener una regla propia ajena a tablas (`commented`:
  * recupera el body de un comentario histórico, ver exporter.ts/importer.ts).
  */
@@ -72,7 +72,7 @@ export const ACTIVITY_REFS: Partial<Record<ActivityType, RefField[]>> = {
   ],
 };
 
-/** Los 17 ActivityType existentes — usado por el test que exige cobertura total. */
+/** Los 18 ActivityType existentes — usado por el test que exige cobertura total. */
 export const ALL_ACTIVITY_TYPES: ActivityType[] = [
   "created",
   "title_changed",
@@ -91,6 +91,7 @@ export const ALL_ACTIVITY_TYPES: ActivityType[] = [
   "relation_removed",
   "commented",
   "archived",
+  "unarchived",
 ];
 
 /**

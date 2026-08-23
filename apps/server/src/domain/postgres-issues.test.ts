@@ -42,21 +42,42 @@ const issue: IssueRow = {
   team_key: "PB",
 };
 
-function fakePersistence(): { persistence: Persistence; activities: string[]; updates: number } {
+function fakePersistence(synchronizeReads = false): {
+  persistence: Persistence;
+  activities: string[];
+  updates: number;
+} {
   let current = { ...issue };
   const activities: string[] = [];
   let updates = 0;
+  let issueReads = 0;
+  let releaseIssueReads: () => void = () => undefined;
+  const issueReadBarrier = new Promise<void>((resolve) => {
+    releaseIssueReads = resolve;
+  });
   const transaction: PersistenceTransaction = {
     one: async <Row extends object>(sql: string): Promise<Row | null> => {
       if (sql.includes("FROM teams")) return { id: current.team_id, archived_at: null } as Row;
-      if (sql.includes("SELECT issues.*")) return { ...current } as Row;
+      if (sql.includes("SELECT issues.*")) {
+        const snapshot = { ...current };
+        if (synchronizeReads && issueReads < 2) {
+          issueReads += 1;
+          if (issueReads === 2) releaseIssueReads();
+          await issueReadBarrier;
+        }
+        return snapshot as Row;
+      }
       return null;
     },
     many: async <Row extends object>() => [] as Row[],
     execute: async <Row extends object>(sql: string, params?: SqlParameters) => {
       if (sql.includes("UPDATE issues SET archived_at = NULL")) {
-        current = { ...current, archived_at: null, updated_at: String(params?.[0]) };
-        updates += 1;
+        const changed = current.archived_at !== null;
+        if (changed) {
+          current = { ...current, archived_at: null, updated_at: String(params?.[0]) };
+          updates += 1;
+        }
+        return { rows: [], rowCount: changed ? 1 : 0 } satisfies PersistenceResult<Row>;
       }
       if (sql.includes("INSERT INTO activity")) activities.push(String(params?.[3]));
       return { rows: [], rowCount: 1 } satisfies PersistenceResult<Row>;
@@ -81,8 +102,23 @@ describe("issues PostgreSQL", () => {
     const restored = await unarchivePostgresIssue(fake.persistence, viewer, "PB-1");
     const again = await unarchivePostgresIssue(fake.persistence, viewer, "PB-1");
 
-    expect(restored.archived_at).toBeNull();
-    expect(again.archived_at).toBeNull();
+    expect(restored.row.archived_at).toBeNull();
+    expect(again.row.archived_at).toBeNull();
+    expect(restored.changed).toBe(true);
+    expect(again.changed).toBe(false);
+    expect(fake.updates).toBe(1);
+    expect(fake.activities).toEqual(["unarchived"]);
+  });
+
+  it("serializa restauraciones concurrentes y emite una sola Activity", async () => {
+    const fake = fakePersistence(true);
+    const results = await Promise.all([
+      unarchivePostgresIssue(fake.persistence, viewer, "PB-1"),
+      unarchivePostgresIssue(fake.persistence, viewer, "PB-1"),
+    ]);
+
+    expect(results.filter((result) => result.changed)).toHaveLength(1);
+    expect(results.every((result) => result.row.archived_at === null)).toBe(true);
     expect(fake.updates).toBe(1);
     expect(fake.activities).toEqual(["unarchived"]);
   });

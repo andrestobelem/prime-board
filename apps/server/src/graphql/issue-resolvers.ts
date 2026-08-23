@@ -823,10 +823,10 @@ export const issueResolvers = {
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
-        const changed = Boolean(existing && !existing.archived_at);
-        const row = await archivePostgresIssue(context.persistence, viewer, args.id);
-        if (changed) context.events.emit("issue.archived", viewer, issueEventData(row));
-        return { success: true, issue: mapIssue(row) };
+        const result = await archivePostgresIssue(context.persistence, viewer, args.id);
+        if (result.changed)
+          context.events.emit("issue.archived", viewer, issueEventData(result.row));
+        return { success: true, issue: mapIssue(result.row) };
       }
       const existing = assertIssueAccess(context, viewer, args.id);
       const changed = !existing.archived_at;
@@ -841,10 +841,10 @@ export const issueResolvers = {
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
-        const wasArchived = Boolean(existing?.archived_at);
-        const row = await unarchivePostgresIssue(context.persistence, viewer, args.id);
-        if (wasArchived) context.events.emit("issue.unarchived", viewer, issueEventData(row));
-        return { success: true, issue: mapIssue(row) };
+        const result = await unarchivePostgresIssue(context.persistence, viewer, args.id);
+        if (result.changed)
+          context.events.emit("issue.unarchived", viewer, issueEventData(result.row));
+        return { success: true, issue: mapIssue(result.row) };
       }
       const existing = assertIssueAccess(context, viewer, args.id);
       const wasArchived = Boolean(existing.archived_at);

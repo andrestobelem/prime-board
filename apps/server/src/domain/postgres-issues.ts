@@ -94,6 +94,11 @@ export interface PostgresIssuePage {
   endCursor: string | null;
 }
 
+export interface PostgresIssueArchiveMutationResult {
+  row: IssueRow;
+  changed: boolean;
+}
+
 export async function getPostgresIssue(
   persistence: Persistence | PersistenceTransaction,
   id: string,
@@ -595,20 +600,19 @@ export async function archivePostgresIssue(
   persistence: Persistence,
   viewer: ActorRow,
   ref: string,
-): Promise<IssueRow> {
+): Promise<PostgresIssueArchiveMutationResult> {
   return persistence.transaction(async (tx) => {
     const issue = await getPostgresIssueByRef(tx, ref);
     if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
     await requirePostgresIssueWrite(tx, viewer, issue.team_id);
-    if (!issue.archived_at) {
-      const archivedAt = now();
-      await tx.execute("UPDATE issues SET archived_at = $1, updated_at = $1 WHERE id = $2", [
-        archivedAt,
-        issue.id,
-      ]);
-      await recordPostgresActivity(tx, issue.id, viewer.id, "archived", {}, archivedAt);
-    }
-    return (await getPostgresIssue(tx, issue.id))!;
+    const archivedAt = now();
+    const update = await tx.execute(
+      "UPDATE issues SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
+      [archivedAt, issue.id],
+    );
+    const changed = update.rowCount > 0;
+    if (changed) await recordPostgresActivity(tx, issue.id, viewer.id, "archived", {}, archivedAt);
+    return { row: (await getPostgresIssue(tx, issue.id))!, changed };
   });
 }
 
@@ -616,20 +620,19 @@ export async function unarchivePostgresIssue(
   persistence: Persistence,
   viewer: ActorRow,
   ref: string,
-): Promise<IssueRow> {
+): Promise<PostgresIssueArchiveMutationResult> {
   return persistence.transaction(async (tx) => {
     const issue = await getPostgresIssueByRef(tx, ref);
     if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
     await requirePostgresIssueWrite(tx, viewer, issue.team_id);
-    if (issue.archived_at) {
-      const updatedAt = now();
-      await tx.execute("UPDATE issues SET archived_at = NULL, updated_at = $1 WHERE id = $2", [
-        updatedAt,
-        issue.id,
-      ]);
-      await recordPostgresActivity(tx, issue.id, viewer.id, "unarchived", {}, updatedAt);
-    }
-    return (await getPostgresIssue(tx, issue.id))!;
+    const updatedAt = now();
+    const update = await tx.execute(
+      "UPDATE issues SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND archived_at IS NOT NULL",
+      [updatedAt, issue.id],
+    );
+    const changed = update.rowCount > 0;
+    if (changed) await recordPostgresActivity(tx, issue.id, viewer.id, "unarchived", {}, updatedAt);
+    return { row: (await getPostgresIssue(tx, issue.id))!, changed };
   });
 }
 
