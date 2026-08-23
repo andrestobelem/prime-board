@@ -3,9 +3,8 @@ import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { parseDateTime } from "./datetime.ts";
 import {
-  assertPostgresTeamActive,
+  assertCanManagePostgresTeam,
   canDiscoverPostgresTeam,
-  canWritePostgresTeam,
   getPostgresTeam,
 } from "./postgres-teams.ts";
 import type { ActorRow } from "../auth/viewer.ts";
@@ -77,10 +76,7 @@ async function assertPostgresCycleAccess(
   viewer: ActorRow,
   teamId: string,
 ): Promise<void> {
-  const team = await assertPostgresTeamActive(persistence, teamId);
-  if (!(await canWritePostgresTeam(persistence, viewer, team.id))) {
-    throw apiError("UNAUTHORIZED", "Team access policy does not allow this operation");
-  }
+  await assertCanManagePostgresTeam(persistence, viewer, teamId);
 }
 
 async function nextPostgresCycleNumber(
