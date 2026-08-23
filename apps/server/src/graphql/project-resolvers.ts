@@ -15,6 +15,13 @@ import {
 } from "../domain/postgres-projects.ts";
 import { accessiblePostgresTeamIds, listPostgresIssues } from "../domain/postgres-issues.ts";
 import {
+  createPostgresProjectUpdate,
+  deletePostgresProjectUpdate,
+  getPostgresProjectUpdate,
+  listPostgresProjectUpdates,
+  mapPostgresProjectUpdate,
+} from "../domain/postgres-project-updates.ts";
+import {
   createPostgresMilestone,
   deletePostgresMilestone,
   getPostgresMilestone,
@@ -65,8 +72,6 @@ import {
   scopeWorkspaceRows,
 } from "../domain/workspace-guards.ts";
 import { issueEventData } from "./issue-resolvers.ts";
-import { listPostgresProjectUpdates } from "../domain/postgres-planning.ts";
-import { documentResolvers } from "./document-resolvers.ts";
 import { apiError, requireViewer } from "./errors.ts";
 import {
   assertCanCreateProject,
@@ -193,7 +198,7 @@ export const projectResolvers = {
       if (context.persistence) {
         return (await postgresProjectTeamsAllowed(context, project.id))
           ? (await listPostgresProjectUpdates(context.persistence, project.id)).map(
-              (row) => mapProjectUpdate(row as never),
+              mapPostgresProjectUpdate,
             )
           : [];
       }
@@ -222,8 +227,8 @@ export const projectResolvers = {
     },
     author: async (update: { authorId: string }, _args: unknown, context: Context) => {
       if (context.persistence) {
-        const author = await getPostgresActor(context.persistence, update.authorId);
-        return author ? mapPostgresActor(author) : null;
+        const actor = await getPostgresActor(context.persistence, update.authorId);
+        return actor ? mapPostgresActor(actor) : null;
       }
       return mapActor(lookupActor(context, update.authorId)!);
     },
@@ -564,7 +569,7 @@ export const projectResolvers = {
       context.events.emit("project.updated", viewer, project);
       return { success: true, project };
     },
-    projectUpdateCreate: (
+    projectUpdateCreate: async (
       _parent: unknown,
       args: {
         input: {
@@ -577,6 +582,22 @@ export const projectResolvers = {
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        await assertPostgresProjectKeyLimit(
+          context,
+          await listPostgresProjectTeamIds(context.persistence, args.input.projectId),
+        );
+        const projectUpdate = mapPostgresProjectUpdate(
+          await createPostgresProjectUpdate(context.persistence, viewer, args.input),
+        );
+        context.events.emit("project.updated", viewer, {
+          id: args.input.projectId,
+          updateId: projectUpdate.id,
+          health: projectUpdate.health,
+          body: projectUpdate.body,
+        });
+        return { success: true, projectUpdate };
+      }
       assertCanManageProject(context.db, viewer, args.input.projectId);
       requireProject(context, args.input.projectId);
       const projectUpdate = mapProjectUpdate(
@@ -590,8 +611,18 @@ export const projectResolvers = {
       });
       return { success: true, projectUpdate };
     },
-    projectUpdateDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+    projectUpdateDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const projectUpdate = await getPostgresProjectUpdate(context.persistence, args.id);
+        if (projectUpdate) {
+          await assertPostgresProjectKeyLimit(
+            context,
+            await listPostgresProjectTeamIds(context.persistence, projectUpdate.project_id),
+          );
+        }
+        return { success: await deletePostgresProjectUpdate(context.persistence, viewer, args.id) };
+      }
       const projectUpdate = getProjectUpdate(context.db, args.id);
       if (projectUpdate) assertCanManageProject(context.db, viewer, projectUpdate.project_id);
       return { success: deleteProjectUpdate(context.db, args.id) };

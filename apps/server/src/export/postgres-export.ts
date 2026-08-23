@@ -61,6 +61,10 @@ async function copyTable(persistence: Persistence, db: Database, table: string):
   const insert = db.query(
     `INSERT OR IGNORE INTO ${quoteIdentifier(table)} (${selected}) VALUES (${placeholders})`,
   );
+  const before = Number(
+    (db.query(`SELECT count(*) AS count FROM ${quoteIdentifier(table)}`).get() as { count: number })
+      .count,
+  );
   for (const row of rows) {
     const values: SqlValue[] = columns.map((column) => {
       const value = row[column];
@@ -76,6 +80,13 @@ async function copyTable(persistence: Persistence, db: Database, table: string):
     });
     insert.run(...(values as never[]));
   }
+  const after = Number(
+    (db.query(`SELECT count(*) AS count FROM ${quoteIdentifier(table)}`).get() as { count: number })
+      .count,
+  );
+  if (after - before !== rows.length) {
+    throw new Error(`PostgreSQL export lost rows while projecting table ${table}`);
+  }
 }
 
 /**
@@ -90,8 +101,8 @@ export async function exportPostgresBoard(
 ): Promise<ExportResult> {
   const db = openDatabase(":memory:");
   try {
-    // Teams and workflow_states reference each other through default_state_id.
-    // Defer SQLite FK enforcement until the complete projection exists.
+    // Teams y workflow_states se referencian mediante default_state_id.
+    // Difiere la validación de FKs hasta completar la proyección.
     db.exec("PRAGMA foreign_keys = OFF;");
     try {
       for (const table of TABLES) await copyTable(persistence, db, table);

@@ -48,6 +48,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:project",
   "query:cycles",
   "query:cycle",
+  "query:initiatives",
+  "query:initiative",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:projectCreate",
@@ -61,6 +63,11 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:cycleUpdate",
   "mutation:cycleDelete",
   "mutation:cycleCarryOver",
+  "mutation:initiativeCreate",
+  "mutation:initiativeUpdate",
+  "mutation:initiativeDelete",
+  "mutation:projectUpdateCreate",
+  "mutation:projectUpdateDelete",
   "mutation:teamArchive",
   "mutation:teamUnarchive",
   "mutation:teamDelete",
@@ -315,6 +322,7 @@ function operationTeamIds(
       if (args.projectId) return teamIdsForProject(context, args.projectId);
       return null;
     case "initiative":
+      if (context.persistence) return [];
       return teamIdsForInitiative(context, args.id);
     case "document":
       if (context.persistence) return [];
@@ -446,8 +454,10 @@ function operationTeamIds(
       if (context.persistence) return [];
       return teamIdsForMilestone(context, args.id);
     case "projectUpdateCreate":
+      if (context.persistence) return [];
       return teamIdsForProject(context, input.projectId);
     case "projectUpdateDelete": {
+      if (context.persistence) return [];
       const row = context.db
         .query("SELECT project_id FROM project_updates WHERE id = ?1")
         .get(scalar(args.id)) as { project_id: string } | null;
@@ -496,6 +506,7 @@ function operationTeamIds(
       if (context.persistence) return [];
       return teamIdsForDocument(context, args.id);
     case "initiativeCreate": {
+      if (context.persistence) return [];
       const teams = [
         ...new Set([
           ...ids(input.teamIds),
@@ -505,6 +516,7 @@ function operationTeamIds(
       return teams.length ? teams : ["__workspace__"];
     }
     case "initiativeUpdate": {
+      if (context.persistence) return [];
       const current = teamIdsForInitiative(context, args.id);
       const direct =
         input.teamIds !== undefined && input.teamIds !== null ? ids(input.teamIds) : current;
@@ -516,6 +528,7 @@ function operationTeamIds(
       return teams.length ? teams : ["__workspace__"];
     }
     case "initiativeDelete":
+      if (context.persistence) return [];
       return teamIdsForInitiative(context, args.id);
     case "inboxMarkRead":
     case "inboxArchive":
