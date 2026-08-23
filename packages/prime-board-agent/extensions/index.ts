@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
+import type { RuntimeStatus, RuntimeDependencies } from "./runtime.ts";
+import {
+  createRuntimeController,
+  readProjectCredential,
+  saveProjectCredential,
+} from "./runtime.ts";
 
-/**
- * Integración mínima con Prime Agent para descubrir y comprobar prime-board.
- *
- * Esta extensión no inicia servidores ni modifica archivos del proyecto.
- * La skill prime-board-workflow sigue siendo la fuente de verdad para operar Issues.
- */
+export type NotificationLevel = "info" | "warning" | "error";
 
-type NotificationLevel = "info" | "warning" | "error";
+type SessionEvent = { reason?: string };
 
 type ExtensionContext = {
   cwd: string;
@@ -15,12 +16,25 @@ type ExtensionContext = {
   ui: { notify(message: string, level: NotificationLevel): void };
 };
 
+type CommandContext = ExtensionContext & {
+  reload?: () => Promise<void>;
+};
+
+type ToolResult = {
+  content: [{ type: "text"; text: string }];
+  details: RuntimeStatus;
+};
+
 type ExtensionAPI = {
+  on?: (
+    event: "session_start" | "session_shutdown",
+    handler: (event: SessionEvent, ctx: ExtensionContext) => unknown,
+  ) => void;
   registerCommand(
     name: string,
     definition: {
       description: string;
-      handler: (args: string, ctx: ExtensionContext) => void | Promise<void>;
+      handler: (args: string, ctx: CommandContext) => void | Promise<void>;
     },
   ): void;
   registerTool(definition: {
@@ -34,7 +48,7 @@ type ExtensionAPI = {
       signal: AbortSignal,
       onUpdate: unknown,
       ctx: ExtensionContext,
-    ) => Promise<{ content: [{ type: "text"; text: string }]; details: PrimeBoardStatus }>;
+    ) => Promise<ToolResult>;
   }): void;
 };
 
@@ -48,7 +62,7 @@ export type PrimeBoardStatus = {
 const DEFAULT_URL = "http://localhost:3333";
 const HEALTH_TIMEOUT_MS = 1_000;
 
-/** Encuentra el proyecto Git que contiene el directorio de trabajo indicado. */
+/** Finds the Git project that contains the supplied working directory. */
 export function discoverPrimeBoardProject(cwd: string): string | null {
   const result = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
     encoding: "utf8",
@@ -58,7 +72,7 @@ export function discoverPrimeBoardProject(cwd: string): string | null {
   return root || null;
 }
 
-/** Comprueba el servidor local configurado sin iniciarlo ni cambiar el estado del proyecto. */
+/** Checks the configured local server without starting it. */
 export async function getPrimeBoardStatus(
   cwd: string,
   url = process.env.PRIME_BOARD_URL || DEFAULT_URL,
@@ -69,6 +83,15 @@ export async function getPrimeBoardStatus(
     healthUrl = new URL("/health", url).toString();
   } catch {
     return { projectRoot, url, state: "unavailable", detail: "Invalid server URL" };
+  }
+
+  if (!projectRoot) {
+    return {
+      projectRoot,
+      url,
+      state: "unavailable",
+      detail: "Current directory is not inside a Git project",
+    };
   }
 
   try {
@@ -88,31 +111,190 @@ export async function getPrimeBoardStatus(
   }
 }
 
-function formatStatus(status: PrimeBoardStatus): string {
-  const project = status.projectRoot ?? "Git project not found";
-  return `prime-board ${status.state} — ${status.detail} (project: ${project}; URL: ${status.url})`;
+function formatStatus(status: RuntimeStatus): string {
+  const project = status.projectRoot || "Git project not found";
+  const url = status.url ? ` URL: ${status.url}.` : "";
+  return `prime-board ${status.state}: ${status.detail}.${url} Project: ${project}.`;
 }
 
-export default function primeBoard(pi: ExtensionAPI): void {
-  const check = async (ctx: ExtensionContext): Promise<PrimeBoardStatus> =>
-    getPrimeBoardStatus(ctx.cwd);
-
-  pi.registerCommand("prime-board", {
-    description: "Discover the current project and check the local prime-board server",
-    async handler(_args, ctx) {
-      const status = await check(ctx);
-      ctx.ui.notify(formatStatus(status), status.state === "healthy" ? "info" : "warning");
-    },
-  });
-
-  pi.registerTool({
-    name: "prime_board_status",
-    label: "prime-board status",
-    description: "Discover the current Git project and report local prime-board health.",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const status = await check(ctx);
-      return { content: [{ type: "text", text: formatStatus(status) }], details: status };
-    },
-  });
+function commandUsage(): string {
+  return "Usage: /prime-board [start|status|open|logs [lines]|stop|auth]";
 }
+
+function notifyRuntime(ctx: ExtensionContext, status: RuntimeStatus): void {
+  ctx.ui.notify(
+    formatStatus(status),
+    status.state === "running" ? "info" : status.state === "error" ? "error" : "warning",
+  );
+}
+
+export interface PrimeBoardExtensionOptions {
+  runtimeDependencies?: RuntimeDependencies;
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+}
+
+/**
+ * Prime Agent extension for the per-project prime-board runtime.
+ *
+ * The extension only owns lifecycle and diagnostics. Issue operations remain in
+ * the authenticated GraphQL-backed MCP catalog.
+ */
+export function createPrimeBoardExtension(options: PrimeBoardExtensionOptions = {}) {
+  const runtime = createRuntimeController(
+    options.runtimeDependencies,
+    options.env ?? process.env,
+    options.home,
+  );
+  let current: RuntimeStatus | null = null;
+
+  return (pi: ExtensionAPI): void => {
+    const start = async (ctx: ExtensionContext): Promise<RuntimeStatus> => {
+      const projectRoot = discoverPrimeBoardProject(ctx.cwd);
+      if (!projectRoot) {
+        const status: RuntimeStatus = {
+          projectRoot: ctx.cwd,
+          url: null,
+          state: "error",
+          detail: "The current directory is not inside a Git project",
+          logPath: "",
+          credentialPath: "",
+        };
+        current = status;
+        return status;
+      }
+      current = await runtime.ensure(projectRoot);
+      const environment = options.env ?? process.env;
+      const stored = readProjectCredential(projectRoot, options.home);
+      const apiKey = environment.PRIME_BOARD_API_KEY ?? stored?.apiKey;
+      if (apiKey && current.url) {
+        saveProjectCredential(
+          projectRoot,
+          {
+            apiKey,
+            url: current.url,
+            ...((environment.PRIME_BOARD_MCP_URL ?? stored?.mcpUrl)
+              ? { mcpUrl: environment.PRIME_BOARD_MCP_URL ?? stored?.mcpUrl }
+              : {}),
+          },
+          options.home,
+        );
+      }
+      return current;
+    };
+
+    const readStatus = (ctx: ExtensionContext): RuntimeStatus => {
+      const projectRoot = discoverPrimeBoardProject(ctx.cwd);
+      if (!projectRoot) {
+        return {
+          projectRoot: ctx.cwd,
+          url: null,
+          state: "error",
+          detail: "The current directory is not inside a Git project",
+          logPath: "",
+          credentialPath: "",
+        };
+      }
+      current = runtime.status(projectRoot);
+      return current;
+    };
+
+    pi.registerCommand("prime-board", {
+      description: "Start, inspect, open, stop, or authenticate the project prime-board runtime",
+      async handler(rawArgs, ctx) {
+        const [action = "status", linesArg] = rawArgs.trim().split(/\s+/);
+        try {
+          if (action === "start") {
+            notifyRuntime(ctx, await start(ctx));
+            return;
+          }
+          if (action === "status") {
+            notifyRuntime(ctx, readStatus(ctx));
+            return;
+          }
+          const projectRoot = discoverPrimeBoardProject(ctx.cwd);
+          if (!projectRoot) {
+            ctx.ui.notify("The current directory is not inside a Git project.", "error");
+            return;
+          }
+          if (action === "open") {
+            notifyRuntime(ctx, runtime.open(projectRoot));
+            return;
+          }
+          if (action === "logs") {
+            const lines = linesArg === undefined ? 80 : Number(linesArg);
+            if (!Number.isInteger(lines) || lines < 1 || lines > 500) {
+              ctx.ui.notify("The log line count must be an integer from 1 to 500.", "error");
+              return;
+            }
+            ctx.ui.notify(
+              runtime.logs(projectRoot, lines) || "No runtime log is available.",
+              "info",
+            );
+            return;
+          }
+          if (action === "stop") {
+            notifyRuntime(ctx, await runtime.stop(projectRoot));
+            current = null;
+            return;
+          }
+          if (action === "auth") {
+            const apiKey = (options.env ?? process.env).PRIME_BOARD_API_KEY;
+            if (!apiKey) {
+              ctx.ui.notify(
+                "Set PRIME_BOARD_API_KEY in the process environment before /prime-board auth.",
+                "warning",
+              );
+              return;
+            }
+            const environment = options.env ?? process.env;
+            const url = environment.PRIME_BOARD_URL;
+            const mcpUrl = environment.PRIME_BOARD_MCP_URL;
+            const path = saveProjectCredential(
+              projectRoot,
+              { apiKey, ...(url ? { url } : {}), ...(mcpUrl ? { mcpUrl } : {}) },
+              options.home,
+            );
+            ctx.ui.notify(`Saved the project credential with mode 0600 at ${path}.`, "info");
+            return;
+          }
+          ctx.ui.notify(commandUsage(), "warning");
+        } catch (error) {
+          ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+        }
+      },
+    });
+
+    pi.registerTool({
+      name: "prime_board_status",
+      label: "prime-board status",
+      description: "Discover the current Git project and report local prime-board runtime health.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+        const status = await start(ctx);
+        return { content: [{ type: "text", text: formatStatus(status) }], details: status };
+      },
+    });
+
+    if (pi.on) {
+      pi.on("session_start", async (_event, ctx) => {
+        try {
+          const status = await start(ctx);
+          notifyRuntime(ctx, status);
+        } catch (error) {
+          ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+        }
+      });
+      pi.on("session_shutdown", async (_event, ctx) => {
+        const projectRoot = discoverPrimeBoardProject(ctx.cwd);
+        if (projectRoot) {
+          current = null;
+          // Do not stop the process: another Prime Agent session can use it.
+          void ctx;
+        }
+      });
+    }
+  };
+}
+
+export default createPrimeBoardExtension();
