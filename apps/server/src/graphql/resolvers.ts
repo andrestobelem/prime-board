@@ -143,6 +143,13 @@ import {
   updateLabel,
 } from "../domain/labels.ts";
 import { createWebhook, deleteWebhook, mapWebhook } from "../domain/webhooks.ts";
+import {
+  assertCanCreatePostgresWebhook,
+  createPostgresWebhook,
+  deletePostgresWebhook,
+  listPostgresWebhooks,
+  mapPostgresWebhook,
+} from "../domain/postgres-webhooks.ts";
 import { listProjectTeamIds, listProjects, mapProject } from "../domain/projects.ts";
 import {
   canAccessSavedView,
@@ -807,8 +814,16 @@ export const resolvers = {
           .filter((label) => !team?.archived_at || label.team_id == null)
           .map(mapLabel);
       },
-      webhooks: (_parent: unknown, _args: unknown, context: Context) => {
+      webhooks: async (_parent: unknown, _args: unknown, context: Context) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          return (await listPostgresWebhooks(context.persistence, viewer))
+            .filter(
+              (webhook) =>
+                !webhook.team_id || apiKeyTeamsWithinLimit(context.auth, [webhook.team_id]),
+            )
+            .map(mapPostgresWebhook);
+        }
         return listWebhooksInWorkspace(context, viewer).map(mapWebhook);
       },
       savedViews: (
@@ -1591,7 +1606,7 @@ export const resolvers = {
             key,
           };
         },
-        webhookCreate: (
+        webhookCreate: async (
           _parent: unknown,
           args: {
             input: {
@@ -1604,6 +1619,20 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            if (args.input.teamId) {
+              if (!apiKeyTeamsWithinLimit(context.auth, [args.input.teamId])) {
+                throw apiError("NOT_FOUND", "Team resource not found");
+              }
+              await assertCanCreatePostgresWebhook(context.persistence, viewer, args.input.teamId);
+            }
+            const { row, secret } = await createPostgresWebhook(
+              context.persistence,
+              viewer,
+              args.input,
+            );
+            return { success: true, webhook: mapPostgresWebhook(row), secret };
+          }
           if (args.input.teamId) {
             requireTeam(context, { id: args.input.teamId });
             assertCanAccessTeam(context.db, viewer, args.input.teamId);
@@ -1623,8 +1652,13 @@ export const resolvers = {
           );
           return { success: true, webhook: mapWebhook(row), secret };
         },
-        webhookDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+        webhookDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            return {
+              success: await deletePostgresWebhook(context.persistence, args.id, viewer),
+            };
+          }
           const existing = context.db
             .query("SELECT team_id FROM webhooks WHERE id = ?1")
             .get(args.id) as {

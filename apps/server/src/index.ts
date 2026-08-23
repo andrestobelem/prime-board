@@ -36,9 +36,10 @@ if (config.persistenceBackend === "postgres") {
   // Los dominios todavía no migrados conservan un SQLite efímero como seam de
   // compatibilidad; workspace/actors ya leen y escriben exclusivamente PG.
   const db = openDatabase(":memory:");
-  const { server } = createApp({ db, config, persistence });
+  const { server, events } = createApp({ db, config, persistence });
   const close = async () => {
     server.stop();
+    await events.idle();
     db.close();
     await persistence.close();
   };
