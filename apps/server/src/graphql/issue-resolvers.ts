@@ -84,6 +84,31 @@ import {
 
 type MappedIssue = ReturnType<typeof mapIssue>;
 
+function postgresProjectIdsInIssueFilter(filter: IssueFilter | null | undefined): string[] {
+  if (!filter) return [];
+  const project = filter.project;
+  const ids = [
+    ...(project?.eq ? [project.eq] : []),
+    ...(project?.in ?? []),
+    ...(filter.and ?? []).flatMap((nested) => postgresProjectIdsInIssueFilter(nested)),
+    ...(filter.or ?? []).flatMap((nested) => postgresProjectIdsInIssueFilter(nested)),
+  ];
+  return [...new Set(ids)];
+}
+
+async function canQueryPostgresProjects(
+  context: Context,
+  filter: IssueFilter | null | undefined,
+): Promise<boolean> {
+  const projectIds = postgresProjectIdsInIssueFilter(filter);
+  if (!projectIds.length) return true;
+  for (const projectId of projectIds) {
+    const teamIds = await listPostgresProjectTeamIds(context.persistence!, projectId);
+    if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) return false;
+  }
+  return true;
+}
+
 /** Teams de una referencia del historial, para no traducir nombres fuera del allowlist. */
 function activityReferenceTeams(context: Context, table: RefTable, value: string): string[] | null {
   if (table === "actors") return [];
@@ -532,6 +557,9 @@ export const issueResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
+        if (!(await canQueryPostgresProjects(context, args.filter))) {
+          return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+        }
         const teamIds = await accessiblePostgresTeamIds(context.persistence, viewer, context.auth);
         const page = await listPostgresIssues(context.persistence, {
           filter: args.filter,

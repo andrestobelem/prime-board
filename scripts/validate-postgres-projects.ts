@@ -136,6 +136,23 @@ try {
     { input: { teamId: firstTeamId, title: "Project issue", projectId: singleProjectId } },
   );
   const issueId = issue.data?.issueCreate.issue.id as string;
+  const multiIssue = await graphql(
+    `
+      mutation ($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+          issue {
+            id
+            project {
+              id
+            }
+          }
+        }
+      }
+    `,
+    {
+      input: { teamId: firstTeamId, title: "Multi-Team project issue", projectId: multiProjectId },
+    },
+  );
   const issueUpdate = await graphql(
     `
       mutation ($id: ID!, $input: IssueUpdateInput!) {
@@ -234,6 +251,19 @@ try {
     { id: multiProjectId },
     limitedKey,
   );
+  const limitedProjectIssues = await graphql(
+    `
+      query ($projectId: ID!) {
+        issues(filter: { project: { eq: $projectId } }) {
+          nodes {
+            id
+          }
+        }
+      }
+    `,
+    { projectId: multiProjectId },
+    limitedKey,
+  );
 
   report.crud =
     !multiProject.errors &&
@@ -248,6 +278,8 @@ try {
     ) &&
     !issue.errors &&
     issue.data?.issueCreate.issue.project.id === singleProjectId &&
+    !multiIssue.errors &&
+    multiIssue.data?.issueCreate.issue.project.id === multiProjectId &&
     !issueUpdate.errors &&
     issueUpdate.data?.issueUpdate.issue.project === null;
   report.archive =
@@ -261,7 +293,9 @@ try {
       (project: { id: string }) => project.id === multiProjectId,
     ) &&
     !limitedMulti.errors &&
-    limitedMulti.data?.project === null;
+    limitedMulti.data?.project === null &&
+    !limitedProjectIssues.errors &&
+    limitedProjectIssues.data?.issues.nodes.length === 0;
   const passed = Object.values(report).every(Boolean);
   console.log(JSON.stringify({ passed, report }));
   if (!passed) process.exitCode = 1;
