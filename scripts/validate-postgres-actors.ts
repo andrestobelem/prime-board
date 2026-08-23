@@ -794,7 +794,7 @@ try {
     undefined,
     outsiderKey,
   );
-  const unsupportedNested = await graphql(
+  const teamLabels = await graphql(
     base,
     `
       query ($id: ID!) {
@@ -1235,7 +1235,8 @@ try {
     memberCannotManageMembership.errors?.[0]?.extensions?.code === "NOT_FOUND" &&
     !memberPrivateTeams.errors &&
     !memberPrivateTeams.data?.teams.some((team: { id: string }) => team.id === createdTeamId) &&
-    unsupportedNested.errors?.[0]?.extensions?.code === "VALIDATION_FAILED" &&
+    !teamLabels.errors &&
+    teamLabels.data?.team.labels.length === 0 &&
     !issuePageOne.errors &&
     issuePageOne.data?.issues.nodes.length === 2 &&
     outsiderIssue.data?.issue === null &&
