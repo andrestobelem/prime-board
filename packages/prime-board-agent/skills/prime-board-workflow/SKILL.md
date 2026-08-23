@@ -63,8 +63,8 @@ replica las mutaciones GraphQL: descubre y llama las tools que expone el servido
 
 ```python
 import prime_board_workflow
-await prime_board_workflow("diagnose")
-await prime_board_workflow("list_tools")
+await prime_board_workflow.run("diagnose")
+await prime_board_workflow.run("list_tools")
 await prime_board_workflow.call_tool("list_issues", {"team": "PRB"})
 ```
 

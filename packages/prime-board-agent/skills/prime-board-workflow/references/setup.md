@@ -25,8 +25,10 @@ Para inspeccionar la configuración sin iniciar el servidor, ejecuta:
 eval "$(bun scripts/prime-board-project.ts --project /ruta/al/proyecto --print-env)"
 ```
 
-La admin key se imprime una sola vez durante el primer inicio. Crea un Actor y una API key
-para el trabajo normal. Después exporta esa clave como `PRIME_BOARD_API_KEY`.
+La admin key se imprime una sola vez durante el primer inicio. Define esa clave solo para
+`/prime-board auth` o para el bootstrap inicial. La extensión crea un Actor `AGENT` por proyecto,
+crea una API key limitada al Team y guarda solo esa credencial verificada. Después exporta la clave
+AGENT como `PRIME_BOARD_API_KEY` para el trabajo normal.
 
 ## 2. Instalar el package en el proyecto objetivo
 

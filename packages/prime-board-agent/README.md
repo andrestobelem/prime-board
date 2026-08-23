@@ -35,7 +35,8 @@ aislada, buscar y reclamar Issues, implementar y validar, dejar evidencia y reso
 recurso instala la skill Python `prime_board_workflow`, que diagnostica la conexión y delega
 `list_tools`/`call_tool` al MCP HTTP autenticado. No duplica mutaciones GraphQL. Mantén las
 credenciales (`PRIME_BOARD_API_KEY`) fuera del paquete y del repositorio; `/prime-board auth`
-puede guardarlas por proyecto en `~/.prime-board/credentials/` con modo `0600`.
+verifica o crea un Actor `AGENT` por proyecto y guarda solo su credencial en
+`~/.prime-board/credentials/` con modo `0600`.
 
 ## MCP HTTP
 

@@ -1,7 +1,7 @@
-"""Authenticated, project-scoped prime-board MCP diagnostics.
+"""Diagnóstico MCP autenticado y asociado al proyecto de prime-board.
 
-This module deliberately delegates issue operations to the MCP server. It does
-not contain a second GraphQL mutation catalog.
+Este módulo delega las operaciones de Issues al servidor MCP. No contiene un
+segundo catálogo de mutaciones GraphQL.
 """
 
 from __future__ import annotations
@@ -10,29 +10,39 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
+_STREAMABLE_HTTP_LEGACY = False
 try:
-    import httpx2
+    try:
+        import httpx2 as httpx_client
+    except ImportError:
+        import httpx as httpx_client
     from mcp import ClientSession
-    from mcp.client.streamable_http import streamable_http_client
-except ImportError as exc:  # pragma: no cover - exercised by Prime Agent's disabled-skill path
-    httpx2 = None  # type: ignore[assignment]
-    ClientSession = None  # type: ignore[assignment,misc]
-    streamable_http_client = None  # type: ignore[assignment]
+    try:
+        from mcp.client.streamable_http import streamable_http_client
+    except ImportError:
+        from mcp.client.streamable_http import streamablehttp_client as streamable_http_client
+
+        _STREAMABLE_HTTP_LEGACY = True
+except ImportError as exc:  # pragma: no cover - ruta de skill deshabilitada sin dependencias
+    httpx_client = None
+    ClientSession = None
+    streamable_http_client = None
     _IMPORT_ERROR = exc
 else:
     _IMPORT_ERROR = None
 
 
 class PrimeBoardError(RuntimeError):
-    """A safe, user-facing error that never contains a bearer token."""
+    """Error seguro para el usuario que nunca contiene un token Bearer."""
 
 
 def project_root(cwd: str | None = None) -> Path | None:
-    """Resolve the Git root used to select the project credential file."""
+    """Resuelve la raíz Git usada para seleccionar la credencial del proyecto."""
     location = Path(cwd or os.getcwd()).resolve()
     try:
         result = subprocess.run(
@@ -49,50 +59,71 @@ def project_root(cwd: str | None = None) -> Path | None:
 
 
 def credential_path(root: Path, home: str | None = None) -> Path:
-    """Return the 0600 credential path outside settings and ``.prime-board``."""
+    """Devuelve la ruta 0600 fuera de settings y de ``.prime-board``."""
     digest = hashlib.sha256(str(root).encode()).hexdigest()[:16]
     return Path(home or Path.home()) / ".prime-board" / "credentials" / f"{digest}.json"
 
 
 def _credential(root: Path, url: str | None) -> tuple[str | None, str]:
-    environment_key = os.environ.get("PRIME_BOARD_API_KEY")
+    """Resuelve la URL y prioriza la API key del entorno sobre el archivo."""
+    environment_key = os.environ.get("PRIME_BOARD_API_KEY", "").strip()
     environment_url = url or os.environ.get("PRIME_BOARD_URL")
     path = credential_path(root)
     try:
         mode = path.stat().st_mode & 0o777
     except FileNotFoundError:
-        return environment_url, environment_key or ""
+        return environment_url, environment_key
     if mode != 0o600:
         raise PrimeBoardError(f"Credential file must have mode 0600: {path}")
     try:
         value = json.loads(path.read_text())
     except (OSError, ValueError) as exc:
         raise PrimeBoardError(f"Cannot read the project credential: {path}") from exc
-    key = value.get("apiKey")
-    if not isinstance(key, str) or not key.strip():
-        return environment_url, environment_key or ""
-    # A project file owns its endpoint. An explicit URL is the only override,
-    # which keeps two concurrent projects isolated even with one process env.
-    return url or value.get("url") or environment_url, key
+    if not isinstance(value, dict):
+        raise PrimeBoardError(f"The project credential must be a JSON object: {path}")
+    file_key = value.get("apiKey")
+    if not isinstance(file_key, str) or not file_key.strip():
+        return environment_url, environment_key
+    key = environment_key or file_key.strip()
+    # La URL explícita domina. Después usa la URL del entorno y, por último, la del proyecto.
+    endpoint = url or os.environ.get("PRIME_BOARD_URL") or value.get("url")
+    return endpoint if isinstance(endpoint, str) else None, key
 
 
 def _endpoint(root: Path, url: str | None) -> str | None:
+    """Resuelve el endpoint MCP con prioridad explícita por proyecto."""
+    environment_endpoint = os.environ.get("PRIME_BOARD_MCP_URL")
+    if environment_endpoint:
+        return environment_endpoint
     if url is None:
         try:
             value = json.loads(credential_path(root).read_text())
         except (FileNotFoundError, OSError, ValueError):
             value = {}
-        if isinstance(value.get("mcpUrl"), str) and value["mcpUrl"]:
+        if isinstance(value, dict) and isinstance(value.get("mcpUrl"), str) and value["mcpUrl"]:
             return value["mcpUrl"]
-    return os.environ.get("PRIME_BOARD_MCP_URL")
+    return None
 
 
 def _safe_error(error: BaseException, key: str | None = None) -> str:
+    """Redacta API keys y tokens Bearer de errores de transporte."""
     message = str(error)
     key = key or os.environ.get("PRIME_BOARD_API_KEY")
     if key:
         message = message.replace(key, "[redacted-api-key]")
-    return message.replace("Bearer ", "Bearer [redacted] ")
+    message = re.sub(
+        r"(\b(?:prime[_ -]?board[_ -]?api[_ -]?key|api[_ -]?key|access[_ -]?token|secret)\b\s*[:=]\s*)[^\s,;]+",
+        r"\1[redacted-api-key]",
+        message,
+        flags=re.IGNORECASE,
+    )
+    message = re.sub(
+        r"(\bauthorization\b\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+",
+        r"\1[redacted-bearer]",
+        message,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"(\bbearer\s+)[^\s,;]+", r"\1[redacted-bearer]", message, flags=re.IGNORECASE)
 
 
 def _json(value: Any) -> Any:
@@ -125,35 +156,42 @@ async def _mcp(operation: str, root: Path, url: str | None, tool: str | None, ar
         }
     headers = {"authorization": f"Bearer {key}"}
     last_error: str | None = None
+
+    async def operate(read: Any, write: Any) -> dict[str, Any]:
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            if operation == "list_tools":
+                result = await session.list_tools()
+                return {
+                    "state": "healthy",
+                    "projectRoot": str(root),
+                    "endpoint": endpoint,
+                    "tools": [_json(item) for item in result.tools],
+                }
+            if operation == "call_tool":
+                if not tool:
+                    raise PrimeBoardError("tool is required for call_tool")
+                result = await session.call_tool(tool, arguments or {})
+                return {
+                    "state": "healthy",
+                    "projectRoot": str(root),
+                    "endpoint": endpoint,
+                    "tool": tool,
+                    "result": _json(result),
+                }
+            raise PrimeBoardError(f"Unsupported MCP operation: {operation}")
+
     for attempt in range(2):
         try:
-            async with httpx2.AsyncClient(headers=headers, timeout=10) as client:
+            if _STREAMABLE_HTTP_LEGACY:
+                async with streamable_http_client(endpoint, headers=headers) as streams:
+                    return await operate(streams[0], streams[1])
+            async with httpx_client.AsyncClient(headers=headers, timeout=10) as client:
                 async with streamable_http_client(endpoint, http_client=client) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        if operation == "list_tools":
-                            result = await session.list_tools()
-                            return {
-                                "state": "healthy",
-                                "projectRoot": str(root),
-                                "endpoint": endpoint,
-                                "tools": [_json(item) for item in result.tools],
-                            }
-                        if operation == "call_tool":
-                            if not tool:
-                                raise PrimeBoardError("tool is required for call_tool")
-                            result = await session.call_tool(tool, arguments or {})
-                            return {
-                                "state": "healthy",
-                                "projectRoot": str(root),
-                                "endpoint": endpoint,
-                                "tool": tool,
-                                "result": _json(result),
-                            }
-                        raise PrimeBoardError(f"Unsupported MCP operation: {operation}")
+                    return await operate(read, write)
         except PrimeBoardError:
             raise
-        except Exception as error:  # MCP SDK errors vary by transport version.
+        except Exception as error:  # El SDK MCP cambia los errores entre transportes.
             last_error = _safe_error(error, key)
             if attempt == 0:
                 await asyncio.sleep(0)
@@ -166,7 +204,7 @@ async def _mcp(operation: str, root: Path, url: str | None, tool: str | None, ar
 
 
 async def diagnose(cwd: str | None = None, url: str | None = None) -> dict[str, Any]:
-    """Check project identity, health, and bearer authentication without exposing secrets."""
+    """Comprueba identidad, salud y autenticación Bearer sin exponer secretos."""
     root = project_root(cwd)
     if root is None:
         return {"state": "error", "detail": "The current directory is not inside a Git project."}
@@ -176,7 +214,7 @@ async def diagnose(cwd: str | None = None, url: str | None = None) -> dict[str, 
     try:
         if _IMPORT_ERROR is not None:
             raise PrimeBoardError(f"Prime Agent HTTP dependencies are unavailable: {_IMPORT_ERROR}")
-        async with httpx2.AsyncClient(timeout=5) as client:
+        async with httpx_client.AsyncClient(timeout=5) as client:
             response = await client.get(f"{base}/health")
         result["health"] = "healthy" if response.is_success else f"http_{response.status_code}"
     except Exception as error:
@@ -188,7 +226,7 @@ async def diagnose(cwd: str | None = None, url: str | None = None) -> dict[str, 
         result["detail"] = "Set PRIME_BOARD_API_KEY or run /prime-board auth for this project."
         return result
     try:
-        async with httpx2.AsyncClient(
+        async with httpx_client.AsyncClient(
             headers={"authorization": f"Bearer {key}"}, timeout=5
         ) as client:
             response = await client.post(
@@ -214,7 +252,7 @@ async def diagnose(cwd: str | None = None, url: str | None = None) -> dict[str, 
 
 
 async def list_tools(cwd: str | None = None, url: str | None = None) -> dict[str, Any]:
-    """Discover the authenticated MCP tool catalog for the current project."""
+    """Descubre el catálogo MCP autenticado del proyecto actual."""
     root = project_root(cwd)
     if root is None:
         return {"state": "error", "detail": "The current directory is not inside a Git project."}
@@ -227,7 +265,7 @@ async def call_tool(
     cwd: str | None = None,
     url: str | None = None,
 ) -> dict[str, Any]:
-    """Call one tool exposed by MCP; writes stay owned by the MCP GraphQL catalog."""
+    """Llama una tool MCP; las escrituras siguen bajo el catálogo GraphQL."""
     root = project_root(cwd)
     if root is None:
         return {"state": "error", "detail": "The current directory is not inside a Git project."}
@@ -241,7 +279,7 @@ async def run(
     tool: str | None = None,
     arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run ``diagnose``, ``list_tools``, or ``call_tool`` for the current project."""
+    """Ejecuta ``diagnose``, ``list_tools`` o ``call_tool`` para el proyecto actual."""
     if operation == "diagnose":
         return await diagnose(cwd, url)
     if operation == "list_tools":

@@ -125,9 +125,11 @@ export function readProjectCredential(
 function redactSecrets(value: string): string {
   return value
     .replace(
-      /(api\s*key|bearer\s+token|access\s+token|secret)\s*[:=]\s*[^\s,;]+/gi,
-      "$1: [redacted]",
+      /(\b(?:prime[_ -]?board[_ -]?api[_ -]?key|api[_ -]?key|access[_ -]?token|secret)\b\s*[:=]\s*)[^\s,;]+/gi,
+      "$1[redacted-api-key]",
     )
+    .replace(/(\bauthorization\b\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi, "$1[redacted-bearer]")
+    .replace(/(\bbearer\s+)[^\s,;]+/gi, "$1[redacted-bearer]")
     .replace(/\bpb_[A-Za-z0-9_-]+\b/g, "[redacted-api-key]");
 }
 
@@ -427,6 +429,6 @@ export function createRuntimeController(
 }
 
 export function releaseRuntime(_projectRoot: string): void {
-  // The launcher owns the process lock. A session shutdown only releases its
-  // in-memory reference; it must not stop a runtime used by another session.
+  // El launcher posee el lock del proceso. El cierre de una sesión solo libera
+  // su referencia en memoria y no detiene un runtime compartido.
 }

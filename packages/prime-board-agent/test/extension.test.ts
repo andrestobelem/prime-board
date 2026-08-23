@@ -56,7 +56,20 @@ describe("Prime Board extension lifecycle", () => {
         },
         registerTool() {},
       };
-      const okFetch: FetchLike = async () => new Response("ok", { status: 200 });
+      const okFetch: FetchLike = async (input, init) => {
+        if (String(input).endsWith("/health")) return new Response("ok", { status: 200 });
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        if (body.query?.includes("viewer")) {
+          return new Response(JSON.stringify({ data: { viewer: { type: "AGENT" } } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ data: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
       const controller = createPrimeBoardExtension({
         home: project.home,
         env: { PRIME_BOARD_ROOT: project.runtimeRoot, PRIME_BOARD_API_KEY: "pb_test_secret" },
@@ -99,7 +112,106 @@ describe("Prime Board extension lifecycle", () => {
       await commands.get("prime-board")!("status", context);
       expect(notifications.at(-1)).toContain("Runtime is running");
       await events.get("session_shutdown")!({ reason: "shutdown" }, context);
+      await events.get("session_start")!({ reason: "reload" }, context);
       expect(launches).toBe(1);
+    } finally {
+      rmSync(project.home, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a project Actor AGENT without persisting the bootstrap human key", async () => {
+    const project = gitProject();
+    try {
+      let running = false;
+      const events = new Map<string, (event: { reason?: string }, ctx: FakeContext) => unknown>();
+      const requests: string[] = [];
+      const fetch: FetchLike = async (input, init) => {
+        const inputUrl = String(input);
+        if (inputUrl.endsWith("/health")) return new Response("ok", { status: 200 });
+        const key = new Headers(init?.headers).get("authorization") ?? "";
+        requests.push(key);
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        if (body.query?.includes("viewer")) {
+          return new Response(
+            JSON.stringify({
+              data: { viewer: { type: key.includes("pb_agent") ? "AGENT" : "HUMAN" } },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (body.query?.includes("actors(type: AGENT)")) {
+          return new Response(
+            JSON.stringify({ data: { actors: [], teams: [{ id: "team-1", memberships: [] }] } }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        if (body.query?.includes("actorCreate")) {
+          return new Response(
+            JSON.stringify({ data: { actorCreate: { actor: { id: "agent-1", type: "AGENT" } } } }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        if (body.query?.includes("teamMembershipCreate")) {
+          return new Response(
+            JSON.stringify({ data: { teamMembershipCreate: { success: true } } }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        if (body.query?.includes("apiKeyCreate")) {
+          return new Response(JSON.stringify({ data: { apiKeyCreate: { key: "pb_agent" } } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ data: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+      const extension = createPrimeBoardExtension({
+        home: project.home,
+        env: { PRIME_BOARD_ROOT: project.runtimeRoot, PRIME_BOARD_API_KEY: "pb_admin" },
+        runtimeDependencies: {
+          runStatus: () => ({
+            status: running ? 0 : 1,
+            stdout: running
+              ? `running project=${project.root} port=3403 pid=3403 db=/tmp/c.db`
+              : `not-running project=${project.root} db=/tmp/c.db`,
+            stderr: "",
+          }),
+          launch: () => {
+            running = true;
+            return { pid: 3403, unref() {} };
+          },
+          fetch,
+          sleep: async () => undefined,
+        },
+      });
+      const fakePi = {
+        on(name: string, handler: (event: { reason?: string }, ctx: FakeContext) => unknown) {
+          events.set(name, handler);
+        },
+        registerCommand() {},
+        registerTool() {},
+      };
+      extension(fakePi);
+      const context = { cwd: project.root, ui: { notify: () => undefined } };
+      await events.get("session_start")!({ reason: "startup" }, context);
+      expect(readProjectCredential(project.root, project.home)).toMatchObject({
+        apiKey: "pb_agent",
+      });
+      expect(readProjectCredential(project.root, project.home)?.apiKey).not.toBe("pb_admin");
+      expect(requests).toContain("Bearer pb_admin");
+      expect(requests).toContain("Bearer pb_agent");
     } finally {
       rmSync(project.home, { recursive: true, force: true });
     }
@@ -135,10 +247,16 @@ describe("Prime Board extension lifecycle", () => {
       );
       const logPath = projectLogPath(project.root, project.home);
       mkdirSync(join(project.home, ".prime-board", "logs"), { recursive: true });
-      writeFileSync(logPath, "Admin API key (save it now): pb_secret\nhealthy\n");
+      writeFileSync(
+        logPath,
+        "Admin API key (save it now): pb_secret\nAPI_KEY=supersecret\nAuthorization: Bearer realtoken\nhealthy\n",
+      );
       chmodSync(logPath, 0o600);
       expect(runtime.logs(project.root)).toContain("[redacted-api-key]");
       expect(runtime.logs(project.root)).not.toContain("pb_secret");
+      expect(runtime.logs(project.root)).not.toContain("supersecret");
+      expect(runtime.logs(project.root)).not.toContain("realtoken");
+      expect(runtime.logs(project.root)).toContain("[redacted-bearer]");
       expect(runtime.open(project.root).url).toBe("http://127.0.0.1:3402");
       expect(opened).toEqual(["http://127.0.0.1:3402"]);
       expect((await runtime.stop(project.root)).state).toBe("stopped");
