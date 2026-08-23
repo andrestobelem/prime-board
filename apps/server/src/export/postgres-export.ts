@@ -61,6 +61,10 @@ async function copyTable(persistence: Persistence, db: Database, table: string):
   const insert = db.query(
     `INSERT OR IGNORE INTO ${quoteIdentifier(table)} (${selected}) VALUES (${placeholders})`,
   );
+  const before = Number(
+    (db.query(`SELECT count(*) AS count FROM ${quoteIdentifier(table)}`).get() as { count: number })
+      .count,
+  );
   for (const row of rows) {
     const values: SqlValue[] = columns.map((column) => {
       const value = row[column];
@@ -75,6 +79,13 @@ async function copyTable(persistence: Persistence, db: Database, table: string):
       return JSON.stringify(value);
     });
     insert.run(...(values as never[]));
+  }
+  const after = Number(
+    (db.query(`SELECT count(*) AS count FROM ${quoteIdentifier(table)}`).get() as { count: number })
+      .count,
+  );
+  if (after - before !== rows.length) {
+    throw new Error(`PostgreSQL export lost rows while projecting table ${table}`);
   }
 }
 
