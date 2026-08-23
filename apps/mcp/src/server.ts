@@ -1153,27 +1153,31 @@ export function createServer(config: McpConfig | McpSession): McpServer {
   server.registerTool(
     "list_reviews",
     {
-      description: "List reviews visible to the authenticated actor.",
+      description:
+        "List one cursor page of reviews visible to the authenticated actor. Use pageInfo.endCursor as after to continue with the same filters.",
       inputSchema: {
         openOnly: z.boolean().optional(),
-        first: z.number().optional(),
+        first: z.number().int().min(1).max(250).optional(),
+        after: z.string().optional().describe("Cursor from pageInfo.endCursor"),
         team: z.string().optional(),
         project: z.string().optional(),
         reviewer: z.string().optional(),
         olderThanDays: z.number().optional(),
       },
     },
-    async ({ openOnly, first, team, project, reviewer, olderThanDays }) => {
+    async ({ openOnly, first, after, team, project, reviewer, olderThanDays }) => {
       const data = await gqlRequest(
         sessionConfig,
-        `query($openOnly: Boolean, $first: Int, $teamId: ID, $projectId: ID, $reviewerId: ID, $olderThanDays: Int) {
-      reviews(openOnly: $openOnly, first: $first, teamId: $teamId, projectId: $projectId, reviewerId: $reviewerId, olderThanDays: $olderThanDays) {
-        id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type }
+        `query($openOnly: Boolean, $first: Int, $after: String, $teamId: ID, $projectId: ID, $reviewerId: ID, $olderThanDays: Int) {
+      reviews(openOnly: $openOnly, first: $first, after: $after, teamId: $teamId, projectId: $projectId, reviewerId: $reviewerId, olderThanDays: $olderThanDays) {
+        nodes { id status createdAt updatedAt issue { id identifier title } requester { id name type } reviewer { id name type } }
+        pageInfo { hasNextPage endCursor }
       }
     }`,
         {
           openOnly: Boolean(openOnly),
           first: first ?? 50,
+          after: after ?? null,
           teamId: team ? (await resolveTeam(sessionConfig, team)).id : null,
           projectId: project ?? null,
           reviewerId: reviewer ? await resolveActor(sessionConfig, reviewer) : null,

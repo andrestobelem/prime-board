@@ -72,7 +72,8 @@ Diferencias verificadas:
 - `Query.projects` y `Query.teams`: Prime Board devuelve listas con filtros simples; Linear usa conexiones, filtros, cursor bidireccional y orden.
 - `Project.issues` y `Milestone.issues`: Prime Board acepta `first/after`; Linear agrega `before/last/orderBy`.
 - `Issue.children`: Prime Board solo añade `includeArchived`; Linear ofrece filtro, cursor bidireccional y orden.
-- Varias colecciones locales (`teams`, `actors`, `labels`, `projects`, `cycles`, `reviews`, `initiatives`, comments y relations) son listas no paginables.
+- Varias colecciones locales (`teams`, `actors`, `labels`, `projects`, `cycles`, `initiatives`, comments y relations) son listas no paginables.
+- `reviews`: Prime Board expone una conexión forward con `nodes` y `pageInfo { hasNextPage, endCursor }`.
 
 **Clasificación:** gap de compatibilidad de API. La paginación forward local cubre el MVP, pero los clientes Relay de Linear necesitan un adapter.
 

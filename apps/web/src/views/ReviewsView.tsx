@@ -1,7 +1,10 @@
 // Cola de reviews (PRB-205/217): filtros team/proyecto/agente/edad.
-import { useState } from "react";
-import { GqlError, mutate, useQuery } from "../api.ts";
+import { useEffect, useRef, useState } from "react";
+import { gql, GqlError, mutate, useQuery } from "../api.ts";
 import { Avatar } from "../components/bits.tsx";
+import { ErrorState } from "../components/AsyncState.tsx";
+import { appendUniqueById } from "../pagination.ts";
+import { createRequestGate } from "../request-generation.ts";
 import { EntityModal } from "../components/EntityModal.tsx";
 import { Link } from "../router.tsx";
 
@@ -12,6 +15,15 @@ interface ReviewItem {
   requester: { id: string; name: string; type: string };
   reviewer: { id: string; name: string; type: string };
   issue: { identifier: string; title: string };
+}
+
+interface ReviewPageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+interface ReviewsData {
+  reviews: { nodes: ReviewItem[]; pageInfo: ReviewPageInfo };
 }
 
 const STATUS_ACTIONS: Array<{ status: string; label: string }> = [
@@ -29,6 +41,14 @@ export function ReviewsView() {
   const [olderThanDays, setOlderThanDays] = useState("");
   const [requestOpen, setRequestOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [extraItems, setExtraItems] = useState<ReviewItem[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [pageInfo, setPageInfo] = useState<ReviewPageInfo>({
+    hasNextPage: false,
+    endCursor: null,
+  });
+  const pageGate = useRef(createRequestGate());
 
   const meta = useQuery<{
     actors: Array<{ id: string; name: string; type: string }>;
@@ -51,24 +71,56 @@ export function ReviewsView() {
     filterVars.olderThanDays = Number(olderThanDays);
   }
 
-  const result = useQuery<{ reviews: ReviewItem[] }>(
-    `query(
-      $openOnly: Boolean, $first: Int,
-      $teamId: ID, $projectId: ID, $reviewerId: ID, $olderThanDays: Int
+  const REVIEWS_QUERY = `query(
+    $openOnly: Boolean, $first: Int, $after: String,
+    $teamId: ID, $projectId: ID, $reviewerId: ID, $olderThanDays: Int
+  ) {
+    reviews(
+      openOnly: $openOnly, first: $first, after: $after,
+      teamId: $teamId, projectId: $projectId,
+      reviewerId: $reviewerId, olderThanDays: $olderThanDays
     ) {
-      reviews(
-        openOnly: $openOnly, first: $first,
-        teamId: $teamId, projectId: $projectId,
-        reviewerId: $reviewerId, olderThanDays: $olderThanDays
-      ) {
+      nodes {
         id status createdAt
         requester { id name type }
         reviewer { id name type }
         issue { identifier title }
       }
-    }`,
-    filterVars,
-  );
+      pageInfo { hasNextPage endCursor }
+    }
+  }`;
+  const result = useQuery<ReviewsData>(REVIEWS_QUERY, filterVars);
+  const pageKey = JSON.stringify(filterVars);
+
+  useEffect(() => {
+    pageGate.current.next();
+    setExtraItems([]);
+    setLoadingMore(false);
+    setPageError(null);
+    if (result.data?.reviews.pageInfo) setPageInfo(result.data.reviews.pageInfo);
+  }, [pageKey, result.data]);
+
+  async function loadMore(): Promise<void> {
+    if (loadingMore || !pageInfo.hasNextPage || !pageInfo.endCursor) return;
+    const generation = pageGate.current.next();
+    setLoadingMore(true);
+    setPageError(null);
+    try {
+      const next = await gql<ReviewsData>(REVIEWS_QUERY, {
+        ...filterVars,
+        after: pageInfo.endCursor,
+      });
+      if (!pageGate.current.isCurrent(generation)) return;
+      setExtraItems((current) => appendUniqueById(current, next.reviews.nodes));
+      setPageInfo(next.reviews.pageInfo);
+    } catch (loadError) {
+      if (pageGate.current.isCurrent(generation)) {
+        setPageError(loadError instanceof Error ? loadError.message : String(loadError));
+      }
+    } finally {
+      if (pageGate.current.isCurrent(generation)) setLoadingMore(false);
+    }
+  }
 
   async function setStatus(id: string, status: string) {
     setError(null);
@@ -99,9 +151,9 @@ export function ReviewsView() {
   }
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
-  if (result.error) return <div className="error-banner">{result.error.message}</div>;
+  if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
 
-  const items = result.data?.reviews ?? [];
+  const items = [...(result.data?.reviews.nodes ?? []), ...extraItems];
   const selectStyle = { fontSize: 12, maxWidth: 160 } as const;
 
   return (
@@ -224,6 +276,21 @@ export function ReviewsView() {
             </span>
           </div>
         ))
+      )}
+      {pageError && (
+        <div className="error-banner" role="alert">
+          {pageError}{" "}
+          <button className="btn secondary" onClick={() => void loadMore()}>
+            Retry
+          </button>
+        </div>
+      )}
+      {(pageInfo.hasNextPage || loadingMore) && (
+        <div style={{ padding: 16, textAlign: "center" }}>
+          <button className="btn secondary" disabled={loadingMore} onClick={() => void loadMore()}>
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
+        </div>
       )}
       {requestOpen && (
         <EntityModal
