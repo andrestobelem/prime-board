@@ -1361,21 +1361,36 @@ export const resolvers = {
         if (context.persistence) {
           if (args.teamId) {
             const team = await getPostgresTeam(context.persistence, { id: args.teamId });
-            if (team?.archived_at) return [];
+            if (team?.archived_at) {
+              return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+            }
           }
-          const rows = await listPostgresReviews(context.persistence, viewer.id, {
+          // Apply the same team visibility and API-key scope before paginating.
+          // This keeps pages and cursors stable when a review is not visible.
+          const allowedTeamIds: string[] = [];
+          for (const team of await listPostgresTeams(context.persistence, true)) {
+            if (
+              (await canDiscoverPostgresTeam(context.persistence, viewer, team)) &&
+              (await canWritePostgresTeam(context.persistence, viewer, team.id)) &&
+              apiKeyTeamsWithinLimit(context.auth, [team.id])
+            ) {
+              allowedTeamIds.push(team.id);
+            }
+          }
+          const page = await listPostgresReviews(context.persistence, viewer.id, {
             openOnly: Boolean(args.openOnly),
             first: args.first ?? 50,
+            after: args.after,
             teamId: args.teamId,
             projectId: args.projectId,
             reviewerId: args.reviewerId,
             olderThanDays: args.olderThanDays,
+            teamIds: allowedTeamIds,
           });
-          const visible = [];
-          for (const row of rows) {
-            if (await visiblePostgresReview(context, row, viewer)) visible.push(row);
-          }
-          return visible.map(mapPostgresReview);
+          return {
+            nodes: page.rows.map(mapPostgresReview),
+            pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+          };
         }
         if (args.teamId) {
           const team = lookupTeam(context, { id: args.teamId });

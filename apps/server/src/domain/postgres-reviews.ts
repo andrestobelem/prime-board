@@ -1,4 +1,4 @@
-import type { Persistence, PersistenceTransaction } from "../db/persistence.ts";
+import type { Persistence, PersistenceTransaction, SqlValue } from "../db/persistence.ts";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { getPostgresActor } from "./postgres-actors.ts";
@@ -8,14 +8,112 @@ import type { ReviewRow, ReviewStatus } from "./reviews.ts";
 export interface PostgresReviewListOptions {
   openOnly?: boolean;
   first?: number;
+  after?: string | null;
   teamId?: string | null;
   projectId?: string | null;
   reviewerId?: string | null;
   olderThanDays?: number | null;
+  /** Teams already authorized by the resolver. */
+  teamIds?: readonly string[] | null;
+}
+
+export interface PostgresReviewPage {
+  rows: ReviewRow[];
+  hasNextPage: boolean;
+  endCursor: string | null;
 }
 
 function reviewLimit(first: number | null | undefined): number {
-  return Math.min(Math.max(first ?? 50, 1), 100);
+  const value = first ?? 50;
+  if (!Number.isInteger(value) || value < 1 || value > 250) {
+    throw apiError("VALIDATION_FAILED", "first must be between 1 and 250");
+  }
+  return value;
+}
+
+function effectiveOlderThanDays(value: number | null | undefined): number | null {
+  return value != null && value > 0 ? value : null;
+}
+
+function reviewFilterKey(options: PostgresReviewListOptions): string {
+  return JSON.stringify([
+    Boolean(options.openOnly),
+    options.teamId ?? null,
+    options.projectId ?? null,
+    options.reviewerId ?? null,
+    effectiveOlderThanDays(options.olderThanDays),
+    options.teamIds ? [...options.teamIds].sort() : null,
+    "CREATED_DESC",
+  ]);
+}
+
+function reviewTimestamp(value: string | Date): string {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function encodeReviewCursor(createdAt: string | Date, id: string, filterKey: string): string {
+  return Buffer.from(JSON.stringify([reviewTimestamp(createdAt), id, filterKey])).toString(
+    "base64url",
+  );
+}
+
+interface ReviewCursor {
+  createdAt: string;
+  id: string;
+  filterKey: string;
+}
+
+function decodeReviewCursor(cursor: string): ReviewCursor | null {
+  try {
+    if (Buffer.from(cursor, "base64url").toString("base64url") !== cursor) return null;
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString());
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length !== 3 ||
+      typeof parsed[0] !== "string" ||
+      typeof parsed[1] !== "string" ||
+      typeof parsed[2] !== "string" ||
+      !parsed[0] ||
+      !parsed[1] ||
+      !parsed[2]
+    ) {
+      return null;
+    }
+    return { createdAt: parsed[0], id: parsed[1], filterKey: parsed[2] };
+  } catch {
+    return null;
+  }
+}
+
+function buildReviewClauses(
+  viewerId: string,
+  options: PostgresReviewListOptions,
+  params: SqlValue[],
+): string[] {
+  params.push(viewerId);
+  const add = (value: SqlValue): string => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const clauses = ["(reviews.reviewer_id = $1 OR reviews.requester_id = $1)"];
+
+  if (options.openOnly) clauses.push("reviews.status IN ('requested', 'in_progress')");
+  if (options.reviewerId) clauses.push(`reviews.reviewer_id = ${add(options.reviewerId)}`);
+  if (options.teamId) clauses.push(`issues.team_id = ${add(options.teamId)}`);
+  if (options.projectId) clauses.push(`issues.project_id = ${add(options.projectId)}`);
+  if (options.teamIds) {
+    if (options.teamIds.length === 0) {
+      clauses.push("1 = 0");
+    } else {
+      clauses.push(`issues.team_id IN (${options.teamIds.map(add).join(", ")})`);
+    }
+  }
+  const olderThanDays = effectiveOlderThanDays(options.olderThanDays);
+  if (olderThanDays != null) {
+    const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
+    clauses.push(`reviews.created_at <= ${add(cutoff)}`);
+  }
+  return clauses;
 }
 
 function reviewStatus(status: string): ReviewStatus {
@@ -63,42 +161,56 @@ export async function listPostgresReviews(
   persistence: Persistence,
   viewerId: string,
   options: PostgresReviewListOptions = {},
-): Promise<ReviewRow[]> {
-  const clauses = ["(reviews.reviewer_id = $1 OR reviews.requester_id = $1)"];
-  const params: Array<string | number> = [viewerId];
+): Promise<PostgresReviewPage> {
+  const first = reviewLimit(options.first);
+  const filterKey = reviewFilterKey(options);
+  const params: SqlValue[] = [];
+  const clauses = buildReviewClauses(viewerId, options, params);
 
-  if (options.openOnly) {
-    clauses.push("reviews.status IN ('requested', 'in_progress')");
-  }
-  if (options.reviewerId) {
-    params.push(options.reviewerId);
-    clauses.push(`reviews.reviewer_id = $${params.length}`);
-  }
-  if (options.teamId) {
-    params.push(options.teamId);
-    clauses.push(`issues.team_id = $${params.length}`);
-  }
-  if (options.projectId) {
-    params.push(options.projectId);
-    clauses.push(`issues.project_id = $${params.length}`);
-  }
-  if (options.olderThanDays != null && options.olderThanDays > 0) {
-    params.push(new Date(Date.now() - options.olderThanDays * 86_400_000).toISOString());
-    clauses.push(`reviews.created_at <= $${params.length}`);
-  }
+  if (options.after != null) {
+    const cursor = decodeReviewCursor(options.after);
+    if (!cursor || cursor.filterKey !== filterKey) {
+      throw apiError("VALIDATION_FAILED", "Invalid review cursor");
+    }
 
-  params.push(reviewLimit(options.first));
-  return [
-    ...(await persistence.many<ReviewRow>(
-      `SELECT reviews.*
+    // The cursor must still belong to the same connection and filter.
+    const cursorParams: SqlValue[] = [];
+    const cursorClauses = buildReviewClauses(viewerId, options, cursorParams);
+    cursorParams.push(cursor.id);
+    const cursorRow = await persistence.one<{ created_at: string | Date }>(
+      `SELECT reviews.created_at
        FROM reviews
        JOIN issues ON issues.id = reviews.issue_id
-       WHERE ${clauses.join(" AND ")}
-       ORDER BY reviews.created_at DESC, reviews.id DESC
-       LIMIT $${params.length}`,
-      params,
-    )),
-  ];
+       WHERE ${cursorClauses.join(" AND ")} AND reviews.id = $${cursorParams.length}`,
+      cursorParams,
+    );
+    if (!cursorRow || reviewTimestamp(cursorRow.created_at) !== cursor.createdAt) {
+      throw apiError("VALIDATION_FAILED", "Invalid review cursor");
+    }
+
+    const createdAtParam = params.length + 1;
+    params.push(cursor.createdAt);
+    const idParam = params.length + 1;
+    params.push(cursor.id);
+    clauses.push(`(reviews.created_at, reviews.id) < ($${createdAtParam}, $${idParam})`);
+  }
+
+  const rows = await persistence.many<ReviewRow>(
+    `SELECT reviews.*
+     FROM reviews
+     JOIN issues ON issues.id = reviews.issue_id
+     WHERE ${clauses.join(" AND ")}
+     ORDER BY reviews.created_at DESC, reviews.id DESC
+     LIMIT ${first + 1}`,
+    params,
+  );
+  const page = [...rows].slice(0, first);
+  const last = page[page.length - 1];
+  return {
+    rows: page,
+    hasNextPage: rows.length > first,
+    endCursor: last ? encodeReviewCursor(last.created_at, last.id, filterKey) : null,
+  };
 }
 
 export async function createPostgresReview(

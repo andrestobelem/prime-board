@@ -168,7 +168,19 @@ try {
   const secondReviewId = createTwo.data?.reviewCreate.review.id;
   const list = await graphql(
     base,
-    `{ reviews(first: 1, reviewerId: "${reviewerId}") { id status reviewer { id } } }`,
+    `{ reviews(first: 1, reviewerId: "${reviewerId}") {
+      nodes { id status reviewer { id } }
+      pageInfo { hasNextPage endCursor }
+    } }`,
+    undefined,
+    reviewerKey,
+  );
+  const listNext = await graphql(
+    base,
+    `{ reviews(first: 1, after: "${list.data?.reviews.pageInfo.endCursor}", reviewerId: "${reviewerId}") {
+      nodes { id }
+      pageInfo { hasNextPage endCursor }
+    } }`,
     undefined,
     reviewerKey,
   );
@@ -189,7 +201,10 @@ try {
   );
   const open = await graphql(
     base,
-    `{ reviews(openOnly: true, reviewerId: "${reviewerId}") { id status } }`,
+    `{ reviews(openOnly: true, reviewerId: "${reviewerId}") {
+      nodes { id status }
+      pageInfo { hasNextPage endCursor }
+    } }`,
     undefined,
     reviewerKey,
   );
@@ -198,7 +213,13 @@ try {
     `
       {
         reviews(reviewerId: "missing-reviewer") {
-          id
+          nodes {
+            id
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     `,
@@ -264,15 +285,22 @@ try {
     createOne.data?.reviewCreate.review.reviewer.id === reviewerId;
   report.list =
     !list.errors &&
-    list.data?.reviews.length === 1 &&
-    list.data?.reviews[0].reviewer.id === reviewerId;
+    list.data?.reviews.nodes.length === 1 &&
+    list.data?.reviews.nodes[0].reviewer.id === reviewerId &&
+    list.data?.reviews.pageInfo.hasNextPage === true &&
+    typeof list.data?.reviews.pageInfo.endCursor === "string";
+  report.pagination =
+    !listNext.errors &&
+    listNext.data?.reviews.nodes.length === 1 &&
+    listNext.data?.reviews.pageInfo.hasNextPage === false;
   report.updateAndFilter =
     !approved.errors &&
     approved.data?.reviewUpdate.review.status === "APPROVED" &&
     !open.errors &&
-    open.data?.reviews.every((review: { status: string }) => review.status !== "APPROVED") &&
+    open.data?.reviews.nodes.every((review: { status: string }) => review.status !== "APPROVED") &&
     !filtered.errors &&
-    filtered.data?.reviews.length === 0;
+    filtered.data?.reviews.nodes.length === 0 &&
+    filtered.data?.reviews.pageInfo.hasNextPage === false;
   report.authorization = !hidden.errors && hidden.data?.review === null;
   report.delete = !deleted.errors && deleted.data?.reviewDelete.success === true;
   report.foreignKeys = constraints.length === 3;
