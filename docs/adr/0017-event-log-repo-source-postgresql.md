@@ -21,6 +21,15 @@ Si el proyector falla, el evento del repositorio sigue siendo válido y queda pe
 
 Repository Source contiene el estado compartido: Workspace, Teams, Workflow States, Issues, Comments, Relations, Projects, Cycles, Initiatives, Reviews y sus eventos. Favorites, Inbox Receipts, API keys y secretos de webhooks quedan fuera porque son estado personal o material sensible. El importador Markdown solo emite eventos explícitos. Nunca escribe directamente en PostgreSQL.
 
+## Exclusión aceptada para PRB-440
+
+PRB-440 no implementa auditoría durable para `Initiative` ni para `Project Update`. El
+modelo actual de `Activity` es issue-only y las operaciones de estas entidades no
+producen un event log PostgreSQL completo. La implementación y la validación de ese
+log quedan explícitamente diferidas a PRB-445/PRB-446. El smoke de PRB-440 valida
+persistencia, autorización, relaciones, cascadas y exportación, pero no presenta esa
+auditoría como completada.
+
 ## Consecuencias
 
 - El data pump de SQLite se convierte en una importación histórica `SQLite → Log`, seguida de `Log → PostgreSQL`. No hay carga directa como autoridad final.
