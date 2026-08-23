@@ -27,6 +27,11 @@ describe("PostgreSQL Documents", () => {
     await migratePostgres(sql);
     const persistence = createPostgresPersistence(sql);
     const db = openDatabase(":memory:");
+    // Mantiene segura la integración condicional si el setup falla antes del fixture.
+    close = async () => {
+      db.close();
+      await persistence.close();
+    };
     const config = {
       port: 0,
       host: "127.0.0.1",
@@ -43,8 +48,11 @@ describe("PostgreSQL Documents", () => {
     const admin = await persistence.one<{ id: string }>(
       "SELECT id FROM actors WHERE name = 'admin'",
     );
-    const team = await persistence.one<{ id: string }>("SELECT id FROM teams ORDER BY key LIMIT 1");
+    const team = await persistence.one<{ id: string; key: string }>(
+      "SELECT id, key FROM teams ORDER BY key LIMIT 1",
+    );
     if (!admin || !team) throw new Error("PostgreSQL test requires the bootstrap Workspace");
+    let issueId: string | undefined;
     const projectId = newId();
     const cycleId = newId();
     const timestamp = now();
@@ -138,6 +146,24 @@ describe("PostgreSQL Documents", () => {
     const app = createApp({ db, config, persistence });
     stop = () => app.server.stop();
     close = async () => {
+      await persistence.execute("DELETE FROM documents WHERE title LIKE $1", [
+        "PRB-550 PostgreSQL test:%",
+      ]);
+      if (issueId) {
+        await persistence.execute(
+          "DELETE FROM issue_relations WHERE issue_id = $1 OR related_id = $1",
+          [issueId],
+        );
+        await persistence.execute("DELETE FROM issue_labels WHERE issue_id = $1", [issueId]);
+        await persistence.execute("DELETE FROM issue_subscribers WHERE issue_id = $1", [issueId]);
+        await persistence.execute("DELETE FROM comments WHERE issue_id = $1", [issueId]);
+        await persistence.execute("DELETE FROM activity WHERE issue_id = $1", [issueId]);
+        await persistence.execute("DELETE FROM reviews WHERE issue_id = $1", [issueId]);
+        await persistence.execute("DELETE FROM issues WHERE id = $1", [issueId]);
+      }
+      await persistence.execute("DELETE FROM project_teams WHERE project_id = $1", [projectId]);
+      await persistence.execute("DELETE FROM projects WHERE id = $1", [projectId]);
+      await persistence.execute("DELETE FROM cycles WHERE id = $1", [cycleId]);
       await persistence.execute("DELETE FROM api_key_team_limits WHERE api_key_id = $1", [
         limitedKeyId,
       ]);
@@ -167,6 +193,7 @@ describe("PostgreSQL Documents", () => {
       db.close();
       await persistence.close();
     };
+
     const request = async (query: string, variables?: Record<string, unknown>, token = key) => {
       const response = await fetch(`http://127.0.0.1:${app.server.port}/graphql`, {
         method: "POST",
@@ -181,7 +208,7 @@ describe("PostgreSQL Documents", () => {
       }`,
       {
         input: {
-          title: "PRB-545 integration document",
+          title: "PRB-550 PostgreSQL test: team document",
           content: "PostgreSQL worker content",
           teamId: team.id,
         },
@@ -193,7 +220,7 @@ describe("PostgreSQL Documents", () => {
       `mutation($input: DocumentCreateInput!) {
         documentCreate(input: $input) { document { id project { id name teams { id } } } }
       }`,
-      { input: { title: "PRB-545 project document", projectId } },
+      { input: { title: "PRB-550 PostgreSQL test: project document", projectId } },
     );
     expect(projectCreated.errors).toBeUndefined();
     expect(projectCreated.data!.documentCreate.document.project).toEqual({
@@ -206,7 +233,7 @@ describe("PostgreSQL Documents", () => {
       `mutation($input: DocumentCreateInput!) {
         documentCreate(input: $input) { document { id cycle { id number name team { id } progress } } }
       }`,
-      { input: { title: "PRB-545 cycle document", cycleId } },
+      { input: { title: "PRB-550 PostgreSQL test: cycle document", cycleId } },
     );
     expect(cycleCreated.errors).toBeUndefined();
     expect(cycleCreated.data!.documentCreate.document.cycle).toEqual({
@@ -217,24 +244,80 @@ describe("PostgreSQL Documents", () => {
       progress: 0,
     });
     const cycleDocumentId = cycleCreated.data!.documentCreate.document.id as string;
+    const issueCreated = await request(
+      `mutation($input: IssueCreateInput!) {
+        issueCreate(input: $input) { issue { id identifier } }
+      }`,
+      { input: { teamKey: team.key, title: "PRB-550 PostgreSQL test: issue" } },
+    );
+    expect(issueCreated.errors).toBeUndefined();
+    issueId = issueCreated.data!.issueCreate.issue.id as string;
+    const issueIdentifier = issueCreated.data!.issueCreate.issue.identifier as string;
+    const issueDocument = await request(
+      `mutation($input: DocumentCreateInput!) {
+        documentCreate(input: $input) {
+          document {
+            id
+            title
+            content
+            creator { id name }
+            issue { id identifier }
+            url
+          }
+        }
+      }`,
+      {
+        input: {
+          title: "PRB-550 PostgreSQL test: issue document",
+          content: "Issue-linked PostgreSQL content",
+          issueId,
+        },
+      },
+    );
+    expect(issueDocument.errors).toBeUndefined();
+    expect(issueDocument.data!.documentCreate.document).toMatchObject({
+      title: "PRB-550 PostgreSQL test: issue document",
+      content: "Issue-linked PostgreSQL content",
+      creator: { name: "admin" },
+      issue: { id: issueId, identifier: issueIdentifier },
+      url: `http://localhost:${app.server.port}/document/${issueDocument.data!.documentCreate.document.id}`,
+    });
+    const issueDocumentId = issueDocument.data!.documentCreate.document.id as string;
     const globalCreated = await request(
       `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id } } }`,
-      { input: { title: "PRB-545 global integration document", content: "global content" } },
+      { input: { title: "PRB-550 PostgreSQL test: global document", content: "global content" } },
     );
     expect(globalCreated.errors).toBeUndefined();
     const globalId = globalCreated.data!.documentCreate.document.id as string;
     const noTeamDocument = await request(
       `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id initiative { id } } } }`,
-      { input: { title: "PRB-545 no-team document", initiativeId: noTeamInitiativeId } },
+      {
+        input: {
+          title: "PRB-550 PostgreSQL test: no-team document",
+          initiativeId: noTeamInitiativeId,
+        },
+      },
       memberKey,
     );
     expect(noTeamDocument.errors).toBeUndefined();
     const noTeamDocumentId = noTeamDocument.data!.documentCreate.document.id as string;
     const linkedDocument = await request(
-      `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id } } }`,
-      { input: { title: "PRB-545 linked initiative document", initiativeId: linkedInitiativeId } },
+      `mutation($input: DocumentCreateInput!) {
+        documentCreate(input: $input) { document { id initiative { id name teams { id } } } }
+      }`,
+      {
+        input: {
+          title: "PRB-550 PostgreSQL test: initiative document",
+          initiativeId: linkedInitiativeId,
+        },
+      },
     );
     expect(linkedDocument.errors).toBeUndefined();
+    expect(linkedDocument.data!.documentCreate.document.initiative).toEqual({
+      id: linkedInitiativeId,
+      name: "PRB-545 linked initiative",
+      teams: [{ id: team.id }],
+    });
     const linkedDocumentId = linkedDocument.data!.documentCreate.document.id as string;
     const memberLinkedRead = await request(
       `query($id: ID!) { document(id: $id) { id } }`,
@@ -243,9 +326,32 @@ describe("PostgreSQL Documents", () => {
     );
     expect(memberLinkedRead.errors).toBeUndefined();
     expect(memberLinkedRead.data!.document).toBeNull();
+    const memberIssueRead = await request(
+      `query($id: ID!) { document(id: $id) { id issue { id } } }`,
+      { id: issueDocumentId },
+      memberKey,
+    );
+    expect(memberIssueRead.errors).toBeUndefined();
+    expect(memberIssueRead.data!.document).toEqual({
+      id: issueDocumentId,
+      issue: { id: issueId },
+    });
+    const memberIssueCreate = await request(
+      `mutation($input: DocumentCreateInput!) {
+        documentCreate(input: $input) { document { id } }
+      }`,
+      { input: { title: "PRB-550 PostgreSQL test: denied issue document", issueId } },
+      memberKey,
+    );
+    expect(memberIssueCreate.errors?.[0]?.message).toContain("Team");
     const memberLinkedCreate = await request(
       `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id } } }`,
-      { input: { title: "PRB-545 denied initiative document", initiativeId: linkedInitiativeId } },
+      {
+        input: {
+          title: "PRB-550 PostgreSQL test: denied initiative document",
+          initiativeId: linkedInitiativeId,
+        },
+      },
       memberKey,
     );
     expect(memberLinkedCreate.errors?.[0]?.message).toContain("Initiative not found");
@@ -273,25 +379,101 @@ describe("PostgreSQL Documents", () => {
     await persistence.execute("UPDATE teams SET archived_at = NULL WHERE id = $1", [team.id]);
     const limitedCreate = await request(
       `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id } } }`,
-      { input: { title: "PRB-545 denied global document", content: "denied" } },
+      { input: { title: "PRB-550 PostgreSQL test: denied global document", content: "denied" } },
       limitedKey,
     );
     expect(limitedCreate.errors?.[0]?.message).toContain("unrestricted API key");
+    const nested = await request(
+      `query($issueId: ID!, $projectId: ID!, $teamId: ID!, $cycleId: ID!, $initiativeId: ID!) {
+        issue(id: $issueId) { documents { id title } }
+        project(id: $projectId) { documents { id title } }
+        team(id: $teamId) { documents { id title } }
+        cycle(id: $cycleId) { documents { id title } }
+        initiative(id: $initiativeId) { documents { id title } }
+      }`,
+      { issueId, projectId, teamId: team.id, cycleId, initiativeId: linkedInitiativeId },
+    );
+    expect(nested.errors).toBeUndefined();
+    expect(nested.data!.issue.documents).toEqual([
+      { id: issueDocumentId, title: "PRB-550 PostgreSQL test: issue document" },
+    ]);
+    expect(nested.data!.project.documents).toEqual([
+      { id: projectDocumentId, title: "PRB-550 PostgreSQL test: project document" },
+    ]);
+    expect(nested.data!.team.documents).toEqual([
+      { id, title: "PRB-550 PostgreSQL test: team document" },
+    ]);
+    expect(nested.data!.cycle.documents).toEqual([
+      { id: cycleDocumentId, title: "PRB-550 PostgreSQL test: cycle document" },
+    ]);
+    expect(nested.data!.initiative.documents).toEqual([
+      { id: linkedDocumentId, title: "PRB-550 PostgreSQL test: initiative document" },
+    ]);
+    const updated = await request(
+      `mutation($id: ID!, $input: DocumentUpdateInput!) {
+        documentUpdate(id: $id, input: $input) {
+          document { id title content issue { id identifier } }
+        }
+      }`,
+      {
+        id: issueDocumentId,
+        input: {
+          title: "PRB-550 PostgreSQL test: edited issue document",
+          content: "Edited content",
+        },
+      },
+    );
+    expect(updated.errors).toBeUndefined();
+    expect(updated.data!.documentUpdate.document).toEqual({
+      id: issueDocumentId,
+      title: "PRB-550 PostgreSQL test: edited issue document",
+      content: "Edited content",
+      issue: { id: issueId, identifier: issueIdentifier },
+    });
+    const globalUpdated = await request(
+      `mutation($id: ID!, $input: DocumentUpdateInput!) {
+        documentUpdate(id: $id, input: $input) { document { title content } }
+      }`,
+      {
+        id: globalId,
+        input: { title: "PRB-550 PostgreSQL test: edited global document", content: "edited" },
+      },
+    );
+    expect(globalUpdated.errors).toBeUndefined();
+    expect(globalUpdated.data!.documentUpdate.document).toEqual({
+      title: "PRB-550 PostgreSQL test: edited global document",
+      content: "edited",
+    });
+    const limitedGlobalRead = await request(
+      `query($id: ID!) { document(id: $id) { id } }`,
+      { id: globalId },
+      limitedKey,
+    );
+    expect(limitedGlobalRead.errors).toBeUndefined();
+    expect(limitedGlobalRead.data!.document).toBeNull();
+    const limitedGlobalUpdate = await request(
+      `mutation($id: ID!, $input: DocumentUpdateInput!) {
+        documentUpdate(id: $id, input: $input) { document { id } }
+      }`,
+      { id: globalId, input: { content: "must remain private" } },
+      limitedKey,
+    );
+    expect(limitedGlobalUpdate.errors?.[0]?.message).toContain("Document not found");
     const limitedList = await request(`{ documents { id title } }`, undefined, limitedKey);
     expect(limitedList.errors).toBeUndefined();
     expect(limitedList.data!.documents).toContainEqual({
       id,
-      title: "PRB-545 integration document",
+      title: "PRB-550 PostgreSQL test: team document",
     });
     expect(limitedList.data!.documents).not.toContainEqual({
       id: globalId,
-      title: "PRB-545 global integration document",
+      title: "PRB-550 PostgreSQL test: edited global document",
     });
     const listed = await request(`{ documents(search: "work") { id title content } }`);
     expect(listed.errors).toBeUndefined();
     expect(listed.data!.documents).toContainEqual({
       id,
-      title: "PRB-545 integration document",
+      title: "PRB-550 PostgreSQL test: team document",
       content: "PostgreSQL worker content",
     });
     const archived = await request(
@@ -306,16 +488,5 @@ describe("PostgreSQL Documents", () => {
     );
     expect(restored.errors).toBeUndefined();
     expect(restored.data!.documentUnarchive.document.archivedAt).toBeNull();
-    await persistence.execute("DELETE FROM documents WHERE id IN ($1, $2, $3, $4, $5, $6)", [
-      id,
-      globalId,
-      projectDocumentId,
-      cycleDocumentId,
-      noTeamDocumentId,
-      linkedDocumentId,
-    ]);
-    await persistence.execute("DELETE FROM project_teams WHERE project_id = $1", [projectId]);
-    await persistence.execute("DELETE FROM projects WHERE id = $1", [projectId]);
-    await persistence.execute("DELETE FROM cycles WHERE id = $1", [cycleId]);
   });
 });
