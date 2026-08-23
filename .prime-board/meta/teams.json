@@ -225,16 +225,16 @@
         "type": "backlog"
       },
       {
-        "color": "#e2e2e2",
-        "name": "Todo",
-        "position": 1,
-        "type": "unstarted"
-      },
-      {
         "color": "#f2c94c",
         "name": "In Progress",
         "position": 2,
         "type": "started"
+      },
+      {
+        "color": "#8a8f98",
+        "name": "Ready for Review",
+        "position": 2.5,
+        "type": "unstarted"
       },
       {
         "color": "#5e6ad2",
@@ -265,12 +265,6 @@
         "name": "Needs Info",
         "position": 6,
         "type": "unstarted"
-      },
-      {
-        "color": "#95a2b3",
-        "name": "Duplicate",
-        "position": 7,
-        "type": "canceled"
       }
     ],
     "visibility": "public"

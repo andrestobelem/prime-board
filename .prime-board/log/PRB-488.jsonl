@@ -6,3 +6,4 @@
 {"actor":"admin","issue":"PRB-488","payload":{"type":"blocked_by","issue":"PRB-416"},"ts":"2026-08-21T18:34:57.262Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-488","payload":{"type":"blocks","issue":"PRB-491"},"ts":"2026-08-21T18:34:57.720Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-488","payload":{"type":"blocks","issue":"PRB-420"},"ts":"2026-08-21T18:37:21.356Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-488","payload":{"type":"related","issue":"PRB-527"},"ts":"2026-08-23T03:59:54.401Z","type":"relation_added"}

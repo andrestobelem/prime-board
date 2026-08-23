@@ -231,20 +231,20 @@
         "targetDate": null
       },
       {
-        "description": "CLI `pb` y MCP server como clientes de la API GraphQL.",
-        "name": "Parte 3 — Interfaces para agentes",
-        "position": 2066,
-        "targetDate": null
-      },
-      {
         "description": "UI Linear-like: shell, lista, board, detalle, command palette.",
         "name": "Parte 4 — UI web",
-        "position": 3022,
+        "position": 2066,
         "targetDate": null
       },
       {
         "description": "Ajustes surgidos de probar el MVP: temas, gestión de usuarios y proyectos por team.",
         "name": "Parte 5 — Feedback del MVP",
+        "position": 3022,
+        "targetDate": null
+      },
+      {
+        "description": "CLI `pb` y MCP server como clientes de la API GraphQL.",
+        "name": "Parte 3 — Interfaces para agentes",
         "position": 3943,
         "targetDate": null
       }

@@ -5,7 +5,7 @@
     "createdAt": "2026-08-16T11:26:51.823Z",
     "expiresAt": null,
     "id": "01a00a56-10db-7005-842a-ab752da24497",
-    "lastUsedAt": "2026-08-22T05:32:16.172Z",
+    "lastUsedAt": "2026-08-23T07:09:41.188Z",
     "name": "admin operational key",
     "revokedAt": null,
     "rotatedFromId": null,
@@ -22,7 +22,7 @@
     "createdAt": "2026-08-16T11:27:16.943Z",
     "expiresAt": null,
     "id": "01a00a56-10db-7006-b2dc-839a76b69ad2",
-    "lastUsedAt": "2026-08-21T20:15:22.336Z",
+    "lastUsedAt": "2026-08-23T06:06:24.527Z",
     "name": "Atlas operational key",
     "revokedAt": null,
     "rotatedFromId": null,
@@ -39,7 +39,7 @@
     "createdAt": "2026-08-16T11:27:16.969Z",
     "expiresAt": null,
     "id": "01a00a56-10db-7007-bbbf-76fb38015ac1",
-    "lastUsedAt": "2026-08-22T01:45:06.216Z",
+    "lastUsedAt": "2026-08-23T06:06:24.530Z",
     "name": "Forja operational key",
     "revokedAt": null,
     "rotatedFromId": null,
@@ -56,7 +56,7 @@
     "createdAt": "2026-08-16T11:27:16.995Z",
     "expiresAt": null,
     "id": "01a00a56-10db-7008-86d9-8e12af2a57e4",
-    "lastUsedAt": "2026-08-21T20:15:22.377Z",
+    "lastUsedAt": "2026-08-23T06:06:24.533Z",
     "name": "Lupa operational key",
     "revokedAt": null,
     "rotatedFromId": null,
@@ -73,7 +73,7 @@
     "createdAt": "2026-08-16T11:27:17.019Z",
     "expiresAt": null,
     "id": "01a00a56-10db-7009-a070-626c6ef02b19",
-    "lastUsedAt": "2026-08-22T01:41:43.536Z",
+    "lastUsedAt": "2026-08-23T06:06:24.535Z",
     "name": "Brujula operational key",
     "revokedAt": null,
     "rotatedFromId": null,
@@ -90,7 +90,7 @@
     "createdAt": "2026-08-18T03:05:54.768Z",
     "expiresAt": null,
     "id": "01a012d5-2950-7000-b806-9cd27a12d0ca",
-    "lastUsedAt": "2026-08-22T01:42:24.590Z",
+    "lastUsedAt": "2026-08-23T06:11:26.678Z",
     "name": "Scout operational key",
     "revokedAt": null,
     "rotatedFromId": null,
@@ -107,7 +107,7 @@
     "createdAt": "2026-08-18T03:05:54.771Z",
     "expiresAt": null,
     "id": "01a012d5-2953-7000-ad6e-8d1f5f3768b1",
-    "lastUsedAt": "2026-08-22T01:45:00.572Z",
+    "lastUsedAt": "2026-08-23T06:06:24.613Z",
     "name": "Builder operational key",
     "revokedAt": null,
     "rotatedFromId": null,
@@ -191,7 +191,7 @@
     "createdAt": "2026-08-21T16:58:02.890Z",
     "expiresAt": null,
     "id": "01a02542-150a-7075-b533-74cad2df5086",
-    "lastUsedAt": "2026-08-22T03:37:25.158Z",
+    "lastUsedAt": "2026-08-23T06:06:24.544Z",
     "name": "Board browser admin",
     "revokedAt": null,
     "rotatedFromId": null,
@@ -201,5 +201,41 @@
       "write"
     ],
     "teamIds": []
+  },
+  {
+    "actor": "ghostty-scout",
+    "actorId": "01a018b2-46fd-7000-8a72-3eb61231d3bb",
+    "createdAt": "2026-08-23T03:33:00.150Z",
+    "expiresAt": null,
+    "id": "01a02cad-c276-7682-97b5-a752325a8642",
+    "lastUsedAt": "2026-08-23T06:25:00.166Z",
+    "name": "Ghostty Scout operational key",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "read",
+      "write"
+    ],
+    "teamIds": [
+      "PRB"
+    ]
+  },
+  {
+    "actor": "Lucía",
+    "actorId": "01a00a56-10a7-7002-b608-fa26396ec9e1",
+    "createdAt": "2026-08-23T03:51:34.646Z",
+    "expiresAt": null,
+    "id": "01a02cbe-c3f6-73e3-ab0a-71e7f6dfd29d",
+    "lastUsedAt": "2026-08-23T06:06:24.899Z",
+    "name": "ghostty-lucia-prb-443",
+    "revokedAt": null,
+    "rotatedFromId": null,
+    "scopes": [
+      "read",
+      "write"
+    ],
+    "teamIds": [
+      "PRB"
+    ]
   }
 ]
