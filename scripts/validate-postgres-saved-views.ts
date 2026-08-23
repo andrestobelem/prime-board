@@ -337,6 +337,102 @@ try {
     limitedKey,
   );
 
+  const limitedWriteKeyResult = await graphql(
+    `
+      mutation ($actorId: ID!, $teamId: ID!) {
+        apiKeyCreate(
+          input: {
+            actorId: $actorId
+            name: "validation limited writer"
+            scopes: [WRITE]
+            teamIds: [$teamId]
+          }
+        ) {
+          key
+        }
+      }
+    `,
+    { actorId: viewerId, teamId },
+  );
+  const limitedWriteKey = limitedWriteKeyResult.data?.apiKeyCreate.key as string;
+  const limitedSavedViewQueries = await Promise.all(
+    [personalId, workspaceId].map((id) =>
+      graphql(
+        `
+          query ($id: ID!) {
+            savedView(id: $id) {
+              id
+              filter
+            }
+          }
+        `,
+        { id },
+        limitedWriteKey,
+      ),
+    ),
+  );
+  const limitedSavedViewMutations = await Promise.all(
+    [personalId, workspaceId].flatMap((id) =>
+      [
+        `mutation($id: ID!) { savedViewUpdate(id: $id, input: { name: "limited update" }) { success } }`,
+        `mutation($id: ID!) { savedViewDuplicate(id: $id) { success } }`,
+        `mutation($id: ID!) { savedViewDelete(id: $id) { success } }`,
+      ].map((query) => graphql(query, { id }, limitedWriteKey)),
+    ),
+  );
+  const scopedProject = await graphql(
+    `
+      mutation ($input: ProjectCreateInput!) {
+        projectCreate(input: $input) {
+          project {
+            id
+          }
+        }
+      }
+    `,
+    { input: { name: "Limited favorite project", teamIds: [teamId] } },
+  );
+  const scopedProjectId = scopedProject.data?.projectCreate.project.id as string;
+  const scopedFavorite = await graphql(
+    `
+      mutation ($input: FavoriteCreateInput!) {
+        favoriteCreate(input: $input) {
+          favorite {
+            id
+          }
+        }
+      }
+    `,
+    { input: { projectId: scopedProjectId } },
+    limitedWriteKey,
+  );
+  const scopedFavoriteId = scopedFavorite.data?.favoriteCreate.favorite.id as string;
+  const limitedFavoriteReorder = await graphql(
+    `
+      mutation ($id: ID!) {
+        favoriteReorder(id: $id, position: 0) {
+          favorite {
+            id
+            position
+          }
+        }
+      }
+    `,
+    { id: scopedFavoriteId },
+    limitedWriteKey,
+  );
+  const limitedFavoriteDelete = await graphql(
+    `
+      mutation ($id: ID!) {
+        favoriteDelete(id: $id) {
+          success
+        }
+      }
+    `,
+    { id: scopedFavoriteId },
+    limitedWriteKey,
+  );
+
   report.savedViews =
     !personal.errors &&
     personal.data?.savedViewCreate.savedView.filter.priority.eq === 2 &&
@@ -356,6 +452,21 @@ try {
     hiddenFavorite.data?.favorites.length === 1 &&
     restoredFavorite.data?.favorites.length === 2;
   report.authorization = limitedFavorites.errors?.[0]?.extensions?.code === "UNAUTHORIZED";
+  report.savedViewAuthorization =
+    limitedSavedViewQueries.every(
+      (result) =>
+        result.errors?.[0]?.extensions?.code === "UNAUTHORIZED" && !result.data?.savedView,
+    ) &&
+    limitedSavedViewMutations.every(
+      (result) => result.errors?.[0]?.extensions?.code === "UNAUTHORIZED",
+    );
+  report.favoriteAuthorization =
+    !scopedProject.errors &&
+    !scopedFavorite.errors &&
+    !limitedFavoriteReorder.errors &&
+    limitedFavoriteReorder.data?.favoriteReorder.favorite.id === scopedFavoriteId &&
+    !limitedFavoriteDelete.errors &&
+    limitedFavoriteDelete.data?.favoriteDelete.success === true;
 
   const passed = Object.values(report).every(Boolean);
   console.log(JSON.stringify({ passed, report }));
