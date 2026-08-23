@@ -69,8 +69,8 @@ export async function listPostgresWebhooks(
 ): Promise<PostgresWebhookRow[]> {
   const rows = await persistence.many<PostgresWebhookRow>(
     viewer.workspace_role === "admin"
-      ? "SELECT * FROM webhooks WHERE enabled = TRUE ORDER BY created_at, id"
-      : "SELECT * FROM webhooks WHERE enabled = TRUE AND owner_id = $1 ORDER BY created_at, id",
+      ? "SELECT * FROM webhooks ORDER BY created_at, id"
+      : "SELECT * FROM webhooks WHERE owner_id = $1 ORDER BY created_at, id",
     viewer.workspace_role === "admin" ? undefined : [viewer.id],
   );
   if (viewer.workspace_role === "admin") return [...rows];
