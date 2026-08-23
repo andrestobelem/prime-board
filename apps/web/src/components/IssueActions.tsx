@@ -31,6 +31,8 @@ export interface IssueActionCycle {
 
 export interface IssueActionOptions {
   states: IssueActionState[];
+  /** Etiqueta para cambiar estados en un menú contextual. */
+  stateActionLabel?: string;
   actors: IssueActionActor[];
   labels: IssueActionLabel[];
   projects: IssueActionProject[];
@@ -88,9 +90,10 @@ export function IssueActionMenu({
   }
 
   function selectOptions(): Array<[string, string]> {
+    const stateActionLabel = options.stateActionLabel ?? "State";
     return [
       ...options.states.map(
-        (state) => [`state:${state.id}`, `State: ${state.name}`] as [string, string],
+        (state) => [`state:${state.id}`, `${stateActionLabel}: ${state.name}`] as [string, string],
       ),
       ...options.actors.map(
         (actor) =>
@@ -137,6 +140,11 @@ export function IssueActionMenu({
           role="menu"
           onClick={(event) => event.stopPropagation()}
         >
+          {error && (
+            <div className="issue-action-error" role="alert">
+              {error}
+            </div>
+          )}
           <label>
             <span className="sr-only">Change issue</span>
             <select
@@ -150,7 +158,9 @@ export function IssueActionMenu({
                 if (input) void run(() => onAction(input));
               }}
             >
-              <option value="">Change…</option>
+              <option value="">
+                {options.stateActionLabel === "Move to" ? "Move to…" : "Change…"}
+              </option>
               {selectOptions().map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}

@@ -12,7 +12,12 @@ import {
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import { appendUniqueById } from "../pagination.ts";
 import { createRequestGate } from "../request-generation.ts";
-import { issueStateColumnKey, stateColumnKey } from "../board-grouping.ts";
+import {
+  incompatibleStateDropMessage,
+  issueStateColumnKey,
+  stateColumnKey,
+  stateIdForDrop,
+} from "../board-grouping.ts";
 import { getVisibleBoardMetadata } from "../board-columns.ts";
 import { navigate } from "../router.tsx";
 import {
@@ -196,7 +201,13 @@ export function BoardView({
     const team = isProject
       ? container.teams.find((candidate: any) => candidate.id === issue.team?.id)
       : container;
-    return { ...actionOptions, actors: actorsForTeam(team) };
+    return {
+      ...actionOptions,
+      // En un Project, Move to… solo ofrece estados del Team de la issue.
+      states: isProject ? (team?.states ?? []) : actionOptions.states,
+      stateActionLabel: isProject ? "Move to" : actionOptions.stateActionLabel,
+      actors: actorsForTeam(team),
+    };
   }
 
   const selectedIssues = issues.filter((issue) => selectedIds.has(issue.id));
@@ -385,9 +396,18 @@ export function BoardView({
 
     // Board de proyecto por estado: el id a escribir depende del team del issue.
     let stateId = column.patch.stateId ?? null;
-    if (groupBy === "state" && isProject) {
-      stateId = column.stateIdByTeam?.[issue.team?.id ?? ""] ?? null;
-      if (!stateId) return; // el team del issue no tiene un estado equivalente
+    if (groupBy === "state") {
+      stateId = stateIdForDrop({
+        isProject,
+        stateId: column.patch.stateId,
+        stateIdByTeam: column.stateIdByTeam,
+        issueTeamId: issue.team?.id,
+      });
+      if (!stateId && isProject) {
+        setActionError(incompatibleStateDropMessage(column.label));
+        setDragId(null);
+        return;
+      }
     }
 
     // Optimista: mueve la card ya; la mutación refetchea al confirmar.
@@ -472,10 +492,30 @@ export function BoardView({
             .sort(
               (a, b) => (a.priority === 0 ? 5 : a.priority) - (b.priority === 0 ? 5 : b.priority),
             );
+          const draggedIssue = dragId ? issues.find((issue) => issue.id === dragId) : undefined;
+          const unavailableForDraggedIssue = Boolean(
+            draggedIssue &&
+            groupBy === "state" &&
+            isProject &&
+            !stateIdForDrop({
+              isProject,
+              stateId: column.patch.stateId,
+              stateIdByTeam: column.stateIdByTeam,
+              issueTeamId: draggedIssue.team?.id,
+            }),
+          );
           return (
             <div
               key={column.key}
-              className={`board-column${overState === column.key ? " drag-over" : ""}`}
+              className={`board-column${overState === column.key ? " drag-over" : ""}${
+                unavailableForDraggedIssue ? " unavailable" : ""
+              }`}
+              aria-disabled={unavailableForDraggedIssue || undefined}
+              aria-label={
+                unavailableForDraggedIssue
+                  ? `${column.label} (unavailable for this issue's team)`
+                  : column.label
+              }
               onDragOver={(event) => {
                 event.preventDefault();
                 setOverState(column.key);
@@ -491,6 +531,9 @@ export function BoardView({
                 <span className="count" style={{ color: "var(--text-faint)", fontWeight: 400 }}>
                   {cards.length}
                 </span>
+                {unavailableForDraggedIssue && (
+                  <span className="board-column-availability">Unavailable for this issue</span>
+                )}
               </div>
               {cards.map((issue) => (
                 <div
