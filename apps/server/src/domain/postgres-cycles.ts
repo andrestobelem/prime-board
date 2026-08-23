@@ -258,16 +258,18 @@ export async function deletePostgresCycle(
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   const reference = `${team.key}/${existing.number}`;
   await persistence.transaction(async (tx) => {
-    const issues = await tx.many<{ id: string }>("SELECT id FROM issues WHERE cycle_id = $1", [id]);
     await preserveCycleActivityReferences(tx, id, reference);
     const timestamp = now();
-    await tx.execute("UPDATE issues SET cycle_id = NULL, updated_at = $1 WHERE cycle_id = $2", [
-      timestamp,
-      id,
-    ]);
+    const issues = await tx.many<{ id: string }>(
+      `UPDATE issues SET cycle_id = NULL, updated_at = $1
+       WHERE cycle_id = $2
+       RETURNING id`,
+      [timestamp, id],
+    );
     for (const issue of issues) {
       await recordCycleActivity(tx, issue.id, viewer.id, { from: reference, to: null }, timestamp);
     }
+
     await tx.execute("DELETE FROM cycles WHERE id = $1", [id]);
   });
   return true;
@@ -308,18 +310,12 @@ export async function carryOverPostgresCycle(
   await assertPostgresCycleAccess(persistence, viewer, from.team_id);
   let affected: readonly { id: string }[] = [];
   await persistence.transaction(async (tx) => {
-    affected = await tx.many<{ id: string }>(
-      `SELECT id FROM issues
-       WHERE cycle_id = $1 AND archived_at IS NULL
-         AND state_id IN (SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled'))
-       FOR UPDATE`,
-      [fromCycleId],
-    );
     const timestamp = now();
-    await tx.execute(
+    affected = await tx.many<{ id: string }>(
       `UPDATE issues SET cycle_id = $2, updated_at = $3
        WHERE cycle_id = $1 AND archived_at IS NULL
-         AND state_id IN (SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled'))`,
+         AND state_id IN (SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled'))
+       RETURNING id`,
       [fromCycleId, toCycleId, timestamp],
     );
     for (const issue of affected) {
