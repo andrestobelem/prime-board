@@ -101,7 +101,18 @@ export async function exportPostgresBoard(
 ): Promise<ExportResult> {
   const db = openDatabase(":memory:");
   try {
-    for (const table of TABLES) await copyTable(persistence, db, table);
+    // Teams y workflow_states se referencian mediante default_state_id.
+    // Difiere la validación de FKs hasta completar la proyección.
+    db.exec("PRAGMA foreign_keys = OFF;");
+    try {
+      for (const table of TABLES) await copyTable(persistence, db, table);
+    } finally {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    if (violations.length) {
+      throw new Error("PostgreSQL export produced invalid foreign-key references");
+    }
     return exportBoard(db, rootDir, options);
   } finally {
     db.close();
