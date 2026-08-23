@@ -549,7 +549,7 @@ export const documentResolvers = {
         : null;
     },
     url: (document: { id: string }, _args: unknown, context: Context) =>
-      `http://localhost:${context.config.port}/document/${document.id}`,
+      `${context.baseUrl}/document/${document.id}`,
   },
   Query: {
     documents: async (_parent: unknown, args: Record<string, unknown>, context: Context) => {

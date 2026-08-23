@@ -32,6 +32,7 @@ describe("documents", () => {
       issue: { id: issueId },
       creator: { name: "admin" },
     });
+    expect(document.url).toBe(`${app.url}/document/${document.id}`);
 
     const issueDocuments = await gql(
       app,

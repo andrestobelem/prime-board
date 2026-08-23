@@ -10,6 +10,8 @@ import type { Persistence } from "../db/persistence.ts";
 export interface Context {
   db: Database;
   config: Config;
+  /** Base URL pública con el puerto efectivo del servidor. */
+  baseUrl: string;
   /** Workspace efectivo; hoy siempre es el singleton de la instalación. */
   workspace: WorkspaceContext;
   viewer: ActorRow | null;

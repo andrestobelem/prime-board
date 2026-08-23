@@ -26,6 +26,7 @@ export interface AppDeps {
 export function createApp({ db, config, webhookOptions, persistence }: AppDeps) {
   const events = new WebhookDispatcher(db, webhookOptions ?? { log: console.error }, persistence);
   const repo = persistence ? null : createRepoSync(db, config.repoRoot);
+  let baseUrl = `http://localhost:${config.port}`;
   const yoga = createYoga({
     schema: createSchema<Context>({ typeDefs, resolvers }),
     graphqlEndpoint: "/graphql",
@@ -63,6 +64,7 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
             ? (workspace as { id: string }).id
             : (workspace as { workspaceId: string }).workspaceId,
         },
+        baseUrl,
         viewer: auth?.actor ?? null,
         auth,
         events,
@@ -116,6 +118,7 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
       return Response.json({ error: "Not found" }, { status: 404 });
     },
   });
+  baseUrl = `http://localhost:${server.port}`;
 
   return { server, events };
 }
