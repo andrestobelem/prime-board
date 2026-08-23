@@ -15,6 +15,14 @@ import {
 } from "../domain/postgres-projects.ts";
 import { accessiblePostgresTeamIds, listPostgresIssues } from "../domain/postgres-issues.ts";
 import {
+  createPostgresMilestone,
+  deletePostgresMilestone,
+  getPostgresMilestone,
+  listPostgresMilestones,
+  mapPostgresMilestone,
+  updatePostgresMilestone,
+} from "../domain/postgres-milestones.ts";
+import {
   canDiscoverPostgresTeam,
   getPostgresTeam,
   listPostgresTeams,
@@ -108,10 +116,11 @@ export const projectResolvers = {
     },
     milestones: async (project: MappedProject, _args: unknown, context: Context) => {
       if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Project milestones are not yet available with PostgreSQL persistence",
-        );
+        return (await postgresProjectTeamsAllowed(context, project.id))
+          ? (await listPostgresMilestones(context.persistence, project.id)).map(
+              mapPostgresMilestone,
+            )
+          : [];
       }
       return projectTeamsAllowed(context, project.id)
         ? listMilestones(context.db, project.id).map(mapMilestone)
@@ -207,15 +216,44 @@ export const projectResolvers = {
   },
 
   Milestone: {
-    project: (milestone: { projectId: string }, _args: unknown, context: Context) => {
+    project: async (milestone: { projectId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const project = await getPostgresProject(context.persistence, milestone.projectId);
+        return project && (await postgresProjectTeamsAllowed(context, project.id))
+          ? mapPostgresProject(project)
+          : null;
+      }
       const project = lookupProject(context, milestone.projectId);
       return project && projectTeamsAllowed(context, project.id) ? mapProject(project) : null;
     },
-    issues: (
+    issues: async (
       milestone: { id: string },
       args: { first?: number; after?: string | null },
       context: Context,
     ) => {
+      if (context.persistence) {
+        const milestoneRow = await getPostgresMilestone(context.persistence, milestone.id);
+        if (
+          !milestoneRow ||
+          !(await postgresProjectTeamsAllowed(context, milestoneRow.project_id))
+        ) {
+          return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+        }
+        const page = await listPostgresIssues(context.persistence, {
+          filter: { milestone: { eq: milestone.id } },
+          first: Math.min(Math.max(args.first ?? 100, 1), 250),
+          after: args.after,
+          teamIds: await accessiblePostgresTeamIds(
+            context.persistence,
+            requireViewer(context),
+            context.auth,
+          ),
+        });
+        return {
+          nodes: page.rows.map(mapIssue),
+          pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+        };
+      }
       const milestoneRow = getMilestone(context.db, milestone.id);
       if (!milestoneRow || !projectTeamsAllowed(context, milestoneRow.project_id)) {
         return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
@@ -231,7 +269,18 @@ export const projectResolvers = {
         pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
       };
     },
-    progress: (milestone: { id: string }, _args: unknown, context: Context) => {
+    progress: async (milestone: { id: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const row = await context.persistence.one<{ total: number; done: number | null }>(
+          `SELECT count(*)::int AS total,
+                  COALESCE(sum(CASE WHEN workflow_states.type IN ('completed', 'canceled') THEN 1 ELSE 0 END), 0)::int AS done
+           FROM issues JOIN workflow_states ON workflow_states.id = issues.state_id
+           WHERE issues.milestone_id = $1 AND issues.archived_at IS NULL`,
+          [milestone.id],
+        );
+        const total = Number(row?.total ?? 0);
+        return total === 0 ? 0 : Number(row?.done ?? 0) / total;
+      }
       const row = context.db
         .query(
           `SELECT count(*) AS total,
@@ -336,8 +385,19 @@ export const projectResolvers = {
       context.events.emit("project.created", viewer, project);
       return { success: true, project };
     },
-    milestoneDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+    milestoneDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const milestone = await getPostgresMilestone(context.persistence, args.id);
+        if (milestone) {
+          await assertPostgresProjectKeyLimit(
+            context,
+            await listPostgresProjectTeamIds(context.persistence, milestone.project_id),
+          );
+        }
+        const orphaned = await deletePostgresMilestone(context.persistence, viewer, args.id);
+        return { success: true, orphanedIssues: orphaned };
+      }
       const milestone = getMilestone(context.db, args.id);
       if (milestone) assertCanManageProject(context.db, viewer, milestone.project_id);
       const affected = context.db
@@ -411,23 +471,46 @@ export const projectResolvers = {
       });
       return { success: true, project: restored };
     },
-    milestoneCreate: (
+    milestoneCreate: async (
       _parent: unknown,
       args: { input: Parameters<typeof createMilestone>[1] },
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        await assertPostgresProjectKeyLimit(
+          context,
+          await listPostgresProjectTeamIds(context.persistence, args.input.projectId),
+        );
+        const created = mapPostgresMilestone(
+          await createPostgresMilestone(context.persistence, viewer, args.input),
+        );
+        return { success: true, milestone: created };
+      }
       assertCanManageProject(context.db, viewer, args.input.projectId);
       requireProject(context, args.input.projectId);
       const created = mapMilestone(createMilestone(context.db, args.input));
       return { success: true, milestone: created };
     },
-    milestoneUpdate: (
+    milestoneUpdate: async (
       _parent: unknown,
       args: { id: string; input: Parameters<typeof updateMilestone>[2] },
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const milestone = await getPostgresMilestone(context.persistence, args.id);
+        if (milestone) {
+          await assertPostgresProjectKeyLimit(
+            context,
+            await listPostgresProjectTeamIds(context.persistence, milestone.project_id),
+          );
+        }
+        const updated = mapPostgresMilestone(
+          await updatePostgresMilestone(context.persistence, viewer, args.id, args.input),
+        );
+        return { success: true, milestone: updated };
+      }
       const milestone = getMilestone(context.db, args.id);
       if (milestone) assertCanManageProject(context.db, viewer, milestone.project_id);
       const updated = mapMilestone(updateMilestone(context.db, args.id, args.input));
