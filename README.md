@@ -83,7 +83,12 @@ bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto
 
 El launcher deriva una DB independiente en `~/.prime-board/projects/`, configura
 `PRIME_BOARD_REPO` con la raíz del proyecto y escribe allí la réplica `.prime-board/`.
-Usa `--port` y `--db` para personalizar la instancia. Puedes elegir la identidad que se
+Usa `--port`, `--host`, `--db` y `--web-dist` para personalizar la instancia. Espera `/health`
+antes de indicar que el runtime está listo. Para una instalación limpia, empaqueta
+`packages/prime-board-runtime` con `bun run build:runtime` y ejecuta el binario `prime-board`;
+el paquete requiere Bun >= 1.3.14, incluye UI y migraciones, y documenta la matriz y los
+checksums en su README. La DB, el lock, los logs y las credenciales quedan fuera del paquete.
+Puedes elegir la identidad que se
 siembra en una base nueva:
 
 ```bash
