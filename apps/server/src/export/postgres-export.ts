@@ -1,0 +1,109 @@
+import type { Database } from "bun:sqlite";
+import { openDatabase } from "../db/database.ts";
+import type { Persistence, SqlValue } from "../db/persistence.ts";
+import { exportBoard, type ExportOptions, type ExportResult } from "./exporter.ts";
+
+const TABLES = [
+  "workspace",
+  "actors",
+  "teams",
+  "workflow_states",
+  "projects",
+  "project_teams",
+  "milestones",
+  "cycles",
+  "issues",
+  "labels",
+  "issue_labels",
+  "issue_relations",
+  "comments",
+  "activity",
+  "webhooks",
+  "api_keys",
+  "api_key_scopes",
+  "api_key_team_limits",
+  "saved_views",
+  "favorites",
+  "team_memberships",
+  "project_updates",
+  "reviews",
+  "initiatives",
+  "initiative_projects",
+  "initiative_teams",
+  "inbox_receipts",
+] as const;
+
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+async function copyTable(persistence: Persistence, db: Database, table: string): Promise<void> {
+  const sqliteColumns = (
+    db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>
+  ).map((column) => column.name);
+  if (!sqliteColumns.length) return;
+  const postgresColumns = await persistence.many<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_schema = current_schema() AND table_name = $1
+     ORDER BY ordinal_position`,
+    [table],
+  );
+  const columns = postgresColumns
+    .map((column) => column.column_name)
+    .filter((column) => sqliteColumns.includes(column));
+  if (!columns.length) return;
+  const selected = columns.map(quoteIdentifier).join(", ");
+  const rows = await persistence.many<Record<string, unknown>>(
+    `SELECT ${selected} FROM ${quoteIdentifier(table)}`,
+  );
+  if (!rows.length) return;
+  const placeholders = columns.map(() => "?").join(", ");
+  const insert = db.query(
+    `INSERT OR IGNORE INTO ${quoteIdentifier(table)} (${selected}) VALUES (${placeholders})`,
+  );
+  for (const row of rows) {
+    const values: SqlValue[] = columns.map((column) => {
+      const value = row[column];
+      if (value === null || value === undefined) return null;
+      if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "bigint" ||
+        typeof value === "boolean"
+      )
+        return value;
+      return JSON.stringify(value);
+    });
+    insert.run(...(values as never[]));
+  }
+}
+
+/**
+ * Exporta PostgreSQL mediante el exportador determinista existente.
+ * La base SQLite temporal es solo una proyección de exportación. PostgreSQL
+ * permanece como fuente de verdad y la copia no escribe en el repositorio.
+ */
+export async function exportPostgresBoard(
+  persistence: Persistence,
+  rootDir: string,
+  options: ExportOptions = {},
+): Promise<ExportResult> {
+  const db = openDatabase(":memory:");
+  try {
+    // Teams and workflow_states reference each other through default_state_id.
+    // Defer SQLite FK enforcement until the complete projection exists.
+    db.exec("PRAGMA foreign_keys = OFF;");
+    try {
+      for (const table of TABLES) await copyTable(persistence, db, table);
+    } finally {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    if (violations.length) {
+      throw new Error("PostgreSQL export produced invalid foreign-key references");
+    }
+    return exportBoard(db, rootDir, options);
+  } finally {
+    db.close();
+  }
+}

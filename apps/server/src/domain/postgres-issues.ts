@@ -24,6 +24,8 @@ import { apiError } from "../graphql/errors.ts";
 import { isWorkspaceAdmin } from "../auth/permissions.ts";
 import { newId, now } from "../db/util.ts";
 import { applyPostgresLabelOps } from "./postgres-labels.ts";
+import { assertPostgresMilestoneMatchesProject } from "./postgres-milestones.ts";
+import { validatePostgresCycleForTeam } from "./postgres-cycles.ts";
 
 const SELECT_ISSUE =
   "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id";
@@ -223,18 +225,21 @@ function assertPostgresPriority(priority: number): void {
   }
 }
 
-function hasOwn(input: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(input, key);
-}
-
-function assertPostgresIssueDependencies(input: Record<string, unknown>): void {
-  const unsupported = ["projectId", "milestoneId", "cycleId"];
-  const field = unsupported.find((name) => hasOwn(input, name));
-  if (field) {
-    throw apiError(
-      "VALIDATION_FAILED",
-      `Issue ${field} is not yet available with PostgreSQL persistence`,
-    );
+async function assertPostgresProjectForTeam(
+  persistence: Persistence | PersistenceTransaction,
+  projectId: string,
+  teamId: string,
+): Promise<void> {
+  if (!(await persistence.one("SELECT id FROM projects WHERE id = $1", [projectId]))) {
+    throw apiError("NOT_FOUND", "Project not found");
+  }
+  if (
+    !(await persistence.one("SELECT 1 FROM project_teams WHERE project_id = $1 AND team_id = $2", [
+      projectId,
+      teamId,
+    ]))
+  ) {
+    throw apiError("VALIDATION_FAILED", "Project does not include the issue's team");
   }
 }
 
@@ -324,7 +329,6 @@ export async function createPostgresIssue(
   input: IssueCreateInput,
 ): Promise<IssueRow> {
   return persistence.transaction(async (tx) => {
-    assertPostgresIssueDependencies(input as unknown as Record<string, unknown>);
     const team = input.teamId
       ? await getPostgresTeam(tx, { id: input.teamId })
       : await getPostgresTeam(tx, { key: input.teamKey });
@@ -344,6 +348,10 @@ export async function createPostgresIssue(
     }
     if (input.assigneeId) await assertPostgresAssignee(tx, viewer, team, input.assigneeId);
     if (input.parentId) await assertPostgresParent(tx, null, team.id, input.parentId);
+    if (input.projectId) await assertPostgresProjectForTeam(tx, input.projectId, team.id);
+    if (input.milestoneId) {
+      await assertPostgresMilestoneMatchesProject(tx, input.milestoneId, input.projectId ?? null);
+    }
     if (input.creatorId) {
       const creator = await getPostgresActor(tx, input.creatorId);
       if (!creator) throw apiError("NOT_FOUND", "Creator actor not found");
@@ -389,8 +397,8 @@ export async function createPostgresIssue(
     await tx.execute(
       `INSERT INTO issues
        (id, team_id, number, title, description, state_id, priority, assignee_id, parent_id,
-        project_id, creator_id, sort_order, created_at, updated_at, archived_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, 0, $11, $11, NULL)`,
+        project_id, milestone_id, cycle_id, creator_id, sort_order, created_at, updated_at, archived_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 0, $14, $14, NULL)`,
       [
         issueId,
         team.id,
@@ -401,6 +409,9 @@ export async function createPostgresIssue(
         priority,
         input.assigneeId ?? null,
         input.parentId ?? null,
+        input.projectId ?? null,
+        input.milestoneId ?? null,
+        null,
         input.creatorId ?? viewer.id,
         createdAt,
       ],
@@ -415,7 +426,25 @@ export async function createPostgresIssue(
         },
       );
     }
-    await recordPostgresActivity(tx, issueId, viewer.id, "created", { title, number }, createdAt);
+    await recordPostgresActivity(
+      tx,
+      issueId,
+      input.creatorId ?? viewer.id,
+      "created",
+      {
+        title,
+        description: input.description ?? null,
+        teamId: team.id,
+        number,
+        priority,
+        stateId: state.id,
+        assigneeId: input.assigneeId ?? null,
+        parentId: input.parentId ?? null,
+        projectId: input.projectId ?? null,
+        milestoneId: input.milestoneId ?? null,
+      },
+      createdAt,
+    );
     const row = await getPostgresIssue(tx, issueId);
     if (!row) throw apiError("NOT_FOUND", "Issue not found after creation");
     return row;
@@ -429,7 +458,6 @@ export async function updatePostgresIssue(
   input: IssueUpdateInput,
 ): Promise<{ row: IssueRow; changes: Array<{ field: string; from: unknown; to: unknown }> }> {
   return persistence.transaction(async (tx) => {
-    assertPostgresIssueDependencies(input as unknown as Record<string, unknown>);
     const issue = await getPostgresIssueByRef(tx, ref);
     if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
     const team = await requirePostgresIssueWrite(tx, viewer, issue.team_id);
@@ -483,7 +511,7 @@ export async function updatePostgresIssue(
       push("assignee_id", input.assigneeId);
       changes.push({ field: "assignee", from: issue.assignee_id, to: input.assigneeId });
       activity.push({
-        type: "assignee_changed",
+        type: "assigned",
         payload: { from: issue.assignee_id, to: input.assigneeId },
       });
     }
@@ -494,6 +522,44 @@ export async function updatePostgresIssue(
       activity.push({
         type: "parent_changed",
         payload: { from: issue.parent_id, to: input.parentId },
+      });
+    }
+    if (input.projectId !== undefined && input.projectId !== issue.project_id) {
+      if (input.projectId) await assertPostgresProjectForTeam(tx, input.projectId, team.id);
+      push("project_id", input.projectId);
+      changes.push({ field: "project", from: issue.project_id, to: input.projectId });
+      activity.push({
+        type: "project_changed",
+        payload: { from: issue.project_id, to: input.projectId },
+      });
+      if (issue.milestone_id && input.milestoneId === undefined) {
+        push("milestone_id", null);
+        changes.push({ field: "milestone", from: issue.milestone_id, to: null });
+        activity.push({
+          type: "milestone_changed",
+          payload: { from: issue.milestone_id, to: null },
+        });
+      }
+    }
+    if (input.milestoneId !== undefined && input.milestoneId !== issue.milestone_id) {
+      if (input.milestoneId) {
+        const projectId = input.projectId !== undefined ? input.projectId : issue.project_id;
+        await assertPostgresMilestoneMatchesProject(tx, input.milestoneId, projectId ?? null);
+      }
+      push("milestone_id", input.milestoneId);
+      changes.push({ field: "milestone", from: issue.milestone_id, to: input.milestoneId });
+      activity.push({
+        type: "milestone_changed",
+        payload: { from: issue.milestone_id, to: input.milestoneId },
+      });
+    }
+    if (input.cycleId !== undefined && input.cycleId !== issue.cycle_id) {
+      if (input.cycleId) await validatePostgresCycleForTeam(tx, input.cycleId, team.id);
+      push("cycle_id", input.cycleId);
+      changes.push({ field: "cycle", from: issue.cycle_id, to: input.cycleId });
+      activity.push({
+        type: "cycle_changed",
+        payload: { from: issue.cycle_id, to: input.cycleId },
       });
     }
     if (

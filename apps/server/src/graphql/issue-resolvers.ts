@@ -18,8 +18,18 @@ import { ACTIVITY_REFS, translateActivityRefs, type RefTable } from "../domain/a
 import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getMilestone, mapMilestone } from "../domain/milestones.ts";
+import { getPostgresMilestone, mapPostgresMilestone } from "../domain/postgres-milestones.ts";
 import { listProjectTeamIds, mapProject } from "../domain/projects.ts";
+import {
+  assertCanManagePostgresProject,
+  canAccessPostgresProject,
+  getPostgresProject,
+  listPostgresProjectTeamIds,
+  mapPostgresProject,
+} from "../domain/postgres-projects.ts";
 import { getCycle, mapCycle } from "../domain/cycles.ts";
+import { getPostgresCycle, mapPostgresCycle } from "../domain/postgres-cycles.ts";
+import { listPostgresActivity } from "../domain/postgres-activity.ts";
 import {
   createRelation,
   deleteRelation,
@@ -77,6 +87,48 @@ import {
 } from "../domain/postgres-teams.ts";
 
 type MappedIssue = ReturnType<typeof mapIssue>;
+
+function postgresProjectIdsInIssueFilter(filter: IssueFilter | null | undefined): string[] {
+  if (!filter) return [];
+  const project = filter.project;
+  const ids = [
+    ...(project?.eq ? [project.eq] : []),
+    ...(project?.in ?? []),
+    ...(filter.and ?? []).flatMap((nested) => postgresProjectIdsInIssueFilter(nested)),
+    ...(filter.or ?? []).flatMap((nested) => postgresProjectIdsInIssueFilter(nested)),
+  ];
+  return [...new Set(ids)];
+}
+
+function postgresMilestoneIdsInIssueFilter(filter: IssueFilter | null | undefined): string[] {
+  if (!filter) return [];
+  const milestone = filter.milestone;
+  const ids = [
+    ...(milestone?.eq ? [milestone.eq] : []),
+    ...(milestone?.in ?? []),
+    ...(filter.and ?? []).flatMap((nested) => postgresMilestoneIdsInIssueFilter(nested)),
+    ...(filter.or ?? []).flatMap((nested) => postgresMilestoneIdsInIssueFilter(nested)),
+  ];
+  return [...new Set(ids)];
+}
+
+export async function canQueryPostgresIssueFilter(
+  context: Context,
+  filter: IssueFilter | null | undefined,
+): Promise<boolean> {
+  const projectIds = postgresProjectIdsInIssueFilter(filter);
+  for (const projectId of projectIds) {
+    const teamIds = await listPostgresProjectTeamIds(context.persistence!, projectId);
+    if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) return false;
+  }
+  for (const milestoneId of postgresMilestoneIdsInIssueFilter(filter)) {
+    const milestone = await getPostgresMilestone(context.persistence!, milestoneId);
+    if (!milestone) return false;
+    const teamIds = await listPostgresProjectTeamIds(context.persistence!, milestone.project_id);
+    if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) return false;
+  }
+  return true;
+}
 
 /** Teams de una referencia del historial, para no traducir nombres fuera del allowlist. */
 function activityReferenceTeams(context: Context, table: RefTable, value: string): string[] | null {
@@ -191,6 +243,71 @@ export function issueEventData(row: IssueRow) {
   };
 }
 
+async function postgresActivityPayload(
+  activity: { _issueId?: string; type: string; payload: Record<string, unknown> },
+  context: Context,
+): Promise<Record<string, unknown>> {
+  const persistence = context.persistence!;
+  const payload = { ...activity.payload };
+  const source = activity._issueId ? await getPostgresIssue(persistence, activity._issueId) : null;
+  if (context.auth?.teamIds) {
+    const refs = ACTIVITY_REFS[activity.type as keyof typeof ACTIVITY_REFS] ?? [];
+    for (const ref of refs) {
+      const value = payload[ref.field];
+      if (typeof value !== "string") continue;
+      let teams: string[] | null = null;
+      if (ref.table === "issues") {
+        const row = await getPostgresIssueByRef(persistence, value);
+        teams = row ? [row.team_id] : null;
+      } else if (ref.table === "teams") {
+        const row = await getPostgresTeam(persistence, { id: value });
+        teams = row ? [row.id] : null;
+      } else if (ref.table === "states") {
+        const row = await getPostgresWorkflowState(persistence, value);
+        teams = row ? [row.team_id] : null;
+      } else if (ref.table === "cycles") {
+        const row = await getPostgresCycle(persistence, value);
+        teams = row ? [row.team_id] : null;
+      } else if (ref.table === "projects") {
+        const row = await getPostgresProject(persistence, value);
+        teams = row ? await listPostgresProjectTeamIds(persistence, row.id) : null;
+      } else if (ref.table === "milestones") {
+        const row = await getPostgresMilestone(persistence, value);
+        const project = row ? await getPostgresProject(persistence, row.project_id) : null;
+        teams = project ? await listPostgresProjectTeamIds(persistence, project.id) : null;
+      } else {
+        teams = [];
+      }
+      if (!source || !teams || !apiKeyTeamsWithinLimit(context.auth, [source.team_id, ...teams])) {
+        if (ref.mode === "dense") payload[ref.field] = null;
+        else delete payload[ref.field];
+      }
+    }
+  }
+  const queries: Record<RefTable, string> = {
+    states: "SELECT name FROM workflow_states WHERE id = $1",
+    actors: "SELECT name FROM actors WHERE id = $1",
+    projects: "SELECT name FROM projects WHERE id = $1",
+    milestones: "SELECT name FROM milestones WHERE id = $1",
+    cycles:
+      "SELECT teams.key || '/' || cycles.number AS name FROM cycles JOIN teams ON teams.id = cycles.team_id WHERE cycles.id = $1",
+    teams: "SELECT key AS name FROM teams WHERE id = $1",
+    issues:
+      "SELECT teams.key || '-' || issues.number AS name FROM issues JOIN teams ON teams.id = issues.team_id WHERE issues.id = $1",
+  };
+  const values = new Map<string, string | undefined>();
+  const refs = ACTIVITY_REFS[activity.type as keyof typeof ACTIVITY_REFS] ?? [];
+  for (const ref of refs) {
+    const value = payload[ref.field];
+    if (typeof value !== "string") continue;
+    const row = await persistence.one<{ name: string }>(queries[ref.table], [value]);
+    values.set(`${ref.table}:${value}`, row?.name);
+  }
+  return translateActivityRefs(activity.type, payload, (table, value) =>
+    values.get(`${table}:${value}`),
+  );
+}
+
 export const issueResolvers = {
   Issue: {
     team: async (issue: MappedIssue, _args: unknown, context: Context) => {
@@ -290,14 +407,19 @@ export const issueResolvers = {
         )
         .map(mapLabel);
     },
-    project: (issue: MappedIssue, _args: unknown, context: Context) => {
-      if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Issue projects are not yet available with PostgreSQL persistence",
-        );
-      }
+    project: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.project_id) return null;
+      if (context.persistence) {
+        const project = await getPostgresProject(context.persistence, issue._row.project_id);
+        if (
+          !project ||
+          !(await canAccessPostgresProject(context.persistence, requireViewer(context), project.id))
+        ) {
+          return null;
+        }
+        const teamIds = await listPostgresProjectTeamIds(context.persistence, project.id);
+        return apiKeyTeamsWithinLimit(context.auth, teamIds) ? mapPostgresProject(project) : null;
+      }
       const project = lookupProject(context, issue._row.project_id);
       if (
         !project ||
@@ -309,14 +431,25 @@ export const issueResolvers = {
         return null;
       return mapProject(project);
     },
-    milestone: (issue: MappedIssue, _args: unknown, context: Context) => {
-      if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Issue milestones are not yet available with PostgreSQL persistence",
-        );
-      }
+    milestone: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.milestone_id) return null;
+      if (context.persistence) {
+        const milestone = await getPostgresMilestone(context.persistence, issue._row.milestone_id);
+        if (!milestone) return null;
+        const project = await getPostgresProject(context.persistence, milestone.project_id);
+        const teamIds = project
+          ? await listPostgresProjectTeamIds(context.persistence, project.id)
+          : [];
+        return project &&
+          (await canAccessPostgresProject(
+            context.persistence,
+            requireViewer(context),
+            project.id,
+          )) &&
+          apiKeyTeamsWithinLimit(context.auth, teamIds)
+          ? mapPostgresMilestone(milestone)
+          : null;
+      }
       const milestone = getMilestone(context.db, issue._row.milestone_id);
       if (
         !milestone ||
@@ -328,14 +461,20 @@ export const issueResolvers = {
         return null;
       return mapMilestone(milestone);
     },
-    cycle: (issue: MappedIssue, _args: unknown, context: Context) => {
-      if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Issue cycles are not yet available with PostgreSQL persistence",
-        );
-      }
+    cycle: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.cycle_id) return null;
+      if (context.persistence) {
+        const cycle = await getPostgresCycle(context.persistence, issue._row.cycle_id);
+        const team = cycle
+          ? await getPostgresTeam(context.persistence, { id: cycle.team_id })
+          : null;
+        return cycle &&
+          team &&
+          (await canDiscoverPostgresTeam(context.persistence, requireViewer(context), team)) &&
+          apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, cycle.team_id])
+          ? mapPostgresCycle(cycle)
+          : null;
+      }
       const cycle = getCycle(context.db, issue._row.cycle_id);
       return cycle &&
         canAccessTeam(context.db, requireViewer(context), cycle.team_id) &&
@@ -397,12 +536,17 @@ export const issueResolvers = {
         })
         .filter(Boolean);
     },
-    activity: (issue: MappedIssue, _args: unknown, context: Context) => {
+    activity: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Issue activity is not yet available with PostgreSQL persistence",
-        );
+        const viewer = requireViewer(context);
+        const team = await getPostgresTeam(context.persistence, { id: issue._row.team_id });
+        if (
+          !team ||
+          !(await canDiscoverPostgresTeam(context.persistence, viewer, team)) ||
+          !apiKeyTeamsWithinLimit(context.auth, [team.id])
+        )
+          return [];
+        return (await listPostgresActivity(context.persistence, issue.id)).map(mapActivity);
       }
       return listActivity(context.db, issue.id).map(mapActivity);
     },
@@ -470,17 +614,23 @@ export const issueResolvers = {
   },
 
   Activity: {
-    actor: (activity: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(lookupActor(context, activity.actorId)!),
+    actor: async (activity: { actorId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, activity.actorId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, activity.actorId)!);
+    },
     // Traduce ids a nombres reales antes de mandar el payload al cliente
     // (AT-190): el esquema de referencias (AT-187) es el mismo que usan
     // exporter/importer, solo cambia el resolve — acá consulta la DB en vivo
     // en vez de un lookup pre-armado, porque no hay un export de por medio.
-    payload: (
+    payload: async (
       activity: { _issueId?: string; type: string; payload: Record<string, unknown> },
       _args: unknown,
       context: Context,
     ) => {
+      if (context.persistence) return postgresActivityPayload(activity, context);
       const queries: Record<RefTable, string> = {
         states: "SELECT name FROM workflow_states WHERE id = ?1",
         actors: "SELECT name FROM actors WHERE id = ?1",
@@ -527,6 +677,9 @@ export const issueResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
+        if (!(await canQueryPostgresIssueFilter(context, args.filter))) {
+          return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+        }
         const teamIds = await accessiblePostgresTeamIds(context.persistence, viewer, context.auth);
         const page = await listPostgresIssues(context.persistence, {
           filter: args.filter,
@@ -565,6 +718,16 @@ export const issueResolvers = {
         if (team && !apiKeyTeamsWithinLimit(context.auth, [team.id])) {
           throw apiError("NOT_FOUND", "Team resource not found");
         }
+        if (args.input.projectId) {
+          await assertCanManagePostgresProject(context.persistence, viewer, args.input.projectId);
+          const projectTeamIds = await listPostgresProjectTeamIds(
+            context.persistence,
+            args.input.projectId,
+          );
+          if (!apiKeyTeamsWithinLimit(context.auth, projectTeamIds)) {
+            throw apiError("NOT_FOUND", "Project resource not found");
+          }
+        }
         const row = await createPostgresIssue(context.persistence, viewer, args.input);
         context.events.emit("issue.created", viewer, issueEventData(row));
         return { success: true, issue: mapIssue(row) };
@@ -595,6 +758,23 @@ export const issueResolvers = {
         const existing = await getPostgresIssueByRef(context.persistence, args.id);
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
+        }
+        const effectiveProjectId =
+          args.input.projectId !== undefined ? args.input.projectId : existing?.project_id;
+        if (args.input.projectId) {
+          await assertCanManagePostgresProject(context.persistence, viewer, args.input.projectId);
+        }
+        if (args.input.milestoneId && effectiveProjectId) {
+          await assertCanManagePostgresProject(context.persistence, viewer, effectiveProjectId);
+        }
+        if (effectiveProjectId) {
+          const projectTeamIds = await listPostgresProjectTeamIds(
+            context.persistence,
+            effectiveProjectId,
+          );
+          if (!apiKeyTeamsWithinLimit(context.auth, projectTeamIds)) {
+            throw apiError("NOT_FOUND", "Project resource not found");
+          }
         }
         const { row, changes } = await updatePostgresIssue(
           context.persistence,

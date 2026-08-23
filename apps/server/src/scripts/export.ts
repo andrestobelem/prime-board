@@ -6,6 +6,8 @@ import { parseArgs } from "node:util";
 import { loadConfig } from "../config.ts";
 import { openDatabase } from "../db/database.ts";
 import { exportBoard } from "../export/exporter.ts";
+import { exportPostgresBoard } from "../export/postgres-export.ts";
+import { createPostgresPersistence } from "../db/postgres/persistence.ts";
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
@@ -23,9 +25,27 @@ function repoRoot(): string {
 }
 
 const config = loadConfig();
-const db = openDatabase(config.dbPath);
 const outDir = values.out ?? repoRoot();
-const result = exportBoard(db, outDir, { teamKey: values.team ?? null });
-
-console.log(`Exported ${result.issues} issues and ${result.events} events`);
-console.log(`${result.files} files written to ${outDir}/.prime-board/`);
+const options = { teamKey: values.team ?? null };
+if (config.persistenceBackend === "postgres") {
+  if (!config.postgresUrl)
+    throw new Error("PRIME_BOARD_POSTGRES_URL is required for PostgreSQL export");
+  const sql = new Bun.SQL({ url: config.postgresUrl });
+  const persistence = createPostgresPersistence(sql);
+  try {
+    const result = await exportPostgresBoard(persistence, outDir, options);
+    console.log(`Exported ${result.issues} issues and ${result.events} events`);
+    console.log(`${result.files} files written to ${outDir}/.prime-board/`);
+  } finally {
+    await persistence.close();
+  }
+} else {
+  const db = openDatabase(config.dbPath);
+  try {
+    const result = exportBoard(db, outDir, options);
+    console.log(`Exported ${result.issues} issues and ${result.events} events`);
+    console.log(`${result.files} files written to ${outDir}/.prime-board/`);
+  } finally {
+    db.close();
+  }
+}
