@@ -72,6 +72,7 @@ import {
   scopeWorkspaceRows,
 } from "../domain/workspace-guards.ts";
 import { issueEventData } from "./issue-resolvers.ts";
+import { documentResolvers } from "./document-resolvers.ts";
 import { apiError, requireViewer } from "./errors.ts";
 import {
   assertCanCreateProject,
