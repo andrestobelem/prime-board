@@ -50,6 +50,9 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:cycle",
   "query:initiatives",
   "query:initiative",
+  "query:savedViews",
+  "query:savedView",
+  "query:favorites",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:projectCreate",
@@ -99,6 +102,13 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:documentUnarchive",
   "mutation:issueRelationCreate",
   "mutation:issueRelationDelete",
+  "mutation:savedViewCreate",
+  "mutation:savedViewUpdate",
+  "mutation:savedViewDuplicate",
+  "mutation:savedViewDelete",
+  "mutation:favoriteCreate",
+  "mutation:favoriteDelete",
+  "mutation:favoriteReorder",
   "mutation:apiKeyCreate",
   "mutation:apiKeyDelete",
   "mutation:apiKeyRotate",
@@ -178,6 +188,29 @@ function teamIdsForSavedView(context: Context, viewId: unknown): string[] {
   return row.team_id ? [row.team_id] : ["__workspace__"];
 }
 
+async function operationTeamIdsForSavedView(context: Context, viewId: unknown): Promise<string[]> {
+  if (!context.persistence) return teamIdsForSavedView(context, viewId);
+  const id = scalar(viewId);
+  if (!id) return ["__missing__"];
+  const row = await context.persistence.one<{ team_id: string | null }>(
+    "SELECT team_id FROM saved_views WHERE id = $1",
+    [id],
+  );
+  if (!row) return ["__missing__"];
+  return row.team_id ? [row.team_id] : ["__workspace__"];
+}
+
+async function operationTeamIdsForProject(context: Context, projectId: unknown): Promise<string[]> {
+  const id = scalar(projectId);
+  if (!id) return [];
+  if (!context.persistence) return teamIdsForProject(context, id);
+  const rows = await context.persistence.many<{ team_id: string }>(
+    "SELECT team_id FROM project_teams WHERE project_id = $1 ORDER BY team_id",
+    [id],
+  );
+  return rows.map((row) => row.team_id);
+}
+
 function teamIdsForInitiative(context: Context, initiativeId: unknown): string[] {
   const id = scalar(initiativeId);
   if (!id) return ["__missing__"];
@@ -238,6 +271,23 @@ function teamIdsForFavorite(context: Context, favoriteId: unknown): string[] {
     : teamIdsForSavedView(context, row.saved_view_id);
 }
 
+async function operationTeamIdsForFavorite(
+  context: Context,
+  favoriteId: unknown,
+): Promise<string[]> {
+  if (!context.persistence) return teamIdsForFavorite(context, favoriteId);
+  const id = scalar(favoriteId);
+  if (!id) return [];
+  const row = await context.persistence.one<{
+    project_id: string | null;
+    saved_view_id: string | null;
+  }>("SELECT project_id, saved_view_id FROM favorites WHERE id = $1", [id]);
+  if (!row) return [];
+  return row.project_id
+    ? operationTeamIdsForProject(context, row.project_id)
+    : operationTeamIdsForSavedView(context, row.saved_view_id);
+}
+
 function teamIdsForInbox(context: Context, itemId: unknown): string[] {
   const id = scalar(itemId);
   if (!id) return [];
@@ -266,11 +316,11 @@ function issueFilterTeams(context: Context, filter: unknown): string[] | null {
   return null;
 }
 
-function operationTeamIds(
+async function operationTeamIds(
   context: Context,
   field: string,
   args: Record<string, unknown>,
-): string[] | null {
+): Promise<string[] | null> {
   const input = (args.input && typeof args.input === "object" ? args.input : {}) as Record<
     string,
     unknown
@@ -312,7 +362,7 @@ function operationTeamIds(
       if (context.persistence) return [];
       return args.team ? [teamForRef(context, args.team) ?? "__missing__"] : null;
     case "savedView":
-      return teamIdsForSavedView(context, args.id);
+      return operationTeamIdsForSavedView(context, args.id);
     case "savedViews":
       return args.teamId ? [scalar(args.teamId) ?? "__missing__"] : null;
     case "review":
@@ -489,14 +539,14 @@ function operationTeamIds(
     case "savedViewUpdate":
     case "savedViewDuplicate":
     case "savedViewDelete":
-      return teamIdsForSavedView(context, args.id);
+      return operationTeamIdsForSavedView(context, args.id);
     case "favoriteCreate":
       return input.projectId
-        ? teamIdsForProject(context, input.projectId)
-        : teamIdsForSavedView(context, input.savedViewId);
+        ? operationTeamIdsForProject(context, input.projectId)
+        : operationTeamIdsForSavedView(context, input.savedViewId);
     case "favoriteDelete":
     case "favoriteReorder":
-      return teamIdsForFavorite(context, args.id);
+      return operationTeamIdsForFavorite(context, args.id);
     case "documentCreate":
       if (context.persistence) return [];
       return teamIdsForDocumentTarget(context, input);
@@ -538,15 +588,15 @@ function operationTeamIds(
   }
 }
 
-function assertOperationTeams(
+async function assertOperationTeams(
   context: Context,
   field: string,
   args: Record<string, unknown>,
   kind: "query" | "mutation",
-): void {
+): Promise<void> {
   if (!hasApiKeyTeamLimit(context.auth)) return;
   if (kind === "mutation" && SAFE_MUTATIONS.has(field)) return;
-  const teamIds = operationTeamIds(context, field, args);
+  const teamIds = await operationTeamIds(context, field, args);
   if (teamIds === null) {
     throw apiError(
       "UNAUTHORIZED",
@@ -560,7 +610,7 @@ function wrapResolverMap(map: ResolverMap, kind: "query" | "mutation"): Resolver
   return Object.fromEntries(
     Object.entries(map).map(([field, resolver]) => [
       field,
-      (...args: unknown[]) => {
+      async (...args: unknown[]) => {
         const context = args[2] as Context;
         const resolverArgs = (args[1] ?? {}) as Record<string, unknown>;
         if (context.persistence && !POSTGRES_SUPPORTED_OPERATIONS.has(`${kind}:${field}`)) {
@@ -573,7 +623,9 @@ function wrapResolverMap(map: ResolverMap, kind: "query" | "mutation"): Resolver
         } else {
           assertApiKeyScope(context, kind === "query" ? "read" : "write");
         }
-        if (!KEY_MUTATIONS.has(field)) assertOperationTeams(context, field, resolverArgs, kind);
+        if (!KEY_MUTATIONS.has(field)) {
+          await assertOperationTeams(context, field, resolverArgs, kind);
+        }
         const result = resolver(...args);
         const filterAsync = (value: unknown, filter: (items: unknown[]) => unknown[]): unknown => {
           if (Array.isArray(value)) return filter(value);
