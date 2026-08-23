@@ -1,14 +1,21 @@
 # prime-board
 
 Clon de Linear para agentes. Gestiona issues y proyectos para agentes y otros clientes,
-incluido [prime-agent](https://github.com/nicolaschapur/prime-agent).
+incluido [prime-agent](https://github.com/PrimeIntellect-ai/prime-agent).
+
+## Rutas rápidas
+
+- **Instalar y levantar:** sigue [Inicio rápido](#inicio-rápido).
+- **Operar como agente:** consulta la [guía de operación](docs/guia-agentes.md).
+- **Usar el tracker del repositorio:** consulta el [issue tracker](docs/agents/issue-tracker.md).
+- **Buscar documentación por audiencia o tipo:** abre el [índice de documentación](docs/README.md).
 
 ## Estado
 
 **Parte 1 — Definición del MVP: completa.** [`docs/alcance-mvp.md`](docs/alcance-mvp.md)
-define el MVP. [`docs/specs/mvp.md`](docs/specs/mvp.md) lo especifica con Bun + TypeScript +
-SQLite, API GraphQL, arquitectura local-first single-tenant, CLI, MCP server y una UI
-similar a Linear.
+define el alcance histórico del MVP. [`docs/specs/mvp.md`](docs/specs/mvp.md) conserva la
+especificación técnica histórica. No es el contrato actual. Para operar el producto, usa la
+[guía de operación](docs/guia-agentes.md) y los [contratos para agentes](docs/agents/).
 
 **Parte 2 — Núcleo del backend: completa.** La API GraphQL opera sobre SQLite e incluye
 Teams, Actors humanos y agentes con API keys y roles de workspace, Memberships, Issues con

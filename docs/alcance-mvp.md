@@ -1,10 +1,12 @@
 # Alcance del MVP de prime-board
 
-> La especificación técnica del MVP vive en [`specs/mvp.md`](specs/mvp.md).
+> La especificación técnica histórica del MVP vive en [`specs/mvp.md`](specs/mvp.md). No es el
+> contrato actual; el estado vigente se resume en este documento y en el SDL de GraphQL.
 
-## Decisiones estructurales
+## Decisiones históricas del MVP
 
-El dueño del proyecto confirmó estas decisiones:
+El dueño del proyecto confirmó estas decisiones para el MVP original. Esta sección conserva el
+registro histórico y no sustituye el estado vigente que aparece más abajo.
 
 | Decisión      | Elección                                 | Motivo                                                                                                                                      |
 | ------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -13,9 +15,16 @@ El dueño del proyecto confirmó estas decisiones:
 | Modelo de uso | **Local-first, single-tenant**           | Un proceso local con un Workspace, igual que prime-agent. La autenticación usa API keys.                                                    |
 | UI            | **Sí, lo más parecida posible a Linear** | Requisito explícito: la UI es parte de la identidad del clon (dark-first, densa, keyboard-first y con command palette).                     |
 
-## Alcance vigente (2026-08-17)
+> **Decisión histórica de persistencia (2026-08-14):** el equipo evaluó PostgreSQL y ratificó
+> SQLite puro para el MVP. El motivo fue conservar el modelo local-first, single-tenant, de
+> proceso único y cero configuración. Esta decisión no describe el backend opcional que el
+> estado vigente habilita durante la migración incremental.
 
-Este documento conserva la decisión histórica del MVP, pero la implementación ya superó esa lista cerrada. La siguiente matriz sirve como referencia para auditorías y planificación. Si existe una diferencia, el código y esta sección prevalecen sobre las exclusiones históricas.
+## Estado vigente (verificado el 2026-08-23)
+
+La implementación actual ya superó la lista cerrada del MVP. Esta sección es la referencia para
+el estado operativo, las auditorías y la planificación. Las exclusiones históricas no son un
+inventario de faltantes actuales.
 
 | Capacidad actualmente implementada           | GraphQL | CLI (`pb`) | MCP |    UI web |
 | -------------------------------------------- | ------: | ---------: | --: | --------: |
@@ -27,32 +36,54 @@ Este documento conserva la decisión histórica del MVP, pero la implementación
 | Filtros, búsqueda y vistas guardadas         |      Sí |         Sí |  Sí |   Parcial |
 | Inbox, favoritos y seguimiento del actor     |      Sí |         Sí |  Sí |        Sí |
 | Initiatives y status updates                 |      Sí |         Sí |  Sí |   Parcial |
+| Documents Markdown                           |      Sí |         Sí |  Sí |        Sí |
 | Webhooks y actividad/auditoría               |      Sí |         Sí |  Sí | No aplica |
 
-Las celdas `Parcial` indican gaps de experiencia de usuario. No indican ausencia del modelo o de la API. Tickets `PRB-*` independientes siguen esos gaps. La matriz no implica soporte multi-workspace: prime-board continúa siendo single-workspace y local-first.
+Las celdas `Parcial` indican gaps de experiencia de usuario. No indican ausencia del modelo o de la API. Tickets `PRB-*` independientes siguen esos gaps. El alcance de cada capacidad depende del backend: Documents está disponible en SQLite y PostgreSQL; ambos backends exponen el núcleo Markdown agent-first. El soporte de varios Workspaces también es incremental en SQLite y no tiene paridad en PostgreSQL.
+
+### Persistencia vigente: SQLite y PostgreSQL
+
+Los backends no tienen el mismo alcance. SQLite sigue siendo el backend predeterminado y la fuente
+operativa local. PostgreSQL es opcional y su migración todavía es incremental.
+
+| Backend        | Estado verificado                                                                                                                     | Diferencias comprobadas                                                                                                                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **SQLite**     | `bun:sqlite`, archivo definido por `PRIME_BOARD_DB`, migraciones `0001`–`0027`.                                                       | Es el camino operativo completo. Incluye Documents Markdown, FTS5 y el soporte de Workspace Context y aislamiento de las migraciones `0024`–`0027`.                                                                                           |
+| **PostgreSQL** | Se activa con `PRIME_BOARD_PERSISTENCE=postgres` y requiere `PRIME_BOARD_POSTGRES_URL`; usa migraciones independientes `0001`–`0005`. | Mantiene una única Workspace, tiene dominios migrados de forma parcial y usa un SQLite efímero para dominios todavía no migrados. Documents está migrado en `0005`; las demás superficies de planificación siguen teniendo cobertura parcial. |
+
+No se debe presentar PostgreSQL como un reemplazo con paridad de persistencia. La diferencia es de
+capacidad implementada, no solo de configuración: el contrato GraphQL puede existir en ambos
+caminos, pero una operación puede no estar migrada en PostgreSQL.
+
+### Documents en el estado vigente
+
+`Document` es un recurso de Markdown. Puede ser `Workspace-scoped`, o estar vinculado a exactamente un recurso:
+`Issue`, `Project`, `Team`, `Initiative` o `Cycle`. El contrato GraphQL expone `documents` y
+`document`, además de `documentCreate`, `documentUpdate`, `documentArchive` y
+`documentUnarchive`. El CLI `pb` y el MCP exponen listado, consulta, creación, edición y
+archivo reversible. La UI web expone listado, consulta, creación, edición y archivo. El contenido
+es Markdown; no incluye adjuntos ricos, reacciones ni colaboración avanzada. Estas operaciones funcionan en SQLite y PostgreSQL. PostgreSQL conserva el núcleo Markdown agent-first; las superficies avanzadas quedan fuera de alcance.
 
 ### Inventario de operaciones por cliente
 
-Este inventario estable verifica la paridad de las mutaciones administrativas y del archivo de Issues:
+Este inventario estable verifica la paridad de las mutaciones administrativas, Documents y el archivo de Issues:
 
-| Dominio         | CLI `pb`                                   | MCP                                                                       |
-| --------------- | ------------------------------------------ | ------------------------------------------------------------------------- |
-| Issues          | `issue archive`                            | `archive_issue`                                                           |
-| Teams           | `team create/update`                       | `save_team`                                                               |
-| Memberships     | `team membership-list/create/delete`       | `list_team_memberships`, `save_team_membership`, `delete_team_membership` |
-| Actores         | `actor list/create/update`                 | `list_users`, `save_user`                                                 |
-| API keys        | `api-key create/delete`                    | `save_api_key`, `delete_api_key`                                          |
-| Workflow states | `team workflow-state-create/update/delete` | `save_issue_status`, `delete_issue_status`                                |
-| Labels          | `team label-create/update/delete`          | `save_issue_label`, `delete_issue_label`                                  |
+| Dominio         | CLI `pb`                                             | MCP                                                                                         |
+| --------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Issues          | `issue archive`                                      | `archive_issue`                                                                             |
+| Teams           | `team create/update`                                 | `save_team`                                                                                 |
+| Memberships     | `team membership-list/create/delete`                 | `list_team_memberships`, `save_team_membership`, `delete_team_membership`                   |
+| Actores         | `actor list/create/update`                           | `list_users`, `save_user`                                                                   |
+| API keys        | `api-key create/delete`                              | `save_api_key`, `delete_api_key`                                                            |
+| Workflow states | `team workflow-state-create/update/delete`           | `save_issue_status`, `delete_issue_status`                                                  |
+| Labels          | `team label-create/update/delete`                    | `save_issue_label`, `delete_issue_label`                                                    |
+| Documents       | `document list/view/create/update/archive/unarchive` | `list_documents`, `get_document`, `save_document`, `archive_document`, `unarchive_document` |
 
 Las operaciones privilegiadas conservan la autorización del server GraphQL. CLI y MCP no intentan replicarla localmente. Los contratos e2e de ambos clientes verifican el inventario, las respuestas JSON y los errores GraphQL.
 
-> **Decisión revisada (2026-08-14):** el equipo evaluó PostgreSQL y **ratificó SQLite puro**.
-> Motivo: con local-first single-tenant el proceso Bun es el único escritor, por lo que la limitación de concurrencia de SQLite no aplica. El volumen esperado es trivial y PostgreSQL rompería la premisa de cero configuración. La decisión se reabre solo si la visión cambia a un servicio alojado o multi-tenant, si se ejecutan varias instancias del server o si aparecen escritores externos directos a la DB.
+## Lista cerrada del MVP histórico
 
-## Lista cerrada del MVP
-
-Regla heredada de Linear: **paridad total de API**. Todo lo que aparece en esta lista es accesible por GraphQL. La UI, CLI y MCP son clientes de esa API.
+Regla heredada de Linear: **paridad total de API**. Todo lo que aparece en esta lista era accesible por GraphQL en la especificación original. La UI, CLI y MCP eran clientes de esa API. Esta lista no es el contrato vigente.
 
 ### Núcleo del board
 
@@ -83,26 +114,26 @@ Regla heredada de Linear: **paridad total de API**. Todo lo que aparece en esta 
 
 La tabla describe las funcionalidades excluidas del MVP original. No debe leerse como un inventario de faltantes actuales. Para conocer el estado vigente, consulta la matriz anterior y los tickets `PRB-*`.
 
-| Funcionalidad                                      | Por qué queda afuera                                                                                      |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Relaciones entre issues (blocks/related/duplicate) | Sub-issues cubren la descomposición, que es el caso agente principal; las dependencias llegan en Parte 5. |
-| Milestones                                         | Estructura secundaria dentro de Projects; el MVP planifica con Projects y Labels.                         |
-| Ciclos (sprints)                                   | Cadencia pensada para capacidad humana; es menos central para agentes 24/7.                               |
-| Estimaciones, due dates editables                  | Metadatos de planificación fina; no bloquean el flujo core.                                               |
-| Templates, issues recurrentes                      | Los Agents generan estructura por sí mismos; un cron o heartbeat externo cubre la recurrencia.            |
-| Triage como bandeja dedicada                       | Un Workflow State de tipo `triage` simula la bandeja (el modelo ya lo soporta).                           |
-| Status updates de Project                          | Los Comments de Project cubren esta necesidad en una parte posterior.                                     |
-| Initiatives, roadmap/timeline, insights            | Capa de management y visualización; no aporta valor API-first inmediato.                                  |
-| Documents, adjuntos, reacciones                    | Quedan fuera del núcleo de Issue tracking; Markdown con links cubre lo esencial.                          |
-| Custom Views persistidas                           | Los clientes (Agents) guardan sus propias queries; la UI del MVP ofrece vistas fijas.                     |
-| Notificaciones/Inbox en UI                         | Los Webhooks son el mecanismo correcto para Agents; el Inbox humano llega con la UI madura.               |
-| OAuth, SSO/SCIM, multi-tenant                      | No son necesarios en local-first single-tenant.                                                           |
-| Integraciones de terceros, importers               | Webhooks y API bastan para integrar otros sistemas; las migraciones no aplican sin usuarios.              |
-| SLAs, asks, customer requests, releases/diffs      | Pertenecen a Enterprise u otro producto; quedan fuera de la misión.                                       |
+| Funcionalidad                                      | Por qué queda afuera                                                                                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Relaciones entre issues (blocks/related/duplicate) | Sub-issues cubren la descomposición, que es el caso agente principal; las dependencias llegan en Parte 5.                                            |
+| Milestones                                         | Estructura secundaria dentro de Projects; el MVP planifica con Projects y Labels.                                                                    |
+| Ciclos (sprints)                                   | Cadencia pensada para capacidad humana; es menos central para agentes 24/7.                                                                          |
+| Estimaciones, due dates editables                  | Metadatos de planificación fina; no bloquean el flujo core.                                                                                          |
+| Templates, issues recurrentes                      | Los Agents generan estructura por sí mismos; un cron o heartbeat externo cubre la recurrencia.                                                       |
+| Triage como bandeja dedicada                       | Un Workflow State de tipo `triage` simula la bandeja (el modelo ya lo soporta).                                                                      |
+| Status updates de Project                          | Los Comments de Project cubren esta necesidad en una parte posterior.                                                                                |
+| Initiatives, roadmap/timeline, insights            | Capa de management y visualización; no aporta valor API-first inmediato.                                                                             |
+| Documents, adjuntos, reacciones                    | No formaban parte del MVP original. El estado vigente de Documents Markdown se describe arriba; adjuntos ricos y colaboración avanzada siguen fuera. |
+| Custom Views persistidas                           | Los clientes (Agents) guardan sus propias queries; la UI del MVP ofrece vistas fijas.                                                                |
+| Notificaciones/Inbox en UI                         | Los Webhooks son el mecanismo correcto para Agents; el Inbox humano llega con la UI madura.                                                          |
+| OAuth, SSO/SCIM, multi-tenant                      | No son necesarios en local-first single-tenant.                                                                                                      |
+| Integraciones de terceros, importers               | Webhooks y API bastan para integrar otros sistemas; las migraciones no aplican sin usuarios.                                                         |
+| SLAs, asks, customer requests, releases/diffs      | Pertenecen a Enterprise u otro producto; quedan fuera de la misión.                                                                                  |
 
-## Consecuencia para el plan
+## Plan histórico de implementación
 
-El MVP se implementa en tres partes (hitos en Linear):
+El MVP original se implementaba en tres partes (hitos en Linear):
 
 - **Parte 2 — Núcleo del backend:** SQLite + GraphQL + auth + webhooks.
 - **Parte 3 — Interfaces para agentes:** CLI + MCP.

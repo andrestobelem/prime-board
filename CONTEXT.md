@@ -5,11 +5,11 @@ prime-board es un gestor de trabajo para agentes. Este glosario define las entid
 ## Espacio y autorización
 
 **Workspace**:
-Límite de autorización y estado operativo. Contiene Actors, Teams y recursos de planificación. El modelo objetivo admite varios Workspaces en una misma DB/proceso y aísla cada uno mediante su Workspace Context. La implementación actual usa un solo Workspace hasta completar PRB-411–420. El dominio conserva este término aunque Linear use `Organization` en GraphQL.
+Límite de autorización y estado operativo. Contiene Actors, Teams y recursos de planificación. Varios Workspaces pueden vivir en una misma DB/proceso SQLite y cada una queda aislada por su Workspace Context. La instalación inicial sigue creando un Workspace, pero SQLite ya permite crear, seleccionar y operar varios. Durante la migración incremental, el backend PostgreSQL conserva un solo Workspace por DB/proceso. El dominio conserva este término aunque Linear use `Organization` en GraphQL.
 _Avoid_: Organization, tenant, account
 
 **Workspace Context**:
-Identidad efectiva del Workspace que acompaña cada operación de API, CLI, MCP o UI. Delimita lecturas, mutaciones, eventos y réplicas. El sistema debe resolverlo desde una credencial, una Membership y un selector validado. Un `workspaceId` enviado sin prueba de acceso nunca tiene autoridad. La instalación actual resuelve el único Workspace disponible. PRB-411–420 convertirá el contexto en seleccionable y no falsificable.
+Identidad efectiva del Workspace que acompaña cada operación de API, CLI, MCP o UI. Delimita lecturas, mutaciones, eventos y réplicas. En SQLite, el sistema lo resuelve mediante el grant de la credencial, una Workspace Membership activa y un selector validado cuando hace falta. Un `workspaceId` enviado sin prueba de acceso nunca tiene autoridad. En PostgreSQL, la migración actual mantiene el contexto ligado al único Workspace y todavía no ofrece selección multi-Workspace.
 _Avoid_: Current organization, namespace
 
 **Actor**:
@@ -19,11 +19,11 @@ El ciclo de acceso de un Actor en un Workspace usa `active`, `suspended` o `left
 _Avoid_: User, account
 
 **Workspace Role**:
-Capacidad de un Actor dentro de un Workspace: `admin` o `member`. Durante la transición, `workspace_role` mantiene compatibilidad con el modo single-workspace. Antes de habilitar un segundo Workspace, la autoridad pasará a la Workspace Membership correspondiente.
+Capacidad de un Actor dentro de un Workspace: `admin` o `member`. `workspace_role` en Actor se conserva por compatibilidad. En SQLite, el rol efectivo proviene de la Workspace Membership activa y el grant de la credencial. En PostgreSQL, la migración actual todavía usa `workspace_role` para su único Workspace.
 _Avoid_: Workspace membership, account role
 
 **Workspace Membership**:
-Relación entre un Actor y un Workspace. Expresa pertenencia, rol, estado de acceso y posibles límites de sus credenciales. Es la autoridad objetivo para el roster y los permisos. Mientras la migración no esté habilitada, la instalación conserva el modo single-workspace y no ofrece esta relación como selector operativo.
+Relación entre un Actor y un Workspace. Expresa pertenencia, rol, estado de acceso y posibles límites de sus credenciales. En SQLite ya es la autoridad operativa para el roster, los permisos y la selección entre Workspaces. En PostgreSQL, la ruta en migración conserva un solo Workspace y todavía no usa Membership para seleccionar varios.
 _Avoid_: Team membership, seat
 
 **Team**:
@@ -145,7 +145,7 @@ Relación privada y ordenada entre un Actor y un Project o Saved View. No cambia
 _Avoid_: Bookmark, shortcut
 
 **Activity**:
-Proyección legible de un evento de dominio observable asociado a una Issue. Incluye Actor y momento. Alimenta el historial, el Inbox y los snapshots Markdown. El Log canónico conserva el evento de origen. Activity no es por sí sola la fuente de verdad ni el estado actual.
+Proyección legible de un evento de dominio observable asociado a una Issue. Incluye Actor y momento. Alimenta el historial, el Inbox y los snapshots Markdown. El Log conserva el evento de origen en la réplica actual y será la autoridad canónica en la topología PostgreSQL de ADR-0019. Activity no es por sí sola la fuente de verdad ni el estado actual.
 _Avoid_: Audit log, changelog, CDC del WAL
 
 **Comment**:
@@ -164,20 +164,30 @@ _Avoid_: Notification state
 Suscripción de un Actor a eventos del Workspace, entregada a una URL externa. Es una superficie de integración, no una fuente adicional del estado de las entidades.
 _Avoid_: Callback, notification
 
+## Persistencia
+
+**SQLite backend**:
+Backend predeterminado de prime-board. Mantiene el modo local-first y la operación sin configuración adicional. Una DB/proceso SQLite puede contener varios Workspaces aislados, con selección validada por Workspace Context. SQLite conserva la autoridad operativa mientras la migración a PostgreSQL siga en curso.
+_Avoid_: SQLite-only contract, cache
+
+**PostgreSQL backend**:
+Backend opcional que se activa de forma explícita. La migración es incremental: PostgreSQL recibe los dominios que ya tienen adaptador, mientras el resto conserva su camino de transición. Durante esta migración, PostgreSQL mantiene un solo Workspace por DB/proceso y no ofrece selección multi-Workspace. ADR-0019 define su arquitectura objetivo, con el Log del Repository Source como autoridad y PostgreSQL como proyección.
+_Avoid_: PostgreSQL default, replica completa
+
 ## Registro y réplica
 
 **Operational State**:
-Proyección vigente del Workspace. La API la consulta para permisos, filtros y relaciones actuales. En la topología PostgreSQL objetivo, el sistema puede reconstruirla desde el Repository Source. El runtime SQLite actual conserva la autoridad operativa hasta completar el cutover.
+Proyección vigente del Workspace. La API la consulta para permisos, filtros y relaciones actuales. SQLite la conserva como autoridad operativa por defecto. PostgreSQL mantiene el estado de los dominios migrados durante la transición, pero no reemplaza todavía a SQLite ni al Repository Source. ADR-0019 define su reconstrucción desde el Repository Source en la topología PostgreSQL objetivo.
 _Avoid_: Source of truth, cache
 
 **Repository Source**:
-Estado compartido y versionado del dominio. En la topología PostgreSQL objetivo, su Log append-only es la autoridad canónica. Los snapshots Markdown y el Operational State se derivan de él. Los secretos y las proyecciones personales quedan fuera de esta fuente.
+Estado compartido y versionado del dominio. En el runtime SQLite actual, `.prime-board` es una réplica controlada de SQLite, según ADR-0004. ADR-0019 define la transición en la que su Log append-only será la autoridad canónica para la topología PostgreSQL objetivo. Los secretos y las proyecciones personales quedan fuera de esta fuente.
 _Avoid_: Repository Replica, backup, dump
 
 **Log**:
-Serie versionada de eventos de dominio append-only dentro del Repository Source (`.prime-board/log/AT-172.jsonl`). Cada evento tiene identidad, tipo, actor, momento y payload suficiente para que un reducer reconstruya el estado de su agregado. Los merges se resuelven de forma determinista y PostgreSQL puede reproyectarse desde cero.
+Serie versionada de eventos de dominio append-only dentro del Repository Source (`.prime-board/log/AT-172.jsonl`). En el runtime SQLite actual, forma parte de la réplica y la DB conserva la autoridad operativa. En la topología PostgreSQL de ADR-0019, el Log será la fuente canónica y PostgreSQL podrá reproyectarse desde cero. Cada evento tiene identidad, tipo, actor, momento y payload suficiente para que un reducer reconstruya el estado de su agregado. Los merges se resuelven de forma determinista.
 _Avoid_: Activity, CDC del WAL, source of truth aislado del Repository Source
 
 **Issue Markdown**:
-Representación derivada y legible de una Issue dentro del Repository Source (`.prime-board/issues/AT-172.md`). El sistema la regenera desde el Log. Un importador explícito puede leerla y emitir eventos; la representación no escribe directamente en PostgreSQL ni actúa como autoridad.
+Representación derivada y legible de una Issue dentro del Repository Source (`.prime-board/issues/AT-172.md`). En el runtime SQLite actual, se genera como parte de la réplica. En la topología PostgreSQL de ADR-0019, se regenerará desde el Log. Un importador explícito puede leerla y emitir eventos; la representación no escribe directamente en PostgreSQL ni actúa como autoridad.
 _Avoid_: Snapshot editable, dump
