@@ -99,14 +99,31 @@ function postgresProjectIdsInIssueFilter(filter: IssueFilter | null | undefined)
   return [...new Set(ids)];
 }
 
-async function canQueryPostgresProjects(
+function postgresMilestoneIdsInIssueFilter(filter: IssueFilter | null | undefined): string[] {
+  if (!filter) return [];
+  const milestone = filter.milestone;
+  const ids = [
+    ...(milestone?.eq ? [milestone.eq] : []),
+    ...(milestone?.in ?? []),
+    ...(filter.and ?? []).flatMap((nested) => postgresMilestoneIdsInIssueFilter(nested)),
+    ...(filter.or ?? []).flatMap((nested) => postgresMilestoneIdsInIssueFilter(nested)),
+  ];
+  return [...new Set(ids)];
+}
+
+export async function canQueryPostgresIssueFilter(
   context: Context,
   filter: IssueFilter | null | undefined,
 ): Promise<boolean> {
   const projectIds = postgresProjectIdsInIssueFilter(filter);
-  if (!projectIds.length) return true;
   for (const projectId of projectIds) {
     const teamIds = await listPostgresProjectTeamIds(context.persistence!, projectId);
+    if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) return false;
+  }
+  for (const milestoneId of postgresMilestoneIdsInIssueFilter(filter)) {
+    const milestone = await getPostgresMilestone(context.persistence!, milestoneId);
+    if (!milestone) return false;
+    const teamIds = await listPostgresProjectTeamIds(context.persistence!, milestone.project_id);
     if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) return false;
   }
   return true;
@@ -653,7 +670,7 @@ export const issueResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        if (!(await canQueryPostgresProjects(context, args.filter))) {
+        if (!(await canQueryPostgresIssueFilter(context, args.filter))) {
           return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
         }
         const teamIds = await accessiblePostgresTeamIds(context.persistence, viewer, context.auth);
