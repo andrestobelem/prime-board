@@ -44,6 +44,32 @@ describe("documents", () => {
     ]);
   });
 
+  it("rechaza un documento de una iniciativa vinculada a un Team archivado", async () => {
+    const isolated = createTestApp();
+    try {
+      const team = isolated.db.query("SELECT id FROM teams WHERE key = 'PB'").get() as {
+        id: string;
+      };
+      const initiative = await gql(
+        isolated,
+        `mutation($teamId: ID!) { initiativeCreate(input: { name: "Archived Team initiative", teamIds: [$teamId] }) { initiative { id } } }`,
+        { teamId: team.id },
+      );
+      const initiativeId = initiative.data!.initiativeCreate.initiative.id as string;
+      isolated.db.query("UPDATE teams SET archived_at = ?1 WHERE id = ?2").run(now(), team.id);
+
+      const result = await gql(
+        isolated,
+        `mutation($initiativeId: ID!) { documentCreate(input: { title: "Must fail", initiativeId: $initiativeId }) { document { id } } }`,
+        { initiativeId },
+      );
+      expect(result.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+      expect(result.errors?.[0]?.message).toContain("Team is archived");
+    } finally {
+      isolated.stop();
+    }
+  });
+
   it("permite documentos globales, búsqueda y archivo reversible", async () => {
     const created = await gql(
       app,

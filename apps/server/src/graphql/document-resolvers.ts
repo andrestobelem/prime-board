@@ -45,6 +45,7 @@ import {
 import { getPostgresActor, mapPostgresActor } from "../domain/postgres-actors.ts";
 import { getPostgresIssueByRef } from "../domain/postgres-issues.ts";
 import {
+  assertPostgresTeamActive,
   canDiscoverPostgresTeam,
   canWritePostgresTeam,
   getPostgresTeam,
@@ -96,7 +97,7 @@ async function postgresInitiativeVisible(context: Context, initiativeId: string)
   return true;
 }
 
-async function assertPostgresInitiativeAccess(
+export async function assertPostgresInitiativeAccess(
   context: Context,
   initiativeId: string,
 ): Promise<void> {
@@ -114,10 +115,14 @@ async function assertPostgresInitiativeAccess(
     throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
   }
   const viewer = requireViewer(context);
-  if (isWorkspaceAdmin(viewer)) return;
+  const isAdmin = isWorkspaceAdmin(viewer);
   for (const teamId of teams) {
-    if (!(await isPostgresTeamMember(context.persistence, teamId, viewer.id))) {
+    await assertPostgresTeamActive(context.persistence, teamId);
+    if (!isAdmin && !(await isPostgresTeamMember(context.persistence, teamId, viewer.id))) {
       throw apiError("NOT_FOUND", "Initiative not found");
+    }
+    if (!(await canWritePostgresTeam(context.persistence, viewer, teamId))) {
+      throw apiError("UNAUTHORIZED", "Team access policy does not allow this operation");
     }
   }
 }

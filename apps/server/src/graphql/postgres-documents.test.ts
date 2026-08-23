@@ -70,6 +70,8 @@ describe("PostgreSQL Documents", () => {
     const memberKeyId = newId();
     const noTeamInitiativeId = newId();
     const linkedInitiativeId = newId();
+    const limitedInitiativeId = newId();
+    const limitedTeamId = newId();
     if (!seeded.adminApiKey) {
       await persistence.execute(
         "INSERT INTO api_keys (id, actor_id, name, hash, created_at) VALUES ($1, $2, $3, $4, $5)",
@@ -111,19 +113,27 @@ describe("PostgreSQL Documents", () => {
       ]);
     }
     await persistence.execute(
+      `INSERT INTO teams (id, name, key, description, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $5)`,
+      [limitedTeamId, "PRB-545 limited Team", "LIM", "API key limit fixture", timestamp],
+    );
+    await persistence.execute(
       `INSERT INTO initiatives (id, name, description, state, created_at, updated_at)
-       VALUES ($1, $2, '', 'planned', $3, $3), ($4, $5, '', 'planned', $3, $3)`,
+       VALUES ($1, $2, '', 'planned', $3, $3), ($4, $5, '', 'planned', $3, $3),
+              ($6, $7, '', 'planned', $3, $3)`,
       [
         noTeamInitiativeId,
         "PRB-545 no-team initiative",
         timestamp,
         linkedInitiativeId,
         "PRB-545 linked initiative",
+        limitedInitiativeId,
+        "PRB-545 limited initiative",
       ],
     );
     await persistence.execute(
-      "INSERT INTO initiative_teams (initiative_id, team_id) VALUES ($1, $2)",
-      [linkedInitiativeId, team.id],
+      "INSERT INTO initiative_teams (initiative_id, team_id) VALUES ($1, $2), ($3, $4)",
+      [linkedInitiativeId, team.id, limitedInitiativeId, limitedTeamId],
     );
     const app = createApp({ db, config, persistence });
     stop = () => app.server.stop();
@@ -140,13 +150,16 @@ describe("PostgreSQL Documents", () => {
         memberKeyId,
       ]);
       await persistence.execute("DELETE FROM actors WHERE id = $1", [memberId]);
-      await persistence.execute("DELETE FROM initiative_teams WHERE initiative_id = $1", [
+      await persistence.execute("DELETE FROM initiative_teams WHERE initiative_id IN ($1, $2)", [
         linkedInitiativeId,
+        limitedInitiativeId,
       ]);
-      await persistence.execute("DELETE FROM initiatives WHERE id IN ($1, $2)", [
+      await persistence.execute("DELETE FROM initiatives WHERE id IN ($1, $2, $3)", [
         noTeamInitiativeId,
         linkedInitiativeId,
+        limitedInitiativeId,
       ]);
+      await persistence.execute("DELETE FROM teams WHERE id = $1", [limitedTeamId]);
       if (!seeded.adminApiKey) {
         await persistence.execute("DELETE FROM api_key_scopes WHERE api_key_id = $1", [keyId]);
         await persistence.execute("DELETE FROM api_keys WHERE id = $1", [keyId]);
@@ -236,6 +249,28 @@ describe("PostgreSQL Documents", () => {
       memberKey,
     );
     expect(memberLinkedCreate.errors?.[0]?.message).toContain("Initiative not found");
+    const limitedInitiativeCreate = await request(
+      `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id } } }`,
+      {
+        input: { title: "PRB-545 limited initiative document", initiativeId: limitedInitiativeId },
+      },
+      limitedKey,
+    );
+    expect(limitedInitiativeCreate.errors?.[0]?.message).toContain(
+      "API key is limited to different Teams",
+    );
+    await persistence.execute("UPDATE teams SET archived_at = $1 WHERE id = $2", [
+      timestamp,
+      team.id,
+    ]);
+    const archivedInitiativeCreate = await request(
+      `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id } } }`,
+      {
+        input: { title: "PRB-545 archived initiative document", initiativeId: linkedInitiativeId },
+      },
+    );
+    expect(archivedInitiativeCreate.errors?.[0]?.message).toContain("Team is archived");
+    await persistence.execute("UPDATE teams SET archived_at = NULL WHERE id = $1", [team.id]);
     const limitedCreate = await request(
       `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id } } }`,
       { input: { title: "PRB-545 denied global document", content: "denied" } },
