@@ -25,7 +25,7 @@ El SDL es común, pero la capacidad operativa depende del backend configurado:
 - **SQLite** es el backend predeterminado. Usa `bun:sqlite`, migraciones `0001`–`00028` y
   expone Documents Markdown.
 - **PostgreSQL** es opcional. Se activa con `PRIME_BOARD_PERSISTENCE=postgres`, requiere
-  `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0006` y conserva una
+  `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0007` y conserva una
   única Workspace. La migración es incremental: los dominios no migrados usan un SQLite
   efímero; Documents ya está disponible en PostgreSQL desde la migración `0005`; la cobertura de suscriptores llega a `0006`.
 

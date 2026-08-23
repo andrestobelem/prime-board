@@ -5,6 +5,7 @@ import actorNameUnique from "./0003_actor_name_unique.sql" with { type: "text" }
 import issueSearch from "./0004_issue_search.sql" with { type: "text" };
 import documents from "./0005_documents.sql" with { type: "text" };
 import issueSubscribers from "./0006_issue_subscribers.sql" with { type: "text" };
+import workspaceAuth from "./0007_workspace_auth.sql" with { type: "text" };
 
 export interface PostgresMigration {
   readonly version: number;
@@ -19,6 +20,7 @@ export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
   { version: 4, name: "issue_search", sql: issueSearch },
   { version: 5, name: "documents", sql: documents },
   { version: 6, name: "issue_subscribers", sql: issueSubscribers },
+  { version: 7, name: "workspace_auth", sql: workspaceAuth },
 ];
 
 interface AppliedMigration {
