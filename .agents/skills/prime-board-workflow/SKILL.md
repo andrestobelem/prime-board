@@ -43,9 +43,9 @@ for detailed CLI and MCP configuration.
    the current Actor.
 3. **Implement and validate.** Follow the target project's `AGENTS.md`, tests, and conventions.
    Create separate issues for newly discovered bugs before you fix them.
-4. **Leave evidence.** Comment on the issue with the changes, commands run, and known gaps.
-5. **Resolve only after validation.** Move the issue to the completed workflow state only after
-   the acceptance criteria and regression checks pass.
+4. **Leave evidence.** Comment on the issue with the SHA, covered criteria, commands and results, known gaps, and next state. Notify `admin` when the work is ready or blocked.
+5. **Hand off for review.** Move a validated delivery to `Ready for Review`. A reviewer must verify it independently.
+6. **Resolve only after review.** Move the issue to `Done` only after the acceptance criteria and regression checks pass. Move it back to `In Progress` when changes are required.
 
 Use the CLI commands in [references/commands.md](references/commands.md). The GraphQL API is the
 authority for authorization and issue state. The CLI and MCP are adapters.

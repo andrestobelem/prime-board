@@ -4,8 +4,13 @@ Los issues de este repositorio viven en **prime-board**, el propio producto del 
 
 - **API:** GraphQL en `$PRIME_BOARD_URL/graphql` (por defecto, `http://localhost:3333`). Se autentica con `Authorization: Bearer $PRIME_BOARD_API_KEY`.
 - **CLI:** `pb` (alias de `bun apps/cli/src/index.ts`). Consulta `docs/guia-agentes.md`.
-- **MCP:** el server de `apps/mcp` expone las mismas tools que el MCP de Linear.
-- **Réplica en el repositorio:** cada escritura se refleja en `.prime-board/` (consulta `docs/investigacion-tickets-en-repo.md`). Es una réplica de lectura. **No edites esos archivos a mano**; escribe siempre mediante la API.
+- **MCP:** el server de `apps/mcp` ofrece tools para operar el Workspace, Teams, Issues,
+  Projects y otras entidades. Consulta la [guía de operación](../guia-agentes.md#6-mcp) para
+  los nombres y ejemplos disponibles.
+- **Réplica en el repositorio:** cada escritura se refleja en `.prime-board/`. La investigación
+  [Tickets en el repositorio](../investigacion-tickets-en-repo.md) es histórica; el contrato vigente
+  usa SQLite como fuente operativa y `.prime-board/` como réplica. **No edites esos archivos a mano**;
+  escribe siempre mediante la API.
 - **Linear:** funciona como archivo de consulta. Los `AT-*` importados conservan su trazabilidad en `.prime-board/meta/source-map.json` y no reciben nuevas escrituras operativas.
 
 ## Convenciones
@@ -14,6 +19,8 @@ Los issues de este repositorio viven en **prime-board**, el propio producto del 
 - Registra el estado de triage como **estado del workflow**, no como label (consulta `triage-labels.md`).
 - Registra como **Issues nuevas** los hallazgos que aparezcan durante la implementación. No los dejes solo en la conversación.
 - Usa los comentarios como registro de evidencia: indica qué entregaste, cómo lo verificaste y qué quedó fuera de alcance.
+- Entrega una unidad con SHA, criterios cubiertos, verificación, brechas y siguiente estado. Usa `Ready for Review` cuando una entrega necesita revisión independiente.
+- Envía un aviso directo a `admin` al terminar o quedar bloqueado. El comentario del Issue conserva la evidencia; el aviso activa la coordinación.
 
 ## Cuando una skill diga «publish to the issue tracker»
 
@@ -58,4 +65,5 @@ Las usa `/wayfinder`. prime-board no tiene un concepto separado de «map»: el *
 - **Blocking:** usa `pb issue link <ID> --blocked-by <ID>` (relación nativa con validación de ciclos).
 - **Frontier:** ejecuta `pb issue list --team PRB --unblocked --json` y filtra por Project.
 - **Claim:** ejecuta `pb issue update <ID> --state "In Progress" --assignee me`.
-- **Resolve:** comenta la respuesta con `pb issue comment <ID> --body -` y luego cambia el estado a `done` con `pb issue update <ID> --state done`.
+- **Handoff:** comenta SHA, criterios, comandos, resultados, brechas y siguiente estado; luego cambia a `Ready for Review`.
+- **Review:** verifica la entrega de forma independiente. Usa `Done` si pasa o `In Progress` si requiere cambios.

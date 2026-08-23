@@ -40,6 +40,8 @@ For a PR, apply the same states to the attached code. `ready-for-agent` means a 
 
 Every triaged issue must have exactly one category role and one state role. If state roles conflict, report the conflict and ask the maintainer before continuing.
 
+`Ready for Review` is an operational handoff, not a triage role. Use it after an agent delivers a validated change. Keep `Ready for Human` for human implementation or decision work. For a PR, `ready-for-human` still means that a human can merge the PR.
+
 These are canonical role names. The issue tracker may use different label strings. Use the provided mapping. If no mapping exists, tell the user to run `/setup-matt-pocock-skills`.
 
 State transitions: move an unlabeled issue to `needs-triage` first. From there, move it to `needs-info`, `ready-for-agent`, `ready-for-human`, or `wontfix`. Move `needs-info` back to `needs-triage` after the reporter replies. A maintainer can override any transition. Report unusual transitions and ask before proceeding.

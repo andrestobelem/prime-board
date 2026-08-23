@@ -16,6 +16,10 @@ Cuando una skill mencione un rol, como `apply the AFK-ready triage label`, cambi
 pb issue update PRB-172 --state "Ready for Agent"
 ```
 
+Los estados operativos (`Backlog`, `In Progress`, `Ready for Review` y `Done`) describen el trabajo. Los estados de triage describen la decisión previa y no sustituyen el ciclo operativo. `Ready for Human` significa que una persona debe implementar o decidir; `Ready for Review` significa que una entrega espera una verificación independiente.
+
+`Ready for Review` es un estado operativo y no un rol de triage. Un agente usa ese estado después de dejar una entrega con SHA, criterios, verificación y brechas. El reviewer mueve la Issue a `Done` o la devuelve a `In Progress`.
+
 Los tipos semánticos (`triage`, `unstarted`, `canceled`) permiten filtrar sin conocer los nombres visibles:
 
 ```bash

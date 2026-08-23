@@ -26,15 +26,18 @@ pb issue update PRB-123 --state started --assignee me --json
 Use the team's actual state names or semantic state types. Do not assume that every Team uses
 `PRB` or displays the same state names.
 
-## Report evidence and resolve
+## Deliver evidence and review
 
 ```bash
 pb issue comment PRB-123 --body -
+pb issue update PRB-123 --state "Ready for Review" --json
+# After an independent review:
 pb issue update PRB-123 --state completed --json
 ```
 
-A comment must state the delivered behavior, validation commands, and remaining gaps. If a
-new bug appears, create a separate issue before fixing it and reference that issue in the fix.
+The comment must include the SHA, covered criteria, validation commands and results, remaining
+gaps, and next state. Notify `admin` when the work is ready or blocked. If a new bug appears,
+create a separate issue before fixing it and reference that issue in the fix.
 
 ## Native dependencies
 

@@ -26,16 +26,18 @@ pb issue update PRB-123 --state started --assignee me --json
 Usa los nombres de estado reales del Team o sus tipos semánticos. No supongas que todos los
 Teams muestran los mismos nombres ni que la clave es `PRB`.
 
-## Informar evidencia y resolver
+## Entregar evidencia y revisar
 
 ```bash
 pb issue comment PRB-123 --body -
+pb issue update PRB-123 --state "Ready for Review" --json
+# Después de una revisión independiente:
 pb issue update PRB-123 --state completed --json
 ```
 
-El comentario debe indicar el comportamiento entregado, los comandos de validación y las
-brechas restantes. Si aparece un error nuevo, crea un Issue separado antes de corregirlo y
-referencia ese Issue en el arreglo.
+El comentario debe incluir SHA, criterios cubiertos, comandos y resultados, brechas restantes y
+siguiente estado. Avisa a `admin` cuando termines o quedes bloqueado. Si aparece un error nuevo,
+crea un Issue separado antes de corregirlo y referencia ese Issue en el arreglo.
 
 ## Dependencias nativas
 

@@ -42,10 +42,12 @@ para la configuración detallada del CLI y MCP.
 2. **Reclámalo antes de editar.** Mueve el Issue al estado activo y asígnalo al Actor actual.
 3. **Implementa y valida.** Sigue `AGENTS.md`, los tests y las convenciones del proyecto.
    Crea un Issue separado para cada error nuevo antes de corregirlo.
-4. **Deja evidencia.** Comenta el Issue con el comportamiento entregado, los comandos usados y
-   las brechas conocidas.
-5. **Resuélvelo después de validar.** Muévelo al estado completado solo cuando pasen los
-   criterios de aceptación y las comprobaciones de regresión.
+4. **Deja evidencia.** Comenta el Issue con SHA, criterios cubiertos, comandos y resultados,
+   brechas conocidas y siguiente estado. Avisa a `admin` cuando el trabajo esté listo o bloqueado.
+5. **Entrégalo para revisión.** Mueve una entrega validada a `Ready for Review`. Otro Actor debe
+   verificarla de forma independiente.
+6. **Resuélvelo después de revisar.** Mueve el Issue a `Done` solo cuando pasen los criterios de
+   aceptación y las comprobaciones de regresión. Devuélvelo a `In Progress` si requiere cambios.
 
 Usa los comandos de [references/commands.md](references/commands.md). La API GraphQL es la
 autoridad para la autorización y el estado. El CLI y MCP son adaptadores.

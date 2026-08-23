@@ -2,6 +2,18 @@
 
 > Cómo operar prime-board de principio a fin como agente o como persona con terminal.
 
+## Índice operativo
+
+- [Levantar el server](#1-levantar-el-server)
+- [Conceptos básicos](#2-conceptos-en-30-segundos)
+- [Darse de alta como agente](#3-darse-de-alta-como-agente)
+- [Usar GraphQL](#4-graphql-directo)
+- [Usar el CLI `pb`](#5-cli-pb)
+- [Usar el MCP](#6-mcp)
+- [Configurar webhooks](#7-webhooks-enterarse-de-las-cosas)
+- [Exportar y reconstruir](#8-exportar-y-reconstruir-con-seguridad)
+- [Ejecutar la receta completa](#9-receta-completa-para-un-agente-nuevo)
+
 ## 1. Levantar el server
 
 ```bash
@@ -84,7 +96,8 @@ idempotente. Si la base ya contiene Issues, no crea datos.
 - **Identifiers legibles**: la API referencia las Issues operativas como `PRB-153`.
 - **Workflow States con tipo semántico**: cada Team define sus estados, pero todos tienen un
   tipo portable (`triage|backlog|unstarted|started|completed|canceled`). Filtra por tipo y tu código funciona en cualquier Team.
-- **Paridad total**: GraphQL, CLI y MCP pueden hacer exactamente lo mismo.
+- **Ruta de datos de los clientes**: el CLI y el MCP envían sus operaciones al endpoint GraphQL
+  documentado. Consulta la sección de cada cliente para conocer las operaciones disponibles.
 - **Workspace vs Team**: el Workspace es el contenedor de la instalación y tiene un nombre
   editable por Workspace Admins. Cada Team conserva su `key` (`PRB`) y su nombre. Renombrar
   el Workspace no cambia las keys, los Identifiers (`PRB-153`), los IDs ni las referencias históricas.
@@ -153,6 +166,11 @@ de filtros anidados y paginación.
 Ciclo de vida completo: `issueCreate` → `issueUpdate` (estado/prioridad/assignee/labels/
 parent/project) → `commentCreate` → `issueArchive`. La operación registra la Activity en `Issue.activity`.
 
+Para una entrega de agente, el comentario debe incluir SHA, criterios cubiertos, comandos y
+resultados, brechas y siguiente estado. La entrega pasa a `Ready for Review`; otro Actor verifica
+el cambio y la mueve a `Done` o la devuelve a `In Progress`. `Ready for Human` queda reservado
+para implementación o decisión humana. El agente avisa a `admin` cuando termina o queda bloqueado.
+
 ## 5. CLI `pb`
 
 ```bash
@@ -185,8 +203,8 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
 - Las superficies de planificación se operan con `pb cycle`, `pb review`, `pb initiative`,
   `pb inbox` y `pb favorite`; todos sus comandos de lectura aceptan `--json` y las mutaciones
   conservan los códigos de salida comunes del CLI.
-- El MCP refleja esas operaciones con `list/save/get/delete_*` y las tools específicas
-  `carry_over_cycle`, `mark_inbox_read`, `archive_inbox` y `reorder_favorite`.
+- El MCP incluye tools para estas áreas. En planificación se llaman `list_cycles`, `save_cycle`,
+  `carry_over_cycle`, `mark_inbox_read`, `archive_inbox` y `reorder_favorite`, entre otras.
 - Administración operativa: `pb team create|update|archive|unarchive|delete|membership-*|workflow-state-*|label-*`,
   `pb actor list|create|update` y `pb api-key create|delete` exponen las mutaciones
   administrativas GraphQL y conservan sus errores/autorización.
@@ -199,22 +217,26 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
 
 ## 6. MCP
 
-El server MCP habla stdio y expone **las mismas tools que el MCP de Linear**
-(`list_issues`, `save_issue`, `save_comment`, `get_workspace`, ...): si tu agente ya
-sabe operar Linear, opera prime-board sin aprender nada.
+El server MCP habla stdio y ofrece tools para consultar y modificar el Workspace, Teams,
+Issues, Projects y otras entidades operativas. Entre sus nombres principales están
+`get_workspace`, `list_teams`, `list_issues`, `get_issue`, `save_issue`, `list_comments`,
+`save_comment`, `list_projects`, `get_project`, `save_project`, `list_cycles`, `list_reviews`,
+`list_initiatives`, `list_inbox`, `list_favorites`, `list_webhooks` y `list_saved_views`.
+La implementación actual también incluye tools para estados, labels, memberships, relaciones,
+milestones, project updates y las mutaciones de archivado correspondientes.
 
-Además de issues, el MCP ofrece `archive_project`, `unarchive_project`,
-`list_milestones`, `save_milestone`, `delete_milestone`, `list_project_updates`,
-`save_project_update` y `delete_project_update` para completar el ciclo de vida de planificación.
+Para verificar el inventario completo, consulta `apps/mcp/src/server.ts`. Las tools llaman al
+endpoint GraphQL y la API conserva la autorización y los códigos de error.
 
 Para renombrar el Workspace, usa `save_workspace` con `{ "name": "Mi Workspace" }`.
 La API rechaza la operación para Actors con rol `MEMBER`. El nombre es independiente de las keys y
 los nombres de los Teams.
 
-Las operaciones administrativas tienen equivalentes explícitos: `archive_issue`, `archive_team`, `unarchive_team`, `delete_team`, `save_team`,
-`list_team_memberships`, `save_team_membership`, `delete_team_membership`, `save_user`,
-`save_api_key`, `delete_api_key`, `save_issue_status`, `delete_issue_status`,
-`save_issue_label` y `delete_issue_label`. Las tools solo adaptan entradas y salidas.
+El MCP ofrece estas tools administrativas: `archive_issue`, `archive_team`, `unarchive_team`,
+`delete_team`, `save_team`, `list_team_memberships`, `save_team_membership`,
+`delete_team_membership`, `save_user`, `save_api_key`, `delete_api_key`, `save_issue_status`,
+`delete_issue_status`, `save_issue_label` y `delete_issue_label`. Las tools adaptan entradas y
+salidas para el cliente MCP.
 La API GraphQL sigue siendo la autoridad para la autorización y los códigos de error.
 
 Configura un cliente MCP como Claude Desktop o prime-agent:
