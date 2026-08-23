@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { linkSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import {
   acquireDatabaseReservation,
   acquireInstanceLock,
@@ -48,6 +48,67 @@ describe("atomic project database reservations", () => {
       next();
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a dangling symlink alias lock stable and rejects a second reservation", () => {
+    const root = `/tmp/prime-board-db-symlink-${crypto.randomUUID()}`;
+    const home = `${root}/home`;
+    const target = `${root}/target.db`;
+    const alias = `${root}/alias.db`;
+    mkdirSync(root, { recursive: true });
+    symlinkSync(target, alias);
+    const before = deriveProjectIdentity("/tmp/projects/alpha", home, alias);
+    const record = {
+      version: 1 as const,
+      projectRoot: before.projectRoot,
+      databasePath: before.databasePath,
+      pid: 1234,
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const release = acquireDatabaseReservation(before, record, () => true);
+    try {
+      writeFileSync(target, "database");
+      const after = deriveProjectIdentity("/tmp/projects/alpha", home, alias);
+      expect(after.databasePath).toBe(before.databasePath);
+      expect(after.databaseLockPath).toBe(before.databaseLockPath);
+      expect(after.databasePhysicalLockPath).not.toBeNull();
+      expect(() => acquireDatabaseReservation(after, record, () => true)).toThrow(
+        "Database is already reserved",
+      );
+    } finally {
+      release();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("shares a physical database reservation across hardlink aliases", () => {
+    const root = `/tmp/prime-board-db-hardlink-${crypto.randomUUID()}`;
+    const home = `${root}/home`;
+    const source = `${root}/source.db`;
+    const alias = `${root}/alias.db`;
+    mkdirSync(root, { recursive: true });
+    writeFileSync(source, "database");
+    linkSync(source, alias);
+    const first = deriveProjectIdentity("/tmp/projects/alpha", home, source);
+    const second = deriveProjectIdentity("/tmp/projects/beta", home, alias);
+    const record = (identity: typeof first) => ({
+      version: 1 as const,
+      projectRoot: identity.projectRoot,
+      databasePath: identity.databasePath,
+      pid: 1234,
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const release = acquireDatabaseReservation(first, record(first), () => true);
+    try {
+      expect(first.databasePhysicalLockPath).toBe(second.databasePhysicalLockPath);
+      expect(first.databasePhysicalLockPath).not.toBeNull();
+      expect(() => acquireDatabaseReservation(second, record(second), () => true)).toThrow(
+        "Database is already reserved",
+      );
+    } finally {
+      release();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

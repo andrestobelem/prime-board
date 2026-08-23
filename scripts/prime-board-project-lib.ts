@@ -3,9 +3,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -18,6 +18,7 @@ export interface ProjectInstanceIdentity {
   projectHash: string;
   databasePath: string;
   databaseLockPath: string;
+  databasePhysicalLockPath: string | null;
   lockPath: string;
   metadataPath: string;
 }
@@ -35,7 +36,9 @@ export function deriveProjectIdentity(
   const projectHash = createHash("sha256").update(root).digest("hex").slice(0, 8);
   const projectStateRoot = join(resolve(homeDirectory), ".prime-board", "projects");
   const projectKey = `${projectSlug}-${projectHash}`;
-  const databasePath = resolve(databasePathOverride ?? join(projectStateRoot, `${projectKey}.db`));
+  const databasePath = stableDatabasePath(
+    databasePathOverride ?? join(projectStateRoot, `${projectKey}.db`),
+  );
   const lockPath = join(projectStateRoot, `${projectKey}.lock`);
 
   return {
@@ -44,6 +47,7 @@ export function deriveProjectIdentity(
     projectHash,
     databasePath,
     databaseLockPath: databaseReservationPath(databasePath, homeDirectory),
+    databasePhysicalLockPath: databasePhysicalReservationPath(databasePath, homeDirectory),
     lockPath,
     metadataPath: join(lockPath, "instance.json"),
   };
@@ -66,27 +70,56 @@ export interface DatabaseReservationRecord {
   reservedAt: string;
 }
 
+/**
+ * Keeps the database path as a stable filesystem alias.
+ *
+ * Following any symlink would change the path when a missing parent or target
+ * is created. The physical reservation below handles existing hardlinks while
+ * this alias remains stable for the complete launcher lifecycle.
+ */
+export function stableDatabasePath(databasePath: string): string {
+  return resolve(databasePath);
+}
+
 function databaseReservationKey(databasePath: string): string {
-  const resolved = resolve(databasePath);
-  let canonical = resolved;
+  return stableDatabasePath(databasePath);
+}
+
+function databasePhysicalReservationKey(databasePath: string): string | null {
   try {
-    canonical = realpathSync(resolved);
+    const stats = statSync(databasePath);
+    return stats.isFile() ? `${stats.dev}:${stats.ino}` : null;
   } catch {
-    try {
-      canonical = join(realpathSync(dirname(resolved)), basename(resolved));
-    } catch {
-      // The database and its parent may not exist before the first launch.
-    }
+    return null;
   }
-  return canonical;
 }
 
 export function databaseReservationPath(databasePath: string, homeDirectory = homedir()): string {
   const key = createHash("sha256")
-    .update(databaseReservationKey(databasePath))
+    .update(`alias:${databaseReservationKey(databasePath)}`)
     .digest("hex")
     .slice(0, 16);
   return join(resolve(homeDirectory), ".prime-board", "databases", `${key}.lock`);
+}
+
+export function databasePhysicalReservationPath(
+  databasePath: string,
+  homeDirectory = homedir(),
+): string | null {
+  const key = databasePhysicalReservationKey(databasePath);
+  if (!key) return null;
+  const hash = createHash("sha256").update(`physical:${key}`).digest("hex").slice(0, 16);
+  return join(resolve(homeDirectory), ".prime-board", "databases", `${hash}.lock`);
+}
+
+export function databaseReservationPaths(
+  databasePath: string,
+  homeDirectory = homedir(),
+): string[] {
+  return [
+    databaseReservationPath(databasePath, homeDirectory),
+    databasePhysicalReservationPath(databasePath, homeDirectory),
+  ].filter((path): path is string => Boolean(path));
 }
 
 export type InstanceState = "running" | "stale" | "not-running";
@@ -218,42 +251,46 @@ export function acquireDatabaseReservation(
   record: DatabaseReservationRecord,
   probe: ProcessProbe = processIsAlive,
 ): () => void {
-  const path = identity.databaseLockPath;
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let created = false;
+  const paths = [identity.databaseLockPath, identity.databasePhysicalLockPath]
+    .filter((path): path is string => Boolean(path))
+    .sort();
+  for (const path of paths) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < paths.length + 1; attempt += 1) {
+    const created: string[] = [];
     try {
-      mkdirSync(path, { mode: 0o700 });
-      created = true;
-      writeFileSync(join(path, "reservation.json"), `${JSON.stringify(record, null, 2)}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-      });
+      for (const path of paths) {
+        mkdirSync(path, { mode: 0o700 });
+        created.push(path);
+        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(record, null, 2)}\n`, {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+        });
+      }
       let released = false;
       return () => {
         if (released) return;
         released = true;
-        rmSync(path, { recursive: true, force: true });
+        for (const path of [...paths].reverse()) rmSync(path, { recursive: true, force: true });
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        if (created) rmSync(path, { recursive: true, force: true });
-        throw error;
-      }
-      const existing = readDatabaseReservation(path);
+      for (const path of [...created].reverse()) rmSync(path, { recursive: true, force: true });
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+
+      const conflict = paths.find((path) => existsSync(path));
+      if (!conflict) continue;
+      const existing = readDatabaseReservation(conflict);
       if (existing === null || existing === "invalid") {
         throw new Error(`Database reservation is incomplete: ${identity.databasePath}`);
       }
       if (probe(existing.pid)) {
         throw new Error(`Database is already reserved: ${identity.databasePath}`);
       }
-      retireDatabaseReservation(path);
+      retireDatabaseReservation(conflict);
     }
   }
   throw new Error(`Database reservation is busy: ${identity.databasePath}`);
 }
-
 export type PortProbe = (port: number) => Promise<boolean>;
 
 async function portIsAvailable(port: number): Promise<boolean> {

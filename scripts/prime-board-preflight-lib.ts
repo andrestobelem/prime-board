@@ -3,8 +3,9 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
-  databaseReservationPath,
+  databaseReservationPaths,
   deriveProjectIdentity,
+  stableDatabasePath,
   type InstanceRecord,
 } from "./prime-board-project-lib.ts";
 
@@ -429,13 +430,13 @@ export async function inspectResources(
   const databasePath =
     configuredDatabase === ":memory:"
       ? ":memory:"
-      : canonicalPath(
+      : stableDatabasePath(
           configuredDatabase ?? deriveProjectIdentity(repoRoot, homeDirectory).databasePath,
         );
   const activeInstances = readActiveInstances(homeDirectory, processProbe);
-  const databaseLockPath =
-    databasePath === ":memory:" ? null : databaseReservationPath(databasePath, homeDirectory);
-  const databaseReservationExists = databaseLockPath !== null && existsSync(databaseLockPath);
+  const databaseLockPaths =
+    databasePath === ":memory:" ? [] : databaseReservationPaths(databasePath, homeDirectory);
+  const databaseReservationPathsPresent = databaseLockPaths.filter((path) => existsSync(path));
   const databaseUsers = activeInstances.filter((instance) =>
     databaseArtifacts(instance.record.databasePath).some((candidate) =>
       databaseArtifacts(databasePath).some((requested) => sameDatabase(candidate, requested)),
@@ -479,7 +480,7 @@ export async function inspectResources(
     );
   } else {
     checks.push(
-      databaseUsers.length || databaseReservationExists
+      databaseUsers.length || databaseReservationPathsPresent.length
         ? check(
             "resource-database",
             "fail",
@@ -488,7 +489,7 @@ export async function inspectResources(
               ...databaseUsers.map(
                 (instance) => `${instance.record.projectRoot} — ${instance.metadataPath}`,
               ),
-              ...(databaseReservationExists && databaseLockPath ? [databaseLockPath] : []),
+              ...databaseReservationPathsPresent,
             ],
           )
         : existsSync(databasePath)
@@ -524,7 +525,7 @@ export async function inspectResources(
   if (available.port === null) {
     checks.push(
       check("resource-port", "fail", `No port is available from ${preferredPort}.`, [
-        `Puertos revisados: ${available.skipped.length}`,
+        `Ports checked: ${available.skipped.length}`,
       ]),
     );
     return { checks, databasePath, port: null };
