@@ -600,6 +600,13 @@ kbd {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
+.inbox-action-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--danger-text);
+}
 
 .issue-toolbar {
   position: relative;
