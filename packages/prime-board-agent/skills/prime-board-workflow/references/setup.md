@@ -40,20 +40,36 @@ La instalación descubre la extensión y la skill declaradas en `package.json.pi
 copiar archivos manualmente desde `.agents/skills`. Las convenciones del proyecto mantienen la
 autoridad en su `AGENTS.md`.
 
-## 3. Configurar el CLI
+## 3. Guardar una credencial por proyecto (opcional)
+
+La extensión puede guardar la API key activa fuera del repositorio:
+
+```text
+/prime-board auth
+```
+
+El comando solo lee `PRIME_BOARD_API_KEY` del entorno del proceso. Escribe un archivo con
+permisos `0600` bajo `~/.prime-board/credentials/`. También puedes omitir este paso y mantener
+la key únicamente en el entorno de cada proceso. Nunca pegues una key en `settings.json`, en
+`.prime-board/` ni en un comentario del Issue.
+
+## 4. Configurar el CLI
 
 ```bash
 export PRIME_BOARD_ROOT=/ruta/a/prime-board
 export PRIME_BOARD_URL=http://localhost:3333
 export PRIME_BOARD_API_KEY=pb_...
+export PRIME_BOARD_MCP_URL=http://127.0.0.1:3334/mcp
 export PRIME_BOARD_TEAM=PRB
 alias pb='bun "$PRIME_BOARD_ROOT/apps/cli/src/index.ts"'
 pb issue list --team "$PRIME_BOARD_TEAM" --json
 ```
 
-## 4. Configurar MCP HTTP (interfaz principal)
+## 5. Configurar MCP HTTP (interfaz principal)
 
 Inicia el transporte local en otra terminal. El servidor MCP no lee una API key del entorno.
+Configura `PRIME_BOARD_MCP_URL` en el proceso de Prime Agent para que la skill use el endpoint
+correcto y no intente `/mcp` en el servidor GraphQL.
 Valida el Bearer que envía cada cliente.
 
 ```bash
@@ -83,4 +99,13 @@ El transporte stdio existente sigue disponible para clientes que aún no soporta
 en `.prime-board/`.
 
 Para varios proyectos, ejecuta una instancia por proyecto, con una base y un puerto distintos.
-Nunca reutilices una base entre proyectos.
+Nunca reutilices una base entre proyectos. La extensión conserva el endpoint de cada instancia
+en la credencial por proyecto; la skill resuelve ese archivo desde el Git root. Ejecuta un
+servidor MCP HTTP por proyecto cuando los puertos no sean compartidos:
+
+```bash
+PRIME_BOARD_URL=http://127.0.0.1:<board-port> \
+PRIME_BOARD_MCP_PORT=<mcp-port> \
+PRIME_BOARD_API_KEY="$PRIME_BOARD_API_KEY" \
+bun "$PRIME_BOARD_ROOT/apps/mcp/src/http.ts"
+```

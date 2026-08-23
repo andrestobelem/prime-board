@@ -1,6 +1,6 @@
 ---
 name: prime-board-workflow
-description: Usar cuando el proyecto está conectado a una instancia aislada de prime-board, al crear o actualizar Issues PRB o al configurar el flujo CLI/MCP de prime-board.
+description: Usar cuando el proyecto está conectado a una instancia aislada de prime-board, al crear o actualizar Issues PRB o al configurar el flujo CLI/MCP de prime-board. Incluye diagnóstico Python y acceso MCP autenticado.
 ---
 
 # Flujo de prime-board
@@ -8,6 +8,12 @@ description: Usar cuando el proyecto está conectado a una instancia aislada de 
 Usa la instancia aislada de prime-board del proyecto como gestor operativo de Issues. El
 repositorio del proyecto y su réplica `.prime-board/` están separados del repositorio fuente de
 prime-board.
+
+## Recargar la instalación
+
+Después de instalar o actualizar el package, ejecuta `/reload`. Prime Agent llama
+`session_shutdown` y `session_start`; la segunda fase verifica el runtime existente y no crea un
+segundo proceso. Para cambiar de proyecto, inicia una sesión nueva desde su checkout.
 
 ## Activar la conexión
 
@@ -49,3 +55,28 @@ para la configuración detallada del CLI y MCP.
 
 Usa los comandos de [references/commands.md](references/commands.md). La API GraphQL es la
 autoridad para la autorización y el estado. El CLI y MCP son adaptadores.
+
+## Skill Python de diagnóstico y MCP
+
+El package también instala `prime_board_workflow` en el kernel Python de Prime Agent. No
+replica las mutaciones GraphQL: descubre y llama las tools que expone el servidor MCP.
+
+```python
+import prime_board_workflow
+await prime_board_workflow("diagnose")
+await prime_board_workflow("list_tools")
+await prime_board_workflow.call_tool("list_issues", {"team": "PRB"})
+```
+
+La skill resuelve el Git root desde el directorio actual. Busca primero `PRIME_BOARD_API_KEY`;
+si no existe, lee la credencial del proyecto en
+`~/.prime-board/credentials/<project-hash>.json`, con permisos `0600`. El endpoint y la
+credencial nunca se escriben en `settings.json` ni en `.prime-board/`. Si no hay credencial,
+`diagnose` y `list_tools` devuelven un resultado `unauthenticated` con una guía de configuración.
+Los fallos de transporte devuelven un estado estable y hacen un intento de reconexión.
+
+La skill necesita una sesión MCP Streamable HTTP en `/mcp` y una variable
+`PRIME_BOARD_MCP_URL` por proyecto; consulta [references/setup.md](references/setup.md). Si el
+endpoint no está configurado, devuelve `unconfigured` y no intenta usar `/mcp` en el servidor
+GraphQL. Las operaciones de escritura siguen siendo las
+tools MCP/GraphQL existentes. No uses esta skill para enviar consultas GraphQL arbitrarias.
