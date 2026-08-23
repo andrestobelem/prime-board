@@ -80,9 +80,10 @@ Las rutas explícitas evitan que Bun descubra `scratchpad/worktrees`. El hook ma
 general en `--max-concurrency=5` y ejecuta cada test del launcher en un proceso separado con
 `--max-concurrency=1`.
 
-El preflight no reserva recursos ni corrige Git. La reserva atómica del launcher sigue siendo
-la protección contra carreras entre dos inicios. Usa `--strict` para tratar advertencias como
-fallos. El informe no imprime variables de entorno ni API keys.
+El preflight no reserva recursos ni corrige Git. El launcher reserva de forma atómica el puerto
+y la DB antes de iniciar el servidor; esas reservas protegen contra carreras entre dos inicios.
+Usa `--strict` para tratar advertencias como fallos. El informe no imprime variables de entorno
+ni API keys.
 
 ### Datos de demo (opcional)
 

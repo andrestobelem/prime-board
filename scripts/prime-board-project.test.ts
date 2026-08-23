@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import {
+  acquireDatabaseReservation,
   acquireInstanceLock,
   classifyInstance,
   deriveProjectIdentity,
@@ -20,6 +21,61 @@ describe("project instance identity", () => {
     });
     expect(beta.databasePath).not.toBe(alpha.databasePath);
     expect(beta.lockPath).not.toBe(alpha.lockPath);
+  });
+});
+
+describe("atomic project database reservations", () => {
+  test("serializes reservations for the same database across projects", () => {
+    const home = `/tmp/prime-board-db-test-${crypto.randomUUID()}`;
+    const databasePath = `/tmp/prime-board-shared-${crypto.randomUUID()}.db`;
+    const firstIdentity = deriveProjectIdentity("/tmp/projects/alpha", home, databasePath);
+    const secondIdentity = deriveProjectIdentity("/tmp/projects/beta", home, databasePath);
+    const record = (identity: typeof firstIdentity) => ({
+      version: 1 as const,
+      projectRoot: identity.projectRoot,
+      databasePath: identity.databasePath,
+      pid: 1234,
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    });
+    try {
+      const release = acquireDatabaseReservation(firstIdentity, record(firstIdentity), () => true);
+      expect(secondIdentity.databaseLockPath).toBe(firstIdentity.databaseLockPath);
+      expect(() =>
+        acquireDatabaseReservation(secondIdentity, record(secondIdentity), () => true),
+      ).toThrow("Database is already reserved");
+      release();
+      const next = acquireDatabaseReservation(secondIdentity, record(secondIdentity), () => true);
+      next();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("does not take an incomplete database reservation", () => {
+    const home = `/tmp/prime-board-db-test-${crypto.randomUUID()}`;
+    const identity = deriveProjectIdentity(
+      "/tmp/projects/alpha",
+      home,
+      `/tmp/prime-board-shared-${crypto.randomUUID()}.db`,
+    );
+    mkdirSync(identity.databaseLockPath, { recursive: true });
+    try {
+      expect(() =>
+        acquireDatabaseReservation(
+          identity,
+          {
+            version: 1,
+            projectRoot: identity.projectRoot,
+            databasePath: identity.databasePath,
+            pid: 1234,
+            reservedAt: "2026-01-01T00:00:00.000Z",
+          },
+          () => false,
+        ),
+      ).toThrow("Database reservation is incomplete");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

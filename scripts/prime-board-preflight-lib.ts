@@ -2,7 +2,11 @@ import { createServer } from "node:net";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { deriveProjectIdentity, type InstanceRecord } from "./prime-board-project-lib.ts";
+import {
+  databaseReservationPath,
+  deriveProjectIdentity,
+  type InstanceRecord,
+} from "./prime-board-project-lib.ts";
 
 export type CheckStatus = "pass" | "fail" | "warn";
 
@@ -199,23 +203,28 @@ export function inspectWorktrees(
   checks.push(
     current
       ? current.bare
-        ? check(
-            "worktree-current",
-            "fail",
-            "La entrada actual de worktree está marcada como bare.",
-            [repoRoot],
-          )
-        : check("worktree-current", "pass", "La worktree actual está registrada y no es bare.")
-      : check("worktree-current", "fail", "La worktree actual no aparece en `git worktree list`.", [
-          repoRoot,
-        ]),
+        ? check("worktree-current", "fail", "The current worktree entry is marked as bare.", [
+            repoRoot,
+          ])
+        : check("worktree-current", "pass", "The current worktree is registered and is not bare.")
+      : check(
+          "worktree-current",
+          "fail",
+          "The current worktree is not listed by `git worktree list`.",
+          [repoRoot],
+        ),
   );
 
   const repeatedPaths = repeatedKeys(canonicalEntries.map((entry) => entry.path));
   checks.push(
     repeatedPaths.length
-      ? check("worktree-duplicate-path", "fail", "Hay rutas de worktree duplicadas.", repeatedPaths)
-      : check("worktree-duplicate-path", "pass", "No hay rutas de worktree duplicadas."),
+      ? check(
+          "worktree-duplicate-path",
+          "fail",
+          "Duplicate worktree paths were found.",
+          repeatedPaths,
+        )
+      : check("worktree-duplicate-path", "pass", "No duplicate worktree paths were found."),
   );
 
   const branches = canonicalEntries.flatMap((entry) => (entry.branch ? [entry.branch] : []));
@@ -225,20 +234,24 @@ export function inspectWorktrees(
       ? check(
           "worktree-duplicate-branch",
           "fail",
-          "Hay ramas asignadas a más de una worktree.",
+          "Branches are assigned to more than one worktree.",
           repeatedBranches,
         )
-      : check("worktree-duplicate-branch", "pass", "No hay ramas duplicadas entre worktrees."),
+      : check(
+          "worktree-duplicate-branch",
+          "pass",
+          "No duplicate branches were found between worktrees.",
+        ),
   );
 
   const branchEntries = canonicalEntries.filter((entry) => entry.branch === branch);
   checks.push(
     branchEntries.length === 1
-      ? check("worktree-branch", "pass", `La rama actual es única: ${branch}.`)
+      ? check("worktree-branch", "pass", `The current branch is unique: ${branch}.`)
       : check(
           "worktree-branch",
           "fail",
-          `La rama esperada no tiene una única worktree: ${branch}.`,
+          `The expected branch does not have exactly one worktree: ${branch}.`,
           branchEntries.map((entry) => entry.path),
         ),
   );
@@ -254,22 +267,32 @@ export function inspectWorktrees(
         ? check(
             "worktree-unit",
             "pass",
-            `La unidad ${normalizedUnit} tiene una sola worktree.`,
+            `Unit ${normalizedUnit} has one worktree.`,
             matchingEntries.map((entry) => entry.path),
           )
-        : check(
-            "worktree-unit",
-            "fail",
-            `La unidad ${normalizedUnit} aparece en varias worktrees.`,
-            matchingEntries.map((entry) => `${entry.branch ?? "(detached)"} — ${entry.path}`),
-          ),
+        : matchingEntries.length === 0
+          ? check(
+              "worktree-unit",
+              "fail",
+              `No worktree has a reliable identity for unit ${normalizedUnit}; refusing to assume it is unique.`,
+              canonicalEntries.map(
+                (entry) =>
+                  `${entry.branch ?? "(detached)"} — ${entry.path} — HEAD ${entry.head ?? "(unknown)"}`,
+              ),
+            )
+          : check(
+              "worktree-unit",
+              "fail",
+              `Unit ${normalizedUnit} appears in multiple worktrees.`,
+              matchingEntries.map((entry) => `${entry.branch ?? "(detached)"} — ${entry.path}`),
+            ),
     );
   } else {
     checks.push(
       check(
         "worktree-unit",
         "warn",
-        "No se indicó --unit; no se puede comprobar la duplicación por unidad de trabajo.",
+        "--unit was not provided; unit duplication cannot be checked.",
       ),
     );
   }
@@ -396,8 +419,11 @@ export async function inspectResources(
   const homeDirectory = resolve(options.homeDirectory ?? homedir());
   const processProbe = options.processProbe ?? processIsAlive;
   const inheritedRepo = process.env.PRIME_BOARD_REPO;
-  const inheritedRepoMatches =
-    !inheritedRepo || canonicalPath(inheritedRepo) === canonicalPath(repoRoot);
+  const inheritedRepoMatches = Boolean(
+    inheritedRepo && canonicalPath(inheritedRepo) === canonicalPath(repoRoot),
+  );
+  const hasIncompleteInheritedResources =
+    !inheritedRepo && Boolean(process.env.PRIME_BOARD_DB || process.env.PRIME_BOARD_PORT);
   const configuredDatabase =
     options.databasePath ?? (inheritedRepoMatches ? process.env.PRIME_BOARD_DB : undefined);
   const databasePath =
@@ -407,24 +433,40 @@ export async function inspectResources(
           configuredDatabase ?? deriveProjectIdentity(repoRoot, homeDirectory).databasePath,
         );
   const activeInstances = readActiveInstances(homeDirectory, processProbe);
+  const databaseLockPath =
+    databasePath === ":memory:" ? null : databaseReservationPath(databasePath, homeDirectory);
+  const databaseReservationExists = databaseLockPath !== null && existsSync(databaseLockPath);
   const databaseUsers = activeInstances.filter((instance) =>
     databaseArtifacts(instance.record.databasePath).some((candidate) =>
       databaseArtifacts(databasePath).some((requested) => sameDatabase(candidate, requested)),
     ),
   );
   const checks: PreflightCheck[] = [];
-  if (inheritedRepo && !inheritedRepoMatches) {
+  if (hasIncompleteInheritedResources) {
     checks.push(
       check(
         "resource-inherited-env",
         "warn",
-        "La configuración heredada pertenece a otra worktree; no se reutilizan su puerto ni su DB.",
+        "PRIME_BOARD_DB and PRIME_BOARD_PORT are ignored without PRIME_BOARD_REPO.",
+        ["PRIME_BOARD_DB", "PRIME_BOARD_PORT"],
+      ),
+    );
+  } else if (inheritedRepo && !inheritedRepoMatches) {
+    checks.push(
+      check(
+        "resource-inherited-env",
+        "warn",
+        "Inherited configuration belongs to another worktree; its port and database are ignored.",
         ["PRIME_BOARD_REPO"],
       ),
     );
   } else {
     checks.push(
-      check("resource-inherited-env", "pass", "No hay configuración heredada de otra worktree."),
+      check(
+        "resource-inherited-env",
+        "pass",
+        "No configuration from another worktree is inherited.",
+      ),
     );
   }
   if (databasePath === ":memory:") {
@@ -432,31 +474,34 @@ export async function inspectResources(
       check(
         "resource-database",
         "fail",
-        "`:memory:` no identifica una DB exclusiva entre ejecuciones.",
+        "`:memory:` does not identify an exclusive database between executions.",
       ),
     );
   } else {
     checks.push(
-      databaseUsers.length
+      databaseUsers.length || databaseReservationExists
         ? check(
             "resource-database",
             "fail",
-            "La DB temporal ya está siendo usada por una instancia activa.",
-            databaseUsers.map(
-              (instance) => `${instance.record.projectRoot} — ${instance.metadataPath}`,
-            ),
+            "The temporary database is already reserved by an active or starting instance.",
+            [
+              ...databaseUsers.map(
+                (instance) => `${instance.record.projectRoot} — ${instance.metadataPath}`,
+              ),
+              ...(databaseReservationExists && databaseLockPath ? [databaseLockPath] : []),
+            ],
           )
         : existsSync(databasePath)
           ? check(
               "resource-database",
               "warn",
-              "La DB existe, pero no hay una instancia activa que la reclame.",
+              "The database exists, but no active instance claims it.",
               [databasePath],
             )
           : check(
               "resource-database",
               "pass",
-              "La DB temporal no está compartida por una instancia activa.",
+              "The temporary database is not shared by an active instance.",
               [databasePath],
             ),
     );
@@ -466,7 +511,7 @@ export async function inspectResources(
   const preferredPort = options.port ?? Number(inheritedPort ?? DEFAULT_PORT);
   const explicit = options.port !== undefined || inheritedPort !== undefined;
   if (!Number.isInteger(preferredPort) || preferredPort < 1 || preferredPort > 65535) {
-    checks.push(check("resource-port", "fail", `El puerto no es válido: ${preferredPort}.`));
+    checks.push(check("resource-port", "fail", `Invalid port: ${preferredPort}.`));
     return { checks, databasePath, port: null };
   }
   const available = await findAvailablePort(
@@ -478,7 +523,7 @@ export async function inspectResources(
   );
   if (available.port === null) {
     checks.push(
-      check("resource-port", "fail", `No hay un puerto disponible desde ${preferredPort}.`, [
+      check("resource-port", "fail", `No port is available from ${preferredPort}.`, [
         `Puertos revisados: ${available.skipped.length}`,
       ]),
     );
@@ -486,11 +531,11 @@ export async function inspectResources(
   }
   checks.push(
     available.port === preferredPort
-      ? check("resource-port", "pass", `El puerto ${available.port} está disponible.`)
+      ? check("resource-port", "pass", `Port ${available.port} is available.`)
       : check(
           "resource-port",
           "pass",
-          `El puerto ${preferredPort} está ocupado; se encontró el puerto libre ${available.port}.`,
+          `Port ${preferredPort} is occupied; free port ${available.port} was selected.`,
         ),
   );
   return { checks, databasePath, port: available.port };
@@ -522,19 +567,19 @@ export function inspectTestPlan(hookText: string, repoRoot: string): PreflightCh
 
   checks.push(
     /^\s*set\s+-e(?:u)?(?:\s|$)/m.test(text)
-      ? check("tests-fail-fast", "pass", "El hook detiene la entrega si una etapa falla.")
-      : check("tests-fail-fast", "fail", "El hook no activa modo fail-fast (`set -e`)."),
+      ? check("tests-fail-fast", "pass", "The hook stops the delivery when a step fails.")
+      : check("tests-fail-fast", "fail", "The hook does not enable fail-fast mode (`set -e`)."),
   );
 
   checks.push(
     testLines.length === 0
-      ? check("tests-command", "fail", "El hook no contiene ningún comando `bun test`.")
+      ? check("tests-command", "fail", "The hook has no `bun test` command.")
       : testLines.every((line) => hasRepoTestPath(line, repoRoot))
-        ? check("tests-command", "pass", "Cada `bun test` usa rutas explícitas del repositorio.")
+        ? check("tests-command", "pass", "Every `bun test` command uses explicit repository paths.")
         : check(
             "tests-command",
             "fail",
-            "El hook contiene un `bun test` sin rutas explícitas.",
+            "The hook contains a `bun test` command without explicit paths.",
             testLines.filter((line) => !hasRepoTestPath(line, repoRoot)),
           ),
   );
@@ -544,10 +589,10 @@ export function inspectTestPlan(hookText: string, repoRoot: string): PreflightCh
       ? check(
           "tests-scratchpad",
           "fail",
-          "El hook incluye `scratchpad` en el descubrimiento de tests.",
+          "The hook includes `scratchpad` in test discovery.",
           testLines.filter((line) => /scratchpad/i.test(line)),
         )
-      : check("tests-scratchpad", "pass", "El hook no pasa `scratchpad` a Bun."),
+      : check("tests-scratchpad", "pass", "The hook does not pass `scratchpad` to Bun."),
   );
 
   const missingPaths = REQUIRED_TEST_PATHS.filter((relativePath) => {
@@ -559,13 +604,13 @@ export function inspectTestPlan(hookText: string, repoRoot: string): PreflightCh
       ? check(
           "tests-versioned-scope",
           "fail",
-          "El hook no cubre todos los tests versionados requeridos.",
+          "The hook does not cover all required versioned tests.",
           missingPaths,
         )
       : check(
           "tests-versioned-scope",
           "pass",
-          "El hook cubre CLI, server, web, MCP, packages y scripts versionados.",
+          "The hook covers versioned CLI, server, web, MCP, packages, and scripts.",
         ),
   );
 
@@ -574,11 +619,15 @@ export function inspectTestPlan(hookText: string, repoRoot: string): PreflightCh
   );
   checks.push(
     generalLine && hasConcurrency(generalLine, 5)
-      ? check("tests-general-concurrency", "pass", "La suite general usa concurrencia máxima 5.")
+      ? check(
+          "tests-general-concurrency",
+          "pass",
+          "The general suite uses a maximum concurrency of 5.",
+        )
       : check(
           "tests-general-concurrency",
           "fail",
-          "La suite general no declara `--max-concurrency=5`.",
+          "The general suite does not declare `--max-concurrency=5`.",
           generalLine ? [generalLine] : undefined,
         ),
   );
@@ -604,12 +653,12 @@ export function inspectTestPlan(hookText: string, repoRoot: string): PreflightCh
       ? check(
           "tests-launcher-isolation",
           "pass",
-          "Los tests del launcher están separados y usan concurrencia 1.",
+          "Launcher tests are separated and use concurrency 1.",
         )
       : check(
           "tests-launcher-isolation",
           "fail",
-          "Los tests del launcher pueden ejecutarse en paralelo o no tienen concurrencia 1.",
+          "Launcher tests can run in parallel or do not use concurrency 1.",
           launcherLines,
         ),
   );
@@ -630,13 +679,13 @@ export async function runPreflight(options: PreflightOptions = {}): Promise<Pref
   if (rootResult.exitCode !== 0) {
     repoRoot = repoPath;
     checks.push(
-      check("git-repository", "fail", "La ruta no es un repositorio Git con worktree.", [
+      check("git-repository", "fail", "The path is not a Git repository with a worktree.", [
         rootResult.stderr.trim() || repoPath,
       ]),
     );
   } else {
     repoRoot = canonicalPath(rootResult.stdout.trim());
-    checks.push(check("git-repository", "pass", `Repositorio Git: ${repoRoot}.`));
+    checks.push(check("git-repository", "pass", `Git repository: ${repoRoot}.`));
   }
 
   const insideWorktree = gitRunner(repoRoot, ["rev-parse", "--is-inside-work-tree"]);
@@ -645,60 +694,54 @@ export async function runPreflight(options: PreflightOptions = {}): Promise<Pref
   const coreBare = gitRunner(repoRoot, ["config", "--local", "--bool", "--get", "core.bare"]);
   checks.push(
     commonDir.exitCode === 0
-      ? check("git-common-dir", "pass", `Git common dir: ${commonDir.stdout.trim()}.`)
-      : check("git-common-dir", "fail", "No se pudo resolver el Git common dir.", [
+      ? check("git-common-dir", "pass", `Git common directory: ${commonDir.stdout.trim()}.`)
+      : check("git-common-dir", "fail", "The Git common directory could not be resolved.", [
           commonDir.stderr.trim(),
         ]),
   );
   if (coreBare.stdout.trim().toLowerCase() === "true" || bare.stdout.trim() === "true") {
-    checks.push(
-      check(
-        "git-worktree",
-        "fail",
-        "`core.bare=true`; el checkout principal podría quedar inutilizable.",
-      ),
-    );
+    checks.push(check("git-worktree", "fail", "`core.bare=true`; the checkout may be unusable."));
   } else if (insideWorktree.stdout.trim() === "true") {
-    checks.push(check("git-worktree", "pass", "El checkout es un worktree no bare."));
+    checks.push(check("git-worktree", "pass", "The checkout is a non-bare worktree."));
   } else {
-    checks.push(check("git-worktree", "fail", "Git no reconoce un worktree utilizable."));
+    checks.push(check("git-worktree", "fail", "Git does not recognize a usable worktree."));
   }
 
   const status = gitRunner(repoRoot, ["status", "--porcelain=v2", "--untracked-files=all"]);
   checks.push(
     status.exitCode !== 0
-      ? check("git-clean", "fail", "No se pudo comprobar el estado limpio de la worktree.", [
+      ? check("git-clean", "fail", "The worktree clean state could not be checked.", [
           status.stderr.trim(),
         ])
       : status.stdout.trim()
         ? check(
             "git-clean",
             "fail",
-            "La worktree tiene cambios antes del preflight.",
+            "The worktree has changes before preflight.",
             status.stdout.trim().split(/\r?\n/),
           )
-        : check("git-clean", "pass", "La worktree está limpia."),
+        : check("git-clean", "pass", "The worktree is clean."),
   );
 
   const branchResult = gitRunner(repoRoot, ["branch", "--show-current"]);
   branch = branchResult.stdout.trim() || null;
   checks.push(
     branch
-      ? check("git-branch", "pass", `Rama actual: ${branch}.`)
-      : check("git-branch", "fail", "El checkout está detached; se requiere una rama explícita."),
+      ? check("git-branch", "pass", `Current branch: ${branch}.`)
+      : check("git-branch", "fail", "The checkout is detached; an explicit branch is required."),
   );
   if (options.expectedBranch && branch !== options.expectedBranch) {
     checks.push(
       check(
         "git-expected-branch",
         "fail",
-        `La rama actual no coincide con --branch: ${options.expectedBranch}.`,
+        `The current branch does not match --branch: ${options.expectedBranch}.`,
         [branch ?? "(detached)"],
       ),
     );
   } else if (options.expectedBranch) {
     checks.push(
-      check("git-expected-branch", "pass", `La rama coincide con ${options.expectedBranch}.`),
+      check("git-expected-branch", "pass", `The branch matches ${options.expectedBranch}.`),
     );
   }
 
@@ -706,23 +749,23 @@ export async function runPreflight(options: PreflightOptions = {}): Promise<Pref
   const pruneResult = gitRunner(repoRoot, ["worktree", "prune", "--dry-run"]);
   checks.push(
     pruneResult.exitCode !== 0
-      ? check("worktree-prune", "fail", "No se pudo auditar worktrees huérfanas.", [
+      ? check("worktree-prune", "fail", "Orphaned worktrees could not be audited.", [
           pruneResult.stderr.trim(),
         ])
       : pruneResult.stdout.trim()
-        ? check("worktree-prune", "fail", "Hay registros de worktree que Git propone podar.", [
+        ? check("worktree-prune", "fail", "Git reports worktree records that should be pruned.", [
             pruneResult.stdout.trim(),
           ])
-        : check("worktree-prune", "pass", "No hay registros de worktree huérfanos."),
+        : check("worktree-prune", "pass", "No orphaned worktree records were found."),
   );
   if (worktreeResult.exitCode !== 0 || !branch) {
     checks.push(
-      check("worktree-list", "fail", "No se pudo leer la lista de worktrees.", [
-        worktreeResult.stderr.trim() || "La rama no está disponible.",
+      check("worktree-list", "fail", "The worktree list could not be read.", [
+        worktreeResult.stderr.trim() || "The branch is not available.",
       ]),
     );
   } else {
-    checks.push(check("worktree-list", "pass", "La lista de worktrees se pudo leer."));
+    checks.push(check("worktree-list", "pass", "The worktree list was read successfully."));
     checks.push(
       ...inspectWorktrees(
         parseWorktreePorcelain(worktreeResult.stdout),
@@ -736,7 +779,7 @@ export async function runPreflight(options: PreflightOptions = {}): Promise<Pref
   const hookPath = options.hookPath ?? join(repoRoot, ".husky", "pre-commit");
   if (!existsSync(hookPath)) {
     checks.push(
-      check("tests-hook", "fail", "No existe el hook de pre-commit para auditar.", [hookPath]),
+      check("tests-hook", "fail", "The pre-commit hook to audit does not exist.", [hookPath]),
     );
   } else {
     checks.push(...inspectTestPlan(readFileSync(hookPath, "utf8"), repoRoot));

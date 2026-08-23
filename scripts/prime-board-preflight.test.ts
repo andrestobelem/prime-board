@@ -6,9 +6,10 @@ import {
   runPreflight,
   type WorktreeEntry,
 } from "./prime-board-preflight-lib.ts";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deriveProjectIdentity } from "./prime-board-project-lib.ts";
 
 const hook = readFileSync(join(import.meta.dir, "..", ".husky", "pre-commit"), "utf8");
 
@@ -110,6 +111,36 @@ describe("PRB-543 test plan", () => {
 });
 
 describe("PRB-543 Git preflight", () => {
+  test("PRB-495: checks a real bare repository without modifying it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "prime-board-preflight-bare-"));
+    const bare = join(root, "repo.git");
+    const home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+    try {
+      const initialized = Bun.spawnSync(["git", "init", "--bare", "-q", bare]);
+      expect(initialized.exitCode).toBe(0);
+      const report = await runPreflight({
+        repoPath: bare,
+        expectedBranch: "main",
+        unit: "PRB-495",
+        homeDirectory: home,
+        databasePath: join(root, "state", "bare.db"),
+        port: 41009,
+        portProbe: async () => true,
+        processProbe: () => false,
+      });
+      expect(report.passed).toBe(false);
+      expect(report.checks.find((item) => item.id === "git-worktree")?.status).toBe("fail");
+      expect(
+        Bun.spawnSync(["git", "-C", bare, "rev-parse", "--is-bare-repository"])
+          .stdout.toString()
+          .trim(),
+      ).toBe("true");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("PRB-495: reports core.bare without modifying the repository", async () => {
     const fixture = createGitFixture();
     try {
@@ -203,6 +234,20 @@ describe("PRB-543 Git preflight", () => {
       "PRB-543",
     );
     expect(distinct.find((item) => item.id === "worktree-unit")?.status).toBe("pass");
+
+    const unknownIdentity = inspectWorktrees(
+      [
+        { path: "/tmp/first", head: "a", branch: "feature/first", bare: false },
+        { path: "/tmp/second", head: "b", branch: "feature/second", bare: false },
+      ],
+      "/tmp/first",
+      "feature/first",
+      "PRB-543",
+    );
+    expect(unknownIdentity.find((item) => item.id === "worktree-unit")?.status).toBe("fail");
+    expect(unknownIdentity.find((item) => item.id === "worktree-unit")?.message).toContain(
+      "reliable identity",
+    );
   });
 });
 
@@ -252,6 +297,63 @@ describe("PRB-543 resource preflight", () => {
         "warn",
       );
       expect(report.databasePath).not.toBe("/tmp/another.db");
+      expect(report.port).toBe(3333);
+    } finally {
+      if (previous.repo === undefined) delete process.env.PRIME_BOARD_REPO;
+      else process.env.PRIME_BOARD_REPO = previous.repo;
+      if (previous.db === undefined) delete process.env.PRIME_BOARD_DB;
+      else process.env.PRIME_BOARD_DB = previous.db;
+      if (previous.port === undefined) delete process.env.PRIME_BOARD_PORT;
+      else process.env.PRIME_BOARD_PORT = previous.port;
+      fixture.cleanup();
+    }
+  });
+
+  test("rejects an atomic database reservation without an instance record", async () => {
+    const fixture = createGitFixture();
+    const identity = deriveProjectIdentity(fixture.root, fixture.home, fixture.db);
+    try {
+      mkdirSync(identity.databaseLockPath, { recursive: true });
+      const report = await runPreflight({
+        repoPath: fixture.root,
+        expectedBranch: "ghostty-scout/prb-543",
+        unit: "PRB-543",
+        homeDirectory: fixture.home,
+        databasePath: fixture.db,
+        port: 41007,
+        portProbe: async () => true,
+        processProbe: () => false,
+      });
+      expect(report.checks.find((item) => item.id === "resource-database")?.status).toBe("fail");
+      expect(existsSync(identity.databaseLockPath)).toBe(true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("does not inherit DB or port without PRIME_BOARD_REPO", async () => {
+    const fixture = createGitFixture();
+    const previous = {
+      repo: process.env.PRIME_BOARD_REPO,
+      db: process.env.PRIME_BOARD_DB,
+      port: process.env.PRIME_BOARD_PORT,
+    };
+    try {
+      delete process.env.PRIME_BOARD_REPO;
+      process.env.PRIME_BOARD_DB = "/tmp/inherited-without-repo.db";
+      process.env.PRIME_BOARD_PORT = "41008";
+      const report = await runPreflight({
+        repoPath: fixture.root,
+        expectedBranch: "ghostty-scout/prb-543",
+        unit: "PRB-543",
+        homeDirectory: fixture.home,
+        portProbe: async () => true,
+        processProbe: () => false,
+      });
+      expect(report.checks.find((item) => item.id === "resource-inherited-env")?.status).toBe(
+        "warn",
+      );
+      expect(report.databasePath).not.toBe("/tmp/inherited-without-repo.db");
       expect(report.port).toBe(3333);
     } finally {
       if (previous.repo === undefined) delete process.env.PRIME_BOARD_REPO;

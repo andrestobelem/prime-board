@@ -9,6 +9,7 @@ import {
   type BootstrapIdentity,
 } from "../apps/server/src/db/bootstrap-config.ts";
 import {
+  acquireDatabaseReservation,
   acquireInstanceLock,
   chooseAvailablePort,
   reserveAvailablePort,
@@ -200,10 +201,19 @@ const instanceRecord: InstanceRecord = {
   pid: process.pid,
   startedAt: new Date().toISOString(),
 };
+let releaseDatabaseReservation: (() => void) | null = null;
 let releaseLock: (() => void) | null = null;
 try {
+  releaseDatabaseReservation = acquireDatabaseReservation(identity, {
+    version: 1,
+    projectRoot,
+    databasePath: identity.databasePath,
+    pid: process.pid,
+    reservedAt: instanceRecord.startedAt,
+  });
   releaseLock = acquireInstanceLock(identity, instanceRecord);
 } catch (error) {
+  releaseDatabaseReservation?.();
   portReservation.release();
   const concurrent = classifyInstance(identity);
   if (concurrent.state === "running" && concurrent.record) {
@@ -217,6 +227,7 @@ try {
 
 if (receivedSignal) {
   releaseLock?.();
+  releaseDatabaseReservation?.();
   portReservation.release();
   process.removeListener("SIGINT", onSignal);
   process.removeListener("SIGTERM", onSignal);
@@ -259,6 +270,7 @@ try {
   process.removeListener("SIGINT", onSignal);
   process.removeListener("SIGTERM", onSignal);
   releaseLock?.();
+  releaseDatabaseReservation?.();
   portReservation.release();
 }
 process.exit(exitCode);

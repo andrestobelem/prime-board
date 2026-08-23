@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
@@ -9,6 +17,7 @@ export interface ProjectInstanceIdentity {
   projectSlug: string;
   projectHash: string;
   databasePath: string;
+  databaseLockPath: string;
   lockPath: string;
   metadataPath: string;
 }
@@ -26,13 +35,15 @@ export function deriveProjectIdentity(
   const projectHash = createHash("sha256").update(root).digest("hex").slice(0, 8);
   const projectStateRoot = join(resolve(homeDirectory), ".prime-board", "projects");
   const projectKey = `${projectSlug}-${projectHash}`;
+  const databasePath = resolve(databasePathOverride ?? join(projectStateRoot, `${projectKey}.db`));
   const lockPath = join(projectStateRoot, `${projectKey}.lock`);
 
   return {
     projectRoot: root,
     projectSlug,
     projectHash,
-    databasePath: resolve(databasePathOverride ?? join(projectStateRoot, `${projectKey}.db`)),
+    databasePath,
+    databaseLockPath: databaseReservationPath(databasePath, homeDirectory),
     lockPath,
     metadataPath: join(lockPath, "instance.json"),
   };
@@ -45,6 +56,37 @@ export interface InstanceRecord {
   port: number;
   pid: number;
   startedAt: string;
+}
+
+export interface DatabaseReservationRecord {
+  version: 1;
+  projectRoot: string;
+  databasePath: string;
+  pid: number;
+  reservedAt: string;
+}
+
+function databaseReservationKey(databasePath: string): string {
+  const resolved = resolve(databasePath);
+  let canonical = resolved;
+  try {
+    canonical = realpathSync(resolved);
+  } catch {
+    try {
+      canonical = join(realpathSync(dirname(resolved)), basename(resolved));
+    } catch {
+      // The database and its parent may not exist before the first launch.
+    }
+  }
+  return canonical;
+}
+
+export function databaseReservationPath(databasePath: string, homeDirectory = homedir()): string {
+  const key = createHash("sha256")
+    .update(databaseReservationKey(databasePath))
+    .digest("hex")
+    .slice(0, 16);
+  return join(resolve(homeDirectory), ".prime-board", "databases", `${key}.lock`);
 }
 
 export type InstanceState = "running" | "stale" | "not-running";
@@ -136,6 +178,80 @@ export function acquireInstanceLock(
     released = true;
     removeInstanceLock(identity);
   };
+}
+
+function readDatabaseReservation(path: string): DatabaseReservationRecord | "invalid" | null {
+  const metadataPath = join(path, "reservation.json");
+  if (!existsSync(metadataPath)) return null;
+  try {
+    const record = JSON.parse(
+      readFileSync(metadataPath, "utf8"),
+    ) as Partial<DatabaseReservationRecord>;
+    if (
+      record.version !== 1 ||
+      typeof record.projectRoot !== "string" ||
+      typeof record.databasePath !== "string" ||
+      !Number.isInteger(record.pid) ||
+      typeof record.reservedAt !== "string"
+    ) {
+      return "invalid";
+    }
+    return record as DatabaseReservationRecord;
+  } catch {
+    return "invalid";
+  }
+}
+
+function retireDatabaseReservation(path: string): void {
+  const quarantinePath = `${path}.stale-${process.pid}-${Date.now()}`;
+  try {
+    renameSync(path, quarantinePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  rmSync(quarantinePath, { recursive: true, force: true });
+}
+
+export function acquireDatabaseReservation(
+  identity: ProjectInstanceIdentity,
+  record: DatabaseReservationRecord,
+  probe: ProcessProbe = processIsAlive,
+): () => void {
+  const path = identity.databaseLockPath;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let created = false;
+    try {
+      mkdirSync(path, { mode: 0o700 });
+      created = true;
+      writeFileSync(join(path, "reservation.json"), `${JSON.stringify(record, null, 2)}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        rmSync(path, { recursive: true, force: true });
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        if (created) rmSync(path, { recursive: true, force: true });
+        throw error;
+      }
+      const existing = readDatabaseReservation(path);
+      if (existing === null || existing === "invalid") {
+        throw new Error(`Database reservation is incomplete: ${identity.databasePath}`);
+      }
+      if (probe(existing.pid)) {
+        throw new Error(`Database is already reserved: ${identity.databasePath}`);
+      }
+      retireDatabaseReservation(path);
+    }
+  }
+  throw new Error(`Database reservation is busy: ${identity.databasePath}`);
 }
 
 export type PortProbe = (port: number) => Promise<boolean>;
