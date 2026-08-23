@@ -156,6 +156,58 @@ describe("Prime Board extension lifecycle", () => {
     }
   });
 
+  it("keeps runtime identities, ports, logs, and credentials isolated across two projects", async () => {
+    const alpha = gitProject();
+    const beta = gitProject();
+    try {
+      const running = new Set<string>();
+      const launches: string[] = [];
+      const runtime = createRuntimeController(
+        {
+          runStatus: (args) => {
+            const root = args[args.indexOf("--project") + 1]!;
+            const port = root === alpha.root ? 3411 : 3412;
+            return {
+              status: running.has(root) ? 0 : 1,
+              stdout: running.has(root)
+                ? `running project=${root} port=${port} pid=${port} db=/tmp/${port}.db`
+                : `not-running project=${root} db=/tmp/${port}.db`,
+              stderr: "",
+            };
+          },
+          launch: (args) => {
+            const root = args[args.indexOf("--project") + 1]!;
+            launches.push(root);
+            running.add(root);
+            return { pid: root === alpha.root ? 3411 : 3412, unref() {} };
+          },
+          fetch: async (input) => new Response(String(input).includes("3411") ? "ok" : "ok"),
+          sleep: async () => undefined,
+        },
+        { PRIME_BOARD_ROOT: alpha.runtimeRoot },
+        alpha.home,
+      );
+      const [alphaStatus, betaStatus] = await Promise.all([
+        runtime.ensure(alpha.root),
+        runtime.ensure(beta.root),
+      ]);
+      expect(launches).toEqual([alpha.root, beta.root]);
+      expect(alphaStatus.url).toBe("http://127.0.0.1:3411");
+      expect(betaStatus.url).toBe("http://127.0.0.1:3412");
+      expect(projectCredentialPath(alpha.root, alpha.home)).not.toBe(
+        projectCredentialPath(beta.root, beta.home),
+      );
+      expect(projectLogPath(alpha.root, alpha.home)).not.toBe(projectLogPath(beta.root, beta.home));
+      saveProjectCredential(alpha.root, { apiKey: "pb_alpha" }, alpha.home);
+      saveProjectCredential(beta.root, { apiKey: "pb_beta" }, beta.home);
+      expect(readProjectCredential(alpha.root, alpha.home)?.apiKey).toBe("pb_alpha");
+      expect(readProjectCredential(beta.root, beta.home)?.apiKey).toBe("pb_beta");
+    } finally {
+      rmSync(alpha.home, { recursive: true, force: true });
+      rmSync(beta.home, { recursive: true, force: true });
+    }
+  });
+
   it("reports a non-Git directory as unavailable even when the URL is healthy", async () => {
     const path = join(tmpdir(), `not-a-git-${crypto.randomUUID()}`);
     mkdirSync(path, { recursive: true });
