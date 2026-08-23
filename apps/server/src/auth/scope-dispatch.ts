@@ -59,6 +59,7 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:inbox",
   "query:inboxPage",
   "query:inboxUnreadCount",
+  "query:webhooks",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:projectCreate",
@@ -123,6 +124,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:apiKeyCreate",
   "mutation:apiKeyDelete",
   "mutation:apiKeyRotate",
+  "mutation:webhookCreate",
+  "mutation:webhookDelete",
 ]);
 
 type Resolver = (...args: any[]) => any;
@@ -342,6 +345,10 @@ async function operationTeamIds(
     string,
     unknown
   >;
+  if (context.persistence && field === "webhookCreate") {
+    const teamId = scalar(input.teamId);
+    return teamId ? [teamId] : null;
+  }
   const directTeam = teamForRef(context, args.teamId ?? input.teamId ?? args.team ?? input.team);
   if (directTeam) return [directTeam];
 

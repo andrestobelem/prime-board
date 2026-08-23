@@ -22,8 +22,8 @@ export function mapWebhook(row: WebhookRow) {
   return {
     id: row.id,
     url: row.url,
-    events: JSON.parse(row.events) as string[],
-    enabled: row.enabled === 1,
+    events: typeof row.events === "string" ? (JSON.parse(row.events) as string[]) : [...row.events],
+    enabled: row.enabled === 1 || row.enabled === true,
     teamId: row.team_id,
     createdAt: row.created_at,
   };

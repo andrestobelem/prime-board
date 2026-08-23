@@ -24,7 +24,7 @@ export interface AppDeps {
 }
 
 export function createApp({ db, config, webhookOptions, persistence }: AppDeps) {
-  const events = new WebhookDispatcher(db, webhookOptions ?? { log: console.error });
+  const events = new WebhookDispatcher(db, webhookOptions ?? { log: console.error }, persistence);
   const repo = persistence ? null : createRepoSync(db, config.repoRoot);
   const yoga = createYoga({
     schema: createSchema<Context>({ typeDefs, resolvers }),
