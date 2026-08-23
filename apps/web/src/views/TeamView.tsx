@@ -15,6 +15,7 @@ import {
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import { appendUniqueById } from "../pagination.ts";
 import { createRequestGate } from "../request-generation.ts";
+import { getAssignableActors } from "../assignee-actors.ts";
 import {
   activeIssueFilterCount,
   buildIssueFilter,
@@ -26,12 +27,13 @@ import {
 
 const TEAM_QUERY = `query($key: String, $teamId: ID, $filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
   team(key: $key) {
-    id key name
+    id key name accessPolicy
+    memberships { actor { id name type status } }
     states { id name type color position }
     projects { id name milestones { id name } }
     cycles { id name number }
   }
-  actors { id name type }
+  actors { id name type status }
   labels(team: $teamId) { id name color }
   issues(filter: $filter, first: 250, after: $after, orderBy: $orderBy) {
     nodes { ${ISSUE_LIST_FIELDS} }
@@ -52,11 +54,13 @@ interface TeamData {
     id: string;
     key: string;
     name: string;
+    accessPolicy: string;
+    memberships: Array<{ actor: { id: string; name: string; type: string; status: string } }>;
     states: TeamState[];
     projects: Array<{ id: string; name: string; milestones: Array<{ id: string; name: string }> }>;
     cycles: Array<{ id: string; name: string; number: number }>;
   } | null;
-  actors: Array<{ id: string; name: string; type: string }>;
+  actors: Array<{ id: string; name: string; type: string; status: string }>;
   labels: Array<{ id: string; name: string; color: string }>;
   issues: { nodes: IssueListItem[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
 }
@@ -151,9 +155,10 @@ export function TeamView({
     }
   }
 
+  const actors = getAssignableActors(result.data?.actors ?? [], result.data?.team);
   const actionOptions: IssueActionOptions = {
     states: result.data?.team?.states ?? [],
-    actors: result.data?.actors ?? [],
+    actors,
     labels: result.data?.labels ?? [],
     projects: result.data?.team?.projects ?? [],
     cycles: result.data?.team?.cycles ?? [],
@@ -235,7 +240,7 @@ export function TeamView({
       <IssueFilterToolbar
         draft={draft}
         states={result.data.team.states}
-        actors={result.data.actors}
+        actors={actors}
         labels={result.data.labels}
         projects={result.data.team.projects}
         milestones={result.data.team.projects.flatMap((project) => project.milestones)}

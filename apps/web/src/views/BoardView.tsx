@@ -23,6 +23,7 @@ import {
 } from "../components/IssueActions.tsx";
 import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-actions.ts";
 import { isIssueShortcutTarget } from "../issue-selection.ts";
+import { getAssignableActors, type AssigneeActor } from "../assignee-actors.ts";
 import type { IssueColumn, IssueOrder } from "../components/DisplayOptions.tsx";
 
 const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
@@ -177,16 +178,9 @@ export function BoardView({
   }
 
   const issues: BoardCard[] = local ?? [...result.data.issues.nodes, ...extraIssues];
-  type BoardActor = { id: string; name: string; type: string; status: string };
-  const activeActors: BoardActor[] = result.data.actors.filter(
-    (actor: BoardActor) => actor.status === "ACTIVE",
-  );
-  const actorsForTeam = (team: any): BoardActor[] =>
-    team?.accessPolicy === "TEAM_MEMBERS"
-      ? (team.memberships ?? [])
-          .map((membership: { actor: BoardActor }) => membership.actor)
-          .filter((actor: BoardActor) => actor.status === "ACTIVE")
-      : activeActors;
+  const activeActors: AssigneeActor[] = getAssignableActors(result.data.actors, null);
+  const actorsForTeam = (team: any): AssigneeActor[] =>
+    getAssignableActors(result.data.actors, team);
   const actors = isProject ? activeActors : actorsForTeam(container);
   const actionOptions: IssueActionOptions = {
     states: isProject ? [] : container.states,
