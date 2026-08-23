@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
@@ -9,6 +19,9 @@ export interface ProjectInstanceIdentity {
   projectSlug: string;
   projectHash: string;
   databasePath: string;
+  databaseLockPath: string;
+  databasePhysicalLockPath: string;
+  databaseInodeLockPath: string | null;
   lockPath: string;
   metadataPath: string;
 }
@@ -26,13 +39,19 @@ export function deriveProjectIdentity(
   const projectHash = createHash("sha256").update(root).digest("hex").slice(0, 8);
   const projectStateRoot = join(resolve(homeDirectory), ".prime-board", "projects");
   const projectKey = `${projectSlug}-${projectHash}`;
+  const databasePath = stableDatabasePath(
+    databasePathOverride ?? join(projectStateRoot, `${projectKey}.db`),
+  );
   const lockPath = join(projectStateRoot, `${projectKey}.lock`);
 
   return {
     projectRoot: root,
     projectSlug,
     projectHash,
-    databasePath: resolve(databasePathOverride ?? join(projectStateRoot, `${projectKey}.db`)),
+    databasePath,
+    databaseLockPath: databaseReservationPath(databasePath, homeDirectory),
+    databasePhysicalLockPath: databasePhysicalReservationPath(databasePath, homeDirectory),
+    databaseInodeLockPath: databaseInodeReservationPath(databasePath, homeDirectory),
     lockPath,
     metadataPath: join(lockPath, "instance.json"),
   };
@@ -45,6 +64,91 @@ export interface InstanceRecord {
   port: number;
   pid: number;
   startedAt: string;
+}
+
+export interface DatabaseReservationRecord {
+  version: 1;
+  projectRoot: string;
+  databasePath: string;
+  pid: number;
+  reservedAt: string;
+}
+
+/**
+ * Keeps the database path as a stable filesystem alias.
+ *
+ * Following any symlink would change the path when a missing parent or target
+ * is created. The physical reservation below handles existing hardlinks while
+ * this alias remains stable for the complete launcher lifecycle.
+ */
+export function stableDatabasePath(databasePath: string): string {
+  return resolve(databasePath);
+}
+
+function databaseReservationKey(databasePath: string): string {
+  return stableDatabasePath(databasePath);
+}
+
+function databasePhysicalReservationKey(databasePath: string): string {
+  let current = resolve(databasePath);
+  for (let depth = 0; depth < 32; depth += 1) {
+    try {
+      if (!lstatSync(current).isSymbolicLink()) return current;
+      current = resolve(dirname(current), readlinkSync(current));
+    } catch {
+      return current;
+    }
+  }
+  return current;
+}
+
+function databaseInodeReservationKey(databasePath: string): string | null {
+  try {
+    const stats = statSync(databasePath);
+    return stats.isFile() ? `${stats.dev}:${stats.ino}` : null;
+  } catch {
+    return null;
+  }
+}
+
+export function databaseReservationPath(databasePath: string, homeDirectory = homedir()): string {
+  const key = createHash("sha256")
+    .update(`alias:${databaseReservationKey(databasePath)}`)
+    .digest("hex")
+    .slice(0, 16);
+  return join(resolve(homeDirectory), ".prime-board", "databases", `${key}.lock`);
+}
+
+/** Stable target-path lock. It works before a dangling symlink target exists. */
+export function databasePhysicalReservationPath(
+  databasePath: string,
+  homeDirectory = homedir(),
+): string {
+  const key = databasePhysicalReservationKey(databasePath);
+  const hash = createHash("sha256").update(`target:${key}`).digest("hex").slice(0, 16);
+  return join(resolve(homeDirectory), ".prime-board", "databases", `${hash}.lock`);
+}
+
+/** Inode lock. It makes existing hardlink aliases share the same reservation. */
+export function databaseInodeReservationPath(
+  databasePath: string,
+  homeDirectory = homedir(),
+): string | null {
+  const key = databaseInodeReservationKey(databasePath);
+  if (!key) return null;
+  const hash = createHash("sha256").update(`inode:${key}`).digest("hex").slice(0, 16);
+  return join(resolve(homeDirectory), ".prime-board", "databases", `${hash}.lock`);
+}
+
+export function databaseReservationPaths(
+  databasePath: string,
+  homeDirectory = homedir(),
+): string[] {
+  return [
+    databaseReservationPath(databasePath, homeDirectory),
+    databasePhysicalReservationPath(databasePath, homeDirectory),
+    databaseInodeReservationPath(databasePath, homeDirectory),
+  ].filter((path): path is string => Boolean(path));
 }
 
 export type InstanceState = "running" | "stale" | "not-running";
@@ -138,6 +242,88 @@ export function acquireInstanceLock(
   };
 }
 
+function readDatabaseReservation(path: string): DatabaseReservationRecord | "invalid" | null {
+  const metadataPath = join(path, "reservation.json");
+  if (!existsSync(metadataPath)) return null;
+  try {
+    const record = JSON.parse(
+      readFileSync(metadataPath, "utf8"),
+    ) as Partial<DatabaseReservationRecord>;
+    if (
+      record.version !== 1 ||
+      typeof record.projectRoot !== "string" ||
+      typeof record.databasePath !== "string" ||
+      !Number.isInteger(record.pid) ||
+      typeof record.reservedAt !== "string"
+    ) {
+      return "invalid";
+    }
+    return record as DatabaseReservationRecord;
+  } catch {
+    return "invalid";
+  }
+}
+
+function retireDatabaseReservation(path: string): void {
+  const quarantinePath = `${path}.stale-${process.pid}-${Date.now()}`;
+  try {
+    renameSync(path, quarantinePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  rmSync(quarantinePath, { recursive: true, force: true });
+}
+
+export function acquireDatabaseReservation(
+  identity: ProjectInstanceIdentity,
+  record: DatabaseReservationRecord,
+  probe: ProcessProbe = processIsAlive,
+): () => void {
+  const paths = [
+    identity.databaseLockPath,
+    identity.databasePhysicalLockPath,
+    identity.databaseInodeLockPath,
+  ]
+    .filter((path): path is string => Boolean(path))
+    .sort();
+  for (const path of paths) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < paths.length + 1; attempt += 1) {
+    const created: string[] = [];
+    try {
+      for (const path of paths) {
+        mkdirSync(path, { mode: 0o700 });
+        created.push(path);
+        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(record, null, 2)}\n`, {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+        });
+      }
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        for (const path of [...paths].reverse()) rmSync(path, { recursive: true, force: true });
+      };
+    } catch (error) {
+      for (const path of [...created].reverse()) rmSync(path, { recursive: true, force: true });
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+
+      const conflict = paths.find((path) => existsSync(path));
+      if (!conflict) continue;
+      const existing = readDatabaseReservation(conflict);
+      if (existing === null || existing === "invalid") {
+        throw new Error(`Database reservation is incomplete: ${identity.databasePath}`);
+      }
+      if (probe(existing.pid)) {
+        throw new Error(`Database is already reserved: ${identity.databasePath}`);
+      }
+      retireDatabaseReservation(conflict);
+    }
+  }
+  throw new Error(`Database reservation is busy: ${identity.databasePath}`);
+}
 export type PortProbe = (port: number) => Promise<boolean>;
 
 async function portIsAvailable(port: number): Promise<boolean> {

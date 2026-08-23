@@ -8,6 +8,7 @@
   "scripts": {
     "server": "bun run --cwd apps/server start",
     "test": "bun test",
+    "preflight": "bun scripts/prime-board-preflight.ts",
     "typecheck": "tsc --noEmit",
     "seed": "bun run --cwd apps/server seed",
     "build": "bun run --cwd apps/web build",
