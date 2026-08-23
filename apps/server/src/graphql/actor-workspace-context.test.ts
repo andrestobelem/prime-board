@@ -441,4 +441,71 @@ describe("actor operations and Workspace Context", () => {
       isolated.stop();
     }
   });
+
+  it("scopes API key listing and creation to the effective Workspace", async () => {
+    const isolated = createTestApp();
+    try {
+      const firstWorkspace = (await gql(isolated, `{ workspace { id } }`)).data!.workspace
+        .id as string;
+      const secondWorkspace = await createSecondWorkspace(isolated, "second-key-scope");
+      const adminId = (await gql(isolated, `{ viewer { id } }`)).data!.viewer.id as string;
+      const actorResult = await gql(
+        isolated,
+        `mutation { actorCreate(input: { name: "first-workspace-actor", type: AGENT }) { actor { id } } }`,
+      );
+      expect(actorResult.errors).toBeUndefined();
+      const actorId = actorResult.data!.actorCreate.actor.id as string;
+
+      const rejectedCreate = await gql(
+        isolated,
+        `mutation($actorId: ID!) {
+          apiKeyCreate(input: { actorId: $actorId, name: "invalid second key" }) { apiKey { id } }
+        }`,
+        { actorId },
+        isolated.apiKey,
+        secondWorkspace,
+      );
+      expect(rejectedCreate.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+      expect(
+        (
+          isolated.db
+            .query("SELECT count(*) AS count FROM api_keys WHERE actor_id = ?1")
+            .get(actorId) as {
+            count: number;
+          }
+        ).count,
+      ).toBe(0);
+
+      const secondKeyResult = await gql(
+        isolated,
+        `mutation { apiKeyCreate(input: { actorId: "${adminId}", name: "second workspace key" }) { apiKey { id } } }`,
+        {},
+        isolated.apiKey,
+        secondWorkspace,
+      );
+      expect(secondKeyResult.errors).toBeUndefined();
+      const secondKeyId = secondKeyResult.data!.apiKeyCreate.apiKey.id as string;
+
+      const firstActors = (
+        await gql(isolated, `{ actors { id apiKeys { id } } }`, {}, isolated.apiKey)
+      ).data!.actors as Array<{ id: string; apiKeys: Array<{ id: string }> }>;
+      const firstAdmin = firstActors.find((actor) => actor.id === adminId);
+      expect(firstAdmin?.apiKeys.map((key) => key.id)).not.toContain(secondKeyId);
+
+      const secondActors = (
+        await gql(
+          isolated,
+          `{ actors { id apiKeys { id } } }`,
+          {},
+          isolated.apiKey,
+          secondWorkspace,
+        )
+      ).data!.actors as Array<{ id: string; apiKeys: Array<{ id: string }> }>;
+      const secondAdmin = secondActors.find((actor) => actor.id === adminId);
+      expect(secondAdmin?.apiKeys.map((key) => key.id)).toContain(secondKeyId);
+      expect(firstWorkspace).not.toBe(secondWorkspace);
+    } finally {
+      isolated.stop();
+    }
+  });
 });
