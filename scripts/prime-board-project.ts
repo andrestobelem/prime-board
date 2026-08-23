@@ -31,7 +31,9 @@ Start an isolated prime-board instance for a project repository.
 Options:
   --project PATH  Project repository (default: current directory)
   --port PORT     HTTP port (default: 3333; moves to the next free port when implicit)
+  --host HOST     HTTP bind host (default: 127.0.0.1; local auth forces loopback)
   --db PATH       SQLite database path (default: ~/.prime-board/projects/<project>.db)
+  --web-dist PATH Static UI directory (default: apps/web/dist)
   --workspace-name NAME       Initial Workspace display name
   --workspace-url-key KEY     Initial Workspace URL key (lowercase slug)
   --team-name NAME            Initial Team display name
@@ -41,6 +43,14 @@ Options:
   --help          Show this help
 `);
   process.exit(0);
+}
+
+function parseHost(raw: string | undefined): string {
+  const host = raw ?? "127.0.0.1";
+  if (!host || /\s/.test(host) || host.includes("/")) {
+    throw new Error(`Invalid host: ${host}`);
+  }
+  return host;
 }
 
 function parsePort(raw: string | undefined): number {
@@ -71,7 +81,7 @@ function inheritedProjectMatches(projectRoot: string): boolean {
 function describeStatus(identity: ProjectInstanceIdentity, status: InstanceStatus): void {
   const record = status.record;
   const details = record
-    ? ` port=${record.port} pid=${record.pid} db=${record.databasePath}`
+    ? ` host=${record.host ?? "127.0.0.1"} port=${record.port} pid=${record.pid} db=${record.databasePath}`
     : ` db=${identity.databasePath}`;
   console.log(`${status.state} project=${identity.projectRoot}${details}`);
 }
@@ -101,15 +111,19 @@ function assertDatabaseCompatibility(
 function printEnvironment(
   identity: ProjectInstanceIdentity,
   projectRoot: string,
+  host: string,
   port: number,
   bootstrap: BootstrapIdentity,
+  webDist?: string,
 ): void {
-  const url = `http://127.0.0.1:${port}`;
+  const url = `http://${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
   console.log(`export PRIME_BOARD_ROOT=${shellQuote(PRIME_BOARD_ROOT)}`);
   console.log(`export PRIME_BOARD_REPO=${shellQuote(projectRoot)}`);
   console.log(`export PRIME_BOARD_DB=${shellQuote(identity.databasePath)}`);
   console.log(`export PRIME_BOARD_PORT=${shellQuote(String(port))}`);
+  console.log(`export PRIME_BOARD_HOST=${shellQuote(host)}`);
   console.log(`export PRIME_BOARD_URL=${shellQuote(url)}`);
+  if (webDist) console.log(`export PRIME_BOARD_WEB_DIST=${shellQuote(webDist)}`);
   console.log(`export PRIME_BOARD_WORKSPACE_NAME=${shellQuote(bootstrap.workspaceName)}`);
   console.log(`export PRIME_BOARD_WORKSPACE_URL_KEY=${shellQuote(bootstrap.workspaceUrlKey)}`);
   console.log(`export PRIME_BOARD_TEAM_NAME=${shellQuote(bootstrap.teamName)}`);
@@ -120,8 +134,10 @@ const { values } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
     project: { type: "string" },
+    host: { type: "string" },
     port: { type: "string" },
     db: { type: "string" },
+    "web-dist": { type: "string" },
     "workspace-name": { type: "string" },
     "workspace-url-key": { type: "string" },
     "team-name": { type: "string" },
@@ -147,6 +163,11 @@ const databaseOverride =
   values.db ?? (inheritedConfigMatches ? process.env.PRIME_BOARD_DB : undefined);
 const identity = deriveProjectIdentity(projectRoot, homedir(), databaseOverride);
 const inheritedPort = inheritedConfigMatches ? process.env.PRIME_BOARD_PORT : undefined;
+const host = parseHost(
+  values.host ?? (inheritedConfigMatches ? process.env.PRIME_BOARD_HOST : undefined),
+);
+const webDist =
+  values["web-dist"] ?? (inheritedConfigMatches ? process.env.PRIME_BOARD_WEB_DIST : undefined);
 const requestedPort = parsePort(values.port ?? inheritedPort ?? "3333");
 const portIsExplicit = values.port !== undefined || inheritedPort !== undefined;
 const status = classifyInstance(identity);
@@ -159,7 +180,7 @@ if (values.status) {
 
 if (values["print-env"]) {
   if (status.state === "running" && status.record) {
-    printEnvironment(identity, projectRoot, status.record.port, bootstrap);
+    printEnvironment(identity, projectRoot, host, status.record.port, bootstrap, webDist);
     process.exit(0);
   }
   if (status.state === "stale") {
@@ -167,13 +188,13 @@ if (values["print-env"]) {
     process.exit(statusExitCode(status));
   }
   const port = await chooseAvailablePort(requestedPort, portIsExplicit);
-  printEnvironment(identity, projectRoot, port, bootstrap);
+  printEnvironment(identity, projectRoot, host, port, bootstrap, webDist);
   process.exit(0);
 }
 
 if (status.state === "running" && status.record) {
   console.error(
-    `prime-board already running for ${projectRoot} at http://127.0.0.1:${status.record.port}`,
+    `prime-board already running for ${projectRoot} at http://${hostForUrl(status.record.host ?? host)}:${status.record.port}`,
   );
   process.exit(0);
 }
@@ -199,6 +220,7 @@ const instanceRecord: InstanceRecord = {
   databasePath: identity.databasePath,
   port,
   pid: process.pid,
+  host,
   startedAt: new Date().toISOString(),
 };
 let releaseDatabaseReservation: (() => void) | null = null;
@@ -249,8 +271,9 @@ const environment = {
   PRIME_BOARD_REPO: projectRoot,
   PRIME_BOARD_DB: identity.databasePath,
   PRIME_BOARD_PORT: String(port),
-  PRIME_BOARD_HOST: "127.0.0.1",
+  PRIME_BOARD_HOST: host,
   PRIME_BOARD_PERSISTENCE: "sqlite",
+  ...(webDist ? { PRIME_BOARD_WEB_DIST: webDist } : {}),
   PRIME_BOARD_WORKSPACE_NAME: bootstrap.workspaceName,
   PRIME_BOARD_WORKSPACE_URL_KEY: bootstrap.workspaceUrlKey,
   PRIME_BOARD_TEAM_NAME: bootstrap.teamName,
@@ -265,7 +288,18 @@ try {
     stdout: "inherit",
     stderr: "inherit",
   });
+  await waitForHealth(host, port, server);
+  console.error(`prime-board ready: http://${hostForUrl(host)}:${port}`);
   exitCode = await server.exited;
+} catch (error) {
+  if (server) {
+    server.kill("SIGTERM");
+    await Promise.race([
+      server.exited,
+      new Promise<number>((resolveExit) => setTimeout(() => resolveExit(1), 1_000)),
+    ]);
+  }
+  throw error;
 } finally {
   process.removeListener("SIGINT", onSignal);
   process.removeListener("SIGTERM", onSignal);
@@ -274,6 +308,44 @@ try {
   portReservation.release();
 }
 process.exit(exitCode);
+
+function hostForUrl(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+function healthUrl(host: string, port: number): string {
+  return `http://${hostForUrl(host)}:${port}/health`;
+}
+
+async function waitForHealth(
+  host: string,
+  port: number,
+  server: ReturnType<typeof Bun.spawn>,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const startedAt = Date.now();
+  let exited = false;
+  let exitCode: number | null = null;
+  void server.exited.then((code) => {
+    exited = true;
+    exitCode = code;
+  });
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (exited) {
+      throw new Error(`prime-board server exited before /health (code ${exitCode ?? "signal"})`);
+    }
+    try {
+      const response = await fetch(healthUrl(host, port), {
+        signal: AbortSignal.timeout(1_000),
+      });
+      if (response.ok) return;
+    } catch {
+      // The server may still be applying migrations or bootstrap.
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+  }
+  throw new Error(`Timed out waiting for ${healthUrl(host, port)}`);
+}
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;

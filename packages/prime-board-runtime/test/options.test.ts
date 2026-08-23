@@ -21,8 +21,29 @@ describe("prime-board runtime CLI", () => {
     });
   });
 
-  test("rejects invalid ports and unknown options", () => {
+  test("parses the project launcher options", () => {
+    expect(
+      parseRuntimeArgs([
+        "--project",
+        "/tmp/project with spaces",
+        "--host=127.0.0.1",
+        "--status",
+        "--web-dist",
+        "/tmp/web",
+      ]),
+    ).toEqual({
+      projectRoot: "/tmp/project with spaces",
+      host: "127.0.0.1",
+      status: true,
+      webDist: "/tmp/web",
+      help: false,
+    });
+  });
+
+  test("rejects invalid ports, hosts, and unknown options", () => {
     expect(() => parseRuntimeArgs(["--port", "0"])).toThrow("Invalid port");
+    expect(() => parseRuntimeArgs(["--host", "bad host"])).toThrow("Invalid host");
     expect(() => parseRuntimeArgs(["--unknown", "x"])).toThrow("Unknown argument");
+    expect(() => parseRuntimeArgs(["--status=true"])).toThrow("does not accept a value");
   });
 });

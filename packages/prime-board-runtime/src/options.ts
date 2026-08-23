@@ -1,11 +1,29 @@
 import { resolve } from "node:path";
 
 export interface RuntimeOptions {
-  dbPath?: string;
+  /** Git project root to isolate. Resolved by the launcher. */
+  projectRoot?: string;
+  /** Legacy name for --project. */
   repoRoot?: string;
+  dbPath?: string;
   port?: number;
+  host?: string;
   webDist?: string;
+  status?: boolean;
+  printEnv?: boolean;
   help: boolean;
+}
+
+function pathValue(value: string): string {
+  return value === ":memory:" ? value : resolve(value);
+}
+
+function hostValue(value: string): string {
+  const host = value.trim();
+  if (!host || /\s/.test(host) || host.includes("/")) {
+    throw new Error(`Invalid host: ${value}`);
+  }
+  return host;
 }
 
 export function parseRuntimeArgs(args: string[]): RuntimeOptions {
@@ -24,16 +42,32 @@ export function parseRuntimeArgs(args: string[]): RuntimeOptions {
       options.help = true;
       continue;
     }
+    if (name === "status") {
+      if (inlineValue !== undefined) throw new Error("--status does not accept a value");
+      options.status = true;
+      continue;
+    }
+    if (name === "print-env") {
+      if (inlineValue !== undefined) throw new Error("--print-env does not accept a value");
+      options.printEnv = true;
+      continue;
+    }
     const value = inlineValue ?? args[++index];
     if (!value || value.startsWith("--")) throw new Error(`Missing value for --${name}`);
     switch (name) {
-      case "db":
-        options.dbPath = resolve(value);
+      case "project":
+        if (options.repoRoot) throw new Error("Use only one of --project and --repo");
+        options.projectRoot = resolve(value);
         break;
       case "repo":
+        if (options.projectRoot) throw new Error("Use only one of --project and --repo");
         options.repoRoot = resolve(value);
         break;
+      case "db":
+        options.dbPath = pathValue(value);
+        break;
       case "port": {
+        if (!/^\d+$/.test(value)) throw new Error(`Invalid port: ${value}`);
         const port = Number(value);
         if (!Number.isInteger(port) || port < 1 || port > 65535) {
           throw new Error(`Invalid port: ${value}`);
@@ -41,12 +75,17 @@ export function parseRuntimeArgs(args: string[]): RuntimeOptions {
         options.port = port;
         break;
       }
+      case "host":
+        options.host = hostValue(value);
+        break;
       case "web-dist":
-        options.webDist = resolve(value);
+        options.webDist = pathValue(value);
         break;
       default:
         throw new Error(`Unknown argument: --${name}`);
     }
   }
+  if (options.printEnv && options.status)
+    throw new Error("Use only one of --status and --print-env");
   return options;
 }

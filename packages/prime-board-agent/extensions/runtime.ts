@@ -210,11 +210,13 @@ function parseStatusOutput(
   const state = line.match(/^(running|not-running|stale)/)?.[1];
   const port = Number(line.match(/\bport=(\d+)/)?.[1]);
   const pid = Number(line.match(/\bpid=(\d+)/)?.[1]);
+  const host = line.match(/\bhost=(\S+)/)?.[1] ?? "127.0.0.1";
+  const urlHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
   const database = line.match(/\bdb=(\S+)/)?.[1];
   if (state === "running" && Number.isInteger(port)) {
     return {
       projectRoot,
-      url: `http://127.0.0.1:${port}`,
+      url: `http://${urlHost}:${port}`,
       state: "running",
       detail: "Runtime is running",
       ...(Number.isInteger(pid) ? { pid } : {}),
