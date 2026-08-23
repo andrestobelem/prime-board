@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 const PACKAGE_ROOT = join(import.meta.dir, "..");
 const manifest = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8")) as {
@@ -51,11 +51,15 @@ describe("Prime Agent package", () => {
     for (const resourcePath of manifest.pi?.extensions ?? []) {
       expect(statSync(join(PACKAGE_ROOT, resourcePath)).isDirectory()).toBe(true);
       expect(Bun.file(join(PACKAGE_ROOT, resourcePath, "index.ts")).size).toBeGreaterThan(0);
+      expect(Bun.file(join(PACKAGE_ROOT, resourcePath, "runtime.ts")).size).toBeGreaterThan(0);
     }
     for (const resourcePath of manifest.pi?.skills ?? []) {
       expect(statSync(join(PACKAGE_ROOT, resourcePath)).isDirectory()).toBe(true);
+      const skillRoot = join(PACKAGE_ROOT, resourcePath, "prime-board-workflow");
+      expect(Bun.file(join(skillRoot, "SKILL.md")).size).toBeGreaterThan(0);
+      expect(Bun.file(join(skillRoot, "pyproject.toml")).size).toBeGreaterThan(0);
       expect(
-        Bun.file(join(PACKAGE_ROOT, resourcePath, "prime-board-workflow", "SKILL.md")).size,
+        Bun.file(join(skillRoot, "src", "prime_board_workflow", "__init__.py")).size,
       ).toBeGreaterThan(0);
     }
   });
@@ -97,35 +101,54 @@ describe("Prime Agent package", () => {
       detail: "Invalid server URL",
     });
   });
-  it("installs and lists the package through Prime Agent when available", () => {
+  it("installs and lists the package globally and in a clean project", () => {
     const primeAgent = Bun.which("prime-agent");
     if (!primeAgent) return;
 
+    const globalSettingsPath = join(homedir(), ".prime", "agent", "settings.json");
+    const globalBefore =
+      Bun.file(globalSettingsPath).size > 0 ? readFileSync(globalSettingsPath, "utf8") : null;
+    const globalAlreadyInstalled = globalBefore?.includes(PACKAGE_ROOT) ?? false;
     const project = mkdtempSync(join(tmpdir(), "prime-board-agent-install-"));
     try {
-      const env = { ...process.env, HOME: project };
-      const install = Bun.spawnSync([primeAgent, "package", "install", PACKAGE_ROOT, "--local"], {
+      const env = { ...process.env };
+      const globalInstall = Bun.spawnSync([primeAgent, "package", "install", PACKAGE_ROOT], {
         cwd: project,
         env,
         stdout: "pipe",
         stderr: "pipe",
       });
-      expect(install.exitCode).toBe(0);
+      expect(globalInstall.exitCode).toBe(0);
+      const globalList = Bun.spawnSync([primeAgent, "package", "list"], {
+        cwd: project,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(globalList.exitCode).toBe(0);
+      expect(globalList.stdout.toString()).toContain(PACKAGE_ROOT);
 
-      const settings = JSON.parse(
+      const localInstall = Bun.spawnSync(
+        [primeAgent, "package", "install", PACKAGE_ROOT, "--local"],
+        { cwd: project, env: { ...env, HOME: project }, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(localInstall.exitCode).toBe(0);
+      const localSettings = JSON.parse(
         readFileSync(join(project, ".prime", "agent", "settings.json"), "utf8"),
       ) as { packages?: string[] };
-      expect(settings.packages).toHaveLength(1);
-
-      const listed = Bun.spawnSync([primeAgent, "package", "list"], {
-        cwd: project,
-        env,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      expect(listed.exitCode).toBe(0);
-      expect(listed.stdout.toString()).toContain(PACKAGE_ROOT);
+      expect(localSettings.packages?.[0]).toContain("prime-board-agent");
     } finally {
+      if (!globalAlreadyInstalled) {
+        Bun.spawnSync([primeAgent, "package", "remove", PACKAGE_ROOT], {
+          cwd: project,
+          env: process.env,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+      }
+      if (globalBefore !== null && !globalAlreadyInstalled) {
+        writeFileSync(globalSettingsPath, globalBefore);
+      }
       rmSync(project, { recursive: true, force: true });
     }
   });
