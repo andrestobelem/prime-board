@@ -2,3 +2,4 @@
 {"actor":"admin","issue":"PRB-513","payload":{"type":"related","issue":"PRB-509"},"ts":"2026-08-22T16:22:40.899Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-513","payload":{"from":"Needs Triage","to":"Ready for Review"},"ts":"2026-08-23T21:04:56.678Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-513","payload":{"from":2,"to":1},"ts":"2026-08-23T21:04:56.678Z","type":"priority_changed"}
+{"actor":"admin","issue":"PRB-513","payload":{"from":"Ready for Review","to":"PRB/Ready for Agent"},"ts":"2026-08-23T21:05:32.814Z","type":"state_changed"}
