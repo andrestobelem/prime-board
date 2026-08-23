@@ -181,6 +181,16 @@ import {
   updateCycle,
 } from "../domain/cycles.ts";
 import {
+  carryOverPostgresCycle,
+  createPostgresCycle,
+  cycleProgress as postgresCycleProgress,
+  deletePostgresCycle,
+  getPostgresCycle,
+  listPostgresCycles,
+  mapPostgresCycle,
+  updatePostgresCycle,
+} from "../domain/postgres-cycles.ts";
+import {
   createReview,
   deleteReview,
   getReview,
@@ -416,14 +426,17 @@ export const resolvers = {
         )
         .map(mapProject);
     },
-    cycles: (team: { id: string }, _args: unknown, context: Context) => {
+    cycles: async (team: { id: string }, _args: unknown, context: Context) => {
+      const viewer = requireViewer(context);
       if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Team cycles are not yet available with PostgreSQL persistence",
-        );
+        const row = await getPostgresTeam(context.persistence, { id: team.id });
+        return row &&
+          (await canDiscoverPostgresTeam(context.persistence, viewer, row)) &&
+          apiKeyTeamsWithinLimit(context.auth, [team.id])
+          ? (await listPostgresCycles(context.persistence, team.id)).map(mapPostgresCycle)
+          : [];
       }
-      return canAccessTeam(context.db, requireViewer(context), team.id)
+      return canAccessTeam(context.db, viewer, team.id)
         ? listCycles(context.db, team.id).map(mapCycle)
         : [];
     },
@@ -510,17 +523,31 @@ export const resolvers = {
   },
 
   Cycle: {
-    team: (cycle: { teamId: string }, _args: unknown, context: Context) => {
+    team: async (cycle: { teamId: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const team = await getPostgresTeam(context.persistence, { id: cycle.teamId });
+        return team &&
+          (await canDiscoverPostgresTeam(context.persistence, viewer, team)) &&
+          apiKeyTeamsWithinLimit(context.auth, [team.id])
+          ? mapPostgresTeam(team)
+          : null;
+      }
       const team = lookupTeam(context, { id: cycle.teamId });
       return team && canAccessTeam(context.db, viewer, team.id) ? mapTeam(team) : null;
     },
-    progress: (cycle: { id: string }, _args: unknown, context: Context) =>
-      cycleProgress(context.db, cycle.id).progress,
-    completedIssues: (cycle: { id: string }, _args: unknown, context: Context) =>
-      cycleProgress(context.db, cycle.id).completedIssues,
-    totalIssues: (cycle: { id: string }, _args: unknown, context: Context) =>
-      cycleProgress(context.db, cycle.id).totalIssues,
+    progress: async (cycle: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresCycleProgress(context.persistence, cycle.id)).progress
+        : cycleProgress(context.db, cycle.id).progress,
+    completedIssues: async (cycle: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresCycleProgress(context.persistence, cycle.id)).completedIssues
+        : cycleProgress(context.db, cycle.id).completedIssues,
+    totalIssues: async (cycle: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresCycleProgress(context.persistence, cycle.id)).totalIssues
+        : cycleProgress(context.db, cycle.id).totalIssues,
   },
 
   Review: {
@@ -918,12 +945,29 @@ export const resolvers = {
         const viewer = requireViewer(context);
         return countUnreadInboxActivity(context.db, viewer, context.workspace.workspaceId);
       },
-      cycles: (
+      cycles: async (
         _parent: unknown,
         args: { teamId: string; includeArchived?: boolean | null },
         context: Context,
       ) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const team = await getPostgresTeam(context.persistence, { id: args.teamId });
+          if (
+            !team ||
+            !(await canDiscoverPostgresTeam(context.persistence, viewer, team)) ||
+            !apiKeyTeamsWithinLimit(context.auth, [args.teamId]) ||
+            (team.archived_at && !args.includeArchived)
+          )
+            return [];
+          return (
+            await listPostgresCycles(
+              context.persistence,
+              args.teamId,
+              Boolean(args.includeArchived),
+            )
+          ).map(mapPostgresCycle);
+        }
         const team = lookupTeam(context, { id: args.teamId });
         if (!team || !canAccessTeam(context.db, viewer, team.id)) return [];
         if (team.archived_at && !args.includeArchived) return [];
@@ -932,8 +976,18 @@ export const resolvers = {
           listCycles(context.db, args.teamId, Boolean(args.includeArchived)),
         ).map(mapCycle);
       },
-      cycle: (_parent: unknown, args: { id: string }, context: Context) => {
+      cycle: async (_parent: unknown, args: { id: string }, context: Context) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const row = await getPostgresCycle(context.persistence, args.id);
+          const team = row ? await getPostgresTeam(context.persistence, { id: row.team_id }) : null;
+          return row &&
+            team &&
+            (await canDiscoverPostgresTeam(context.persistence, viewer, team)) &&
+            apiKeyTeamsWithinLimit(context.auth, [row.team_id])
+            ? mapPostgresCycle(row)
+            : null;
+        }
         const row = getCycle(context.db, args.id);
         return row && canAccessTeam(context.db, viewer, row.team_id)
           ? mapCycle(scopeWorkspaceRow(context, row))
@@ -1974,7 +2028,7 @@ export const resolvers = {
             ),
           };
         },
-        cycleCreate: (
+        cycleCreate: async (
           _parent: unknown,
           args: {
             input: {
@@ -1988,10 +2042,21 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            if (!apiKeyTeamsWithinLimit(context.auth, [args.input.teamId])) {
+              throw apiError("NOT_FOUND", "Team resource not found");
+            }
+            return {
+              success: true,
+              cycle: mapPostgresCycle(
+                await createPostgresCycle(context.persistence, viewer, args.input),
+              ),
+            };
+          }
           assertCanManageTeam(context.db, viewer, args.input.teamId);
           return { success: true, cycle: mapCycle(createCycle(context.db, args.input)) };
         },
-        cycleUpdate: (
+        cycleUpdate: async (
           _parent: unknown,
           args: {
             id: string;
@@ -2006,12 +2071,31 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresCycle(context.persistence, args.id);
+            if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("NOT_FOUND", "Cycle resource not found");
+            }
+            return {
+              success: true,
+              cycle: mapPostgresCycle(
+                await updatePostgresCycle(context.persistence, viewer, args.id, args.input),
+              ),
+            };
+          }
           const existing = getCycle(context.db, args.id);
           if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
           return { success: true, cycle: mapCycle(updateCycle(context.db, args.id, args.input)) };
         },
-        cycleDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+        cycleDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresCycle(context.persistence, args.id);
+            if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("NOT_FOUND", "Cycle resource not found");
+            }
+            return { success: await deletePostgresCycle(context.persistence, viewer, args.id) };
+          }
           const existing = getCycle(context.db, args.id);
           if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
           const affected = context.db
@@ -2024,12 +2108,29 @@ export const resolvers = {
           });
           return { success };
         },
-        cycleCarryOver: (
+        cycleCarryOver: async (
           _parent: unknown,
           args: { fromCycleId: string; toCycleId: string },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const fromCycle = await getPostgresCycle(context.persistence, args.fromCycleId);
+            const toCycle = await getPostgresCycle(context.persistence, args.toCycleId);
+            if (
+              (fromCycle && !apiKeyTeamsWithinLimit(context.auth, [fromCycle.team_id])) ||
+              (toCycle && !apiKeyTeamsWithinLimit(context.auth, [toCycle.team_id]))
+            ) {
+              throw apiError("NOT_FOUND", "Cycle resource not found");
+            }
+            const movedIssues = await carryOverPostgresCycle(
+              context.persistence,
+              viewer,
+              args.fromCycleId,
+              args.toCycleId,
+            );
+            return { success: true, movedIssues };
+          }
           const fromCycle = getCycle(context.db, args.fromCycleId);
           if (fromCycle) assertCanManageTeam(context.db, viewer, fromCycle.team_id);
           const movedIssues = carryOverCycle(

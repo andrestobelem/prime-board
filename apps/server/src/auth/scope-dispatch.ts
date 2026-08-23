@@ -44,12 +44,21 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:labels",
   "query:projects",
   "query:project",
+  "query:cycles",
+  "query:cycle",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:projectCreate",
   "mutation:projectUpdate",
   "mutation:projectArchive",
   "mutation:projectUnarchive",
+  "mutation:milestoneCreate",
+  "mutation:milestoneUpdate",
+  "mutation:milestoneDelete",
+  "mutation:cycleCreate",
+  "mutation:cycleUpdate",
+  "mutation:cycleDelete",
+  "mutation:cycleCarryOver",
   "mutation:teamArchive",
   "mutation:teamUnarchive",
   "mutation:teamDelete",
@@ -237,8 +246,10 @@ function operationTeamIds(
       return [teamForRef(context, args.id ?? args.key) ?? "__missing__"];
     case "teamMemberships":
     case "cycles":
+      if (context.persistence) return [];
       return [scalar(args.teamId) ?? "__missing__"];
     case "cycle":
+      if (context.persistence) return [];
       return teamIdsForCycle(context, args.id);
     case "issue":
       if (context.persistence) return [];
@@ -376,9 +387,11 @@ function operationTeamIds(
       if (context.persistence) return [];
       return teamIdsForProject(context, args.id);
     case "milestoneCreate":
+      if (context.persistence) return [];
       return teamIdsForProject(context, input.projectId);
     case "milestoneUpdate":
     case "milestoneDelete":
+      if (context.persistence) return [];
       return teamIdsForMilestone(context, args.id);
     case "projectUpdateCreate":
       return teamIdsForProject(context, input.projectId);
@@ -392,8 +405,10 @@ function operationTeamIds(
       return [scalar(input.teamId) ?? "__missing__"];
     case "cycleUpdate":
     case "cycleDelete":
+      if (context.persistence) return [];
       return teamIdsForCycle(context, args.id);
     case "cycleCarryOver":
+      if (context.persistence) return [];
       return [
         ...new Set([
           ...teamIdsForCycle(context, args.fromCycleId),
