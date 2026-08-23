@@ -2,3 +2,5 @@
 {"actor":"admin","issue":"PRB-529","payload":{"type":"related","issue":"PRB-386"},"ts":"2026-08-23T03:59:54.627Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-529","payload":{"type":"related","issue":"PRB-481"},"ts":"2026-08-23T03:59:54.737Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-529","payload":{"type":"related","issue":"PRB-533"},"ts":"2026-08-23T03:59:55.625Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-529","payload":{"from":"Needs Triage","to":"PRB/In Progress"},"ts":"2026-08-23T13:38:04.324Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-529","payload":{"from":null,"to":"admin"},"ts":"2026-08-23T13:38:04.324Z","type":"assigned"}
