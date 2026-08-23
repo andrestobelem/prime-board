@@ -1,4 +1,4 @@
-// My issues: cola del actor autenticado con filtros de handoff.
+// My issues: cola del Actor autenticado con filtros de asignación, autoría y handoff.
 import { useEffect, useRef, useState } from "react";
 import { gql, useQuery } from "../api.ts";
 import { ErrorState, LoadingState } from "../components/AsyncState.tsx";
@@ -10,6 +10,7 @@ import {
 } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import { appendUniqueById } from "../pagination.ts";
+import { buildMyIssuesOwnerFilter, getMyIssuesScopeCopy, type MyIssuesMode } from "../my-issues.ts";
 
 const QUERY = `query($filter: IssueFilter, $after: String) {
   viewer { id name }
@@ -27,27 +28,20 @@ const STATE_TYPES = [
   "COMPLETED",
   "CANCELED",
 ] as const;
-type Mode = "assigned" | "created" | "subscribed";
-
 export function MyIssuesView({ groupBy = "state" }: { groupBy?: GroupBy }) {
   const [stateType, setStateType] = useState("");
   const [projectId, setProjectId] = useState("");
   const [priority, setPriority] = useState("");
   const [search, setSearch] = useState("");
-  const [mode, setMode] = useState<Mode>("assigned");
+  const [mode, setMode] = useState<MyIssuesMode>("assigned");
   const viewer = useQuery<{ viewer: { id: string; name: string } }>(`{ viewer { id name } }`);
   const meta = useQuery<{ projects: Array<{ id: string; name: string }> }>(
     `{ projects { id name } }`,
   );
-  const assigneeId = viewer.data?.viewer.id;
-  const ownerFilter = assigneeId
-    ? mode === "assigned"
-      ? { assignee: { eq: assigneeId } }
-      : mode === "created"
-        ? { creator: { eq: assigneeId } }
-        : { or: [{ assignee: { eq: assigneeId } }, { creator: { eq: assigneeId } }] }
-    : { search: "__pending__" };
-  const filter: Record<string, unknown> = { ...ownerFilter };
+  const viewerId = viewer.data?.viewer.id;
+  const viewerName = viewer.data?.viewer.name ?? "you";
+  const scopeCopy = getMyIssuesScopeCopy(mode, viewerName);
+  const filter: Record<string, unknown> = { ...buildMyIssuesOwnerFilter(viewerId, mode) };
   if (stateType) filter.stateType = { eq: stateType };
   if (projectId) filter.project = { eq: projectId };
   if (priority) filter.priority = { eq: Number(priority) };
@@ -108,15 +102,15 @@ export function MyIssuesView({ groupBy = "state" }: { groupBy?: GroupBy }) {
   return (
     <div>
       <div className="my-issues-toolbar" aria-label="My issues filters">
-        <span style={{ flex: 1 }}>Work queue for {viewer.data?.viewer.name}</span>
+        <span style={{ flex: 1 }}>{scopeCopy.description}</span>
         <select
           aria-label="My issues scope"
           value={mode}
-          onChange={(event) => setMode(event.target.value as Mode)}
+          onChange={(event) => setMode(event.target.value as MyIssuesMode)}
         >
           <option value="assigned">Assigned</option>
           <option value="created">Created</option>
-          <option value="subscribed">Subscribed / handoff</option>
+          <option value="handoff">Assigned or created</option>
         </select>
         <input
           aria-label="Search my issues"
@@ -174,7 +168,7 @@ export function MyIssuesView({ groupBy = "state" }: { groupBy?: GroupBy }) {
         onLoadMore={() => void loadMore()}
       />
       {nodes.length === 0 ? (
-        <div className="empty">No issues match this work queue.</div>
+        <div className="empty">{scopeCopy.emptyState}</div>
       ) : (
         <IssueList issues={nodes} groupBy={groupBy} />
       )}
