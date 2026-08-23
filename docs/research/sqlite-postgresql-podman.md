@@ -519,7 +519,7 @@ locales describen el código de este repositorio.
 **Decisión posterior:** para la topología PostgreSQL objetivo, el repo deja de ser una réplica
 pasiva. El Log append-only de `.prime-board/` es la fuente canónica del estado compartido; los
 `.md`, `meta/*.json` y PostgreSQL son proyecciones derivadas. La decisión está registrada en
-[ADR-0017](../adr/0017-event-log-repo-source-postgresql.md).
+[ADR-0019](../adr/0019-event-log-repo-source-postgresql.md).
 
 ### Flujo canónico
 

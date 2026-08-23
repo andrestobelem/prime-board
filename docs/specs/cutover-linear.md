@@ -1,5 +1,9 @@
 # Procedimiento de corte Linear → prime-board
 
+> **Estado:** procedimiento histórico ejecutado el 2026-08-16. No es el runbook operativo actual.
+> Para exportar y reconstruir el estado vigente, usa [la guía de operación, sección 8](../guia-agentes.md#8-exportar-y-reconstruir-con-seguridad).
+> Usa este documento solo para repetir o auditar el corte de Linear.
+
 Ejecuta este procedimiento solo después de validar una captura completa de Linear. Hasta entonces, Linear sigue siendo la fuente operativa y el equipo no debe actualizar las instrucciones de los agentes.
 
 ## Resultado ejecutado

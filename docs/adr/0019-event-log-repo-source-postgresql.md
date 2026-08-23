@@ -1,8 +1,8 @@
 ---
-status: accepted — arquitectura objetivo para PostgreSQL; pendiente de implementación
+status: aceptado — arquitectura objetivo para PostgreSQL; implementación pendiente
 ---
 
-# Event Log del repositorio como fuente de verdad con PostgreSQL
+# ADR-0019: Event Log del repositorio como fuente de verdad con PostgreSQL
 
 La migración a PostgreSQL no convertirá la base en la fuente canónica. En la topología PostgreSQL objetivo, el repositorio versionado será la autoridad del estado compartido. `.prime-board/log/*.jsonl` contendrá eventos de dominio append-only; los archivos Markdown, `meta/*.json` y PostgreSQL serán proyecciones reconstruibles. Esta decisión conserva la colaboración y la revisión por Git. También evita confundir el CDC del WAL de PostgreSQL con la autoridad del dominio.
 

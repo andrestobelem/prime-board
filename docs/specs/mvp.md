@@ -66,25 +66,27 @@ Todas las entidades usan `id` UUID v7, ordenable por tiempo. También usan `crea
 `updatedAt` en ISO-8601 UTC. Las entidades que lo requieren usan soft-delete mediante `archivedAt`.
 El server ejecuta migraciones SQL versionadas al arrancar.
 
-| Tabla             | Campos clave                                                                                                                             | Notas                                                                                                                              |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `workspace`       | `id, name, urlKey`                                                                                                                       | Fila única en el modelo histórico del MVP.                                                                                                        |
-| `teams`           | `id, name, key, description, nextIssueNumber`                                                                                            | `key` corta única (`AT`). Al crear un team se siembra el workflow default.                                                         |
-| `actors`          | `id, name, email?, type ('human'\|'agent'), avatarUrl?`                                                                                  | Humanos y agentes en la misma tabla; `type` es informativo y visible en UI/API.                                                    |
-| `api_keys`        | `id, actorId, name, hash, lastUsedAt`                                                                                                    | La key en claro se muestra una sola vez. Formato `pb_<random>`.                                                                    |
-| `workflow_states` | `id, teamId, name, type, color, position`                                                                                                | `type ∈ {triage, backlog, unstarted, started, completed, canceled}`. Default: Backlog, Todo, In Progress, Done, Canceled.          |
-| `issues`          | `id, teamId, number, title, description, stateId, priority (0-4), assigneeId?, parentId?, projectId?, creatorId, sortOrder, archivedAt?` | Identificador legible = `team.key + '-' + number`, inmutable. `priority`: 0 none, 1 urgent, 2 high, 3 medium, 4 low (como Linear). |
-| `labels`          | `id, name, color, teamId?`                                                                                                               | `teamId NULL` = label de workspace.                                                                                                |
-| `issue_labels`    | `issueId, labelId`                                                                                                                       | N:M.                                                                                                                               |
-| `projects`        | `id, name, description, state, leadId?, targetDate?, archivedAt?`                                                                        | `state ∈ {backlog, planned, started, paused, completed, canceled}`.                                                                |
-| `comments`        | `id, issueId, actorId, body, createdAt, editedAt?`                                                                                       | Markdown plano.                                                                                                                    |
-| `activity`        | `id, issueId, actorId, type, payload (JSON), createdAt`                                                                                  | Append-only: `created, state_changed, assigned, priority_changed, labeled, commented, ...`                                         |
-| `webhooks`        | `id, url, secret, events (JSON), enabled`                                                                                                | `events`: lista de tipos suscriptos o `*`.                                                                                         |
-| `issues_fts`      | FTS5: `title, description`                                                                                                               | Sincronizada por triggers; los comentarios se agregan post-MVP si hace falta.                                                      |
+| Tabla             | Campos clave                                                                                                                             | Notas                                                                                                                                                                                                                               |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace`       | `id, name, urlKey`                                                                                                                       | Fila única en el modelo histórico del MVP.                                                                                                                                                                                          |
+| `teams`           | `id, name, key, description, nextIssueNumber`                                                                                            | `key` corta única (`AT`). Al crear un team se siembra el workflow default.                                                                                                                                                          |
+| `actors`          | `id, name, email?, type ('human'\|'agent'), avatarUrl?`                                                                                  | Humanos y agentes en la misma tabla; `type` es informativo y visible en UI/API.                                                                                                                                                     |
+| `api_keys`        | `id, actorId, name, hash, lastUsedAt`                                                                                                    | La key en claro se muestra una sola vez. Formato `pb_<random>`.                                                                                                                                                                     |
+| `workflow_states` | `id, teamId, name, type, color, position`                                                                                                | `type ∈ {triage, backlog, unstarted, started, completed, canceled}`. Default operational states: Backlog, In Progress, Ready for Review, Done, Canceled. Triage adds Needs Triage, Needs Info, Ready for Agent and Ready for Human. |
+| `issues`          | `id, teamId, number, title, description, stateId, priority (0-4), assigneeId?, parentId?, projectId?, creatorId, sortOrder, archivedAt?` | Identificador legible = `team.key + '-' + number`, inmutable. `priority`: 0 none, 1 urgent, 2 high, 3 medium, 4 low (como Linear).                                                                                                  |
+| `labels`          | `id, name, color, teamId?`                                                                                                               | `teamId NULL` = label de workspace.                                                                                                                                                                                                 |
+| `issue_labels`    | `issueId, labelId`                                                                                                                       | N:M.                                                                                                                                                                                                                                |
+| `projects`        | `id, name, description, state, leadId?, targetDate?, archivedAt?`                                                                        | `state ∈ {backlog, planned, started, paused, completed, canceled}`.                                                                                                                                                                 |
+| `comments`        | `id, issueId, actorId, body, createdAt, editedAt?`                                                                                       | Markdown plano.                                                                                                                                                                                                                     |
+| `activity`        | `id, issueId, actorId, type, payload (JSON), createdAt`                                                                                  | Append-only: `created, state_changed, assigned, priority_changed, labeled, commented, ...`                                                                                                                                          |
+| `webhooks`        | `id, url, secret, events (JSON), enabled`                                                                                                | `events`: lista de tipos suscriptos o `*`.                                                                                                                                                                                          |
+| `issues_fts`      | FTS5: `title, description`                                                                                                               | Sincronizada por triggers; los comentarios se agregan post-MVP si hace falta.                                                                                                                                                       |
 
 ## 4. API GraphQL
 
-El endpoint único es `POST /graphql`. **Paridad total**: la UI, el CLI y el MCP no usan canales privados. GraphiQL está habilitado en dev.
+El endpoint público documentado es `POST /graphql`. La UI, el CLI y el MCP lo usan para las
+operaciones que implementan. GraphiQL está habilitado en dev. La cobertura de cada cliente puede
+diferir; consulta sus inventarios antes de asumir que una operación está disponible.
 
 ### Convenciones
 
@@ -220,15 +222,18 @@ pb webhook create --url http://... --events issue.created,comment.created
 
 ## 8. MCP server
 
-El MCP expone tools espejo de la API con los mismos nombres que el MCP de Linear.
-Un agente que ya sabe usar Linear puede operar prime-board sin aprender un contrato nuevo.
-
-`list_issues`, `get_issue`, `save_issue`, `list_comments`, `save_comment`,
+El MCP expone tools para operaciones frecuentes de la API GraphQL. La implementación actual
+incluye `list_issues`, `get_issue`, `save_issue`, `list_comments`, `save_comment`,
 `list_projects`, `get_project`, `save_project`, `list_teams`, `get_team`,
-`list_issue_statuses`, `list_issue_labels`, `list_users`, `get_workspace`.
+`list_issue_statuses`, `list_issue_labels`, `list_users` y `get_workspace`. También incluye
+tools para ciclos, reviews, initiatives, Inbox, favorites, relaciones, webhooks, vistas,
+milestones y project updates.
 
-- Transporte: stdio (`pb-mcp` o `bunx prime-board mcp`), con la URL y API key del server
-  local por env/config. Devuelve JSON estructurado.
+El inventario completo vive en `apps/mcp/src/server.ts`. No asumas que una operación GraphQL
+tiene un equivalente MCP sin comprobar ese inventario.
+
+- Transporte: stdio, con la URL y API key del server local por env/config. Devuelve JSON
+  estructurado.
 
 ## 9. UI web
 
@@ -259,7 +264,8 @@ La UI consume exclusivamente `/graphql` con una key de sesión local. En el MVP,
 2. Un agente, **solo con su API key y GraphQL**, puede: crear un issue en un team,
    asignárselo, moverlo por estados hasta `Done`, etiquetarlo, comentarlo, crear
    sub-issues y consultarlo todo con filtros (incl. full-text).
-3. Todo lo anterior es posible también vía `pb` (CLI) y vía tools MCP.
+3. El flujo base de creación, asignación, cambio de estado, etiquetado, comentarios y consulta
+   tiene comandos documentados en `pb` y tools MCP correspondientes.
 4. La autoría queda correctamente atribuida (creator/assignee/comentarista/actividad)
    al actor real, humano o agente, en API y UI.
 5. Un webhook suscripto a `issue.created` y `comment.created` recibe los eventos
