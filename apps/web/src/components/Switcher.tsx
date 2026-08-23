@@ -12,9 +12,7 @@ export interface SwitcherTeam {
   projects: Array<{ id: string; name: string; state: string }>;
 }
 
-export type SwitcherTarget =
-  | { kind: "team"; key: string }
-  | { kind: "project"; id: string };
+export type SwitcherTarget = { kind: "team"; key: string } | { kind: "project"; id: string };
 
 interface SwitcherProps {
   teams: SwitcherTeam[];
@@ -65,7 +63,8 @@ export function Switcher({ teams, current, view }: SwitcherProps) {
           closed: CLOSED_STATES.includes(project.state),
           active: current.kind === "project" && current.id === project.id,
           // La vista elegida se preserva también al saltar de proyecto (AT-182).
-          go: () => navigate(view === "board" ? `/project-board/${project.id}` : `/project/${project.id}`),
+          go: () =>
+            navigate(view === "board" ? `/project-board/${project.id}` : `/project/${project.id}`),
         });
       }
     }
@@ -74,14 +73,14 @@ export function Switcher({ teams, current, view }: SwitcherProps) {
 
   const lower = query.trim().toLowerCase();
   const visible = lower
-    ? entries.filter((entry) =>
-        `${entry.label} ${entry.teamKey}`.toLowerCase().includes(lower))
+    ? entries.filter((entry) => `${entry.label} ${entry.teamKey}`.toLowerCase().includes(lower))
     : entries;
 
   const label =
     current.kind === "team"
-      ? teams.find((team) => team.key === current.key)?.name ?? current.key
-      : teams.flatMap((team) => team.projects).find((p) => p.id === current.id)?.name ?? "Project";
+      ? (teams.find((team) => team.key === current.key)?.name ?? current.key)
+      : (teams.flatMap((team) => team.projects).find((p) => p.id === current.id)?.name ??
+        "Project");
 
   useEffect(() => setSelected(0), [query, open]);
 
@@ -107,41 +106,56 @@ export function Switcher({ teams, current, view }: SwitcherProps) {
         className="switcher-trigger"
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls="switcher-options"
         onClick={() => setOpen((value) => !value)}
       >
         <span className="title">{label}</span>
         <Icon name="chevron-down" size={14} className="caret" />
       </button>
       {open && (
-        <div className="switcher-menu" role="menu">
-          <input
-            className="switcher-input"
-            autoFocus
-            placeholder="Switch team or project…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setSelected((index) => Math.min(index + 1, visible.length - 1));
-              } else if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setSelected((index) => Math.max(index - 1, 0));
-              } else if (event.key === "Enter") {
-                event.preventDefault();
-                choose(visible[selected]);
-              } else if (event.key === "Escape") {
-                event.preventDefault();
-                setOpen(false);
-              }
-            }}
-          />
-          <div className="switcher-list">
-            {visible.length === 0 && <div className="switcher-empty">No matches.</div>}
+        <div className="switcher-menu">
+          <div role="search" aria-label="Search teams and projects">
+            <input
+              type="search"
+              className="switcher-input"
+              autoFocus
+              placeholder="Switch team or project…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setSelected((index) => Math.min(index + 1, visible.length - 1));
+                } else if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setSelected((index) => Math.max(index - 1, 0));
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  choose(visible[selected]);
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  setOpen(false);
+                }
+              }}
+            />
+          </div>
+          <div
+            id="switcher-options"
+            className="switcher-list"
+            role="menu"
+            aria-label="Switch team or project"
+          >
+            {visible.length === 0 && (
+              <div className="switcher-empty" role="menuitem" aria-disabled="true">
+                No matches.
+              </div>
+            )}
             {visible.map((entry, index) => (
               <button
                 key={entry.id}
                 className={`switcher-item ${entry.kind}${index === selected ? " selected" : ""}${entry.active ? " active" : ""}${entry.closed ? " closed" : ""}`}
+                role="menuitem"
+                aria-current={entry.active ? "page" : undefined}
                 onMouseEnter={() => setSelected(index)}
                 onClick={() => choose(entry)}
               >

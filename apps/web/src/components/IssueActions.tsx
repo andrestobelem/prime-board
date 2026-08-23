@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Icon } from "./icons.tsx";
 import { ArchiveConfirmModal, type ArchiveConfirmationTarget } from "./ArchiveConfirmModal.tsx";
 
@@ -76,6 +76,7 @@ export function IssueActionMenu({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const menuId = useId();
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -130,6 +131,7 @@ export function IssueActionMenu({
         aria-label="Issue actions"
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls={menuId}
         disabled={disabled || saving}
         onClick={(event) => {
           event.stopPropagation();
@@ -139,11 +141,7 @@ export function IssueActionMenu({
         <Icon name="more" size={14} />
       </button>
       {open && (
-        <div
-          className="issue-context-menu"
-          role="menu"
-          onClick={(event) => event.stopPropagation()}
-        >
+        <div className="issue-context-menu" onClick={(event) => event.stopPropagation()}>
           {error && (
             <div className="issue-action-error" role="alert">
               {error}
@@ -172,14 +170,16 @@ export function IssueActionMenu({
               ))}
             </select>
           </label>
-          <button
-            role="menuitem"
-            className="danger"
-            disabled={saving}
-            onClick={() => setArchiveOpen(true)}
-          >
-            <Icon name="archive" size={14} /> Archive issue
-          </button>
+          <div id={menuId} role="menu" aria-label="Issue actions">
+            <button
+              role="menuitem"
+              className="danger"
+              disabled={saving}
+              onClick={() => setArchiveOpen(true)}
+            >
+              <Icon name="archive" size={14} /> Archive issue
+            </button>
+          </div>
           {error && (
             <div className="error-banner" role="alert">
               {error}
