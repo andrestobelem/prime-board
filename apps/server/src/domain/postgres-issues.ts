@@ -415,7 +415,23 @@ export async function createPostgresIssue(
         },
       );
     }
-    await recordPostgresActivity(tx, issueId, viewer.id, "created", { title, number }, createdAt);
+    await recordPostgresActivity(
+      tx,
+      issueId,
+      viewer.id,
+      "created",
+      {
+        title,
+        description: input.description ?? null,
+        teamId: team.id,
+        number,
+        priority,
+        stateId: state.id,
+        assigneeId: input.assigneeId ?? null,
+        parentId: input.parentId ?? null,
+      },
+      createdAt,
+    );
     const row = await getPostgresIssue(tx, issueId);
     if (!row) throw apiError("NOT_FOUND", "Issue not found after creation");
     return row;
@@ -483,7 +499,7 @@ export async function updatePostgresIssue(
       push("assignee_id", input.assigneeId);
       changes.push({ field: "assignee", from: issue.assignee_id, to: input.assigneeId });
       activity.push({
-        type: "assignee_changed",
+        type: "assigned",
         payload: { from: issue.assignee_id, to: input.assigneeId },
       });
     }

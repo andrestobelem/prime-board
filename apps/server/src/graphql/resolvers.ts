@@ -162,6 +162,14 @@ import {
   markInboxRead,
 } from "../domain/inbox.ts";
 import {
+  archivePostgresInboxItem,
+  countPostgresUnreadInboxActivity,
+  listPostgresInboxActivity,
+  listPostgresInboxActivityPage,
+  mapPostgresInboxActivity,
+  markPostgresInboxRead,
+} from "../domain/postgres-inbox.ts";
+import {
   createFavorite,
   deleteFavorite,
   listFavorites,
@@ -214,6 +222,7 @@ import {
   updateWorkspace,
 } from "../domain/workspaces.ts";
 import { seedWorkspace } from "../db/seed.ts";
+import { getPostgresIssue } from "../domain/postgres-issues.ts";
 import {
   createPostgresLabel,
   deletePostgresLabel,
@@ -486,10 +495,26 @@ export const resolvers = {
   },
 
   InboxItem: {
-    actor: (item: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(lookupActor(context, item.actorId)!),
-    issue: (item: { issueId: string }, _args: unknown, context: Context) =>
-      mapIssue(lookupIssueById(context, item.issueId)!),
+    actor: async (item: { actorId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, item.actorId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, item.actorId)!);
+    },
+    issue: async (item: { issueId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const issue = await getPostgresIssue(context.persistence, item.issueId);
+        if (!issue) return null;
+        const team = await getPostgresTeam(context.persistence, { id: issue.team_id });
+        return team &&
+          (await canDiscoverPostgresTeam(context.persistence, requireViewer(context), team)) &&
+          apiKeyTeamsWithinLimit(context.auth, [issue.team_id])
+          ? mapIssue(issue)
+          : null;
+      }
+      return mapIssue(lookupIssueById(context, item.issueId)!);
+    },
   },
 
   Cycle: {
@@ -847,12 +872,25 @@ export const resolvers = {
           listFavorites(context.db, viewer, context.workspace.workspaceId),
         ).map(mapFavorite);
       },
-      inbox: (
+      inbox: async (
         _parent: unknown,
         args: { first?: number | null; includeArchived?: boolean | null },
         context: Context,
       ) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          return (
+            await listPostgresInboxActivity(
+              context.persistence,
+              viewer,
+              {
+                first: args.first ?? 50,
+                includeArchived: Boolean(args.includeArchived),
+              },
+              context.auth?.teamIds,
+            )
+          ).map(mapPostgresInboxActivity);
+        }
         return scopeWorkspaceRows(
           context,
           listInboxActivity(
@@ -871,12 +909,28 @@ export const resolvers = {
           isArchived: Boolean(row.is_archived),
         }));
       },
-      inboxPage: (
+      inboxPage: async (
         _parent: unknown,
         args: { first?: number | null; after?: string | null; includeArchived?: boolean | null },
         context: Context,
       ) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const page = await listPostgresInboxActivityPage(
+            context.persistence,
+            viewer,
+            {
+              first: args.first ?? 50,
+              after: args.after,
+              includeArchived: Boolean(args.includeArchived),
+            },
+            context.auth?.teamIds,
+          );
+          return {
+            nodes: page.rows.map(mapPostgresInboxActivity),
+            pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+          };
+        }
         const page = listInboxActivityPage(
           context.db,
           viewer,
@@ -897,9 +951,11 @@ export const resolvers = {
           pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
         };
       },
-      inboxUnreadCount: (_parent: unknown, _args: unknown, context: Context) => {
+      inboxUnreadCount: async (_parent: unknown, _args: unknown, context: Context) => {
         const viewer = requireViewer(context);
-        return countUnreadInboxActivity(context.db, viewer, context.workspace.workspaceId);
+        return context.persistence
+          ? countPostgresUnreadInboxActivity(context.persistence, viewer, context.auth?.teamIds)
+          : countUnreadInboxActivity(context.db, viewer, context.workspace.workspaceId);
       },
       cycles: (
         _parent: unknown,
@@ -2130,8 +2186,21 @@ export const resolvers = {
             success: deleteInitiative(context.db, args.id, viewer, context.workspace.workspaceId),
           };
         },
-        inboxMarkRead: (_parent: unknown, args: { id: string }, context: Context) => {
+        inboxMarkRead: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            return {
+              success: true,
+              inboxItem: mapPostgresInboxActivity(
+                await markPostgresInboxRead(
+                  context.persistence,
+                  args.id,
+                  viewer,
+                  context.auth?.teamIds,
+                ),
+              ),
+            };
+          }
           const row = markInboxRead(context.db, args.id, viewer, context.workspace.workspaceId);
           return {
             success: true,
@@ -2143,8 +2212,21 @@ export const resolvers = {
             },
           };
         },
-        inboxArchive: (_parent: unknown, args: { id: string }, context: Context) => {
+        inboxArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            return {
+              success: true,
+              inboxItem: mapPostgresInboxActivity(
+                await archivePostgresInboxItem(
+                  context.persistence,
+                  args.id,
+                  viewer,
+                  context.auth?.teamIds,
+                ),
+              ),
+            };
+          }
           const row = archiveInboxItem(context.db, args.id, viewer, context.workspace.workspaceId);
           return {
             success: true,
