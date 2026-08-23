@@ -115,6 +115,7 @@ import {
   assertCanManageApiKey,
   assertApiKeyScope,
   apiKeyTeamsWithinLimit,
+  hasApiKeyTeamLimit,
   assertChildApiKey,
   assertUnrestrictedApiKey,
   assertCanManageIssue,
@@ -216,10 +217,28 @@ import {
 import { seedWorkspace } from "../db/seed.ts";
 import {
   canAccessPostgresProject,
+  getPostgresProject,
   listPostgresProjectTeamIds,
   listPostgresProjects,
   mapPostgresProject,
 } from "../domain/postgres-projects.ts";
+import {
+  canAccessPostgresSavedView,
+  createPostgresSavedView,
+  deletePostgresSavedView,
+  duplicatePostgresSavedView,
+  getPostgresSavedView,
+  listPostgresSavedViews,
+  mapPostgresSavedView,
+  updatePostgresSavedView,
+} from "../domain/postgres-saved-views.ts";
+import {
+  createPostgresFavorite,
+  deletePostgresFavorite,
+  listPostgresFavorites,
+  mapPostgresFavorite,
+  reorderPostgresFavorite,
+} from "../domain/postgres-favorites.ts";
 import {
   createPostgresLabel,
   deletePostgresLabel,
@@ -475,31 +494,62 @@ export const resolvers = {
   Activity: issueResolvers.Activity,
 
   Favorite: {
-    project: (favorite: { projectId: string | null }, _args: unknown, context: Context) => {
+    project: async (favorite: { projectId: string | null }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
       if (!favorite.projectId) return null;
+      if (context.persistence) {
+        const project = await getPostgresProject(context.persistence, favorite.projectId);
+        return project &&
+          !project.archived_at &&
+          (await canAccessPostgresProject(context.persistence, viewer, project.id))
+          ? mapPostgresProject(project)
+          : null;
+      }
       const project = lookupProject(context, favorite.projectId);
       return project && canAccessProject(context.db, viewer, project.id)
         ? mapProject(project)
         : null;
     },
-    savedView: (favorite: { savedViewId: string | null }, _args: unknown, context: Context) => {
+    savedView: async (
+      favorite: { savedViewId: string | null },
+      _args: unknown,
+      context: Context,
+    ) => {
       const viewer = requireViewer(context);
       if (!favorite.savedViewId) return null;
+      if (context.persistence) {
+        const view = await getPostgresSavedView(context.persistence, favorite.savedViewId);
+        return view &&
+          !view.archived_at &&
+          (await canAccessPostgresSavedView(context.persistence, view, viewer))
+          ? mapPostgresSavedView(view)
+          : null;
+      }
       const view = getSavedView(context.db, favorite.savedViewId, context.workspace.workspaceId);
       return view && canAccessSavedView(context.db, view, viewer) ? mapSavedView(view) : null;
     },
   },
 
   SavedView: {
-    team: (view: { teamId: string | null }, _args: unknown, context: Context) => {
+    team: async (view: { teamId: string | null }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
       if (!view.teamId) return null;
+      if (context.persistence) {
+        const row = await getPostgresTeam(context.persistence, { id: view.teamId });
+        return row && (await canDiscoverPostgresTeam(context.persistence, viewer, row))
+          ? mapPostgresTeam(row)
+          : null;
+      }
       const row = lookupTeam(context, { id: view.teamId });
       return row && canAccessTeam(context.db, viewer, row.id) ? mapTeam(row) : null;
     },
-    owner: (view: { ownerId: string }, _args: unknown, context: Context) =>
-      mapActor(lookupActor(context, view.ownerId)!),
+    owner: async (view: { ownerId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, view.ownerId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, view.ownerId)!);
+    },
   },
 
   InboxItem: {
@@ -828,12 +878,24 @@ export const resolvers = {
         const viewer = requireViewer(context);
         return listWebhooksInWorkspace(context, viewer).map(mapWebhook);
       },
-      savedViews: (
+      savedViews: async (
         _parent: unknown,
         args: { teamId?: string | null; includeArchived?: boolean | null },
         context: Context,
       ) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          if (args.teamId && !apiKeyTeamsWithinLimit(context.auth, [args.teamId])) return [];
+          const rows = await listPostgresSavedViews(
+            context.persistence,
+            viewer,
+            args.teamId,
+            Boolean(args.includeArchived),
+          );
+          return rows
+            .filter((row) => !row.team_id || apiKeyTeamsWithinLimit(context.auth, [row.team_id]))
+            .map(mapPostgresSavedView);
+        }
         if (args.teamId) {
           const team = lookupTeam(context, { id: args.teamId });
           if (team?.archived_at && !args.includeArchived) return [];
@@ -849,16 +911,30 @@ export const resolvers = {
           ),
         ).map(mapSavedView);
       },
-      savedView: (_parent: unknown, args: { id: string }, context: Context) => {
+      savedView: async (_parent: unknown, args: { id: string }, context: Context) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const row = await getPostgresSavedView(context.persistence, args.id);
+          if (!row || (row.team_id && !apiKeyTeamsWithinLimit(context.auth, [row.team_id]))) {
+            return null;
+          }
+          return (await canAccessPostgresSavedView(context.persistence, row, viewer))
+            ? mapPostgresSavedView(row)
+            : null;
+        }
         const row = getSavedView(context.db, args.id, context.workspace.workspaceId);
         if (!row) return null;
         scopeWorkspaceRow(context, row);
         if (!canAccessSavedView(context.db, row, viewer)) return null;
         return mapSavedView(row);
       },
-      favorites: (_parent: unknown, _args: unknown, context: Context) => {
+      favorites: async (_parent: unknown, _args: unknown, context: Context) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          return (await listPostgresFavorites(context.persistence, viewer)).map(
+            mapPostgresFavorite,
+          );
+        }
         return scopeWorkspaceRows(
           context,
           listFavorites(context.db, viewer, context.workspace.workspaceId),
@@ -1847,7 +1923,7 @@ export const resolvers = {
           const workflowState = mapWorkflowState(createWorkflowState(context.db, args.input));
           return { success: true, workflowState };
         },
-        savedViewCreate: (
+        savedViewCreate: async (
           _parent: unknown,
           args: {
             input: {
@@ -1863,6 +1939,19 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            if (
+              args.input.scope.toLowerCase() === "team" &&
+              args.input.teamId &&
+              !apiKeyTeamsWithinLimit(context.auth, [args.input.teamId])
+            ) {
+              throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+            }
+            const savedView = mapPostgresSavedView(
+              await createPostgresSavedView(context.persistence, viewer, args.input),
+            );
+            return { success: true, savedView };
+          }
           if (args.input.scope.toLowerCase() === "team") {
             assertCanManageIssue(context.db, viewer, args.input.teamId);
           }
@@ -1871,7 +1960,7 @@ export const resolvers = {
           );
           return { success: true, savedView };
         },
-        savedViewUpdate: (
+        savedViewUpdate: async (
           _parent: unknown,
           args: {
             id: string;
@@ -1887,6 +1976,16 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresSavedView(context.persistence, args.id);
+            if (existing?.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+            }
+            const savedView = mapPostgresSavedView(
+              await updatePostgresSavedView(context.persistence, args.id, viewer, args.input),
+            );
+            return { success: true, savedView };
+          }
           const existing = getSavedView(context.db, args.id, context.workspace.workspaceId);
           if (existing?.team_id && canAccessSavedView(context.db, existing, viewer)) {
             assertTeamActive(context.db, existing.team_id);
@@ -1897,8 +1996,18 @@ export const resolvers = {
           );
           return { success: true, savedView };
         },
-        savedViewDuplicate: (_parent: unknown, args: { id: string }, context: Context) => {
+        savedViewDuplicate: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresSavedView(context.persistence, args.id);
+            if (existing?.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+            }
+            const savedView = mapPostgresSavedView(
+              await duplicatePostgresSavedView(context.persistence, args.id, viewer),
+            );
+            return { success: true, savedView };
+          }
           const existing = getSavedView(context.db, args.id, context.workspace.workspaceId);
           if (existing?.team_id && canAccessSavedView(context.db, existing, viewer)) {
             assertTeamActive(context.db, existing.team_id);
@@ -1909,8 +2018,17 @@ export const resolvers = {
           );
           return { success: true, savedView };
         },
-        savedViewDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+        savedViewDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresSavedView(context.persistence, args.id);
+            if (existing?.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+            }
+            return {
+              success: await deletePostgresSavedView(context.persistence, args.id, viewer),
+            };
+          }
           const existing = getSavedView(context.db, args.id, context.workspace.workspaceId);
           if (existing?.team_id && canAccessSavedView(context.db, existing, viewer)) {
             assertTeamActive(context.db, existing.team_id);
@@ -1920,12 +2038,45 @@ export const resolvers = {
             success: deleteSavedView(context.db, args.id, viewer, context.workspace.workspaceId),
           };
         },
-        favoriteCreate: (
+        favoriteCreate: async (
           _parent: unknown,
           args: { input: { projectId?: string | null; savedViewId?: string | null } },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            if (args.input.projectId) {
+              const project = await getPostgresProject(context.persistence, args.input.projectId);
+              if (project) {
+                const teamIds = await listPostgresProjectTeamIds(context.persistence, project.id);
+                if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) {
+                  throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+                }
+              }
+            }
+            if (args.input.savedViewId) {
+              const savedView = await getPostgresSavedView(
+                context.persistence,
+                args.input.savedViewId,
+              );
+              if (savedView?.team_id) {
+                if (!apiKeyTeamsWithinLimit(context.auth, [savedView.team_id])) {
+                  throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+                }
+              } else if (hasApiKeyTeamLimit(context.auth)) {
+                throw apiError(
+                  "UNAUTHORIZED",
+                  "A Team-limited API key cannot access an unrestricted operation",
+                );
+              }
+            }
+            return {
+              success: true,
+              favorite: mapPostgresFavorite(
+                await createPostgresFavorite(context.persistence, viewer, args.input),
+              ),
+            };
+          }
           if (args.input.projectId) {
             const project = requireProject(context, args.input.projectId);
             if (!canAccessProject(context.db, viewer, project.id)) {
@@ -1949,18 +2100,36 @@ export const resolvers = {
             ),
           };
         },
-        favoriteDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+        favoriteDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            return {
+              success: await deletePostgresFavorite(context.persistence, viewer.id, args.id),
+            };
+          }
           return {
             success: deleteFavorite(context.db, viewer.id, args.id, context.workspace.workspaceId),
           };
         },
-        favoriteReorder: (
+        favoriteReorder: async (
           _parent: unknown,
           args: { id: string; position: number },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            return {
+              success: true,
+              favorite: mapPostgresFavorite(
+                await reorderPostgresFavorite(
+                  context.persistence,
+                  viewer.id,
+                  args.id,
+                  args.position,
+                ),
+              ),
+            };
+          }
           return {
             success: true,
             favorite: mapFavorite(

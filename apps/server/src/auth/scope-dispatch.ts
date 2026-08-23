@@ -44,6 +44,9 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:labels",
   "query:projects",
   "query:project",
+  "query:savedViews",
+  "query:savedView",
+  "query:favorites",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:projectCreate",
@@ -77,6 +80,13 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:labelDelete",
   "mutation:issueRelationCreate",
   "mutation:issueRelationDelete",
+  "mutation:savedViewCreate",
+  "mutation:savedViewUpdate",
+  "mutation:savedViewDuplicate",
+  "mutation:savedViewDelete",
+  "mutation:favoriteCreate",
+  "mutation:favoriteDelete",
+  "mutation:favoriteReorder",
   "mutation:apiKeyCreate",
   "mutation:apiKeyDelete",
   "mutation:apiKeyRotate",
@@ -256,7 +266,7 @@ function operationTeamIds(
       if (context.persistence) return [];
       return args.team ? [teamForRef(context, args.team) ?? "__missing__"] : null;
     case "savedView":
-      return teamIdsForSavedView(context, args.id);
+      return context.persistence ? [] : teamIdsForSavedView(context, args.id);
     case "savedViews":
       return args.teamId ? [scalar(args.teamId) ?? "__missing__"] : null;
     case "review":
@@ -412,14 +422,16 @@ function operationTeamIds(
     case "savedViewUpdate":
     case "savedViewDuplicate":
     case "savedViewDelete":
-      return teamIdsForSavedView(context, args.id);
+      return context.persistence ? [] : teamIdsForSavedView(context, args.id);
     case "favoriteCreate":
-      return input.projectId
-        ? teamIdsForProject(context, input.projectId)
-        : teamIdsForSavedView(context, input.savedViewId);
+      return context.persistence
+        ? []
+        : input.projectId
+          ? teamIdsForProject(context, input.projectId)
+          : teamIdsForSavedView(context, input.savedViewId);
     case "favoriteDelete":
     case "favoriteReorder":
-      return teamIdsForFavorite(context, args.id);
+      return context.persistence ? null : teamIdsForFavorite(context, args.id);
     case "initiativeCreate": {
       const teams = [
         ...new Set([

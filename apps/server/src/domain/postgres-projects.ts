@@ -153,7 +153,7 @@ async function validateProjectTeams(
 
 export async function canAccessPostgresProject(
   persistence: Persistence,
-  viewer: ActorRow,
+  viewer: Pick<ActorRow, "id" | "workspace_role">,
   projectId: string,
 ): Promise<boolean> {
   const teamIds = await listPostgresProjectTeamIds(persistence, projectId);
