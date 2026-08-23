@@ -6,7 +6,13 @@ import {
   getStagedOnboardingKey,
   shouldUseOnboardingKey,
 } from "../onboarding.ts";
-import { getThemePreference, setThemePreference, type ThemePreference } from "../theme.ts";
+import {
+  getThemePreference,
+  isThemePreference,
+  setThemePreference,
+  THEME_OPTIONS,
+  type ThemePreference,
+} from "../theme.ts";
 import { navigate } from "../router.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
 import {
@@ -185,11 +191,15 @@ export function SettingsView({ localAuth = false }: { localAuth?: boolean }) {
         Theme
         <select
           value={theme}
-          onChange={(event) => changeTheme(event.target.value as ThemePreference)}
+          onChange={(event) => {
+            if (isThemePreference(event.target.value)) changeTheme(event.target.value);
+          }}
         >
-          <option value="system">System</option>
-          <option value="dark">Dark</option>
-          <option value="light">Light</option>
+          {THEME_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
         </select>
       </label>
       {!localAuth && (

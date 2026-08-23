@@ -29,11 +29,20 @@
               ? "credential-" + (hash >>> 0).toString(36)
               : "anonymous";
         var stored = localStorage.getItem("pb.ui." + namespace + ".theme");
-        var preference = stored === "dark" || stored === "light" ? stored : "system";
-        var dark =
-          preference === "dark" ||
-          (preference === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-        document.documentElement.dataset.theme = dark ? "dark" : "light";
+        var knownThemes = {
+          system: true,
+          dark: true,
+          light: true,
+          "catppuccin-latte": true,
+          "catppuccin-frappe": true,
+          "catppuccin-macchiato": true,
+          "catppuccin-mocha": true,
+        };
+        var preference = stored && knownThemes[stored] === true ? stored : "system";
+        var systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "catppuccin-mocha"
+          : "catppuccin-latte";
+        document.documentElement.dataset.theme = preference === "system" ? systemTheme : preference;
       })();
     </script>
   </head>

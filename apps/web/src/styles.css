@@ -1,6 +1,117 @@
-/* Tema Linear-like: oscuro, denso, tipografía del sistema (spec §9). */
-/* Tema oscuro (default). El tema activo se resuelve en <html data-theme>. */
-:root {
+/* Tokens semánticos. Catppuccin: https://github.com/catppuccin/catppuccin */
+/* El tema activo se resuelve en <html data-theme>. Mocha es el fallback seguro. */
+:root,
+html[data-theme="catppuccin-mocha"] {
+  --bg: #1e1e2e;
+  --bg-sidebar: #181825;
+  --surface: #313244;
+  --surface-hover: #45475a;
+  --border: #585b70;
+  --border-subtle: #45475a;
+  --text: #cdd6f4;
+  --text-muted: #bac2de;
+  --text-faint: #a6adc8;
+  --accent: #cba6f7;
+  --accent-hover: #b4befe;
+  --accent-contrast: #1e1e2e;
+  --danger: #f38ba8;
+  --danger-text: #f38ba8;
+  --danger-bg: color-mix(in srgb, #f38ba8 12%, transparent);
+  --danger-border: color-mix(in srgb, #f38ba8 40%, transparent);
+  --selection: color-mix(in srgb, #9399b2 25%, transparent);
+  --priority-urgent: #fab387;
+  --status-triage: #fab387;
+  --status-backlog: #6c7086;
+  --status-unstarted: #bac2de;
+  --status-started: #f9e2af;
+  --status-completed: #a6e3a1;
+  --status-canceled: #6c7086;
+  --radius: 6px;
+}
+
+html[data-theme="catppuccin-macchiato"] {
+  --bg: #24273a;
+  --bg-sidebar: #1e2030;
+  --surface: #363a4f;
+  --surface-hover: #494d64;
+  --border: #5b6078;
+  --border-subtle: #494d64;
+  --text: #cad3f5;
+  --text-muted: #b8c0e0;
+  --text-faint: #a5adcb;
+  --accent: #c6a0f6;
+  --accent-hover: #b7bdf8;
+  --accent-contrast: #24273a;
+  --danger: #ed8796;
+  --danger-text: #ed8796;
+  --danger-bg: color-mix(in srgb, #ed8796 12%, transparent);
+  --danger-border: color-mix(in srgb, #ed8796 40%, transparent);
+  --selection: color-mix(in srgb, #939ab7 25%, transparent);
+  --priority-urgent: #f5a97f;
+  --status-triage: #f5a97f;
+  --status-backlog: #6e738d;
+  --status-unstarted: #b8c0e0;
+  --status-started: #eed49f;
+  --status-completed: #a6da95;
+  --status-canceled: #6e738d;
+}
+
+html[data-theme="catppuccin-frappe"] {
+  --bg: #303446;
+  --bg-sidebar: #292c3c;
+  --surface: #414559;
+  --surface-hover: #51576d;
+  --border: #626880;
+  --border-subtle: #51576d;
+  --text: #c6d0f5;
+  --text-muted: #b5bfe2;
+  --text-faint: #a5adce;
+  --accent: #ca9ee6;
+  --accent-hover: #babbf1;
+  --accent-contrast: #303446;
+  --danger: #e78284;
+  --danger-text: #e78284;
+  --danger-bg: color-mix(in srgb, #e78284 12%, transparent);
+  --danger-border: color-mix(in srgb, #e78284 40%, transparent);
+  --selection: color-mix(in srgb, #949cbb 25%, transparent);
+  --priority-urgent: #ef9f76;
+  --status-triage: #ef9f76;
+  --status-backlog: #737994;
+  --status-unstarted: #b5bfe2;
+  --status-started: #e5c890;
+  --status-completed: #a6d189;
+  --status-canceled: #737994;
+}
+
+html[data-theme="catppuccin-latte"] {
+  --bg: #eff1f5;
+  --bg-sidebar: #e6e9ef;
+  --surface: #ccd0da;
+  --surface-hover: #bcc0cc;
+  --border: #acb0be;
+  --border-subtle: #bcc0cc;
+  --text: #4c4f69;
+  --text-muted: #5c5f77;
+  --text-faint: #6c6f85;
+  --accent: #8839ef;
+  --accent-hover: #7287fd;
+  --accent-contrast: #eff1f5;
+  --danger: #d20f39;
+  --danger-text: #d20f39;
+  --danger-bg: color-mix(in srgb, #d20f39 12%, transparent);
+  --danger-border: color-mix(in srgb, #d20f39 40%, transparent);
+  --selection: color-mix(in srgb, #7c7f93 25%, transparent);
+  --priority-urgent: #fe640b;
+  --status-triage: #fe640b;
+  --status-backlog: #9ca0b0;
+  --status-unstarted: #5c5f77;
+  --status-started: #df8e1d;
+  --status-completed: #40a02b;
+  --status-canceled: #9ca0b0;
+}
+
+/* Temas Linear-like legacy. Se conservan para no romper preferencias guardadas. */
+html[data-theme="dark"] {
   --bg: #0f1011;
   --bg-sidebar: #131416;
   --surface: #17181b;
@@ -12,11 +123,21 @@
   --text-faint: #777b84;
   --accent: #5e6ad2;
   --accent-hover: #6e7ae2;
+  --accent-contrast: #ffffff;
   --danger: #eb5757;
-  --radius: 6px;
+  --danger-text: #f2a0a0;
+  --danger-bg: rgba(235, 87, 87, 0.12);
+  --danger-border: rgba(235, 87, 87, 0.4);
+  --selection: rgba(255, 255, 255, 0.12);
+  --priority-urgent: #fc7840;
+  --status-triage: #fc7840;
+  --status-backlog: #5c6067;
+  --status-unstarted: #8a8f98;
+  --status-started: #f2c94c;
+  --status-completed: #5e6ad2;
+  --status-canceled: #5c6067;
 }
 
-/* Tema claro (AT-150): paleta Linear-like sobre blanco. */
 html[data-theme="light"] {
   --bg: #ffffff;
   --bg-sidebar: #f7f8f8;
@@ -29,7 +150,19 @@ html[data-theme="light"] {
   --text-faint: #737780;
   --accent: #5e6ad2;
   --accent-hover: #4f5ac2;
+  --accent-contrast: #ffffff;
   --danger: #d94b4b;
+  --danger-text: #d94b4b;
+  --danger-bg: rgba(217, 75, 75, 0.12);
+  --danger-border: rgba(217, 75, 75, 0.4);
+  --selection: rgba(40, 42, 48, 0.12);
+  --priority-urgent: #fc7840;
+  --status-triage: #fc7840;
+  --status-backlog: #5c6067;
+  --status-unstarted: #6b6f76;
+  --status-started: #f2c94c;
+  --status-completed: #5e6ad2;
+  --status-canceled: #5c6067;
 }
 
 * {
@@ -354,7 +487,7 @@ kbd {
 
 .btn {
   background: var(--accent);
-  color: white;
+  color: var(--accent-contrast);
   border-radius: var(--radius);
   padding: 5px 12px;
   font-size: 12px;
@@ -486,7 +619,7 @@ kbd {
   padding: 0 4px;
   border-radius: 8px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-contrast);
   font-size: 10px;
   line-height: 16px;
   text-align: center;
@@ -630,7 +763,7 @@ kbd {
   color: var(--text-muted);
 }
 .priority-icon.urgent {
-  color: #fc7840;
+  color: var(--priority-urgent);
 }
 /* El color del estado lo pone StateIcon según el tipo del workflow. */
 .state-icon {
@@ -813,7 +946,7 @@ kbd {
   background: var(--surface-hover);
 }
 .issue-context-menu .danger {
-  color: var(--red, #eb5757);
+  color: var(--danger);
 }
 .board-card-topline {
   display: flex;
@@ -1059,7 +1192,7 @@ kbd {
   color: var(--text-muted);
 }
 .palette-item.selected {
-  background: var(--surface-hover);
+  background: var(--selection);
   color: var(--text);
 }
 .palette-item .kind {
@@ -1436,9 +1569,9 @@ kbd {
   font-size: 12px;
 }
 .error-banner {
-  background: rgba(235, 87, 87, 0.12);
-  border: 1px solid rgba(235, 87, 87, 0.4);
-  color: #f2a0a0;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-text);
   border-radius: var(--radius);
   padding: 10px 12px;
   margin: 16px;
@@ -1548,7 +1681,7 @@ kbd {
   opacity: 0.6;
 }
 .switcher-item.selected {
-  background: var(--surface-hover);
+  background: var(--selection);
   color: var(--text);
 }
 .switcher-item.active {

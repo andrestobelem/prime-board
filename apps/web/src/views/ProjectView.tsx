@@ -44,12 +44,12 @@ function formatProjectDate(value: string | null): string | null {
 }
 
 const STATE_COLORS: Record<string, string> = {
-  BACKLOG: "#8a8f98",
-  PLANNED: "#8a8f98",
-  STARTED: "#f2c94c",
-  PAUSED: "#fc7840",
-  COMPLETED: "#5e6ad2",
-  CANCELED: "#5c6067",
+  BACKLOG: "var(--status-backlog)",
+  PLANNED: "var(--status-unstarted)",
+  STARTED: "var(--status-started)",
+  PAUSED: "var(--status-triage)",
+  COMPLETED: "var(--status-completed)",
+  CANCELED: "var(--status-canceled)",
 };
 
 export function ProjectView({ projectId }: { projectId: string }) {

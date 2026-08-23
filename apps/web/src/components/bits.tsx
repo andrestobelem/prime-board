@@ -22,12 +22,12 @@ export function PriorityIcon({ priority }: { priority: number }) {
 }
 
 const STATE_COLORS: Record<string, string> = {
-  TRIAGE: "#fc7840",
-  BACKLOG: "#5c6067",
-  UNSTARTED: "#8a8f98",
-  STARTED: "#f2c94c",
-  COMPLETED: "#5e6ad2",
-  CANCELED: "#5c6067",
+  TRIAGE: "var(--status-triage)",
+  BACKLOG: "var(--status-backlog)",
+  UNSTARTED: "var(--status-unstarted)",
+  STARTED: "var(--status-started)",
+  COMPLETED: "var(--status-completed)",
+  CANCELED: "var(--status-canceled)",
 };
 
 /** Ícono por tipo de estado del workflow. */
@@ -45,7 +45,7 @@ const STATE_ICONS: Record<string, IconName> = {
  * relleno del "en progreso" y el trazo del resto salen del mismo valor.
  */
 export function StateIcon({ state }: { state: { type: string; color?: string; name?: string } }) {
-  const color = STATE_COLORS[state.type] ?? "#8a8f98";
+  const color = STATE_COLORS[state.type] ?? "var(--status-unstarted)";
   return (
     <span className="state-icon" style={{ color }}>
       <Icon name={STATE_ICONS[state.type] ?? "state-todo"} title={state.name} />
