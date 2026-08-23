@@ -491,6 +491,11 @@ export const typeDefs = /* GraphQL */ `
     review: Review!
   }
 
+  type ReviewConnection {
+    nodes: [Review!]!
+    pageInfo: PageInfo!
+  }
+
   enum InitiativeState {
     PLANNED
     ACTIVE
@@ -1114,11 +1119,12 @@ export const typeDefs = /* GraphQL */ `
     reviews(
       openOnly: Boolean = false
       first: Int = 50
+      after: String
       teamId: ID
       projectId: ID
       reviewerId: ID
       olderThanDays: Int
-    ): [Review!]!
+    ): ReviewConnection!
     review(id: ID!): Review
     initiatives(includeArchived: Boolean = false): [Initiative!]!
     initiative(id: ID!): Initiative

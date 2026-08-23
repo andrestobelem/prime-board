@@ -73,12 +73,14 @@ describe("reviews", () => {
 
     const asReviewer = await gql(
       app,
-      `{ reviews { id status issue { identifier } reviewer { id } } }`,
+      `{ reviews { nodes { id status issue { identifier } reviewer { id } } pageInfo { hasNextPage endCursor } } }`,
       {},
       reviewerKey,
     );
     expect(asReviewer.errors).toBeUndefined();
-    expect(asReviewer.data!.reviews.some((r: { id: string }) => r.id === review.id)).toBe(true);
+    expect(asReviewer.data!.reviews.nodes.some((r: { id: string }) => r.id === review.id)).toBe(
+      true,
+    );
 
     const approved = await gql(
       app,
@@ -190,6 +192,86 @@ describe("reviews", () => {
       memberKey,
     );
     expect(hidden.data!.review).toBeNull();
+  });
+
+  it("pagina una cola de más de 50 Reviews con cursor estable", async () => {
+    const reviewer = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "review-page-agent", type: AGENT }) { actor { id } } }`,
+    );
+    const reviewerId = reviewer.data!.actorCreate.actor.id;
+    const issue = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Review pagination target" }) { issue { id } } }`,
+    );
+    const issueId = issue.data!.issueCreate.issue.id;
+    const requester = app.db.query("SELECT id FROM actors WHERE name = 'admin' LIMIT 1").get() as {
+      id: string;
+    };
+    const workspace = app.db.query("SELECT id FROM workspace LIMIT 1").get() as { id: string };
+    const insert = app.db.query(
+      `INSERT INTO reviews
+       (id, issue_id, requester_id, reviewer_id, status, created_at, updated_at, workspace_id)
+       VALUES (?1, ?2, ?3, ?4, 'requested', ?5, ?5, ?6)`,
+    );
+    app.db.transaction(() => {
+      for (let index = 0; index < 51; index += 1) {
+        const createdAt = `2030-01-01T00:${String(index).padStart(2, "0")}:00.000Z`;
+        insert.run(
+          `review-page-${index}`,
+          issueId,
+          requester.id,
+          reviewerId,
+          createdAt,
+          workspace.id,
+        );
+      }
+    })();
+
+    const first = await gql(
+      app,
+      `query($first: Int!, $reviewerId: ID!) {
+        reviews(first: $first, reviewerId: $reviewerId) {
+          nodes { id createdAt }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      { first: 50, reviewerId },
+    );
+    expect(first.errors).toBeUndefined();
+    expect(first.data!.reviews.nodes).toHaveLength(50);
+    expect(first.data!.reviews.nodes[0].id).toBe("review-page-50");
+    expect(first.data!.reviews.nodes[49].id).toBe("review-page-1");
+    expect(first.data!.reviews.pageInfo.hasNextPage).toBe(true);
+
+    const second = await gql(
+      app,
+      `query($first: Int!, $after: String!, $reviewerId: ID!) {
+        reviews(first: $first, after: $after, reviewerId: $reviewerId) {
+          nodes { id createdAt }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      {
+        first: 50,
+        after: first.data!.reviews.pageInfo.endCursor,
+        reviewerId,
+      },
+    );
+    expect(second.errors).toBeUndefined();
+    expect(second.data!.reviews.nodes.map((node: { id: string }) => node.id)).toEqual([
+      "review-page-0",
+    ]);
+    expect(second.data!.reviews.pageInfo.hasNextPage).toBe(false);
+
+    const changedFilter = await gql(
+      app,
+      `query($after: String!, $reviewerId: ID!) {
+        reviews(openOnly: true, after: $after, reviewerId: $reviewerId) { nodes { id } }
+      }`,
+      { after: first.data!.reviews.pageInfo.endCursor, reviewerId },
+    );
+    expect(changedFilter.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
   });
 
   it("rechaza reviewer inexistente", async () => {

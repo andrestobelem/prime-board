@@ -1188,6 +1188,7 @@ export const resolvers = {
         args: {
           openOnly?: boolean | null;
           first?: number | null;
+          after?: string | null;
           teamId?: string | null;
           projectId?: string | null;
           reviewerId?: string | null;
@@ -1198,27 +1199,35 @@ export const resolvers = {
         const viewer = requireViewer(context);
         if (args.teamId) {
           const team = lookupTeam(context, { id: args.teamId });
-          if (team?.archived_at) return [];
+          if (team?.archived_at) {
+            return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+          }
         }
-        const rows = scopeWorkspaceRows(
-          context,
-          listReviews(context.db, viewer.id, {
-            openOnly: Boolean(args.openOnly),
-            first: args.first ?? 50,
-            teamId: args.teamId,
-            projectId: args.projectId,
-            reviewerId: args.reviewerId,
-            olderThanDays: args.olderThanDays,
-          }),
-        );
         // La cola se basa en requester/reviewer, pero una key revocada no debe
-        // conservar acceso a reviews del team.
-        return rows
-          .filter((row) => {
-            const issue = lookupIssueById(context, row.issue_id);
-            return Boolean(issue && canWriteTeam(context.db, viewer, issue.team_id));
-          })
-          .map(mapReview);
+        // conservar acceso a reviews del Team. Aplicar este filtro antes de
+        // paginar evita páginas cortas o cursores que salten recursos ocultos.
+        const writableTeamIds = (
+          context.db
+            .query("SELECT id FROM teams WHERE workspace_id = ?1 ORDER BY id")
+            .all(context.workspace.workspaceId) as Array<{ id: string }>
+        )
+          .map((row) => row.id)
+          .filter((teamId) => canWriteTeam(context.db, viewer, teamId));
+        const page = listReviews(context.db, viewer.id, {
+          openOnly: Boolean(args.openOnly),
+          first: args.first ?? 50,
+          after: args.after,
+          teamId: args.teamId,
+          projectId: args.projectId,
+          reviewerId: args.reviewerId,
+          olderThanDays: args.olderThanDays,
+          teamIds: writableTeamIds,
+          workspaceId: context.workspace.workspaceId,
+        });
+        return {
+          nodes: scopeWorkspaceRows(context, page.rows).map(mapReview),
+          pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+        };
       },
       review: (_parent: unknown, args: { id: string }, context: Context) => {
         const viewer = requireViewer(context);

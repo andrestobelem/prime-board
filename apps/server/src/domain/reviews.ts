@@ -34,57 +34,168 @@ export function getReview(db: Database, id: string): ReviewRow | null {
 
 /**
  * Cola del viewer: revisiones donde es reviewer o requester,
- * más recientes primero. Opcionalmente solo status abiertos.
+ * más recientes primero. La página usa un cursor opaco y conserva los filtros.
  */
+export interface ListReviewsOptions {
+  openOnly?: boolean;
+  first?: number;
+  after?: string | null;
+  teamId?: string | null;
+  projectId?: string | null;
+  reviewerId?: string | null;
+  olderThanDays?: number | null;
+  /** Teams que ya fueron autorizados por el resolver. */
+  teamIds?: readonly string[] | null;
+  workspaceId?: string | null;
+}
+
+export interface ReviewPage {
+  rows: ReviewRow[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+interface ReviewCursor {
+  createdAt: string;
+  id: string;
+  filterKey: string;
+}
+
+function effectiveOlderThanDays(value: number | null | undefined): number | null {
+  return value != null && value > 0 ? value : null;
+}
+
+function reviewFilterKey(options: ListReviewsOptions): string {
+  return JSON.stringify([
+    Boolean(options.openOnly),
+    options.teamId ?? null,
+    options.projectId ?? null,
+    options.reviewerId ?? null,
+    effectiveOlderThanDays(options.olderThanDays),
+    options.workspaceId ?? null,
+    options.teamIds ? [...options.teamIds].sort() : null,
+    "CREATED_DESC",
+  ]);
+}
+
+function encodeReviewCursor(createdAt: string, id: string, filterKey: string): string {
+  return Buffer.from(JSON.stringify([createdAt, id, filterKey])).toString("base64url");
+}
+
+function decodeReviewCursor(cursor: string): ReviewCursor | null {
+  try {
+    if (Buffer.from(cursor, "base64url").toString("base64url") !== cursor) return null;
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString());
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length !== 3 ||
+      typeof parsed[0] !== "string" ||
+      typeof parsed[1] !== "string" ||
+      typeof parsed[2] !== "string" ||
+      !parsed[0] ||
+      !parsed[1] ||
+      !parsed[2]
+    ) {
+      return null;
+    }
+    return { createdAt: parsed[0], id: parsed[1], filterKey: parsed[2] };
+  } catch {
+    return null;
+  }
+}
+
+function buildReviewClauses(
+  viewerId: string,
+  options: ListReviewsOptions,
+  params: unknown[],
+): string[] {
+  params.push(viewerId);
+  const add = (value: unknown): string => {
+    params.push(value);
+    return `?${params.length}`;
+  };
+  const clauses = [`(r.reviewer_id = ?1 OR r.requester_id = ?1)`];
+
+  if (options.openOnly) clauses.push("r.status IN ('requested', 'in_progress')");
+  if (options.reviewerId) clauses.push(`r.reviewer_id = ${add(options.reviewerId)}`);
+  if (options.teamId) clauses.push(`i.team_id = ${add(options.teamId)}`);
+  if (options.projectId) clauses.push(`i.project_id = ${add(options.projectId)}`);
+  if (options.workspaceId) clauses.push(`r.workspace_id = ${add(options.workspaceId)}`);
+  if (options.teamIds) {
+    if (options.teamIds.length === 0) {
+      clauses.push("1 = 0");
+    } else {
+      clauses.push(`i.team_id IN (${options.teamIds.map(add).join(", ")})`);
+    }
+  }
+  const olderThanDays = effectiveOlderThanDays(options.olderThanDays);
+  if (olderThanDays != null) {
+    const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
+    clauses.push(`r.created_at <= ${add(cutoff)}`);
+  }
+  return clauses;
+}
+
 export function listReviews(
   db: Database,
   viewerId: string,
-  opts: {
-    openOnly?: boolean;
-    first?: number;
-    teamId?: string | null;
-    projectId?: string | null;
-    reviewerId?: string | null;
-    olderThanDays?: number | null;
-  } = {},
-): ReviewRow[] {
-  const first = Math.min(Math.max(opts.first ?? 50, 1), 100);
-  const openOnly = opts.openOnly ?? false;
-  const clauses = ["(r.reviewer_id = ?1 OR r.requester_id = ?1)"];
-  const params: unknown[] = [viewerId];
-
-  if (openOnly) {
-    clauses.push("r.status IN ('requested', 'in_progress')");
-  }
-  if (opts.reviewerId) {
-    params.push(opts.reviewerId);
-    clauses.push(`r.reviewer_id = ?${params.length}`);
-  }
-  if (opts.teamId) {
-    params.push(opts.teamId);
-    clauses.push(`i.team_id = ?${params.length}`);
-  }
-  if (opts.projectId) {
-    params.push(opts.projectId);
-    clauses.push(`i.project_id = ?${params.length}`);
-  }
-  if (opts.olderThanDays != null && opts.olderThanDays > 0) {
-    const cutoff = new Date(Date.now() - opts.olderThanDays * 86_400_000).toISOString();
-    params.push(cutoff);
-    clauses.push(`r.created_at <= ?${params.length}`);
+  options: ListReviewsOptions = {},
+): ReviewPage {
+  const first = options.first ?? 50;
+  if (!Number.isInteger(first) || first < 1 || first > 250) {
+    throw apiError("VALIDATION_FAILED", "first must be between 1 and 250");
   }
 
-  params.push(first);
-  return db
+  const filterKey = reviewFilterKey(options);
+  const params: unknown[] = [];
+  const clauses = buildReviewClauses(viewerId, options, params);
+  if (options.after != null) {
+    const cursor = decodeReviewCursor(options.after);
+    if (!cursor || cursor.filterKey !== filterKey) {
+      throw apiError("VALIDATION_FAILED", "Invalid review cursor");
+    }
+
+    // El cursor debe seguir perteneciendo a la misma conexión. Así no se
+    // reinicia la página ni se acepta un cursor de otra combinación de filtros.
+    const cursorParams: unknown[] = [];
+    const cursorClauses = buildReviewClauses(viewerId, options, cursorParams);
+    cursorParams.push(cursor.id);
+    const cursorRow = db
+      .query(
+        `SELECT r.created_at
+         FROM reviews r
+         JOIN issues i ON i.id = r.issue_id
+         WHERE ${cursorClauses.join(" AND ")} AND r.id = ?${cursorParams.length}`,
+      )
+      .get(...(cursorParams as never[])) as { created_at: string } | null;
+    if (!cursorRow || cursorRow.created_at !== cursor.createdAt) {
+      throw apiError("VALIDATION_FAILED", "Invalid review cursor");
+    }
+
+    const createdAtParam = params.length + 1;
+    params.push(cursor.createdAt);
+    const idParam = params.length + 1;
+    params.push(cursor.id);
+    clauses.push(`(r.created_at, r.id) < (?${createdAtParam}, ?${idParam})`);
+  }
+
+  const rows = db
     .query(
       `SELECT r.*
        FROM reviews r
        JOIN issues i ON i.id = r.issue_id
        WHERE ${clauses.join(" AND ")}
        ORDER BY r.created_at DESC, r.id DESC
-       LIMIT ?${params.length}`,
+       LIMIT ${first + 1}`,
     )
     .all(...(params as never[])) as ReviewRow[];
+  const page = rows.slice(0, first);
+  const last = page[page.length - 1];
+  return {
+    rows: page,
+    hasNextPage: rows.length > first,
+    endCursor: last ? encodeReviewCursor(last.created_at, last.id, filterKey) : null,
+  };
 }
 
 function resolveStatus(status: string): ReviewStatus {

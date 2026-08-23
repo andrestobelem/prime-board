@@ -11,7 +11,7 @@ const REVIEW_FIELDS = `id status createdAt updatedAt
   requester { id name type } reviewer { id name type }`;
 const USAGE = `Usage:
   pb review list [--open-only] [--team KEY] [--project ID] [--reviewer ID|me]
-                  [--older-than-days N] [--first N] [--json]
+                  [--older-than-days N] [--first N] [--after CURSOR] [--json]
   pb review view <ID> [--json]
   pb review create --issue ID --reviewer ID|me [--json]
   pb review update <ID> [--status STATUS] [--reviewer ID|me] [--json]
@@ -36,12 +36,18 @@ export async function reviewCommand(argv: string[]): Promise<void> {
         reviewer: { type: "string" },
         "older-than-days": { type: "string" },
         first: { type: "string" },
+        after: { type: "string" },
         json: { type: "boolean" },
       },
     });
+    const first = values.first ? numberOrUsage(values.first, "first") : 50;
+    if (first < 1 || first > 250) {
+      throw new UsageError("--first must be an integer between 1 and 250");
+    }
     const variables: Record<string, unknown> = {
       openOnly: Boolean(values["open-only"]),
-      first: values.first ? numberOrUsage(values.first, "first") : 50,
+      first,
+      after: values.after ?? null,
       teamId: values.team ? (await resolveTeam(config, values.team)).id : null,
       projectId: values.project ?? null,
       reviewerId: values.reviewer ? await resolveAssignee(config, values.reviewer) : null,
@@ -51,15 +57,18 @@ export async function reviewCommand(argv: string[]): Promise<void> {
     };
     const data = await gqlRequest(
       config,
-      `query($openOnly: Boolean, $first: Int, $teamId: ID, $projectId: ID, $reviewerId: ID, $olderThanDays: Int) {
-      reviews(openOnly: $openOnly, first: $first, teamId: $teamId, projectId: $projectId, reviewerId: $reviewerId, olderThanDays: $olderThanDays) { ${REVIEW_FIELDS} }
+      `query($openOnly: Boolean, $first: Int, $after: String, $teamId: ID, $projectId: ID, $reviewerId: ID, $olderThanDays: Int) {
+      reviews(openOnly: $openOnly, first: $first, after: $after, teamId: $teamId, projectId: $projectId, reviewerId: $reviewerId, olderThanDays: $olderThanDays) {
+        nodes { ${REVIEW_FIELDS} }
+        pageInfo { hasNextPage endCursor }
+      }
     }`,
       variables,
     );
     if (values.json) return printJson(data.reviews);
-    for (const review of data.reviews)
+    for (const review of data.reviews.nodes)
       console.log(`${review.id}  [${review.status.toLowerCase()}]  ${review.issue.identifier}`);
-    if (data.reviews.length === 0) console.log("No reviews found.");
+    if (data.reviews.nodes.length === 0) console.log("No reviews found.");
     return;
   }
   if (action === "view") {
