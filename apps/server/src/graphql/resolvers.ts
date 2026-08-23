@@ -53,6 +53,7 @@ import {
   archivePostgresTeam,
   assertPostgresTeamActive,
   canDiscoverPostgresTeam,
+  canWritePostgresTeam,
   createPostgresTeam,
   createPostgresTeamMembership,
   createPostgresWorkflowState,
@@ -201,6 +202,14 @@ import {
   updateReview,
 } from "../domain/reviews.ts";
 import {
+  createPostgresReview,
+  deletePostgresReview,
+  getPostgresReview,
+  listPostgresReviews,
+  mapPostgresReview,
+  updatePostgresReview,
+} from "../domain/postgres-reviews.ts";
+import {
   canViewInitiative,
   createInitiative,
   deleteInitiative,
@@ -239,6 +248,7 @@ import {
   updateWorkspace,
 } from "../domain/workspaces.ts";
 import { seedWorkspace } from "../db/seed.ts";
+import { getPostgresIssue, getPostgresIssueByRef } from "../domain/postgres-issues.ts";
 import {
   canAccessPostgresProject,
   getPostgresProject,
@@ -348,6 +358,72 @@ async function assertPostgresInitiativeKeyLimit(
   if (!scope.size || !apiKeyTeamsWithinLimit(context.auth, [...scope])) {
     throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
   }
+}
+
+async function requirePostgresReviewIssue(
+  context: Context,
+  issueRef: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof getPostgresIssueByRef>>>> {
+  const persistence = context.persistence;
+  if (!persistence) throw new Error("PostgreSQL persistence is required for a review");
+  const issue = await getPostgresIssueByRef(persistence, issueRef);
+  if (!issue) throw apiError("NOT_FOUND", "Issue not found");
+  const team = await getPostgresTeam(persistence, { id: issue.team_id });
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
+  if (!apiKeyTeamsWithinLimit(context.auth, [team.id])) {
+    throw apiError("NOT_FOUND", "Issue resource not found");
+  }
+  if (!(await canDiscoverPostgresTeam(persistence, requireViewer(context), team))) {
+    throw apiError("NOT_FOUND", "Team resource not found");
+  }
+  await assertPostgresTeamActive(persistence, team.id);
+  if (!(await canWritePostgresTeam(persistence, requireViewer(context), team.id))) {
+    throw apiError("UNAUTHORIZED", "Team access policy does not allow this operation");
+  }
+  return issue;
+}
+
+async function assertPostgresReviewReviewer(
+  context: Context,
+  teamId: string,
+  reviewerId: string,
+): Promise<void> {
+  const persistence = context.persistence;
+  if (!persistence) throw new Error("PostgreSQL persistence is required for a review");
+  const viewer = requireViewer(context);
+  const reviewer = await getPostgresActor(persistence, reviewerId);
+  if (!reviewer || reviewer.status !== "active") {
+    throw apiError("UNAUTHORIZED", "Assignee must be an active actor");
+  }
+  const team = await getPostgresTeam(persistence, { id: teamId });
+  if (!team || !(await canWritePostgresTeam(persistence, viewer, teamId))) {
+    throw apiError("UNAUTHORIZED", "Assignee is not allowed for this Team");
+  }
+  if (
+    !isWorkspaceAdmin(viewer) &&
+    team.access_policy === "team_members" &&
+    !(await isPostgresTeamMember(persistence, teamId, reviewerId))
+  ) {
+    throw apiError("UNAUTHORIZED", "Assignee must be a Team member");
+  }
+}
+
+async function visiblePostgresReview(
+  context: Context,
+  review: { issue_id: string; requester_id: string; reviewer_id: string },
+  viewer: ReturnType<typeof requireViewer>,
+): Promise<boolean> {
+  const persistence = context.persistence;
+  if (!persistence) return false;
+  const issue = await getPostgresIssue(persistence, review.issue_id);
+  const team = issue ? await getPostgresTeam(persistence, { id: issue.team_id }) : null;
+  return Boolean(
+    issue &&
+    team &&
+    (await canDiscoverPostgresTeam(persistence, viewer, team)) &&
+    (await canWritePostgresTeam(persistence, viewer, team.id)) &&
+    apiKeyTeamsWithinLimit(context.auth, [team.id]),
+  );
 }
 
 export const resolvers = {
@@ -655,12 +731,27 @@ export const resolvers = {
   },
 
   Review: {
-    issue: (review: { issueId: string }, _args: unknown, context: Context) =>
-      mapIssue(lookupIssueById(context, review.issueId)!),
-    requester: (review: { requesterId: string }, _args: unknown, context: Context) =>
-      mapActor(lookupActor(context, review.requesterId)!),
-    reviewer: (review: { reviewerId: string }, _args: unknown, context: Context) =>
-      mapActor(lookupActor(context, review.reviewerId)!),
+    issue: async (review: { issueId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const issue = await getPostgresIssue(context.persistence, review.issueId);
+        return issue ? mapIssue(issue) : null;
+      }
+      return mapIssue(lookupIssueById(context, review.issueId)!);
+    },
+    requester: async (review: { requesterId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, review.requesterId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, review.requesterId)!);
+    },
+    reviewer: async (review: { reviewerId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, review.reviewerId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, review.reviewerId)!);
+    },
   },
 
   Initiative: {
@@ -1183,7 +1274,7 @@ export const resolvers = {
           ? mapCycle(scopeWorkspaceRow(context, row))
           : null;
       },
-      reviews: (
+      reviews: async (
         _parent: unknown,
         args: {
           openOnly?: boolean | null;
@@ -1197,6 +1288,25 @@ export const resolvers = {
         context: Context,
       ) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          if (args.teamId) {
+            const team = await getPostgresTeam(context.persistence, { id: args.teamId });
+            if (team?.archived_at) return [];
+          }
+          const rows = await listPostgresReviews(context.persistence, viewer.id, {
+            openOnly: Boolean(args.openOnly),
+            first: args.first ?? 50,
+            teamId: args.teamId,
+            projectId: args.projectId,
+            reviewerId: args.reviewerId,
+            olderThanDays: args.olderThanDays,
+          });
+          const visible = [];
+          for (const row of rows) {
+            if (await visiblePostgresReview(context, row, viewer)) visible.push(row);
+          }
+          return visible.map(mapPostgresReview);
+        }
         if (args.teamId) {
           const team = lookupTeam(context, { id: args.teamId });
           if (team?.archived_at) {
@@ -1229,8 +1339,21 @@ export const resolvers = {
           pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
         };
       },
-      review: (_parent: unknown, args: { id: string }, context: Context) => {
+      review: async (_parent: unknown, args: { id: string }, context: Context) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const row = await getPostgresReview(context.persistence, args.id);
+          if (
+            !row ||
+            !(await visiblePostgresReview(context, row, viewer)) ||
+            (!isWorkspaceAdmin(viewer) &&
+              row.reviewer_id !== viewer.id &&
+              row.requester_id !== viewer.id)
+          ) {
+            return null;
+          }
+          return mapPostgresReview(row);
+        }
         const row = getReview(context.db, args.id);
         if (!row) return null;
         scopeWorkspaceRow(context, row);
@@ -2459,12 +2582,22 @@ export const resolvers = {
           );
           return { success: true, movedIssues };
         },
-        reviewCreate: (
+        reviewCreate: async (
           _parent: unknown,
           args: { input: { issueId: string; reviewerId: string } },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const issue = await requirePostgresReviewIssue(context, args.input.issueId);
+            await assertPostgresReviewReviewer(context, issue.team_id, args.input.reviewerId);
+            return {
+              success: true,
+              review: mapPostgresReview(
+                await createPostgresReview(context.persistence, viewer.id, args.input),
+              ),
+            };
+          }
           const issue = requireIssue(context, args.input.issueId);
           assertCanManageIssue(context.db, viewer, issue.team_id);
           if (args.input.reviewerId) {
@@ -2476,7 +2609,7 @@ export const resolvers = {
             review: mapReview(createReview(context.db, viewer.id, args.input)),
           };
         },
-        reviewUpdate: (
+        reviewUpdate: async (
           _parent: unknown,
           args: {
             id: string;
@@ -2485,6 +2618,27 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresReview(context.persistence, args.id);
+            if (existing) {
+              const issue = await requirePostgresReviewIssue(context, existing.issue_id);
+              if (args.input.reviewerId) {
+                await assertPostgresReviewReviewer(context, issue.team_id, args.input.reviewerId);
+              }
+            }
+            return {
+              success: true,
+              review: mapPostgresReview(
+                await updatePostgresReview(
+                  context.persistence,
+                  args.id,
+                  viewer.id,
+                  args.input,
+                  isWorkspaceAdmin(viewer),
+                ),
+              ),
+            };
+          }
           const existing = getReview(context.db, args.id);
           if (existing) {
             const issue = lookupIssueById(context, existing.issue_id);
@@ -2497,8 +2651,20 @@ export const resolvers = {
             ),
           };
         },
-        reviewDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+        reviewDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresReview(context.persistence, args.id);
+            if (existing) await requirePostgresReviewIssue(context, existing.issue_id);
+            return {
+              success: await deletePostgresReview(
+                context.persistence,
+                args.id,
+                viewer.id,
+                isWorkspaceAdmin(viewer),
+              ),
+            };
+          }
           const existing = getReview(context.db, args.id);
           if (existing) {
             const issue = lookupIssueById(context, existing.issue_id);

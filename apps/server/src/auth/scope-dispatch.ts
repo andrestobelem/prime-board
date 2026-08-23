@@ -53,6 +53,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:savedViews",
   "query:savedView",
   "query:favorites",
+  "query:review",
+  "query:reviews",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:projectCreate",
@@ -100,6 +102,9 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:documentUpdate",
   "mutation:documentArchive",
   "mutation:documentUnarchive",
+  "mutation:reviewCreate",
+  "mutation:reviewUpdate",
+  "mutation:reviewDelete",
   "mutation:issueRelationCreate",
   "mutation:issueRelationDelete",
   "mutation:savedViewCreate",
@@ -170,6 +175,7 @@ function teamIdsForCycle(context: Context, cycleId: unknown): string[] {
 }
 
 function teamIdsForReview(context: Context, reviewId: unknown): string[] {
+  if (context.persistence) return [];
   const id = scalar(reviewId);
   if (!id) return [];
   const row = context.db.query("SELECT issue_id FROM reviews WHERE id = ?1").get(id) as {
@@ -528,6 +534,7 @@ async function operationTeamIds(
         ]),
       ];
     case "reviewCreate":
+      if (context.persistence) return [];
       return teamIdsForIssue(context, input.issueId);
     case "reviewUpdate":
     case "reviewDelete":
