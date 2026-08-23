@@ -215,6 +215,12 @@ import {
 } from "../domain/workspaces.ts";
 import { seedWorkspace } from "../db/seed.ts";
 import {
+  canAccessPostgresProject,
+  listPostgresProjectTeamIds,
+  listPostgresProjects,
+  mapPostgresProject,
+} from "../domain/postgres-projects.ts";
+import {
   createPostgresLabel,
   deletePostgresLabel,
   getPostgresLabel,
@@ -385,15 +391,26 @@ export const resolvers = {
         ? scopeWorkspaceRows(context, listLabels(context.db, team.id)).map(mapLabel)
         : [];
     },
-    projects: (team: { id: string }, _args: unknown, context: Context) => {
+    projects: async (team: { id: string }, _args: unknown, context: Context) => {
+      const viewer = requireViewer(context);
       if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Team projects are not yet available with PostgreSQL persistence",
-        );
+        const row = await getPostgresTeam(context.persistence, { id: team.id });
+        if (!row || !(await canDiscoverPostgresTeam(context.persistence, viewer, row))) return [];
+        const projects = await listPostgresProjects(context.persistence, null, team.id);
+        const visible = [];
+        for (const project of projects) {
+          const teamIds = await listPostgresProjectTeamIds(context.persistence, project.id);
+          if (
+            (await canAccessPostgresProject(context.persistence, viewer, project.id)) &&
+            apiKeyTeamsWithinLimit(context.auth, teamIds)
+          ) {
+            visible.push(mapPostgresProject(project));
+          }
+        }
+        return visible;
       }
       return listProjects(context.db, null, team.id)
-        .filter((project) => canAccessProject(context.db, requireViewer(context), project.id))
+        .filter((project) => canAccessProject(context.db, viewer, project.id))
         .filter((project) =>
           apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, project.id)),
         )

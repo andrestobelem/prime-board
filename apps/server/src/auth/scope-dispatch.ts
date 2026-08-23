@@ -42,8 +42,14 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:issue",
   "query:issues",
   "query:labels",
+  "query:projects",
+  "query:project",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
+  "mutation:projectCreate",
+  "mutation:projectUpdate",
+  "mutation:projectArchive",
+  "mutation:projectUnarchive",
   "mutation:teamArchive",
   "mutation:teamUnarchive",
   "mutation:teamDelete",
@@ -241,8 +247,10 @@ function operationTeamIds(
       if (context.persistence) return [];
       return issueFilterTeams(context, args.filter);
     case "project":
+      if (context.persistence) return [];
       return teamIdsForProject(context, args.id);
     case "projects":
+      if (context.persistence) return [];
       return args.team ? [teamForRef(context, args.team) ?? "__missing__"] : null;
     case "labels":
       if (context.persistence) return [];
@@ -349,6 +357,7 @@ function operationTeamIds(
         : ["__missing__"];
     }
     case "projectCreate":
+      if (context.persistence) return [];
       return input.teamIds == null
         ? context.db
             .query("SELECT id FROM teams WHERE archived_at IS NULL ORDER BY id")
@@ -356,6 +365,7 @@ function operationTeamIds(
             .map((row) => (row as { id: string }).id)
         : ids(input.teamIds);
     case "projectUpdate": {
+      if (context.persistence) return [];
       const current = teamIdsForProject(context, args.id);
       return input.teamIds === undefined
         ? current
@@ -363,6 +373,7 @@ function operationTeamIds(
     }
     case "projectArchive":
     case "projectUnarchive":
+      if (context.persistence) return [];
       return teamIdsForProject(context, args.id);
     case "milestoneCreate":
       return teamIdsForProject(context, input.projectId);
@@ -496,7 +507,12 @@ function wrapResolverMap(map: ResolverMap, kind: "query" | "mutation"): Resolver
         }
         // Un proyecto puede abarcar varios Teams. Seleccionar un Team permitido no alcanza:
         // ocultamos el proyecto salvo que todos sus Teams estén permitidos.
-        if (kind === "query" && field === "projects" && context.auth?.teamIds) {
+        if (
+          kind === "query" &&
+          field === "projects" &&
+          context.auth?.teamIds &&
+          !context.persistence
+        ) {
           return filterAsync(result, (items) =>
             items.filter((project) => {
               const id = (project as { id?: string }).id;

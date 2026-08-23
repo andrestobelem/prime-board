@@ -1,6 +1,25 @@
 // Resolvers del dominio project (AT-137). Se ensamblan en resolvers.ts.
 import { mapActor } from "../domain/actors.ts";
 import { mapIssue } from "../domain/issues.ts";
+import { getPostgresActor, mapPostgresActor } from "../domain/postgres-actors.ts";
+import {
+  archivePostgresProject,
+  assertCanManagePostgresProject,
+  canAccessPostgresProject,
+  createPostgresProject,
+  getPostgresProject,
+  listPostgresProjectTeamIds,
+  listPostgresProjects,
+  mapPostgresProject,
+  updatePostgresProject,
+} from "../domain/postgres-projects.ts";
+import { accessiblePostgresTeamIds, listPostgresIssues } from "../domain/postgres-issues.ts";
+import {
+  canDiscoverPostgresTeam,
+  getPostgresTeam,
+  listPostgresTeams,
+  mapPostgresTeam,
+} from "../domain/postgres-teams.ts";
 import {
   archiveProject,
   createProject,
@@ -38,7 +57,7 @@ import {
   scopeWorkspaceRows,
 } from "../domain/workspace-guards.ts";
 import { issueEventData } from "./issue-resolvers.ts";
-import { requireViewer } from "./errors.ts";
+import { apiError, requireViewer } from "./errors.ts";
 import {
   assertCanCreateProject,
   assertCanManageProject,
@@ -49,7 +68,7 @@ import {
   accessibleTeamIds,
 } from "../auth/permissions.ts";
 
-type MappedProject = ReturnType<typeof mapProject>;
+type MappedProject = ReturnType<typeof mapProject> | ReturnType<typeof mapPostgresProject>;
 
 function projectTeamsAllowed(context: Context, projectId: string): boolean {
   const viewer = requireViewer(context);
@@ -59,25 +78,92 @@ function projectTeamsAllowed(context: Context, projectId: string): boolean {
   );
 }
 
+async function postgresProjectTeamsAllowed(context: Context, projectId: string): Promise<boolean> {
+  const viewer = requireViewer(context);
+  const teamIds = await listPostgresProjectTeamIds(context.persistence!, projectId);
+  return (
+    (await canAccessPostgresProject(context.persistence!, viewer, projectId)) &&
+    apiKeyTeamsWithinLimit(context.auth, teamIds)
+  );
+}
+
+async function assertPostgresProjectKeyLimit(
+  context: Context,
+  teamIds: readonly string[],
+): Promise<void> {
+  if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) {
+    throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+  }
+}
+
 export const projectResolvers = {
   Project: {
-    lead: (project: MappedProject, _args: unknown, context: Context) =>
-      project.leadId ? mapActor(lookupActor(context, project.leadId)!) : null,
-    milestones: (project: MappedProject, _args: unknown, context: Context) =>
-      projectTeamsAllowed(context, project.id)
+    lead: async (project: MappedProject, _args: unknown, context: Context) => {
+      if (!project.leadId) return null;
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, project.leadId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, project.leadId)!);
+    },
+    milestones: async (project: MappedProject, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        throw apiError(
+          "VALIDATION_FAILED",
+          "Project milestones are not yet available with PostgreSQL persistence",
+        );
+      }
+      return projectTeamsAllowed(context, project.id)
         ? listMilestones(context.db, project.id).map(mapMilestone)
-        : [],
-    teams: (project: MappedProject, _args: unknown, context: Context) =>
-      listProjectTeamIds(context.db, project.id)
+        : [];
+    },
+    teams: async (project: MappedProject, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const viewer = requireViewer(context);
+        const teamIds = await listPostgresProjectTeamIds(context.persistence, project.id);
+        const teams = [];
+        for (const teamId of teamIds) {
+          const team = await getPostgresTeam(context.persistence, { id: teamId });
+          if (
+            team &&
+            (await canDiscoverPostgresTeam(context.persistence, viewer, team)) &&
+            apiKeyTeamsWithinLimit(context.auth, [teamId])
+          ) {
+            teams.push(mapPostgresTeam(team));
+          }
+        }
+        return teams;
+      }
+      return listProjectTeamIds(context.db, project.id)
         .filter((teamId) => canAccessTeam(context.db, requireViewer(context), teamId))
         .filter((teamId) => apiKeyTeamsWithinLimit(context.auth, [teamId]))
-        .map((teamId) => mapTeam(lookupTeam(context, { id: teamId })!)),
-    issues: (
+        .map((teamId) => mapTeam(lookupTeam(context, { id: teamId })!));
+    },
+    issues: async (
       project: MappedProject,
       args: { first?: number; after?: string | null },
       context: Context,
     ) => {
       const first = Math.min(Math.max(args.first ?? 50, 1), 250);
+      if (context.persistence) {
+        if (!(await postgresProjectTeamsAllowed(context, project.id))) {
+          return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+        }
+        const page = await listPostgresIssues(context.persistence, {
+          filter: { project: { eq: project.id } },
+          first,
+          after: args.after,
+          teamIds: await accessiblePostgresTeamIds(
+            context.persistence,
+            requireViewer(context),
+            context.auth,
+          ),
+        });
+        return {
+          nodes: page.rows.map(mapIssue),
+          pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+        };
+      }
       if (!projectTeamsAllowed(context, project.id)) {
         return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
       }
@@ -92,10 +178,17 @@ export const projectResolvers = {
         pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
       };
     },
-    updates: (project: MappedProject, _args: unknown, context: Context) =>
-      projectTeamsAllowed(context, project.id)
+    updates: async (project: MappedProject, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        throw apiError(
+          "VALIDATION_FAILED",
+          "Project updates are not yet available with PostgreSQL persistence",
+        );
+      }
+      return projectTeamsAllowed(context, project.id)
         ? listProjectUpdates(context.db, project.id).map(mapProjectUpdate)
-        : [],
+        : [];
+    },
   },
 
   ProjectStatusUpdate: {
@@ -152,12 +245,39 @@ export const projectResolvers = {
   },
 
   Query: {
-    projects: (
+    projects: async (
       _parent: unknown,
       args: { state?: string; team?: string; includeArchived?: boolean },
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        if (args.team) {
+          const team = await getPostgresTeam(context.persistence, { id: args.team });
+          if (!team || !(await canDiscoverPostgresTeam(context.persistence, viewer, team)))
+            return [];
+          if (team.archived_at && !args.includeArchived) return [];
+        }
+        const rows = await listPostgresProjects(
+          context.persistence,
+          args.state,
+          args.team,
+          args.includeArchived,
+        );
+        const visible = [];
+        for (const project of rows) {
+          if (
+            (await canAccessPostgresProject(context.persistence, viewer, project.id)) &&
+            apiKeyTeamsWithinLimit(
+              context.auth,
+              await listPostgresProjectTeamIds(context.persistence, project.id),
+            )
+          ) {
+            visible.push(mapPostgresProject(project));
+          }
+        }
+        return visible;
+      }
       if (args.team) {
         const team = lookupTeam(context, { id: args.team });
         if (!team || !canAccessTeam(context.db, viewer, team.id)) return [];
@@ -170,20 +290,43 @@ export const projectResolvers = {
         .filter((project) => canAccessProject(context.db, viewer, project.id))
         .map(mapProject);
     },
-    project: (_parent: unknown, args: { id: string }, context: Context) => {
+    project: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const row = await getPostgresProject(context.persistence, args.id);
+        return row &&
+          (await canAccessPostgresProject(context.persistence, viewer, row.id)) &&
+          apiKeyTeamsWithinLimit(
+            context.auth,
+            await listPostgresProjectTeamIds(context.persistence, row.id),
+          )
+          ? mapPostgresProject(row)
+          : null;
+      }
       const row = lookupProject(context, args.id);
       return row && canAccessProject(context.db, viewer, row.id) ? mapProject(row) : null;
     },
   },
 
   Mutation: {
-    projectCreate: (
+    projectCreate: async (
       _parent: unknown,
       args: { input: Parameters<typeof createProject>[1] },
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const teamIds =
+          args.input.teamIds == null
+            ? (await listPostgresTeams(context.persistence)).map((team) => team.id)
+            : args.input.teamIds;
+        await assertPostgresProjectKeyLimit(context, teamIds);
+        const project = mapPostgresProject(
+          await createPostgresProject(context.persistence, viewer, args.input),
+        );
+        context.events.emit("project.created", viewer, project);
+        return { success: true, project };
+      }
       assertCanCreateProject(context.db, viewer, args.input.teamIds);
       if (args.input.leadId) requireActor(context, args.input.leadId);
       for (const teamId of args.input.teamIds ?? []) requireTeam(context, { id: teamId });
@@ -212,8 +355,26 @@ export const projectResolvers = {
       }
       return { success: true, orphanedIssues: orphaned };
     },
-    projectArchive: (_parent: unknown, args: { id: string }, context: Context) => {
+    projectArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const projectBefore = await assertCanManagePostgresProject(
+          context.persistence,
+          viewer,
+          args.id,
+        );
+        await assertPostgresProjectKeyLimit(
+          context,
+          await listPostgresProjectTeamIds(context.persistence, args.id),
+        );
+        const archived = mapPostgresProject(
+          await archivePostgresProject(context.persistence, args.id, true),
+        );
+        context.events.emit("project.updated", viewer, archived, {
+          archivedAt: { from: projectBefore.archived_at, to: archived.archivedAt },
+        });
+        return { success: true, project: archived };
+      }
       assertCanManageProject(context.db, viewer, args.id);
       const projectBefore = requireProject(context, args.id);
       const archived = mapProject(archiveProject(context.db, args.id, true));
@@ -222,8 +383,26 @@ export const projectResolvers = {
       });
       return { success: true, project: archived };
     },
-    projectUnarchive: (_parent: unknown, args: { id: string }, context: Context) => {
+    projectUnarchive: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const projectBefore = await assertCanManagePostgresProject(
+          context.persistence,
+          viewer,
+          args.id,
+        );
+        await assertPostgresProjectKeyLimit(
+          context,
+          await listPostgresProjectTeamIds(context.persistence, args.id),
+        );
+        const restored = mapPostgresProject(
+          await archivePostgresProject(context.persistence, args.id, false),
+        );
+        context.events.emit("project.updated", viewer, restored, {
+          archivedAt: { from: projectBefore.archived_at, to: restored.archivedAt },
+        });
+        return { success: true, project: restored };
+      }
       assertCanManageProject(context.db, viewer, args.id);
       const projectBefore = requireProject(context, args.id);
       const restored = mapProject(archiveProject(context.db, args.id, false));
@@ -254,12 +433,23 @@ export const projectResolvers = {
       const updated = mapMilestone(updateMilestone(context.db, args.id, args.input));
       return { success: true, milestone: updated };
     },
-    projectUpdate: (
+    projectUpdate: async (
       _parent: unknown,
       args: { id: string; input: Parameters<typeof updateProject>[2] },
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const currentTeams = await listPostgresProjectTeamIds(context.persistence, args.id);
+        const targetTeams =
+          args.input.teamIds === undefined ? currentTeams : (args.input.teamIds ?? []);
+        await assertPostgresProjectKeyLimit(context, targetTeams);
+        const project = mapPostgresProject(
+          await updatePostgresProject(context.persistence, viewer, args.id, args.input),
+        );
+        context.events.emit("project.updated", viewer, project);
+        return { success: true, project };
+      }
       assertCanManageProject(context.db, viewer, args.id);
       requireProject(context, args.id);
       if (args.input.leadId) requireActor(context, args.input.leadId);
