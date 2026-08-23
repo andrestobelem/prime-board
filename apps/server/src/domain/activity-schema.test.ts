@@ -1,4 +1,4 @@
-// Test del esquema de referencias de Activity (AT-187): cubre los 18
+// Test del esquema de referencias de Activity (AT-187): cubre los 20
 // ActivityType y prueba que translateActivityRefs replica exactamente el
 // comportamiento que antes vivía duplicado en exporter.ts e importer.ts.
 import { describe, expect, it } from "bun:test";

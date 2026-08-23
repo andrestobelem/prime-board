@@ -14,6 +14,10 @@ describe("Alcance de My issues", () => {
     });
   });
 
+  it("filtra las Issues seguidas por el Actor autenticado", () => {
+    expect(buildMyIssuesOwnerFilter("actor-1", "subscribed")).toEqual({ subscribed: true });
+  });
+
   it("usa semántica de asignación o autoría sin simular suscripciones", () => {
     const filter = buildMyIssuesOwnerFilter("actor-1", "handoff");
 
@@ -31,6 +35,13 @@ describe("Alcance de My issues", () => {
     expect(getMyIssuesScopeCopy("handoff", "Ada")).toEqual({
       description: "Issues assigned to or created by Ada",
       emptyState: "No issues assigned to or created by Ada.",
+    });
+  });
+
+  it("explica el alcance de Issues seguidas", () => {
+    expect(getMyIssuesScopeCopy("subscribed", "Ada")).toEqual({
+      description: "Issues followed by Ada",
+      emptyState: "No issues followed by Ada.",
     });
   });
 });
