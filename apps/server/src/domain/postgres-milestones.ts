@@ -235,15 +235,14 @@ export async function deletePostgresMilestone(
   const reference = `${project.name}/${milestone.name}`;
   let affected = 0;
   await persistence.transaction(async (tx) => {
-    const issues = await tx.many<{ id: string }>("SELECT id FROM issues WHERE milestone_id = $1", [
-      id,
-    ]);
-    affected = issues.length;
     const timestamp = now();
-    await tx.execute(
-      "UPDATE issues SET milestone_id = NULL, updated_at = $1 WHERE milestone_id = $2",
+    const issues = await tx.many<{ id: string }>(
+      `UPDATE issues SET milestone_id = NULL, updated_at = $1
+       WHERE milestone_id = $2
+       RETURNING id`,
       [timestamp, id],
     );
+    affected = issues.length;
     for (const issue of issues) {
       await recordPostgresActivity(
         tx,
@@ -253,6 +252,7 @@ export async function deletePostgresMilestone(
         timestamp,
       );
     }
+
     await preserveMilestoneActivityReferences(tx, id, reference);
     await tx.execute("DELETE FROM milestones WHERE id = $1", [id]);
   });
