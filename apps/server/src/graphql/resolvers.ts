@@ -211,6 +211,19 @@ import {
   updateInitiative,
 } from "../domain/initiatives.ts";
 import {
+  canAccessPostgresInitiative,
+  createPostgresInitiative,
+  deletePostgresInitiative,
+  getPostgresInitiative,
+  listPostgresInitiativeProjectIds,
+  listPostgresInitiativeScopeTeamIds,
+  listPostgresInitiativeTeamIds,
+  listPostgresInitiatives,
+  mapPostgresInitiative,
+  postgresInitiativeProgress,
+  updatePostgresInitiative,
+} from "../domain/postgres-initiatives.ts";
+import {
   createTeamMembership,
   deleteTeamMembership,
   isTeamMember,
@@ -226,6 +239,7 @@ import {
 import { seedWorkspace } from "../db/seed.ts";
 import {
   canAccessPostgresProject,
+  getPostgresProject,
   listPostgresProjectTeamIds,
   listPostgresProjects,
   mapPostgresProject,
@@ -287,6 +301,33 @@ function emitBulkIssueUpdates(
   for (const issueId of issueIds) {
     const issue = lookupIssueById(context, issueId);
     if (issue) context.events.emit("issue.updated", viewer, issueEventData(issue), changes);
+  }
+}
+
+async function assertPostgresInitiativeKeyLimit(
+  context: Context,
+  initiativeId: string | null,
+  projectIds?: readonly string[] | null,
+  teamIds?: readonly string[] | null,
+): Promise<void> {
+  if (!context.auth?.teamIds || !context.persistence) return;
+  const scope = new Set<string>();
+  if (initiativeId) {
+    for (const teamId of await listPostgresInitiativeScopeTeamIds(
+      context.persistence,
+      initiativeId,
+    )) {
+      scope.add(teamId);
+    }
+  }
+  for (const projectId of projectIds ?? []) {
+    for (const teamId of await listPostgresProjectTeamIds(context.persistence, projectId)) {
+      scope.add(teamId);
+    }
+  }
+  for (const teamId of teamIds ?? []) scope.add(teamId);
+  if (!scope.size || !apiKeyTeamsWithinLimit(context.auth, [...scope])) {
+    throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
   }
 }
 
@@ -560,28 +601,77 @@ export const resolvers = {
   },
 
   Initiative: {
-    projects: (initiative: { id: string }, _args: unknown, context: Context) => {
+    projects: async (initiative: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const projects = [];
+        for (const projectId of await listPostgresInitiativeProjectIds(
+          context.persistence,
+          initiative.id,
+        )) {
+          const project = await getPostgresProject(context.persistence, projectId);
+          if (
+            project &&
+            (await canAccessPostgresProject(context.persistence, viewer, project.id)) &&
+            apiKeyTeamsWithinLimit(
+              context.auth,
+              await listPostgresProjectTeamIds(context.persistence, project.id),
+            )
+          )
+            projects.push(mapPostgresProject(project));
+        }
+        return projects;
+      }
       return listInitiativeProjectIds(context.db, initiative.id, context.workspace.workspaceId)
         .map((projectId) => lookupProject(context, projectId))
         .filter((row) => row && canAccessProject(context.db, viewer, row.id))
         .map((row) => mapProject(row!));
     },
-    teams: (initiative: { id: string }, _args: unknown, context: Context) => {
+    teams: async (initiative: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const teams = [];
+        for (const teamId of await listPostgresInitiativeTeamIds(
+          context.persistence,
+          initiative.id,
+        )) {
+          const team = await getPostgresTeam(context.persistence, { id: teamId });
+          if (
+            team &&
+            (viewer.workspace_role === "admin" ||
+              (await isPostgresTeamMember(context.persistence, team.id, viewer.id))) &&
+            apiKeyTeamsWithinLimit(context.auth, [team.id])
+          )
+            teams.push(mapPostgresTeam(team));
+        }
+        return teams;
+      }
       return listInitiativeTeamIds(context.db, initiative.id, context.workspace.workspaceId)
         .map((teamId) => lookupTeam(context, { id: teamId }))
         .filter((row) => row && canAccessTeam(context.db, viewer, row.id))
         .map((row) => mapTeam(row!));
     },
-    owner: (initiative: { ownerId: string | null }, _args: unknown, context: Context) =>
-      initiative.ownerId ? mapActor(lookupActor(context, initiative.ownerId)!) : null,
-    progress: (initiative: { id: string }, _args: unknown, context: Context) =>
-      initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).progress,
-    completedIssues: (initiative: { id: string }, _args: unknown, context: Context) =>
-      initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).completedIssues,
-    totalIssues: (initiative: { id: string }, _args: unknown, context: Context) =>
-      initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).totalIssues,
+    owner: async (initiative: { ownerId: string | null }, _args: unknown, context: Context) => {
+      if (!initiative.ownerId) return null;
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, initiative.ownerId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, initiative.ownerId)!);
+    },
+    progress: async (initiative: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresInitiativeProgress(context.persistence, initiative.id)).progress
+        : initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).progress,
+    completedIssues: async (initiative: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresInitiativeProgress(context.persistence, initiative.id)).completedIssues
+        : initiativeProgress(context.db, initiative.id, context.workspace.workspaceId)
+            .completedIssues,
+    totalIssues: async (initiative: { id: string }, _args: unknown, context: Context) =>
+      context.persistence
+        ? (await postgresInitiativeProgress(context.persistence, initiative.id)).totalIssues
+        : initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).totalIssues,
   },
 
   ApiKey: {
@@ -1047,12 +1137,26 @@ export const resolvers = {
         }
         return mapReview(row);
       },
-      initiatives: (
+      initiatives: async (
         _parent: unknown,
         args: { includeArchived?: boolean | null },
         context: Context,
       ) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const rows = await listPostgresInitiatives(
+            context.persistence,
+            Boolean(args.includeArchived),
+            viewer,
+          );
+          const visible = [];
+          for (const row of rows) {
+            const teamIds = await listPostgresInitiativeScopeTeamIds(context.persistence, row.id);
+            if (apiKeyTeamsWithinLimit(context.auth, teamIds))
+              visible.push(mapPostgresInitiative(row));
+          }
+          return visible;
+        }
         return scopeWorkspaceRows(
           context,
           listInitiatives(
@@ -1063,8 +1167,19 @@ export const resolvers = {
           ),
         ).map(mapInitiative);
       },
-      initiative: (_parent: unknown, args: { id: string }, context: Context) => {
+      initiative: async (_parent: unknown, args: { id: string }, context: Context) => {
         const viewer = requireViewer(context);
+        if (context.persistence) {
+          const row = await getPostgresInitiative(context.persistence, args.id);
+          if (!row || !(await canAccessPostgresInitiative(context.persistence, viewer, row.id))) {
+            return null;
+          }
+          const teamIds = await listPostgresInitiativeScopeTeamIds(context.persistence, row.id);
+          return !context.auth?.teamIds ||
+            (teamIds.length > 0 && apiKeyTeamsWithinLimit(context.auth, teamIds))
+            ? mapPostgresInitiative(row)
+            : null;
+        }
         const row = getInitiative(context.db, args.id, context.workspace.workspaceId);
         if (!row) return null;
         scopeWorkspaceRow(context, row);
@@ -2190,7 +2305,7 @@ export const resolvers = {
             success: deleteReview(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)),
           };
         },
-        initiativeCreate: (
+        initiativeCreate: async (
           _parent: unknown,
           args: {
             input: {
@@ -2205,14 +2320,24 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
-          return {
-            success: true,
-            initiative: mapInitiative(
-              createInitiative(context.db, viewer, args.input, context.workspace.workspaceId),
-            ),
-          };
+          if (context.persistence) {
+            await assertPostgresInitiativeKeyLimit(
+              context,
+              null,
+              args.input.projectIds,
+              args.input.teamIds,
+            );
+            const initiative = mapPostgresInitiative(
+              await createPostgresInitiative(context.persistence, viewer, args.input),
+            );
+            return { success: true, initiative };
+          }
+          const initiative = mapInitiative(
+            createInitiative(context.db, viewer, args.input, context.workspace.workspaceId),
+          );
+          return { success: true, initiative };
         },
-        initiativeUpdate: (
+        initiativeUpdate: async (
           _parent: unknown,
           args: {
             id: string;
@@ -2229,21 +2354,36 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
-          return {
-            success: true,
-            initiative: mapInitiative(
-              updateInitiative(
-                context.db,
-                args.id,
-                viewer,
-                args.input,
-                context.workspace.workspaceId,
-              ),
+          if (context.persistence) {
+            await assertPostgresInitiativeKeyLimit(
+              context,
+              args.id,
+              args.input.projectIds,
+              args.input.teamIds,
+            );
+            const initiative = mapPostgresInitiative(
+              await updatePostgresInitiative(context.persistence, viewer, args.id, args.input),
+            );
+            return { success: true, initiative };
+          }
+          const initiative = mapInitiative(
+            updateInitiative(
+              context.db,
+              args.id,
+              viewer,
+              args.input,
+              context.workspace.workspaceId,
             ),
-          };
+          );
+          return { success: true, initiative };
         },
-        initiativeDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+        initiativeDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
+          if (context.persistence) {
+            await assertPostgresInitiativeKeyLimit(context, args.id);
+            const success = await deletePostgresInitiative(context.persistence, viewer, args.id);
+            return { success };
+          }
           return {
             success: deleteInitiative(context.db, args.id, viewer, context.workspace.workspaceId),
           };
