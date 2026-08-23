@@ -2,6 +2,7 @@
 // Views guardadas (PRB-201) aparecen como sección propia.
 import { useEffect, useState } from "react";
 import { Link, useRoute } from "../router.tsx";
+import { favoriteMatchesTarget, type FavoriteTarget } from "../favorites.ts";
 import { Icon } from "./icons.tsx";
 import { getDefaultTeamPath, type NavigationView } from "../navigation.ts";
 import type { AccessibleWorkspace } from "../workspace.ts";
@@ -12,8 +13,6 @@ export interface SidebarFavorite {
   project: { id: string; name: string } | null;
   savedView: { id: string; name: string } | null;
 }
-
-type FavoriteTarget = { projectId?: string; savedViewId?: string };
 
 interface SidebarProps {
   workspace: { name: string } | null;
@@ -48,6 +47,10 @@ interface SidebarProps {
     current: SidebarFavorite | undefined,
   ) => void | Promise<void>;
   onReorderFavorite?: (favorite: SidebarFavorite, position: number) => void | Promise<void>;
+  favoritePending?: boolean;
+  favoritePendingLabel?: string;
+  favoriteError?: string;
+  onRetryFavorite?: () => void;
   onLogout?: () => void;
   onCreateIssue?: () => void;
   onCreateView?: (teamId?: string) => void | Promise<void>;
@@ -70,6 +73,10 @@ export function Sidebar({
   unreadInboxCount = 0,
   onToggleFavorite,
   onReorderFavorite,
+  favoritePending = false,
+  favoritePendingLabel = "Updating favorites…",
+  favoriteError,
+  onRetryFavorite,
   onLogout,
   onCreateIssue,
   onCreateView,
@@ -83,11 +90,7 @@ export function Sidebar({
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const favoriteFor = (target: FavoriteTarget) =>
-    favorites.find((favorite) =>
-      target.projectId
-        ? favorite.project?.id === target.projectId
-        : favorite.savedView?.id === target.savedViewId,
-    );
+    favorites.find((favorite) => favoriteMatchesTarget(favorite, target));
   const toggleFavorite = (target: FavoriteTarget) => {
     if (onToggleFavorite) void onToggleFavorite(target, favoriteFor(target));
   };
@@ -100,6 +103,8 @@ export function Sidebar({
         className="favorite-action"
         aria-label={current ? `Remove ${label} from favorites` : `Add ${label} to favorites`}
         title={current ? "Remove from favorites" : "Add to favorites"}
+        aria-busy={favoritePending}
+        disabled={favoritePending}
         onClick={() => toggleFavorite(target)}
       >
         <Icon name={current ? "x" : "plus"} size={12} />
@@ -258,7 +263,7 @@ export function Sidebar({
         <Link to="/documents" className={active("/documents")}>
           <Icon name="file-text" /> Documents
         </Link>
-        {(favorites.length > 0 || onToggleFavorite) && (
+        {(favorites.length > 0 || onToggleFavorite || favoritePending || favoriteError) && (
           <>
             <button
               className="nav favorites-heading"
@@ -268,6 +273,20 @@ export function Sidebar({
               <Icon name={favoritesOpen ? "chevron-down" : "chevron-right"} size={12} />
               <span>Favorites</span>
             </button>
+            {(favoritePending || favoriteError) && (
+              <div
+                className={`favorite-feedback${favoriteError ? " error" : ""}`}
+                role={favoriteError ? "alert" : "status"}
+                aria-live="polite"
+              >
+                <span>{favoriteError ?? favoritePendingLabel}</span>
+                {favoriteError && onRetryFavorite && (
+                  <button className="btn secondary" onClick={onRetryFavorite}>
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
             {favoritesOpen &&
               (favorites.length === 0 ? (
                 <div className="hint" style={{ padding: "0 12px 8px" }}>
@@ -294,7 +313,8 @@ export function Sidebar({
                             className="favorite-action"
                             aria-label={`Move ${name} up`}
                             title="Move up"
-                            disabled={index === 0}
+                            aria-busy={favoritePending}
+                            disabled={favoritePending || index === 0}
                             onClick={() => void onReorderFavorite(favorite, index - 1)}
                           >
                             <Icon name="arrow-up" size={11} />
@@ -303,7 +323,8 @@ export function Sidebar({
                             className="favorite-action"
                             aria-label={`Move ${name} down`}
                             title="Move down"
-                            disabled={index === favorites.length - 1}
+                            aria-busy={favoritePending}
+                            disabled={favoritePending || index === favorites.length - 1}
                             onClick={() => void onReorderFavorite(favorite, index + 1)}
                           >
                             <Icon name="arrow-down" size={11} />
@@ -315,6 +336,8 @@ export function Sidebar({
                           className="favorite-action"
                           aria-label={`Remove ${name} from favorites`}
                           title="Remove from favorites"
+                          aria-busy={favoritePending}
+                          disabled={favoritePending}
                           onClick={() => toggleFavorite(target)}
                         >
                           <Icon name="x" size={12} />

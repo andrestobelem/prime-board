@@ -414,6 +414,26 @@ select:focus {
 .sidebar .favorite-order {
   display: inline-flex;
 }
+.sidebar .favorite-feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.sidebar .favorite-feedback span {
+  flex: 1;
+  min-width: 0;
+}
+.sidebar .favorite-feedback.error {
+  color: var(--danger-text);
+}
+.sidebar .favorite-feedback .btn {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+}
 .sidebar .favorites-heading {
   color: var(--text-faint);
   font-size: 11px;

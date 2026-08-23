@@ -1,7 +1,15 @@
 // Shell de la UI: sidebar + topbar + contenido ruteado por hash.
 // Atajos globales: C crea un issue, ⌘K abre el command palette (AT-148).
-import { useEffect, useState } from "react";
-import { getApiKey, getServerAuthMode, mutate, useQuery, type ServerAuthMode } from "./api.ts";
+import { useEffect, useRef, useState } from "react";
+import {
+  getApiKey,
+  getCredentialGeneration,
+  getServerAuthMode,
+  getWorkspaceGeneration,
+  mutate,
+  useQuery,
+  type ServerAuthMode,
+} from "./api.ts";
 import { getEffectiveWorkspaceContext, getUiStorageKey } from "./ui-context.ts";
 import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueList.tsx";
 import { DisplayOptions, type IssueColumn, type IssueOrder } from "./components/DisplayOptions.tsx";
@@ -10,6 +18,13 @@ import { Palette } from "./components/Palette.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
 import { Icon } from "./components/icons.tsx";
 import { Sidebar, type SidebarFavorite } from "./components/Sidebar.tsx";
+import {
+  favoriteMatchesTarget,
+  favoriteMutationErrorMessage,
+  moveFavorite,
+  restoreFavorites,
+  type FavoriteTarget,
+} from "./favorites.ts";
 import { EntityModal } from "./components/EntityModal.tsx";
 import { Switcher } from "./components/Switcher.tsx";
 import { getWorkspaceKeyFromHash, Link, navigate, useRoute, workspacePath } from "./router.tsx";
@@ -34,6 +49,7 @@ import { DocumentView } from "./views/DocumentView.tsx";
 import { buildNavigation, getDefaultTeamPath, getTeamKeyForRoute } from "./navigation.ts";
 import {
   clearSelectedWorkspaceId,
+  getSelectedWorkspaceId,
   getWorkspaceContract,
   listAccessibleWorkspaces,
   selectWorkspace,
@@ -115,6 +131,37 @@ function loadColumns(): IssueColumn[] {
     return DEFAULT_COLUMNS;
   }
 }
+
+type FavoriteOperationContext = {
+  workspaceId: string;
+  workspaceGeneration: number;
+  credentialGeneration: number;
+};
+
+type FavoriteOperation = FavoriteOperationContext &
+  (
+    | {
+        kind: "create";
+        target: FavoriteTarget;
+        project: SidebarFavorite["project"];
+        savedView: SidebarFavorite["savedView"];
+      }
+    | {
+        kind: "delete";
+        favorite: SidebarFavorite;
+        previousFavorites: SidebarFavorite[];
+      }
+    | {
+        kind: "reorder";
+        favorite: SidebarFavorite;
+        position: number;
+        previousFavorites: SidebarFavorite[];
+      }
+  );
+
+type FavoriteOperationState =
+  | { status: "pending"; operation: FavoriteOperation }
+  | { status: "error"; operation: FavoriteOperation; message: string };
 
 type WorkspaceGateState =
   | { status: "loading" }
@@ -198,6 +245,8 @@ export function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [entityModal, setEntityModal] = useState<CreateModal | null>(null);
   const [favorites, setFavorites] = useState<SidebarFavorite[]>([]);
+  const [favoriteOperation, setFavoriteOperation] = useState<FavoriteOperationState | null>(null);
+  const favoriteAttempt = useRef(0);
   const [groupBy, setGroupBy] = useState<GroupBy>(loadGroupBy);
   const [orderBy, setOrderBy] = useState<IssueOrder>(loadOrderBy);
   const [visibleColumns, setVisibleColumns] = useState<IssueColumn[]>(loadColumns);
@@ -222,7 +271,13 @@ export function App() {
   }, [groupBy, orderBy, visibleColumns, shell.data]);
 
   useEffect(() => {
-    setFavorites(shell.data?.favorites ?? []);
+    if (!shell.data) {
+      favoriteAttempt.current += 1;
+      setFavorites([]);
+      setFavoriteOperation(null);
+      return;
+    }
+    setFavorites(shell.data.favorites);
   }, [shell.data]);
 
   useEffect(() => {
@@ -257,61 +312,139 @@ export function App() {
     navigate("/my-issues");
   }
 
-  const toggleFavorite = async (
-    target: { projectId?: string; savedViewId?: string },
-    current: SidebarFavorite | undefined,
-  ) => {
-    if (current) {
-      await mutate(`mutation($id: ID!) { favoriteDelete(id: $id) { success } }`, {
-        id: current.id,
+  const favoriteContext = (): FavoriteOperationContext | null => {
+    const workspaceId = shell.data?.workspace.id;
+    if (!workspaceId) return null;
+    return {
+      workspaceId,
+      workspaceGeneration: getWorkspaceGeneration(),
+      credentialGeneration: getCredentialGeneration(),
+    };
+  };
+
+  const isCurrentFavoriteAttempt = (operation: FavoriteOperation, attempt: number): boolean => {
+    const currentWorkspaceId =
+      getEffectiveWorkspaceContext()?.workspaceId ?? getSelectedWorkspaceId();
+    return (
+      favoriteAttempt.current === attempt &&
+      operation.workspaceId === currentWorkspaceId &&
+      operation.workspaceGeneration === getWorkspaceGeneration() &&
+      operation.credentialGeneration === getCredentialGeneration()
+    );
+  };
+
+  const runFavoriteOperation = async (operation: FavoriteOperation): Promise<void> => {
+    const attempt = favoriteAttempt.current + 1;
+    favoriteAttempt.current = attempt;
+    setFavoriteOperation({ status: "pending", operation });
+
+    try {
+      if (operation.kind === "create") {
+        const result = await mutate<{
+          favoriteCreate: { favorite: { id: string; position: number } };
+        }>(
+          `mutation($input: FavoriteCreateInput!) { favoriteCreate(input: $input) { favorite { id position } } }`,
+          { input: operation.target },
+        );
+        if (!isCurrentFavoriteAttempt(operation, attempt)) return;
+        setFavorites((items) => {
+          if (items.some((item) => favoriteMatchesTarget(item, operation.target))) return items;
+          return [
+            ...items,
+            {
+              id: result.favoriteCreate.favorite.id,
+              position: result.favoriteCreate.favorite.position,
+              project: operation.project,
+              savedView: operation.savedView,
+            },
+          ];
+        });
+      } else if (operation.kind === "delete") {
+        await mutate(`mutation($id: ID!) { favoriteDelete(id: $id) { success } }`, {
+          id: operation.favorite.id,
+        });
+        if (!isCurrentFavoriteAttempt(operation, attempt)) return;
+        setFavorites((items) => items.filter((item) => item.id !== operation.favorite.id));
+      } else {
+        await mutate(
+          `mutation($id: ID!, $position: Int!) { favoriteReorder(id: $id, position: $position) { favorite { id position } } }`,
+          { id: operation.favorite.id, position: operation.position },
+        );
+        if (!isCurrentFavoriteAttempt(operation, attempt)) return;
+      }
+      if (isCurrentFavoriteAttempt(operation, attempt)) setFavoriteOperation(null);
+    } catch (error: unknown) {
+      if (!isCurrentFavoriteAttempt(operation, attempt)) return;
+      if (operation.kind !== "create") setFavorites(restoreFavorites(operation.previousFavorites));
+      setFavoriteOperation({
+        status: "error",
+        operation,
+        message: favoriteMutationErrorMessage(error),
       });
-      setFavorites((items) => items.filter((item) => item.id !== current.id));
+    }
+  };
+
+  const toggleFavorite = (target: FavoriteTarget, current: SidebarFavorite | undefined): void => {
+    const context = favoriteContext();
+    if (!context || favoriteOperation?.status === "pending") return;
+
+    if (current) {
+      const operation: FavoriteOperation = {
+        ...context,
+        kind: "delete",
+        favorite: current,
+        previousFavorites: favorites,
+      };
+      void runFavoriteOperation(operation);
       return;
     }
-    const result = await mutate<{
-      favoriteCreate: { favorite: { id: string; position: number } };
-    }>(
-      `mutation($input: FavoriteCreateInput!) { favoriteCreate(input: $input) { favorite { id position } } }`,
-      { input: target },
-    );
-    const project = target.projectId
-      ? navigation.projects.find((item) => item.id === target.projectId)
-      : null;
-    const view = target.savedViewId
-      ? shell.data?.savedViews.find((item) => item.id === target.savedViewId)
-      : null;
-    setFavorites((items) => [
-      ...items,
-      {
-        id: result.favoriteCreate.favorite.id,
-        position: result.favoriteCreate.favorite.position,
-        project: project ? { id: project.id, name: project.name } : null,
-        savedView: view ? { id: view.id, name: view.name } : null,
-      },
-    ]);
+
+    const operation: FavoriteOperation = {
+      ...context,
+      kind: "create",
+      target,
+      project:
+        "projectId" in target
+          ? (navigation.projects.find((item) => item.id === target.projectId) ?? null)
+          : null,
+      savedView:
+        "savedViewId" in target
+          ? (shell.data?.savedViews.find((item) => item.id === target.savedViewId) ?? null)
+          : null,
+    };
+    void runFavoriteOperation(operation);
   };
 
   const localAuth = serverAuthMode === "local";
 
   const logout = () => {
     localStorage.removeItem("pb.apiKey");
+    favoriteAttempt.current += 1;
+    setFavoriteOperation(null);
     setFavorites([]);
     if (!localAuth) setHasKey(false);
   };
 
-  const reorderFavorite = async (favorite: SidebarFavorite, position: number) => {
-    await mutate(
-      `mutation($id: ID!, $position: Int!) { favoriteReorder(id: $id, position: $position) { favorite { id position } } }`,
-      { id: favorite.id, position },
-    );
-    setFavorites((items) => {
-      const currentIndex = items.findIndex((item) => item.id === favorite.id);
-      if (currentIndex < 0) return items;
-      const next = [...items];
-      const [selected] = next.splice(currentIndex, 1);
-      next.splice(Math.min(position, next.length), 0, selected!);
-      return next.map((item, index) => ({ ...item, position: index }));
-    });
+  const reorderFavorite = (favorite: SidebarFavorite, position: number): void => {
+    const context = favoriteContext();
+    if (!context || favoriteOperation?.status === "pending") return;
+    const previousFavorites = favorites;
+    if (!previousFavorites.some((item) => item.id === favorite.id)) return;
+
+    const operation: FavoriteOperation = {
+      ...context,
+      kind: "reorder",
+      favorite,
+      position,
+      previousFavorites,
+    };
+    setFavorites((items) => moveFavorite(items, favorite.id, position));
+    void runFavoriteOperation(operation);
+  };
+
+  const retryFavorite = (): void => {
+    if (favoriteOperation?.status !== "error") return;
+    void runFavoriteOperation(favoriteOperation.operation);
   };
 
   if (serverAuthMode === null) {
@@ -605,6 +738,18 @@ export function App() {
     }
   }
 
+  const favoritePending = favoriteOperation?.status === "pending";
+  const favoriteError =
+    favoriteOperation?.status === "error" ? favoriteOperation.message : undefined;
+  const favoritePendingLabel =
+    favoriteOperation?.status === "pending"
+      ? favoriteOperation.operation.kind === "create"
+        ? "Saving favorite…"
+        : favoriteOperation.operation.kind === "delete"
+          ? "Removing favorite…"
+          : "Moving favorite…"
+      : undefined;
+
   return (
     <div className="app">
       <Sidebar
@@ -613,6 +758,9 @@ export function App() {
         activeWorkspaceId={workspaceGate.active?.id}
         workspaceSwitcherEnabled={workspaceGate.supported}
         onSelectWorkspace={(next) => {
+          favoriteAttempt.current += 1;
+          setFavoriteOperation(null);
+          setFavorites([]);
           setSelectedWorkspaceId(next.id);
           const workspaceScopedSections = new Set([
             "team",
@@ -639,6 +787,10 @@ export function App() {
         unreadInboxCount={shell.data?.inboxUnreadCount ?? 0}
         onToggleFavorite={toggleFavorite}
         onReorderFavorite={reorderFavorite}
+        favoritePending={favoritePending}
+        favoritePendingLabel={favoritePendingLabel}
+        favoriteError={favoriteError}
+        onRetryFavorite={retryFavorite}
         onLogout={logout}
         onCreateIssue={() => setCreateOpen(true)}
         initiatives={shell.data?.initiatives ?? []}
