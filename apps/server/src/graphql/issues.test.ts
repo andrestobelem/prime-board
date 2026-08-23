@@ -171,6 +171,53 @@ describe("issues query + archive", () => {
     expect(viaUuid.data!.issue.identifier).toBe("PB-1");
   });
 
+  it("restaura un issue de forma idempotente y conserva su historial", async () => {
+    const created = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Restorable issue", description: "Keep me" }) {
+        issue { id identifier title description state { id } activity { type } }
+      } }`,
+    );
+    const issue = created.data!.issueCreate.issue;
+    await gql(app, `mutation($id: ID!) { issueArchive(id: $id) { success } }`, { id: issue.id });
+
+    const restored = await gql(
+      app,
+      `mutation($id: ID!) { issueUnarchive(id: $id) {
+        issue { id identifier title description archivedAt state { id } activity { type } }
+      } }`,
+      { id: issue.id },
+    );
+    expect(restored.errors).toBeUndefined();
+    expect(restored.data!.issueUnarchive.issue).toMatchObject({
+      id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      description: issue.description,
+      archivedAt: null,
+      state: { id: issue.state.id },
+    });
+
+    const again = await gql(
+      app,
+      `mutation($id: ID!) { issueUnarchive(id: $id) { issue { archivedAt activity { type } } } }`,
+      { id: issue.id },
+    );
+    expect(again.errors).toBeUndefined();
+    expect(again.data!.issueUnarchive.issue.archivedAt).toBeNull();
+    expect(
+      again.data!.issueUnarchive.issue.activity.filter(
+        (event: { type: string }) => event.type === "unarchived",
+      ),
+    ).toHaveLength(1);
+
+    const missing = await gql(
+      app,
+      `mutation { issueUnarchive(id: "PB-999999") { success } }`,
+    );
+    expect(missing.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+  });
+
   it("excluye hijos archivados de la jerarquía activa", async () => {
     const parent = await gql(
       app,

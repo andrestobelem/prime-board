@@ -459,6 +459,19 @@ export function archiveIssue(db: Database, actorId: string, ref: string): IssueR
   return getIssue(db, issue.id)!;
 }
 
+export function unarchiveIssue(db: Database, actorId: string, ref: string): IssueRow {
+  const issue = requireIssue(db, ref);
+  if (issue.archived_at) {
+    const updatedAt = now();
+    db.query("UPDATE issues SET archived_at = NULL, updated_at = ?1 WHERE id = ?2").run(
+      updatedAt,
+      issue.id,
+    );
+    recordActivity(db, issue.id, actorId, "unarchived", {});
+  }
+  return getIssue(db, issue.id)!;
+}
+
 export function listChildren(db: Database, issueId: string, includeArchived = false): IssueRow[] {
   const archivedClause = includeArchived ? "" : " AND issues.archived_at IS NULL";
   return db

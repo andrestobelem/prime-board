@@ -42,6 +42,7 @@ const USAGE = `Usage:
                   [--project ID|none] [--milestone ID|none] [--cycle ID|NAME|none]
                   [--sort-order NUMBER] [--add-label NAME ...] [--remove-label NAME ...] [--json]
   pb issue archive <REF> [--json]
+  pb issue unarchive <REF> [--json]
   pb issue comment <REF> [--body TEXT|-]
   pb issue link <REF> (--blocked-by REF | --blocks REF | --related REF | --duplicate-of REF)... [--json]
   pb issue unlink <REF> (--blocked-by REF | --blocks REF | --related REF | --duplicate-of REF)... [--json]`;
@@ -338,18 +339,20 @@ export async function issueCommand(argv: string[]): Promise<void> {
     return;
   }
 
-  if (action === "archive") {
+  if (action === "archive" || action === "unarchive") {
     const ref = argv[1];
     if (!ref) throw new UsageError(USAGE);
     const { values } = parseArgs({ args: argv.slice(2), options: { json: { type: "boolean" } } });
     const issue = await resolveIssue(config, ref);
+    const mutation = action === "archive" ? "issueArchive" : "issueUnarchive";
     const data = await gqlRequest(
       config,
-      `mutation($id: ID!) { issueArchive(id: $id) { issue { id ${ISSUE_FIELDS} } } }`,
+      `mutation($id: ID!) { ${mutation}(id: $id) { issue { id ${ISSUE_FIELDS} } } }`,
       { id: issue.id },
     );
-    if (values.json) return printJson(data.issueArchive.issue);
-    console.log(`Archived ${data.issueArchive.issue.identifier}`);
+    const result = data[mutation].issue;
+    if (values.json) return printJson(result);
+    console.log(`${action === "archive" ? "Archived" : "Unarchived"} ${result.identifier}`);
     return;
   }
 

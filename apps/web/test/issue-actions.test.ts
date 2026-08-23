@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { runIssueActions } from "../src/issue-actions.ts";
+import { runIssueActions, unarchiveMutation } from "../src/issue-actions.ts";
+
+describe("issue action mutations", () => {
+  test("restores only through the unarchive mutation", () => {
+    expect(unarchiveMutation()).toBe("mutation($id: ID!) { issueUnarchive(id: $id) { success } }");
+  });
+});
 
 describe("issue action runner", () => {
   test("runs sequentially and reports completed order", async () => {

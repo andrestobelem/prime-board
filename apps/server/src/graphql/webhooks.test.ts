@@ -81,6 +81,41 @@ describe("webhooks", () => {
     }
   });
 
+  it("emite issue.unarchived una sola vez al restaurar", async () => {
+    received.length = 0;
+    const hook = await gql(
+      app,
+      `mutation($url: String!) {
+        webhookCreate(input: { url: $url, events: ["issue.unarchived"] }) { webhook { id } }
+      }`,
+      { url: `http://localhost:${receiver.port}/unarchive` },
+    );
+    const created = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Webhook unarchive" }) {
+        issue { id identifier }
+      } }`,
+    );
+    const issue = created.data!.issueCreate.issue;
+    await gql(app, `mutation($id: ID!) { issueArchive(id: $id) { success } }`, { id: issue.id });
+    received.length = 0;
+    await gql(app, `mutation($id: ID!) { issueUnarchive(id: $id) { success } }`, { id: issue.id });
+    await gql(app, `mutation($id: ID!) { issueUnarchive(id: $id) { success } }`, { id: issue.id });
+    await app.events.idle();
+
+    expect(received).toHaveLength(1);
+    const payload = JSON.parse(received[0]!.body);
+    expect(payload.event).toBe("issue.unarchived");
+    expect(payload.data).toMatchObject({
+      id: issue.id,
+      identifier: issue.identifier,
+      archivedAt: null,
+    });
+    await gql(app, `mutation($id: ID!) { webhookDelete(id: $id) { success } }`, {
+      id: hook.data!.webhookCreate.webhook.id,
+    });
+  });
+
   it("no entrega eventos no suscriptos pero sí issue.updated con changes", async () => {
     received.length = 0;
     // El webhook existente NO está suscripto a issue.updated.

@@ -1179,6 +1179,7 @@ export const typeDefs = /* GraphQL */ `
     issueCreate(input: IssueCreateInput!): IssuePayload!
     issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!
     issueArchive(id: ID!): IssuePayload!
+    issueUnarchive(id: ID!): IssuePayload!
     labelCreate(input: LabelCreateInput!): LabelPayload!
     labelUpdate(id: ID!, input: LabelUpdateInput!): LabelPayload!
     labelDelete(id: ID!): LabelDeletePayload!

@@ -3,10 +3,15 @@ import type { IssueActionInput } from "./components/IssueActions.tsx";
 export interface IssueMutationResult {
   issueUpdate?: { success: boolean };
   issueArchive?: { success: boolean };
+  issueUnarchive?: { success: boolean };
 }
 
 export function archiveMutation(): string {
   return `mutation($id: ID!) { issueArchive(id: $id) { success } }`;
+}
+
+export function unarchiveMutation(): string {
+  return `mutation($id: ID!) { issueUnarchive(id: $id) { success } }`;
 }
 
 export function issueUpdateMutation(): string {

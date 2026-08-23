@@ -191,4 +191,53 @@ describe("rebuild fidelity", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("conserva archivedAt y el evento al reconstruir un issue restaurado", async () => {
+    const created = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Restored fidelity" }) {
+        issue { id identifier }
+      } }`,
+    );
+    const issue = created.data!.issueCreate.issue;
+    await gql(app, `mutation($id: ID!) { issueArchive(id: $id) { success } }`, { id: issue.id });
+    await gql(app, `mutation($id: ID!) { issueUnarchive(id: $id) { success } }`, { id: issue.id });
+
+    const dir = mkdtempSync(join(tmpdir(), "pb-unarchive-fidelity-"));
+    try {
+      exportBoard(app.db, dir);
+      const md = readFileSync(
+        join(dir, ".prime-board", "issues", `${issue.identifier}.md`),
+        "utf8",
+      );
+      expect(md).toContain("archivedAt: null");
+      expect(
+        readFileSync(join(dir, ".prime-board", "log", `${issue.identifier}.jsonl`), "utf8"),
+      ).toContain("unarchived");
+
+      const fresh = new Database(":memory:", { strict: true });
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      rebuildFromRepo(fresh, dir);
+      const row = fresh
+        .query(
+          `SELECT i.archived_at
+           FROM issues i JOIN teams ON teams.id = i.team_id
+           WHERE teams.key || '-' || i.number = ?1`,
+        )
+        .get(issue.identifier) as { archived_at: string | null };
+      expect(row.archived_at).toBeNull();
+      const events = fresh
+        .query(
+          `SELECT type FROM activity a
+           JOIN issues i ON i.id = a.issue_id JOIN teams ON teams.id = i.team_id
+           WHERE teams.key || '-' || i.number = ?1 AND type = 'unarchived'`,
+        )
+        .all(issue.identifier) as Array<{ type: string }>;
+      expect(events).toHaveLength(1);
+      fresh.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

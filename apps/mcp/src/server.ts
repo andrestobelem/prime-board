@@ -21,7 +21,7 @@ const ISSUE_FIELDS = `id identifier title description priority
   state { id name type } assignee { id name type } creator { id name type }
   labels { id name } project { id name } milestone { id name } cycle { id number name }
   parent { identifier }
-  url branchName createdAt updatedAt`;
+  url branchName createdAt updatedAt archivedAt`;
 
 function json(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -1001,29 +1001,32 @@ export function createServer(config: McpConfig | McpSession): McpServer {
     },
   );
 
-  server.registerTool(
-    "archive_issue",
-    {
-      description: "Archive an issue by ID or identifier.",
-      inputSchema: { id: z.string().describe("Issue ID or identifier (e.g. PB-1)") },
-    },
-    async ({ id }) => {
-      const existing = await gqlRequest(
-        sessionConfig,
-        `query($id: ID!) { issue(id: $id) { id } }`,
-        {
-          id,
-        },
-      );
-      if (!existing.issue) throw new Error(`NOT_FOUND: Issue not found: ${id}`);
-      const data = await gqlRequest(
-        sessionConfig,
-        `mutation($id: ID!) { issueArchive(id: $id) { issue { ${ISSUE_FIELDS} archivedAt } } }`,
-        { id: existing.issue.id },
-      );
-      return json(data.issueArchive.issue);
-    },
-  );
+  for (const [toolName, mutation, description] of [
+    ["archive_issue", "issueArchive", "Archive an issue by ID or identifier."],
+    ["unarchive_issue", "issueUnarchive", "Restore an archived issue by ID or identifier."],
+  ] as const) {
+    server.registerTool(
+      toolName,
+      {
+        description,
+        inputSchema: { id: z.string().describe("Issue ID or identifier (e.g. PB-1)") },
+      },
+      async ({ id }) => {
+        const existing = await gqlRequest(
+          sessionConfig,
+          `query($id: ID!) { issue(id: $id) { id } }`,
+          { id },
+        );
+        if (!existing.issue) throw new Error(`NOT_FOUND: Issue not found: ${id}`);
+        const data = await gqlRequest(
+          sessionConfig,
+          `mutation($id: ID!) { ${mutation}(id: $id) { issue { ${ISSUE_FIELDS} } } }`,
+          { id: existing.issue.id },
+        );
+        return json(data[mutation].issue);
+      },
+    );
+  }
 
   server.registerTool(
     "list_cycles",

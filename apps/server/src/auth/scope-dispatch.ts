@@ -100,6 +100,7 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:issueCreate",
   "mutation:issueUpdate",
   "mutation:issueArchive",
+  "mutation:issueUnarchive",
   "mutation:labelCreate",
   "mutation:labelUpdate",
   "mutation:labelDelete",
@@ -475,6 +476,7 @@ async function operationTeamIds(
       return [...new Set([...current, ...target, ...parent, ...cycle, ...milestone])];
     }
     case "issueArchive":
+    case "issueUnarchive":
       if (context.persistence) return [];
       return teamIdsForIssue(context, args.id);
     case "commentCreate":

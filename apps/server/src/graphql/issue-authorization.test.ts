@@ -68,6 +68,7 @@ describe("issue authorization", () => {
     for (const mutation of [
       `mutation($id: ID!) { issueUpdate(id: $id, input: { title: "changed" }) { success } }`,
       `mutation($id: ID!) { issueArchive(id: $id) { success } }`,
+      `mutation($id: ID!) { issueUnarchive(id: $id) { success } }`,
       `mutation($id: ID!) { commentCreate(input: { issueId: $id, body: "outsider" }) { success } }`,
       `mutation($id: ID!, $related: ID!) {
         issueRelationCreate(input: { issueId: $id, relatedIssueId: $related, type: RELATED }) { success }

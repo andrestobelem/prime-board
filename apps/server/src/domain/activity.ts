@@ -20,7 +20,8 @@ export type ActivityType =
   | "relation_added"
   | "relation_removed"
   | "commented"
-  | "archived";
+  | "archived"
+  | "unarchived";
 
 export interface ActivityRow {
   id: string;

@@ -187,7 +187,8 @@ sintaxis FTS5. Estas entradas no exponen errores internos de SQLite y conservan 
 de filtros anidados y paginación.
 
 Ciclo de vida completo: `issueCreate` → `issueUpdate` (estado/prioridad/assignee/labels/
-parent/project) → `commentCreate` → `issueArchive`. La operación registra la Activity en `Issue.activity`.
+parent/project) → `commentCreate` → `issueArchive` → `issueUnarchive`. Las operaciones de archivo
+registran `archived` o `unarchived` en la Activity de `Issue.activity`.
 
 Para una entrega de agente, el comentario debe incluir SHA, criterios cubiertos, comandos y
 resultados, brechas y siguiente estado. La entrega pasa a `Ready for Review`; otro Actor verifica
@@ -232,6 +233,7 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
   `pb actor list|create|update` y `pb api-key create|delete` exponen las mutaciones
   administrativas GraphQL y conservan sus errores/autorización.
 - `pb issue archive <REF>` archiva una issue y devuelve la issue archivada con `--json`.
+- `pb issue unarchive <REF>` restaura una issue archivada y devuelve la issue activa con `--json`.
 - Exit codes: `0` ok, `1` error de API (incluye `NOT_FOUND` y `UNAUTHORIZED`), `2` error de uso o parseo de flags.
 - Env `PRIME_BOARD_URL` / `PRIME_BOARD_API_KEY` pisan la config guardada.
 - `pb auth login` guarda las credenciales en `~/.prime-board/cli.json`; el directorio queda
@@ -255,7 +257,7 @@ Para renombrar el Workspace, usa `save_workspace` con `{ "name": "Mi Workspace" 
 La API rechaza la operación para Actors con rol `MEMBER`. El nombre es independiente de las keys y
 los nombres de los Teams.
 
-El MCP ofrece estas tools administrativas: `archive_issue`, `archive_team`, `unarchive_team`,
+El MCP ofrece estas tools administrativas: `archive_issue`, `unarchive_issue`, `archive_team`, `unarchive_team`,
 `delete_team`, `save_team`, `list_team_memberships`, `save_team_membership`,
 `delete_team_membership`, `save_user`, `save_api_key`, `delete_api_key`, `save_issue_status`,
 `delete_issue_status`, `save_issue_label` y `delete_issue_label`. Las tools adaptan entradas y
@@ -282,7 +284,7 @@ Configura un cliente MCP como Claude Desktop o prime-agent:
 ## 7. Webhooks: enterarse de las cosas
 
 Registra una URL y recibe un POST por cada evento
-(`issue.created`, `issue.updated`, `issue.archived`, `comment.created`,
+(`issue.created`, `issue.updated`, `issue.archived`, `issue.unarchived`, `comment.created`,
 `project.created`, `project.updated`, `team.deleted`):
 
 ```bash

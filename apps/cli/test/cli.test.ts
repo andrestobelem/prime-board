@@ -287,6 +287,33 @@ describe("pb issue", () => {
     expect(JSON.parse(again.out).archivedAt).toBe(JSON.parse(archived.out).archivedAt);
   });
 
+  it("restaura issues archivadas e idempotentemente conserva la identidad", () => {
+    const created = pb([
+      "issue",
+      "create",
+      "--team",
+      "PB",
+      "--title",
+      "CLI unarchive target",
+      "--json",
+    ]);
+    expect(created.code).toBe(0);
+    const issue = JSON.parse(created.out);
+    expect(pb(["issue", "archive", issue.identifier]).code).toBe(0);
+
+    const restored = pb(["issue", "unarchive", issue.identifier, "--json"]);
+    expect(restored.code).toBe(0);
+    expect(JSON.parse(restored.out)).toMatchObject({
+      id: issue.id,
+      identifier: issue.identifier,
+      archivedAt: null,
+    });
+    const again = pb(["issue", "unarchive", issue.identifier, "--json"]);
+    expect(again.code).toBe(0);
+    expect(JSON.parse(again.out).id).toBe(issue.id);
+    expect(JSON.parse(again.out).archivedAt).toBeNull();
+  });
+
   it("devuelve exit code 1 en errores de API y 2 en errores de uso", () => {
     const apiError = pb(["issue", "view", "PB-99"]);
     expect(apiError.code).toBe(1);

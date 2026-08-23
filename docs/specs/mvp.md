@@ -163,6 +163,7 @@ type Mutation {
   issueCreate(input: IssueCreateInput!): IssuePayload!
   issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!   # estado, prioridad, assignee, labels, parent, project, título, descripción
   issueArchive(id: ID!): IssuePayload!
+  issueUnarchive(id: ID!): IssuePayload!
   commentCreate(input: CommentCreateInput!): CommentPayload!
   projectCreate(input: ProjectCreateInput!): ProjectPayload!
   projectUpdate(id: ID!, input: ProjectUpdateInput!): ProjectPayload!
@@ -194,7 +195,7 @@ Los `*Payload` devuelven `{ success: Boolean!, <entidad> }` como en Linear.
 
 - `POST` JSON a cada webhook suscripto, firmado con HMAC-SHA256 del body en el header
   `X-PrimeBoard-Signature` usando el `secret` del webhook.
-- **Eventos MVP:** `issue.created`, `issue.updated`, `issue.archived`,
+- **Eventos MVP:** `issue.created`, `issue.updated`, `issue.archived`, `issue.unarchived`,
   `comment.created`, `project.created`, `project.updated`.
 - **Payload:** `{ event, actor {id,name,type}, data { ...entidad }, changes? { campo: {from,to} }, createdAt }`.
 - Entrega asíncrona mediante una cola en memoria, con tres reintentos y backoff.

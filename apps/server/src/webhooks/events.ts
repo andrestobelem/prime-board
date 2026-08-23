@@ -3,6 +3,7 @@ export const WEBHOOK_EVENT_NAMES = [
   "issue.created",
   "issue.updated",
   "issue.archived",
+  "issue.unarchived",
   "comment.created",
   "project.created",
   "project.updated",

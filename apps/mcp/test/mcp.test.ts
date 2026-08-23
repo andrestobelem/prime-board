@@ -143,6 +143,7 @@ describe("mcp tools", () => {
       "save_workspace",
       "suspend_user",
       "unarchive_document",
+      "unarchive_issue",
       "unarchive_project",
       "unarchive_team",
       "unlink_issues",
@@ -377,6 +378,33 @@ describe("mcp tools", () => {
       }),
     );
     expect(detached.parent).toBeNull();
+  });
+
+  it("restaura issues archivadas con respuesta estable e idempotente", async () => {
+    const created = parseResult(
+      await client.callTool({
+        name: "save_issue",
+        arguments: { team: "PB", title: "MCP unarchive target" },
+      }),
+    );
+    const archived = parseResult(
+      await client.callTool({ name: "archive_issue", arguments: { id: created.identifier } }),
+    );
+    expect(archived).toMatchObject({ id: created.id, identifier: created.identifier });
+    expect(archived.archivedAt).toBeTruthy();
+
+    const restored = parseResult(
+      await client.callTool({ name: "unarchive_issue", arguments: { id: created.identifier } }),
+    );
+    expect(restored).toMatchObject({
+      id: created.id,
+      identifier: created.identifier,
+      archivedAt: null,
+    });
+    const again = parseResult(
+      await client.callTool({ name: "unarchive_issue", arguments: { id: created.id } }),
+    );
+    expect(again).toMatchObject({ id: created.id, archivedAt: null });
   });
 
   it("save_issue distingue omission de null al limpiar assignee, project y milestone", async () => {

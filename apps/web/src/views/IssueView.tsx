@@ -8,6 +8,7 @@ import { renderMarkdown } from "../markdown.ts";
 import { Link, navigate } from "../router.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
 import { appendUniqueById } from "../pagination.ts";
+import { unarchiveMutation } from "../issue-actions.ts";
 
 const ISSUE_NAV_QUERY = `query($teamId: ID, $after: String) {
   issues(filter: { team: { eq: $teamId } }, first: 250, after: $after, orderBy: CREATED_DESC) {
@@ -38,6 +39,7 @@ const ISSUE_QUERY = `query($id: ID!) {
     milestone { id name }
     relations { id type relatedIssue { identifier title state { id name type } } }
     comments { id body actor { name type } createdAt }
+    archivedAt
     documents { id title updatedAt archivedAt }
     activity { id type actor { name type } payload createdAt }
   }
@@ -76,6 +78,7 @@ const ACTIVITY_TEXT: Record<string, (payload: any) => string> = {
   unlabeled: (payload) => `removed label "${payload.label}"`,
   commented: () => "commented",
   archived: () => "archived the issue",
+  unarchived: () => "restored the issue",
   relation_added: (payload) =>
     `added relation ${RELATION_LABELS[payload.type] ?? payload.type} ${payload.issue}`,
   relation_removed: (payload) =>
@@ -390,6 +393,24 @@ export function IssueView({ issueRef }: { issueRef: string }) {
     }
   }
 
+  async function unarchiveIssue(): Promise<void> {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await mutate<{ issueUnarchive: { success: boolean } }>(unarchiveMutation(), {
+        id: issue.id,
+      });
+      if (!response.issueUnarchive.success) throw new Error("The issue could not be restored.");
+      setActionsOpen(false);
+      setSaveNotice("Issue restored");
+      window.setTimeout(() => setSaveNotice(null), 1800);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The issue could not be restored.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const activeLabelIds = new Set(issue.labels.map((label: any) => label.id));
 
   return (
@@ -416,9 +437,24 @@ export function IssueView({ issueRef }: { issueRef: string }) {
                     <button role="menuitem" onClick={() => void copyText(issue.identifier)}>
                       <Icon name="copy" size={14} /> Copy identifier
                     </button>
-                    <button role="menuitem" className="danger" onClick={() => setArchiveOpen(true)}>
-                      <Icon name="archive" size={14} /> Archive issue
-                    </button>
+                    {issue.archivedAt ? (
+                      <button
+                        role="menuitem"
+                        onClick={() => void unarchiveIssue()}
+                        disabled={saving}
+                      >
+                        <Icon name="archive" size={14} /> Unarchive issue
+                      </button>
+                    ) : (
+                      <button
+                        role="menuitem"
+                        className="danger"
+                        onClick={() => setArchiveOpen(true)}
+                        disabled={saving}
+                      >
+                        <Icon name="archive" size={14} /> Archive issue
+                      </button>
+                    )}
                     <Link to={`/team/${issue.team.key}`}>
                       <Icon name="issues" size={14} /> Open in team list
                     </Link>

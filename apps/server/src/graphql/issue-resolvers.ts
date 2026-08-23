@@ -3,6 +3,7 @@ import { mapActor } from "../domain/actors.ts";
 import type { IssueFilter, IssueOrder } from "../domain/filters.ts";
 import {
   archiveIssue,
+  unarchiveIssue,
   createIssue,
   identifierOf,
   getIssueByRef,
@@ -73,6 +74,7 @@ import {
   createPostgresIssue,
   updatePostgresIssue,
   archivePostgresIssue,
+  unarchivePostgresIssue,
 } from "../domain/postgres-issues.ts";
 import { getPostgresActor, mapPostgresActor } from "../domain/postgres-actors.ts";
 import { documentResolvers } from "./document-resolvers.ts";
@@ -821,13 +823,33 @@ export const issueResolvers = {
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
+        const changed = Boolean(existing && !existing.archived_at);
         const row = await archivePostgresIssue(context.persistence, viewer, args.id);
-        context.events.emit("issue.archived", viewer, issueEventData(row));
+        if (changed) context.events.emit("issue.archived", viewer, issueEventData(row));
         return { success: true, issue: mapIssue(row) };
       }
-      assertIssueAccess(context, viewer, args.id);
+      const existing = assertIssueAccess(context, viewer, args.id);
+      const changed = !existing.archived_at;
       const row = archiveIssue(context.db, viewer.id, args.id);
-      context.events.emit("issue.archived", viewer, issueEventData(row));
+      if (changed) context.events.emit("issue.archived", viewer, issueEventData(row));
+      return { success: true, issue: mapIssue(row) };
+    },
+    issueUnarchive: async (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      if (context.persistence) {
+        const existing = await getPostgresIssueByRef(context.persistence, args.id);
+        if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+          throw apiError("NOT_FOUND", "Issue resource not found");
+        }
+        const wasArchived = Boolean(existing?.archived_at);
+        const row = await unarchivePostgresIssue(context.persistence, viewer, args.id);
+        if (wasArchived) context.events.emit("issue.unarchived", viewer, issueEventData(row));
+        return { success: true, issue: mapIssue(row) };
+      }
+      const existing = assertIssueAccess(context, viewer, args.id);
+      const wasArchived = Boolean(existing.archived_at);
+      const row = unarchiveIssue(context.db, viewer.id, args.id);
+      if (wasArchived) context.events.emit("issue.unarchived", viewer, issueEventData(row));
       return { success: true, issue: mapIssue(row) };
     },
     issueRelationCreate: (

@@ -612,4 +612,25 @@ export async function archivePostgresIssue(
   });
 }
 
+export async function unarchivePostgresIssue(
+  persistence: Persistence,
+  viewer: ActorRow,
+  ref: string,
+): Promise<IssueRow> {
+  return persistence.transaction(async (tx) => {
+    const issue = await getPostgresIssueByRef(tx, ref);
+    if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
+    await requirePostgresIssueWrite(tx, viewer, issue.team_id);
+    if (issue.archived_at) {
+      const updatedAt = now();
+      await tx.execute("UPDATE issues SET archived_at = NULL, updated_at = $1 WHERE id = $2", [
+        updatedAt,
+        issue.id,
+      ]);
+      await recordPostgresActivity(tx, issue.id, viewer.id, "unarchived", {}, updatedAt);
+    }
+    return (await getPostgresIssue(tx, issue.id))!;
+  });
+}
+
 export { mapIssue };
