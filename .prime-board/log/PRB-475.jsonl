@@ -5,3 +5,5 @@
 {"actor":"admin","issue":"PRB-475","payload":{"type":"blocks","issue":"PRB-413"},"ts":"2026-08-21T18:37:20.494Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-475","payload":{"from":"Needs Triage","to":"Ready for Review"},"ts":"2026-08-23T21:04:56.758Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-475","payload":{"from":"Ready for Review","to":"PRB/Ready for Agent"},"ts":"2026-08-23T21:05:32.884Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-475","payload":{"from":"PRB/Ready for Agent","to":"PRB/In Progress"},"ts":"2026-08-23T21:08:58.807Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-475","payload":{"body":"Inicio de implementación de PRB-475. Agente dedicado en worktree aislado. Se mantendrá el alcance del ticket y se validará con Bun, typecheck, build y diff-check antes de revisión independiente."},"ts":"2026-08-23T21:08:59.104Z","type":"commented"}
