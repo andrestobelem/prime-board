@@ -37,6 +37,25 @@ inicial con `PRIME_BOARD_WORKSPACE_NAME`, `PRIME_BOARD_WORKSPACE_URL_KEY`,
 `Prime Board` y `PB`. El server recorta los nombres. `urlKey` usa minúsculas, números y guiones. La
 `key` del Team tiene entre 1 y 8 caracteres alfanuméricos y comienza con una letra.
 
+### Selección del backend
+
+El endpoint GraphQL es el mismo con ambos backends. SQLite es el backend predeterminado cuando
+`PRIME_BOARD_PERSISTENCE` no está definido o vale `sqlite`. Su archivo se configura con
+`PRIME_BOARD_DB`.
+
+PostgreSQL requiere una selección explícita y una URL de conexión:
+
+```bash
+PRIME_BOARD_PERSISTENCE=postgres \
+  PRIME_BOARD_POSTGRES_URL='postgres://usuario:contraseña@localhost:5432/prime_board' \
+  bun run server
+```
+
+PostgreSQL conserva una única Workspace y una migración incremental por dominios. Los dominios
+migrados usan PostgreSQL. Una operación todavía no migrada puede responder `VALIDATION_FAILED` o
+usar un SQLite efímero de compatibilidad, según el dominio. La presencia de una operación en el
+SDL no garantiza que esté migrada en PostgreSQL. Consulta la [tabla de estado y brechas](alcance-mvp.md#persistencia-vigente-sqlite-y-postgresql) antes de automatizar una operación.
+
 Para una instancia de desarrollo local, desactiva la solicitud de API key:
 
 ```bash

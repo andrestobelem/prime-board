@@ -17,12 +17,15 @@ define el alcance histórico del MVP. [`docs/specs/mvp.md`](docs/specs/mvp.md) c
 especificación técnica histórica. No es el contrato actual. Para operar el producto, usa la
 [guía de operación](docs/guia-agentes.md) y los [contratos para agentes](docs/agents/).
 
-**Parte 2 — Núcleo del backend: completa.** La API GraphQL opera sobre SQLite e incluye
-Teams, Actors humanos y agentes con API keys y roles de workspace, Memberships, Issues con
-sub-issues, Relations, Activity, Labels, Projects con Milestones y Project Updates, Cycles,
+**Parte 2 — Núcleo del backend: completa.** La API GraphQL comparte el contrato y el endpoint
+`/graphql` entre los backends disponibles. SQLite es el backend predeterminado y cubre el núcleo
+completo: Teams, Actors humanos y agentes con API keys y roles de Workspace, Memberships, Issues
+con sub-issues, Relations, Activity, Labels, Projects con Milestones y Project Updates, Cycles,
 Initiatives, Reviews, Inbox, Saved Views, Favorites, filtros componibles y full-text (FTS5),
-paginación por cursor y Webhooks firmados con HMAC. La suite ejecutable se valida con
-`bun test`; esta descripción no fija una cantidad de tests.
+paginación por cursor y Webhooks firmados con HMAC. PostgreSQL es opcional y su migración es
+incremental. La cobertura por backend y las brechas conocidas están en
+[`docs/alcance-mvp.md`](docs/alcance-mvp.md). La suite ejecutable se valida con `bun test`; esta
+descripción no fija una cantidad de tests.
 
 **Parte 3 — Interfaces para agentes: completa.** El CLI `pb` y el MCP server por stdio
 cubren Issues, Teams, Actors, API keys, Memberships, Workflow States, Labels, Projects,
@@ -36,6 +39,27 @@ Linear. Incluye una lista agrupada por estado, un board con drag & drop, navegac
 teclado entre Issues, detalle con edición inline y markdown, creación rápida (`C`), command
 palette (`⌘K`) con búsqueda full-text, Inbox, My Issues, Projects, Cycles, Saved Views,
 Favorites y configuración de Teams y Workspace.
+
+### Selección del backend
+
+SQLite es el valor predeterminado cuando `PRIME_BOARD_PERSISTENCE` no está definido o vale
+`sqlite`. Usa `PRIME_BOARD_DB` para elegir el archivo de datos. Para seleccionar PostgreSQL,
+define `PRIME_BOARD_PERSISTENCE=postgres` y `PRIME_BOARD_POSTGRES_URL`:
+
+```bash
+# SQLite (predeterminado)
+bun run server
+
+# PostgreSQL (selección explícita)
+PRIME_BOARD_PERSISTENCE=postgres \
+  PRIME_BOARD_POSTGRES_URL='postgres://usuario:contraseña@localhost:5432/prime_board' \
+  bun run server
+```
+
+PostgreSQL conserva una única Workspace y una migración por dominios. Las operaciones todavía no
+migradas pueden fallar de forma explícita o usar un SQLite efímero de compatibilidad, según el
+dominio; no hay paridad completa entre backends. Consulta el [estado vigente y sus brechas](docs/alcance-mvp.md#persistencia-vigente-sqlite-y-postgresql) antes de asumir que una operación
+presente en el SDL está disponible en PostgreSQL.
 
 ### Inicio rápido
 
