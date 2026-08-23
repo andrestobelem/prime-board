@@ -83,9 +83,9 @@ general en `--max-concurrency=5` y ejecuta cada test del launcher en un proceso 
 El preflight no reserva recursos ni corrige Git. El launcher reserva de forma atómica el puerto
 y la DB antes de iniciar el servidor; esas reservas protegen contra carreras entre dos inicios.
 El lock de DB conserva el path como alias léxico y no sigue symlinks. Por eso un symlink con
-target pendiente mantiene el mismo lock antes y después de crear el target. Cuando la
-DB ya existe, agrega un lock físico por dispositivo e inode para que los hardlinks compartan la
-reserva. Usa `--strict` para tratar advertencias como fallos. El informe no imprime variables de entorno
+target pendiente mantiene el mismo lock antes y después de crear el target. También agrega
+un lock por la ruta target estable y, cuando la DB ya existe, un lock físico por dispositivo e
+inode para que los hardlinks compartan la reserva. Usa `--strict` para tratar advertencias como fallos. El informe no imprime variables de entorno
 ni API keys.
 
 ### Datos de demo (opcional)

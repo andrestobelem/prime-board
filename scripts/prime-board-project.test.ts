@@ -72,10 +72,24 @@ describe("atomic project database reservations", () => {
       const after = deriveProjectIdentity("/tmp/projects/alpha", home, alias);
       expect(after.databasePath).toBe(before.databasePath);
       expect(after.databaseLockPath).toBe(before.databaseLockPath);
-      expect(after.databasePhysicalLockPath).not.toBeNull();
+      expect(after.databasePhysicalLockPath).toBe(before.databasePhysicalLockPath);
+      expect(after.databaseInodeLockPath).not.toBeNull();
       expect(() => acquireDatabaseReservation(after, record, () => true)).toThrow(
         "Database is already reserved",
       );
+      const targetIdentity = deriveProjectIdentity("/tmp/projects/beta", home, target);
+      expect(targetIdentity.databasePhysicalLockPath).toBe(before.databasePhysicalLockPath);
+      expect(() =>
+        acquireDatabaseReservation(
+          targetIdentity,
+          {
+            ...record,
+            projectRoot: targetIdentity.projectRoot,
+            databasePath: targetIdentity.databasePath,
+          },
+          () => true,
+        ),
+      ).toThrow("Database is already reserved");
     } finally {
       release();
       rmSync(root, { recursive: true, force: true });
@@ -101,8 +115,8 @@ describe("atomic project database reservations", () => {
     });
     const release = acquireDatabaseReservation(first, record(first), () => true);
     try {
-      expect(first.databasePhysicalLockPath).toBe(second.databasePhysicalLockPath);
-      expect(first.databasePhysicalLockPath).not.toBeNull();
+      expect(first.databaseInodeLockPath).toBe(second.databaseInodeLockPath);
+      expect(first.databaseInodeLockPath).not.toBeNull();
       expect(() => acquireDatabaseReservation(second, record(second), () => true)).toThrow(
         "Database is already reserved",
       );

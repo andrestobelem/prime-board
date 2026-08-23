@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   rmSync,
   statSync,
@@ -18,7 +20,8 @@ export interface ProjectInstanceIdentity {
   projectHash: string;
   databasePath: string;
   databaseLockPath: string;
-  databasePhysicalLockPath: string | null;
+  databasePhysicalLockPath: string;
+  databaseInodeLockPath: string | null;
   lockPath: string;
   metadataPath: string;
 }
@@ -48,6 +51,7 @@ export function deriveProjectIdentity(
     databasePath,
     databaseLockPath: databaseReservationPath(databasePath, homeDirectory),
     databasePhysicalLockPath: databasePhysicalReservationPath(databasePath, homeDirectory),
+    databaseInodeLockPath: databaseInodeReservationPath(databasePath, homeDirectory),
     lockPath,
     metadataPath: join(lockPath, "instance.json"),
   };
@@ -85,7 +89,20 @@ function databaseReservationKey(databasePath: string): string {
   return stableDatabasePath(databasePath);
 }
 
-function databasePhysicalReservationKey(databasePath: string): string | null {
+function databasePhysicalReservationKey(databasePath: string): string {
+  let current = resolve(databasePath);
+  for (let depth = 0; depth < 32; depth += 1) {
+    try {
+      if (!lstatSync(current).isSymbolicLink()) return current;
+      current = resolve(dirname(current), readlinkSync(current));
+    } catch {
+      return current;
+    }
+  }
+  return current;
+}
+
+function databaseInodeReservationKey(databasePath: string): string | null {
   try {
     const stats = statSync(databasePath);
     return stats.isFile() ? `${stats.dev}:${stats.ino}` : null;
@@ -102,13 +119,24 @@ export function databaseReservationPath(databasePath: string, homeDirectory = ho
   return join(resolve(homeDirectory), ".prime-board", "databases", `${key}.lock`);
 }
 
+/** Stable target-path lock. It works before a dangling symlink target exists. */
 export function databasePhysicalReservationPath(
   databasePath: string,
   homeDirectory = homedir(),
-): string | null {
+): string {
   const key = databasePhysicalReservationKey(databasePath);
+  const hash = createHash("sha256").update(`target:${key}`).digest("hex").slice(0, 16);
+  return join(resolve(homeDirectory), ".prime-board", "databases", `${hash}.lock`);
+}
+
+/** Inode lock. It makes existing hardlink aliases share the same reservation. */
+export function databaseInodeReservationPath(
+  databasePath: string,
+  homeDirectory = homedir(),
+): string | null {
+  const key = databaseInodeReservationKey(databasePath);
   if (!key) return null;
-  const hash = createHash("sha256").update(`physical:${key}`).digest("hex").slice(0, 16);
+  const hash = createHash("sha256").update(`inode:${key}`).digest("hex").slice(0, 16);
   return join(resolve(homeDirectory), ".prime-board", "databases", `${hash}.lock`);
 }
 
@@ -119,6 +147,7 @@ export function databaseReservationPaths(
   return [
     databaseReservationPath(databasePath, homeDirectory),
     databasePhysicalReservationPath(databasePath, homeDirectory),
+    databaseInodeReservationPath(databasePath, homeDirectory),
   ].filter((path): path is string => Boolean(path));
 }
 
@@ -251,7 +280,11 @@ export function acquireDatabaseReservation(
   record: DatabaseReservationRecord,
   probe: ProcessProbe = processIsAlive,
 ): () => void {
-  const paths = [identity.databaseLockPath, identity.databasePhysicalLockPath]
+  const paths = [
+    identity.databaseLockPath,
+    identity.databasePhysicalLockPath,
+    identity.databaseInodeLockPath,
+  ]
     .filter((path): path is string => Boolean(path))
     .sort();
   for (const path of paths) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
