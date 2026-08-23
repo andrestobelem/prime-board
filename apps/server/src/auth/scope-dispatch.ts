@@ -10,6 +10,7 @@ import {
 } from "./permissions.ts";
 import type { ApiKeyScope } from "../domain/actors.ts";
 import { getIssueByRef } from "../domain/issues.ts";
+import { postgresInboxTeamId } from "../domain/postgres-inbox.ts";
 
 const ADMIN_MUTATIONS = new Set([
   "workspaceCreate",
@@ -55,6 +56,9 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:favorites",
   "query:review",
   "query:reviews",
+  "query:inbox",
+  "query:inboxPage",
+  "query:inboxUnreadCount",
   "query:actorInvitations",
   "mutation:workspaceUpdate",
   "mutation:projectCreate",
@@ -114,6 +118,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:favoriteCreate",
   "mutation:favoriteDelete",
   "mutation:favoriteReorder",
+  "mutation:inboxMarkRead",
+  "mutation:inboxArchive",
   "mutation:apiKeyCreate",
   "mutation:apiKeyDelete",
   "mutation:apiKeyRotate",
@@ -298,11 +304,16 @@ function teamIdsForInbox(context: Context, itemId: unknown): string[] {
   const id = scalar(itemId);
   if (!id) return [];
   const row = context.db
-    .query(
-      "SELECT activity.issue_id FROM inbox_receipts JOIN activity ON activity.id = inbox_receipts.activity_id WHERE inbox_receipts.activity_id = ?1 OR inbox_receipts.rowid = ?1",
-    )
+    .query("SELECT activity.issue_id FROM activity WHERE activity.id = ?1")
     .get(id) as { issue_id: string } | null;
-  return row ? teamIdsForIssue(context, row.issue_id) : [];
+  return row ? teamIdsForIssue(context, row.issue_id) : ["__missing__"];
+}
+
+async function postgresTeamIdsForInbox(context: Context, itemId: unknown): Promise<string[]> {
+  const id = scalar(itemId);
+  if (!id || !context.persistence) return ["__missing__"];
+  const teamId = await postgresInboxTeamId(context.persistence, id);
+  return teamId ? [teamId] : ["__missing__"];
 }
 
 function issueFilterTeams(context: Context, filter: unknown): string[] | null {
@@ -630,10 +641,21 @@ function wrapResolverMap(map: ResolverMap, kind: "query" | "mutation"): Resolver
         } else {
           assertApiKeyScope(context, kind === "query" ? "read" : "write");
         }
-        if (!KEY_MUTATIONS.has(field)) {
-          await assertOperationTeams(context, field, resolverArgs, kind);
+        let result: unknown;
+        const postgresInboxMutation =
+          context.persistence &&
+          hasApiKeyTeamLimit(context.auth) &&
+          kind === "mutation" &&
+          (field === "inboxMarkRead" || field === "inboxArchive");
+        if (postgresInboxMutation) {
+          result = postgresTeamIdsForInbox(context, resolverArgs.id).then((teamIds) => {
+            assertApiKeyTeams(context, teamIds);
+            return resolver(...args);
+          });
+        } else {
+          if (!KEY_MUTATIONS.has(field)) await assertOperationTeams(context, field, resolverArgs, kind);
+          result = resolver(...args);
         }
-        const result = resolver(...args);
         const filterAsync = (value: unknown, filter: (items: unknown[]) => unknown[]): unknown => {
           if (Array.isArray(value)) return filter(value);
           if (value && typeof (value as Promise<unknown>).then === "function") {
