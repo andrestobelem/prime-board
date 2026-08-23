@@ -1,6 +1,7 @@
 // Iniciativa (PRB-206): agrupa proyectos relacionados.
 import { useState } from "react";
 import { GqlError, mutate, useQuery } from "../api.ts";
+import { ErrorState } from "../components/AsyncState.tsx";
 import { Link } from "../router.tsx";
 import { Icon } from "../components/icons.tsx";
 import { EntityModal } from "../components/EntityModal.tsx";
@@ -51,7 +52,7 @@ export function InitiativeView({ initiativeId }: { initiativeId: string }) {
   }
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
-  if (result.error) return <div className="error-banner">{result.error.message}</div>;
+  if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
   const initiative = result.data?.initiative;
   if (!initiative) return <div className="empty">Initiative not found.</div>;
 

@@ -1,6 +1,7 @@
 // Gestión de usuarios y agentes (AT-151 / PRB-197): alta, edición y keys.
 import { useState } from "react";
 import { GqlError, mutate, useQuery } from "../api.ts";
+import { ErrorState } from "../components/AsyncState.tsx";
 import { Avatar } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
 
@@ -212,7 +213,7 @@ export function MembersView() {
   }
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
-  if (result.error) return <div className="error-banner">{result.error.message}</div>;
+  if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
 
   return (
     <div style={{ padding: 24, maxWidth: 720 }}>

@@ -177,6 +177,7 @@ type WorkspaceGateState =
 function useWorkspaceGate(
   routeWorkspaceKey: string | undefined,
   enabled: boolean,
+  retryToken: number,
 ): WorkspaceGateState {
   const [state, setState] = useState<WorkspaceGateState>({ status: "loading" });
   useEffect(() => {
@@ -213,7 +214,7 @@ function useWorkspaceGate(
     return () => {
       mounted = false;
     };
-  }, [enabled, routeWorkspaceKey]);
+  }, [enabled, retryToken, routeWorkspaceKey]);
   return state;
 }
 
@@ -222,8 +223,9 @@ export function App() {
   const routeWorkspaceKey = getWorkspaceKeyFromHash();
   const [hasKey, setHasKey] = useState(() => Boolean(getApiKey()));
   const [serverAuthMode, setServerAuthMode] = useState<ServerAuthMode | null>(null);
+  const [workspaceRetryToken, setWorkspaceRetryToken] = useState(0);
   const authenticated = serverAuthMode !== null && (hasKey || serverAuthMode === "local");
-  const workspaceGate = useWorkspaceGate(routeWorkspaceKey, authenticated);
+  const workspaceGate = useWorkspaceGate(routeWorkspaceKey, authenticated, workspaceRetryToken);
   const shell = useQuery<ShellData>(
     SHELL_QUERY,
     {},
@@ -487,7 +489,10 @@ export function App() {
             <span className="title">Workspace unavailable</span>
           </div>
           <div className="content">
-            <div className="empty">{workspaceGate.message}</div>
+            <ErrorState
+              message={workspaceGate.message}
+              onRetry={() => setWorkspaceRetryToken((token) => token + 1)}
+            />
           </div>
         </div>
       </div>

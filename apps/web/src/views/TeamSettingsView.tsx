@@ -1,6 +1,7 @@
 // Configuración del team: estados del workflow y labels.
 import { useState } from "react";
 import { mutate, useQuery } from "../api.ts";
+import { ErrorState } from "../components/AsyncState.tsx";
 import { navigate } from "../router.tsx";
 import { LabelChip, StateIcon } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
@@ -44,7 +45,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
   const [lifecycleAction, setLifecycleAction] = useState<TeamLifecycleAction | null>(null);
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
-  if (result.error) return <div className="error-banner">{result.error.message}</div>;
+  if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
   const team = result.data?.team;
   if (!team) return <div className="empty">Team {teamKey} not found.</div>;
   const viewer = result.data?.viewer;

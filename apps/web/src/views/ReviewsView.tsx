@@ -228,6 +228,7 @@ export function ReviewsView() {
           Request review
         </button>
       </div>
+      {meta.error && <ErrorState message={meta.error.message} onRetry={meta.refetch} />}
       {error && <div className="error-banner">{error}</div>}
       {items.length === 0 ? (
         <div className="empty">No reviews yet.</div>
@@ -277,14 +278,7 @@ export function ReviewsView() {
           </div>
         ))
       )}
-      {pageError && (
-        <div className="error-banner" role="alert">
-          {pageError}{" "}
-          <button className="btn secondary" onClick={() => void loadMore()}>
-            Retry
-          </button>
-        </div>
-      )}
+      {pageError && <ErrorState message={pageError} onRetry={() => void loadMore()} />}
       {(pageInfo.hasNextPage || loadingMore) && (
         <div style={{ padding: 16, textAlign: "center" }}>
           <button className="btn secondary" disabled={loadingMore} onClick={() => void loadMore()}>

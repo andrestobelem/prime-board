@@ -1,6 +1,7 @@
 // Vista de ciclo (PRB-203): issues asignados al ciclo.
 import { useEffect, useRef, useState } from "react";
 import { gql, GqlError, mutate, useQuery } from "../api.ts";
+import { ErrorState } from "../components/AsyncState.tsx";
 import {
   IssueList,
   IssueListLimitNotice,
@@ -127,7 +128,7 @@ export function CycleView({ cycleId, groupBy = "state" }: { cycleId: string; gro
   }
 
   if (meta.loading && !meta.data) return <div className="loading">Loading…</div>;
-  if (meta.error) return <div className="error-banner">{meta.error.message}</div>;
+  if (meta.error) return <ErrorState message={meta.error.message} onRetry={meta.refetch} />;
   if (!cycle) return <div className="empty">Cycle not found.</div>;
 
   return (
@@ -181,14 +182,7 @@ export function CycleView({ cycleId, groupBy = "state" }: { cycleId: string; gro
           {error}
         </div>
       )}
-      {pageError && (
-        <div className="error-banner" role="alert">
-          {pageError}{" "}
-          <button className="btn secondary" onClick={() => void loadMore()}>
-            Retry
-          </button>
-        </div>
-      )}
+      {pageError && <ErrorState message={pageError} onRetry={() => void loadMore()} />}
       <IssueListLimitNotice
         hasNextPage={pageInfo.hasNextPage}
         loading={loadingMore}
@@ -197,7 +191,7 @@ export function CycleView({ cycleId, groupBy = "state" }: { cycleId: string; gro
       {list.loading && !list.data ? (
         <div className="loading">Loading…</div>
       ) : list.error ? (
-        <div className="error-banner">{list.error.message}</div>
+        <ErrorState message={list.error.message} onRetry={list.refetch} />
       ) : appendUniqueById(list.data?.issues.nodes ?? [], extraIssues).length === 0 ? (
         <div className="empty">No issues in this cycle.</div>
       ) : (

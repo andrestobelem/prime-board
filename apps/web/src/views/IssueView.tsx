@@ -2,6 +2,7 @@
 // panel de propiedades, sub-issues, comentarios e historial de actividad.
 import { useEffect, useRef, useState } from "react";
 import { gql, mutate, useQuery } from "../api.ts";
+import { ErrorState } from "../components/AsyncState.tsx";
 import { Avatar, LabelChip, PRIORITY_NAMES, StateIcon } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
 import { renderMarkdown } from "../markdown.ts";
@@ -222,7 +223,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
   }, [issue?.id, issue?.title, issue?.description]);
 
   if (result.loading && !result.data) return <div className="loading">Loading…</div>;
-  if (result.error) return <div className="error-banner">{result.error.message}</div>;
+  if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
   if (!issue) return <div className="empty">Issue {issueRef} not found.</div>;
 
   const assignableActors =
@@ -533,13 +534,11 @@ export function IssueView({ issueRef }: { issueRef: string }) {
               {saveError}
             </div>
           )}
+          {navigation.error && (
+            <ErrorState message={navigation.error.message} onRetry={navigation.refetch} />
+          )}
           {navigationError && (
-            <div className="error-banner" role="alert">
-              {navigationError}{" "}
-              <button className="btn secondary" onClick={() => void loadNavigationPage()}>
-                Retry
-              </button>
-            </div>
+            <ErrorState message={navigationError} onRetry={() => void loadNavigationPage()} />
           )}
           {saving && <span className="prop-status">Saving…</span>}
           <input
