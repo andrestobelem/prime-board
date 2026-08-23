@@ -15,7 +15,7 @@ const teams = [
 ];
 
 describe("project and cycle permissions", () => {
-  it("allows project mutations for a member of an associated team", () => {
+  it("allows project archive mutations only for an associated team member", () => {
     expect(canManageProject(memberViewer, teams)).toBe(true);
     expect(canManageProject(outsiderViewer, teams)).toBe(false);
   });

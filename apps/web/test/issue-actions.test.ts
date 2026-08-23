@@ -28,4 +28,14 @@ describe("issue action runner", () => {
     ).rejects.toThrow("Could not update issue b");
     expect(order).toEqual(["a", "b"]);
   });
+
+  test("does not call the archive mutation for an empty selection", async () => {
+    let calls = 0;
+    const completed = await runIssueActions([], async () => {
+      calls += 1;
+      return { success: true };
+    });
+    expect(completed).toBe(0);
+    expect(calls).toBe(0);
+  });
 });

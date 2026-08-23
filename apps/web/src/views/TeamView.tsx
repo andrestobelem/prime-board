@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { gql, mutate, useQuery } from "../api.ts";
 import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.tsx";
 import { IssueFilterToolbar } from "../components/IssueFilterToolbar.tsx";
+import { ArchiveConfirmModal } from "../components/ArchiveConfirmModal.tsx";
 import type { IssueActionInput, IssueActionOptions } from "../components/IssueActions.tsx";
 import type { IssueColumn, IssueOrder } from "../components/DisplayOptions.tsx";
 import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-actions.ts";
@@ -85,6 +86,7 @@ export function TeamView({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [archiveSelection, setArchiveSelection] = useState<string[] | null>(null);
   const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -185,9 +187,14 @@ export function TeamView({
     }
   }
 
-  async function bulkArchive(): Promise<void> {
+  async function requestBulkArchive(): Promise<void> {
     const ids = [...selectedIds];
-    if (!ids.length) return;
+    if (ids.length) setArchiveSelection(ids);
+  }
+
+  async function confirmBulkArchive(): Promise<void> {
+    const ids = archiveSelection;
+    if (!ids?.length) return;
     setBulkLoading(true);
     setBulkError(null);
     try {
@@ -198,8 +205,10 @@ export function TeamView({
         return response.issueArchive;
       });
       setSelectedIds(new Set());
+      setArchiveSelection(null);
     } catch (error) {
       setBulkError(error instanceof Error ? error.message : "Could not archive selected issues.");
+      throw error;
     } finally {
       setBulkLoading(false);
     }
@@ -262,10 +271,21 @@ export function TeamView({
         onBulkState={(stateId) => bulkAction({ stateId })}
         actionOptions={actionOptions}
         onBulkAction={bulkAction}
-        onBulkArchive={bulkArchive}
+        onBulkArchive={requestBulkArchive}
         bulkLoading={bulkLoading}
       />
-      {bulkError && <div className="error-banner">{bulkError}</div>}
+      {archiveSelection && (
+        <ArchiveConfirmModal
+          target={{ kind: "issues", count: archiveSelection.length }}
+          onClose={() => setArchiveSelection(null)}
+          onConfirm={confirmBulkArchive}
+        />
+      )}
+      {bulkError && (
+        <div className="error-banner" role="alert">
+          {bulkError}
+        </div>
+      )}
       {pageError && (
         <div className="error-banner" role="alert">
           {pageError}{" "}
@@ -298,7 +318,7 @@ export function TeamView({
         visibleColumns={visibleColumns}
         onIssueAction={updateIssue}
         onArchiveIssue={archiveIssue}
-        onArchiveSelection={bulkArchive}
+        onArchiveSelection={requestBulkArchive}
         emptyTitle={
           activeIssueFilterCount(draft) ? "No issues match these filters" : "No issues yet"
         }

@@ -6,7 +6,7 @@ import { Avatar, LabelChip, PRIORITY_NAMES, StateIcon } from "../components/bits
 import { Icon } from "../components/icons.tsx";
 import { renderMarkdown } from "../markdown.ts";
 import { Link, navigate } from "../router.tsx";
-import { ConfirmModal } from "../components/EntityModal.tsx";
+import { ArchiveConfirmModal } from "../components/ArchiveConfirmModal.tsx";
 import { appendUniqueById } from "../pagination.ts";
 import { unarchiveMutation } from "../issue-actions.ts";
 
@@ -389,7 +389,6 @@ export function IssueView({ issueRef }: { issueRef: string }) {
       throw error;
     } finally {
       setSaving(false);
-      setArchiveOpen(false);
     }
   }
 
@@ -865,12 +864,13 @@ export function IssueView({ issueRef }: { issueRef: string }) {
         </div>
       </div>
       {archiveOpen && (
-        <ConfirmModal
-          title="Archive issue"
-          message={`Archive ${issue.identifier}? It will leave active issue lists.`}
-          confirmLabel="Archive"
+        <ArchiveConfirmModal
+          target={{ kind: "issue", identifier: issue.identifier }}
           onClose={() => setArchiveOpen(false)}
-          onConfirm={archiveIssue}
+          onConfirm={async () => {
+            await archiveIssue();
+            setArchiveOpen(false);
+          }}
         />
       )}
     </>

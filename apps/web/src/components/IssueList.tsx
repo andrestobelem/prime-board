@@ -8,6 +8,7 @@ import {
   type IssueActionInput,
   type IssueActionOptions,
 } from "./IssueActions.tsx";
+import { ArchiveConfirmModal } from "./ArchiveConfirmModal.tsx";
 import { isIssueShortcutTarget } from "../issue-selection.ts";
 import { EmptyState } from "./AsyncState.tsx";
 import type { IssueColumn } from "./DisplayOptions.tsx";
@@ -130,6 +131,10 @@ export function IssueList({
   onClearEmpty?: () => void;
 }) {
   const [focusIndex, setFocusIndex] = useState(-1);
+  const [archiveIssueTarget, setArchiveIssueTarget] = useState<{
+    id: string;
+    identifier: string;
+  } | null>(null);
   const focusRef = useRef(focusIndex);
   useEffect(() => {
     focusRef.current = focusIndex;
@@ -169,7 +174,11 @@ export function IssueList({
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (isIssueShortcutTarget(event.target) || document.querySelector(".overlay")) return;
+      if (isIssueShortcutTarget(event.target)) return;
+      if (document.querySelector(".overlay")) {
+        event.preventDefault();
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
         selection?.onSelectAll?.();
@@ -187,7 +196,7 @@ export function IssueList({
           void onArchiveSelection();
         } else if (focused && onArchiveIssue) {
           event.preventDefault();
-          void onArchiveIssue(focused.id);
+          setArchiveIssueTarget({ id: focused.id, identifier: focused.identifier });
         }
         return;
       }
@@ -204,7 +213,7 @@ export function IssueList({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [flat, onArchiveIssue, selection]);
+  }, [flat, onArchiveIssue, onArchiveSelection, selection]);
 
   useEffect(() => {
     document.querySelector(".issue-row.focused")?.scrollIntoView({ block: "nearest" });
@@ -271,6 +280,7 @@ export function IssueList({
                       options={actionOptions}
                       onAction={(input) => onIssueAction(issue.id, input)}
                       onArchive={() => onArchiveIssue(issue.id)}
+                      archiveTarget={{ kind: "issue", identifier: issue.identifier }}
                     />
                   )}
                 </span>
@@ -279,6 +289,16 @@ export function IssueList({
           })}
         </div>
       ))}
+      {archiveIssueTarget && onArchiveIssue && (
+        <ArchiveConfirmModal
+          target={{ kind: "issue", identifier: archiveIssueTarget.identifier }}
+          onClose={() => setArchiveIssueTarget(null)}
+          onConfirm={async () => {
+            await onArchiveIssue(archiveIssueTarget.id);
+            setArchiveIssueTarget(null);
+          }}
+        />
+      )}
     </div>
   );
 }

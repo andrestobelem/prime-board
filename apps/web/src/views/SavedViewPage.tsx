@@ -5,6 +5,7 @@ import { ISSUE_COLUMNS, type IssueColumn, type IssueOrder } from "../components/
 import { gql, GqlError, mutate, useQuery } from "../api.ts";
 import { navigate } from "../router.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
+import { ArchiveConfirmModal } from "../components/ArchiveConfirmModal.tsx";
 import {
   IssueList,
   IssueListLimitNotice,
@@ -44,6 +45,7 @@ const GROUP_OPTIONS: GroupBy[] = ["state", "milestone", "assignee", "priority"];
 export function SavedViewPage({ viewId }: { viewId: string }) {
   const [editing, setEditing] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [name, setName] = useState("");
   const [filterText, setFilterText] = useState("{}");
   const [orderBy, setOrderBy] = useState<IssueOrder>("UPDATED_DESC");
@@ -142,6 +144,26 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
     await mutate(`mutation($id: ID!) { savedViewDelete(id: $id) { success } }`, { id: view.id });
     setDeleteOpen(false);
     navigate("/");
+  }
+
+  async function archiveView(): Promise<void> {
+    if (!view) return;
+    setError(null);
+    try {
+      const response = await mutate<{ savedViewUpdate: { success: boolean } }>(
+        `mutation($id: ID!) {
+          savedViewUpdate(id: $id, input: { archived: true }) { success }
+        }`,
+        { id: view.id },
+      );
+      if (!response.savedViewUpdate.success)
+        throw new Error("The saved view could not be archived.");
+      setArchiveOpen(false);
+      navigate("/");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "The saved view could not be archived.");
+      throw error;
+    }
   }
 
   if (meta.loading && !meta.data) return <LoadingState />;
@@ -261,18 +283,7 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
               >
                 Save as new
               </button>
-              <button
-                className="btn secondary"
-                onClick={async () => {
-                  await mutate(
-                    `mutation($id: ID!) {
-                    savedViewUpdate(id: $id, input: { archived: true }) { success }
-                  }`,
-                    { id: view.id },
-                  );
-                  navigate("/");
-                }}
-              >
+              <button className="btn secondary" onClick={() => setArchiveOpen(true)}>
                 Archive
               </button>
               <button
@@ -312,6 +323,13 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
             visibleColumns={(view.columns ?? ["priority", "labels", "assignee"]) as IssueColumn[]}
           />
         </>
+      )}
+      {archiveOpen && (
+        <ArchiveConfirmModal
+          target={{ kind: "saved-view", name: view.name }}
+          onClose={() => setArchiveOpen(false)}
+          onConfirm={archiveView}
+        />
       )}
       {deleteOpen && (
         <ConfirmModal

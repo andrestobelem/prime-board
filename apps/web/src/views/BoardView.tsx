@@ -29,6 +29,7 @@ import {
 import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-actions.ts";
 import { isIssueShortcutTarget } from "../issue-selection.ts";
 import { getAssignableActors, type AssigneeActor } from "../assignee-actors.ts";
+import { ArchiveConfirmModal } from "../components/ArchiveConfirmModal.tsx";
 import type { IssueColumn, IssueOrder } from "../components/DisplayOptions.tsx";
 
 const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
@@ -120,6 +121,11 @@ export function BoardView({
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [archiveSelection, setArchiveSelection] = useState<string[] | null>(null);
+  const [archiveIssueTarget, setArchiveIssueTarget] = useState<{
+    id: string;
+    identifier: string;
+  } | null>(null);
   const [extraIssues, setExtraIssues] = useState<BoardCard[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -159,8 +165,11 @@ export function BoardView({
         setFocusedId(null);
       } else if ((event.key === "x" || event.key === "X") && (focusedId || selectedIds.size)) {
         event.preventDefault();
-        if (event.shiftKey && selectedIds.size) void bulkArchive();
-        else if (focusedId) void archiveIssue(focusedId);
+        if (event.shiftKey && selectedIds.size) requestBulkArchive();
+        else if (focusedId) {
+          const focused = visible.find((issue) => issue.id === focusedId);
+          if (focused) setArchiveIssueTarget({ id: focused.id, identifier: focused.identifier });
+        }
       }
     }
     window.addEventListener("keydown", onKey);
@@ -275,9 +284,14 @@ export function BoardView({
     }
   }
 
-  async function bulkArchive(): Promise<void> {
+  async function requestBulkArchive(): Promise<void> {
     const ids = [...selectedIds];
-    if (!ids.length) return;
+    if (ids.length) setArchiveSelection(ids);
+  }
+
+  async function confirmBulkArchive(): Promise<void> {
+    const ids = archiveSelection;
+    if (!ids?.length) return;
     setActionLoading(true);
     setActionError(null);
     try {
@@ -288,8 +302,10 @@ export function BoardView({
         return response.issueArchive;
       });
       setSelectedIds(new Set());
+      setArchiveSelection(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Could not archive selected issues.");
+      throw error;
     } finally {
       setActionLoading(false);
     }
@@ -317,6 +333,7 @@ export function BoardView({
       });
     } catch (error) {
       setActionError(error instanceof Error ? error.message : `Could not archive issue ${id}.`);
+      throw error;
     }
   }
 
@@ -463,10 +480,27 @@ export function BoardView({
         selectedCount={selectedIds.size}
         options={bulkOptions}
         onAction={bulkAction}
-        onArchive={bulkArchive}
+        onArchive={requestBulkArchive}
         onClear={() => setSelectedIds(new Set())}
         loading={actionLoading}
       />
+      {archiveSelection && (
+        <ArchiveConfirmModal
+          target={{ kind: "issues", count: archiveSelection.length }}
+          onClose={() => setArchiveSelection(null)}
+          onConfirm={confirmBulkArchive}
+        />
+      )}
+      {archiveIssueTarget && (
+        <ArchiveConfirmModal
+          target={{ kind: "issue", identifier: archiveIssueTarget.identifier }}
+          onClose={() => setArchiveIssueTarget(null)}
+          onConfirm={async () => {
+            await archiveIssue(archiveIssueTarget.id);
+            setArchiveIssueTarget(null);
+          }}
+        />
+      )}
       {actionError && (
         <div className="error-banner" role="alert">
           {actionError}
@@ -572,6 +606,7 @@ export function BoardView({
                       options={optionsForIssue(issue)}
                       onAction={(input) => updateIssue(issue.id, input)}
                       onArchive={() => archiveIssue(issue.id)}
+                      archiveTarget={{ kind: "issue", identifier: issue.identifier }}
                     />
                   </span>
                   <span className="card-title">{issue.title}</span>

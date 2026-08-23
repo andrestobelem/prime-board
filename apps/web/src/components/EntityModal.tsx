@@ -40,7 +40,11 @@ export function EntityModal({ title, fields, submitLabel, onClose, onSubmit }: E
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape" && !submitting) onClose();
+      if (event.key === "Escape" && !submitting) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onClose();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -63,6 +67,7 @@ export function EntityModal({ title, fields, submitLabel, onClose, onSubmit }: E
     <div
       className="overlay"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      onClick={(event) => event.stopPropagation()}
     >
       <div
         className="modal"
@@ -170,7 +175,11 @@ export function ConfirmModal({
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape" && !submitting) onClose();
+      if (event.key === "Escape" && !submitting) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onClose();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -193,6 +202,7 @@ export function ConfirmModal({
     <div
       className="overlay"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      onClick={(event) => event.stopPropagation()}
     >
       <div
         className="modal"
@@ -201,6 +211,13 @@ export function ConfirmModal({
         aria-modal="true"
         aria-labelledby="confirm-modal-title"
         tabIndex={-1}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Escape" && !submitting) {
+            event.preventDefault();
+            onClose();
+          }
+        }}
       >
         <div className="modal-body">
           <h2 id="confirm-modal-title" style={{ margin: 0, fontSize: 16 }}>

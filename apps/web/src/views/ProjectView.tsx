@@ -6,6 +6,7 @@ import { Link, navigate } from "../router.tsx";
 import { Avatar } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
 import { ConfirmModal, EntityModal } from "../components/EntityModal.tsx";
+import { ArchiveConfirmModal } from "../components/ArchiveConfirmModal.tsx";
 import { IssueList, IssueListLimitNotice, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import { appendUniqueById } from "../pagination.ts";
@@ -59,7 +60,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const [milestoneTarget, setMilestoneTarget] = useState<any | null>(null);
   const [milestoneDelete, setMilestoneDelete] = useState<any | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
-  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [documentTitle, setDocumentTitle] = useState("");
   const [documentContent, setDocumentContent] = useState("");
   const [documentSaving, setDocumentSaving] = useState(false);
@@ -252,6 +253,25 @@ export function ProjectView({ projectId }: { projectId: string }) {
     result.data?.viewer && canManageProject(result.data.viewer, project.teams),
   );
 
+  async function archiveProject(): Promise<void> {
+    if (!canManage) throw new Error("Project team membership is required.");
+    setProjectError(null);
+    try {
+      const response = await mutate<{ projectArchive: { success: boolean } }>(
+        `mutation($id: ID!) { projectArchive(id: $id) { success } }`,
+        { id: projectId },
+      );
+      if (!response.projectArchive.success) throw new Error("The project could not be archived.");
+      setArchiveOpen(false);
+      navigate("/");
+    } catch (error) {
+      setProjectError(
+        error instanceof Error ? error.message : "The project could not be archived.",
+      );
+      throw error;
+    }
+  }
+
   async function createDocument(): Promise<void> {
     const title = documentTitle.trim();
     if (!title) return;
@@ -299,25 +319,8 @@ export function ProjectView({ projectId }: { projectId: string }) {
               <button className="btn secondary" onClick={() => setUpdateOpen(true)}>
                 Post update
               </button>
-              <button
-                className="btn secondary"
-                disabled={archiveLoading}
-                onClick={async () => {
-                  setProjectError(null);
-                  setArchiveLoading(true);
-                  try {
-                    await mutate(`mutation($id: ID!) { projectArchive(id: $id) { success } }`, {
-                      id: project.id,
-                    });
-                    navigate("/");
-                  } catch (err) {
-                    setProjectError(err instanceof Error ? err.message : String(err));
-                  } finally {
-                    setArchiveLoading(false);
-                  }
-                }}
-              >
-                {archiveLoading ? "Archiving…" : "Archive"}
+              <button className="btn secondary" onClick={() => setArchiveOpen(true)}>
+                Archive
               </button>
             </>
           )}
@@ -346,6 +349,13 @@ export function ProjectView({ projectId }: { projectId: string }) {
           </p>
         )}
       </div>
+      {archiveOpen && (
+        <ArchiveConfirmModal
+          target={{ kind: "project", name: project.name }}
+          onClose={() => setArchiveOpen(false)}
+          onConfirm={archiveProject}
+        />
+      )}
       {projectError && (
         <div className="error-banner" role="alert">
           {projectError}

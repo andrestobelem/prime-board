@@ -15,6 +15,7 @@ import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueLi
 import { DisplayOptions, type IssueColumn, type IssueOrder } from "./components/DisplayOptions.tsx";
 import { ErrorState } from "./components/AsyncState.tsx";
 import { Palette } from "./components/Palette.tsx";
+import { ArchiveConfirmModal } from "./components/ArchiveConfirmModal.tsx";
 import { QuickCreate } from "./components/QuickCreate.tsx";
 import { Icon } from "./components/icons.tsx";
 import { Sidebar, type SidebarFavorite } from "./components/Sidebar.tsx";
@@ -243,6 +244,7 @@ export function App() {
   const [createOpen, setCreateOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [archiveIssueRef, setArchiveIssueRef] = useState<string | null>(null);
   const [entityModal, setEntityModal] = useState<CreateModal | null>(null);
   const [favorites, setFavorites] = useState<SidebarFavorite[]>([]);
   const [favoriteOperation, setFavoriteOperation] = useState<FavoriteOperationState | null>(null);
@@ -302,14 +304,24 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  async function archiveCurrentIssue(): Promise<void> {
+  async function requestArchiveCurrentIssue(): Promise<void> {
     const issueRef = route[0] === "issue" ? (route[1] ?? null) : null;
-    if (!issueRef) return;
-    await mutate<{ issueArchive: { success: boolean } }>(
-      `mutation($id: ID!) { issueArchive(id: $id) { success } }`,
-      { id: issueRef },
-    );
-    navigate("/my-issues");
+    if (issueRef) setArchiveIssueRef(issueRef);
+  }
+
+  async function confirmArchiveCurrentIssue(): Promise<void> {
+    if (!archiveIssueRef) return;
+    try {
+      const response = await mutate<{ issueArchive: { success: boolean } }>(
+        `mutation($id: ID!) { issueArchive(id: $id) { success } }`,
+        { id: archiveIssueRef },
+      );
+      if (!response.issueArchive.success) throw new Error("The issue could not be archived.");
+      setArchiveIssueRef(null);
+      navigate("/my-issues");
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   const favoriteContext = (): FavoriteOperationContext | null => {
@@ -822,7 +834,14 @@ export function App() {
           onClose={() => setPaletteOpen(false)}
           onNewIssue={() => setCreateOpen(true)}
           currentIssueRef={route[0] === "issue" ? (route[1] ?? null) : null}
-          onArchiveCurrentIssue={archiveCurrentIssue}
+          onArchiveCurrentIssue={requestArchiveCurrentIssue}
+        />
+      )}
+      {archiveIssueRef && (
+        <ArchiveConfirmModal
+          target={{ kind: "issue", identifier: archiveIssueRef }}
+          onClose={() => setArchiveIssueRef(null)}
+          onConfirm={confirmArchiveCurrentIssue}
         />
       )}
       {shortcutsOpen && (

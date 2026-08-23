@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Icon } from "./icons.tsx";
+import { ArchiveConfirmModal, type ArchiveConfirmationTarget } from "./ArchiveConfirmModal.tsx";
 
 export interface IssueActionState {
   id: string;
@@ -65,14 +66,17 @@ export function IssueActionMenu({
   options,
   onAction,
   onArchive,
+  archiveTarget,
   disabled = false,
 }: {
   options: IssueActionOptions;
   onAction: (input: IssueActionInput) => Promise<void>;
   onArchive: () => Promise<void>;
+  archiveTarget: ArchiveConfirmationTarget;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -172,11 +176,27 @@ export function IssueActionMenu({
             role="menuitem"
             className="danger"
             disabled={saving}
-            onClick={() => void run(onArchive)}
+            onClick={() => setArchiveOpen(true)}
           >
             <Icon name="archive" size={14} /> Archive issue
           </button>
+          {error && (
+            <div className="error-banner" role="alert">
+              {error}
+            </div>
+          )}
         </div>
+      )}
+      {archiveOpen && (
+        <ArchiveConfirmModal
+          target={archiveTarget}
+          onClose={() => setArchiveOpen(false)}
+          onConfirm={async () => {
+            await onArchive();
+            setArchiveOpen(false);
+            setOpen(false);
+          }}
+        />
       )}
     </div>
   );
