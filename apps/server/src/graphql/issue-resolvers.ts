@@ -19,6 +19,13 @@ import { createComment, listComments, mapComment } from "../domain/comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getMilestone, mapMilestone } from "../domain/milestones.ts";
 import { listProjectTeamIds, mapProject } from "../domain/projects.ts";
+import {
+  assertCanManagePostgresProject,
+  canAccessPostgresProject,
+  getPostgresProject,
+  listPostgresProjectTeamIds,
+  mapPostgresProject,
+} from "../domain/postgres-projects.ts";
 import { getCycle, mapCycle } from "../domain/cycles.ts";
 import {
   createRelation,
@@ -289,14 +296,19 @@ export const issueResolvers = {
         )
         .map(mapLabel);
     },
-    project: (issue: MappedIssue, _args: unknown, context: Context) => {
-      if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Issue projects are not yet available with PostgreSQL persistence",
-        );
-      }
+    project: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.project_id) return null;
+      if (context.persistence) {
+        const project = await getPostgresProject(context.persistence, issue._row.project_id);
+        if (
+          !project ||
+          !(await canAccessPostgresProject(context.persistence, requireViewer(context), project.id))
+        ) {
+          return null;
+        }
+        const teamIds = await listPostgresProjectTeamIds(context.persistence, project.id);
+        return apiKeyTeamsWithinLimit(context.auth, teamIds) ? mapPostgresProject(project) : null;
+      }
       const project = lookupProject(context, issue._row.project_id);
       if (
         !project ||
@@ -558,6 +570,16 @@ export const issueResolvers = {
         if (team && !apiKeyTeamsWithinLimit(context.auth, [team.id])) {
           throw apiError("NOT_FOUND", "Team resource not found");
         }
+        if (args.input.projectId) {
+          await assertCanManagePostgresProject(context.persistence, viewer, args.input.projectId);
+          const projectTeamIds = await listPostgresProjectTeamIds(
+            context.persistence,
+            args.input.projectId,
+          );
+          if (!apiKeyTeamsWithinLimit(context.auth, projectTeamIds)) {
+            throw apiError("NOT_FOUND", "Project resource not found");
+          }
+        }
         const row = await createPostgresIssue(context.persistence, viewer, args.input);
         context.events.emit("issue.created", viewer, issueEventData(row));
         return { success: true, issue: mapIssue(row) };
@@ -588,6 +610,16 @@ export const issueResolvers = {
         const existing = await getPostgresIssueByRef(context.persistence, args.id);
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
+        }
+        if (args.input.projectId) {
+          await assertCanManagePostgresProject(context.persistence, viewer, args.input.projectId);
+          const projectTeamIds = await listPostgresProjectTeamIds(
+            context.persistence,
+            args.input.projectId,
+          );
+          if (!apiKeyTeamsWithinLimit(context.auth, projectTeamIds)) {
+            throw apiError("NOT_FOUND", "Project resource not found");
+          }
         }
         const { row, changes } = await updatePostgresIssue(
           context.persistence,

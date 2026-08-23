@@ -262,14 +262,18 @@ export async function updatePostgresProject(
         ]);
       }
     }
-    if (sets.length) {
-      push("updated_at", now());
-      params.push(id);
-      const row = await tx.one<PostgresProjectRow>(
-        `UPDATE projects SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
-        params,
-      );
-      if (!row) throw apiError("NOT_FOUND", "Project not found");
+    if (sets.length || teamIds) {
+      if (sets.length) {
+        push("updated_at", now());
+        params.push(id);
+        const row = await tx.one<PostgresProjectRow>(
+          `UPDATE projects SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+          params,
+        );
+        if (!row) throw apiError("NOT_FOUND", "Project not found");
+      } else {
+        await tx.execute("UPDATE projects SET updated_at = $1 WHERE id = $2", [now(), id]);
+      }
     }
   });
   return (await getPostgresProject(persistence, existing.id))!;

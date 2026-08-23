@@ -228,13 +228,31 @@ function hasOwn(input: object, key: string): boolean {
 }
 
 function assertPostgresIssueDependencies(input: Record<string, unknown>): void {
-  const unsupported = ["projectId", "milestoneId", "cycleId"];
+  const unsupported = ["milestoneId", "cycleId"];
   const field = unsupported.find((name) => hasOwn(input, name));
   if (field) {
     throw apiError(
       "VALIDATION_FAILED",
       `Issue ${field} is not yet available with PostgreSQL persistence`,
     );
+  }
+}
+
+async function assertPostgresProjectForTeam(
+  persistence: Persistence | PersistenceTransaction,
+  projectId: string,
+  teamId: string,
+): Promise<void> {
+  if (!(await persistence.one("SELECT id FROM projects WHERE id = $1", [projectId]))) {
+    throw apiError("NOT_FOUND", "Project not found");
+  }
+  if (
+    !(await persistence.one("SELECT 1 FROM project_teams WHERE project_id = $1 AND team_id = $2", [
+      projectId,
+      teamId,
+    ]))
+  ) {
+    throw apiError("VALIDATION_FAILED", "Project does not include the issue's team");
   }
 }
 
@@ -344,6 +362,7 @@ export async function createPostgresIssue(
     }
     if (input.assigneeId) await assertPostgresAssignee(tx, viewer, team, input.assigneeId);
     if (input.parentId) await assertPostgresParent(tx, null, team.id, input.parentId);
+    if (input.projectId) await assertPostgresProjectForTeam(tx, input.projectId, team.id);
     if (input.creatorId) {
       const creator = await getPostgresActor(tx, input.creatorId);
       if (!creator) throw apiError("NOT_FOUND", "Creator actor not found");
@@ -390,7 +409,7 @@ export async function createPostgresIssue(
       `INSERT INTO issues
        (id, team_id, number, title, description, state_id, priority, assignee_id, parent_id,
         project_id, creator_id, sort_order, created_at, updated_at, archived_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, 0, $11, $11, NULL)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, $12, $12, NULL)`,
       [
         issueId,
         team.id,
@@ -401,6 +420,7 @@ export async function createPostgresIssue(
         priority,
         input.assigneeId ?? null,
         input.parentId ?? null,
+        input.projectId ?? null,
         input.creatorId ?? viewer.id,
         createdAt,
       ],
@@ -494,6 +514,15 @@ export async function updatePostgresIssue(
       activity.push({
         type: "parent_changed",
         payload: { from: issue.parent_id, to: input.parentId },
+      });
+    }
+    if (input.projectId !== undefined && input.projectId !== issue.project_id) {
+      if (input.projectId) await assertPostgresProjectForTeam(tx, input.projectId, team.id);
+      push("project_id", input.projectId);
+      changes.push({ field: "project", from: issue.project_id, to: input.projectId });
+      activity.push({
+        type: "project_changed",
+        payload: { from: issue.project_id, to: input.projectId },
       });
     }
     if (
