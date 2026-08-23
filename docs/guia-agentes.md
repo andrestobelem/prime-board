@@ -65,6 +65,25 @@ eval "$(bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto --print
 Copia `.agents/skills/prime-board-workflow` al proyecto consumidor para que el agente conozca
 el ciclo de crear, reclamar, validar, comentar evidencia y resolver Issues.
 
+### Preflight antes de editar o ejecutar tests
+
+Ejecuta el preflight desde la worktree que vas a usar:
+
+```bash
+bun run preflight -- \
+  --root "$PWD" --unit PRB-543 --branch ghostty-scout/prb-543 --dry-run --json
+```
+
+El informe de solo lectura comprueba la rama, la worktree, `core.bare`, el estado limpio,
+worktrees o ramas duplicadas, la DB y el puerto efectivos, y las rutas del hook de tests.
+Las rutas explícitas evitan que Bun descubra `scratchpad/worktrees`. El hook mantiene la suite
+general en `--max-concurrency=5` y ejecuta cada test del launcher en un proceso separado con
+`--max-concurrency=1`.
+
+El preflight no reserva recursos ni corrige Git. La reserva atómica del launcher sigue siendo
+la protección contra carreras entre dos inicios. Usa `--strict` para tratar advertencias como
+fallos. El informe no imprime variables de entorno ni API keys.
+
 ### Datos de demo (opcional)
 
 ```bash
