@@ -503,6 +503,10 @@ function normalizedOptional(value: string | null | undefined): string | null {
   return normalized ? normalized : null;
 }
 
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Error && /unique|constraint/i.test(error.message);
+}
+
 export function createActorInvitation(
   db: Database,
   invitedBy: string,
@@ -531,16 +535,6 @@ export function createActorInvitation(
   if (type !== null && type !== "human" && type !== "agent") {
     throw apiError("VALIDATION_FAILED", `Invalid actor type: ${input.type}`);
   }
-  if (email) {
-    const existing = db
-      .query(
-        `SELECT id FROM actor_invitations
-         WHERE lower(email) = lower(?1) AND workspace_id = ?2 AND status = 'pending'`,
-      )
-      .get(email, resolvedWorkspaceId);
-    if (existing)
-      throw apiError("VALIDATION_FAILED", "A pending invitation already exists for this email");
-  }
   let metadata = "{}";
   if (input.metadata !== undefined && input.metadata !== null) {
     try {
@@ -556,23 +550,51 @@ export function createActorInvitation(
   const token = generateApiKey();
   const id = newId();
   const timestamp = now();
-  db.query(
-    `INSERT INTO actor_invitations
-      (id, email, name, type, token_hash, status, invited_by, metadata_json, created_at, expires_at, workspace_id)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9, ?10)`,
-  ).run(
-    id,
-    email,
-    name,
-    type,
-    hashApiKey(token),
-    invitedBy,
-    metadata,
-    timestamp,
-    expiresAt,
-    resolvedWorkspaceId,
-  );
-  return { row: getActorInvitation(db, id, resolvedWorkspaceId)!, token };
+  try {
+    let row: ActorInvitationRow | null = null;
+    db.transaction(() => {
+      if (email) {
+        const existing = db
+          .query(
+            `SELECT id, expires_at FROM actor_invitations
+             WHERE lower(email) = lower(?1) AND workspace_id = ?2 AND status = 'pending'`,
+          )
+          .get(email, resolvedWorkspaceId) as { id: string; expires_at: string } | null;
+        if (existing && Date.parse(existing.expires_at) <= Date.now()) {
+          db.query(
+            "UPDATE actor_invitations SET status = 'expired' WHERE id = ?1 AND status = 'pending'",
+          ).run(existing.id);
+        } else if (existing) {
+          throw apiError("VALIDATION_FAILED", "A pending invitation already exists for this email");
+        }
+      }
+      db.query(
+        `INSERT INTO actor_invitations
+          (id, email, name, type, token_hash, status, invited_by, metadata_json, created_at, expires_at, workspace_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9, ?10)`,
+      ).run(
+        id,
+        email,
+        name,
+        type,
+        hashApiKey(token),
+        invitedBy,
+        metadata,
+        timestamp,
+        expiresAt,
+        resolvedWorkspaceId,
+      );
+      row = getActorInvitation(db, id, resolvedWorkspaceId);
+    })();
+    if (!row) throw new Error("Actor invitation insert returned no row");
+    return { row, token };
+  } catch (error) {
+    // The partial unique index is the final arbiter for concurrent invitations.
+    if (isUniqueViolation(error)) {
+      throw apiError("VALIDATION_FAILED", "A pending invitation already exists for this email");
+    }
+    throw error;
+  }
 }
 
 export function revokeActorInvitation(
@@ -586,13 +608,15 @@ export function revokeActorInvitation(
   if (existing.status !== "pending") {
     throw apiError("VALIDATION_FAILED", "Only pending invitations can be revoked");
   }
-  const revoked = db
-    .query(
-      `UPDATE actor_invitations
-       SET status = 'revoked', revoked_at = ?1
-       WHERE id = ?2 AND workspace_id = ?3 AND status = 'pending'`,
-    )
-    .run(now(), id, resolvedWorkspaceId);
+  const revoked = db.transaction(() =>
+    db
+      .query(
+        `UPDATE actor_invitations
+         SET status = 'revoked', revoked_at = ?1
+         WHERE id = ?2 AND workspace_id = ?3 AND status = 'pending'`,
+      )
+      .run(now(), id, resolvedWorkspaceId),
+  )();
   if (revoked.changes !== 1) {
     const current = getActorInvitation(db, id, resolvedWorkspaceId);
     if (!current) throw apiError("NOT_FOUND", "Actor invitation not found");
@@ -623,27 +647,47 @@ export function acceptActorInvitation(
       throw apiError("UNAUTHORIZED", "Invalid actor invitation token");
     }
 
-    // Reservar la invitación dentro de la misma transacción evita que dos
-    // aceptaciones concurrentes creen dos actores para un único bearer token.
-    db.query(
-      "UPDATE actor_invitations SET status = 'accepted' WHERE id = ?1 AND status = 'pending'",
-    ).run(row.id);
-    const reserved = db.query("SELECT status FROM actor_invitations WHERE id = ?1").get(row.id) as {
-      status: ActorInvitationStatus;
-    };
-    if (reserved.status !== "accepted") {
+    // Reserve the invitation in the same transaction. This prevents concurrent
+    // acceptance from creating two identities or credentials for one token.
+    const reserved = db
+      .query(
+        `UPDATE actor_invitations
+         SET status = 'accepted'
+         WHERE id = ?1 AND workspace_id = ?2 AND status = 'pending'`,
+      )
+      .run(row.id, resolvedWorkspaceId);
+    if (reserved.changes !== 1) {
       throw apiError("UNAUTHORIZED", "Invalid actor invitation token");
     }
 
-    const name =
+    const requestedName =
       normalizedOptional(input.name) ?? row.name ?? (row.email ? row.email.split("@")[0] : null);
-    if (!name)
-      throw apiError("VALIDATION_FAILED", "Actor name is required to accept an invitation");
     const type = (input.type ?? row.type ?? "human").toLowerCase();
     if (type !== "human" && type !== "agent") {
       throw apiError("VALIDATION_FAILED", `Invalid actor type: ${input.type}`);
     }
-    const actor = createActor(db, { name, type, email: row.email });
+
+    // Actor identity is global. An email invitation reuses an existing Actor,
+    // then adds only the Membership in the inviting Workspace.
+    const existing = row.email
+      ? (db
+          .query(
+            `SELECT * FROM actors
+             WHERE email IS NOT NULL AND lower(email) = lower(?1)
+             ORDER BY created_at, id LIMIT 1`,
+          )
+          .get(row.email) as ActorRow | null)
+      : null;
+    let actor: ActorRow;
+    if (existing) {
+      actor = existing;
+    } else {
+      if (!requestedName) {
+        throw apiError("VALIDATION_FAILED", "Actor name is required to accept an invitation");
+      }
+      actor = createActor(db, { name: requestedName, type, email: row.email });
+    }
+
     const invitationWorkspaceId = row.workspace_id ?? resolvedWorkspaceId;
     const timestamp = now();
     db.query(
@@ -657,12 +701,16 @@ export function acceptActorInvitation(
       name: "invitation key",
       workspaceId: invitationWorkspaceId,
     });
-    db.query("UPDATE actor_invitations SET actor_id = ?1, accepted_at = ?2 WHERE id = ?3").run(
-      actor.id,
-      timestamp,
-      row.id,
-    );
-    result = { actor: getActor(db, actor.id)!, invitation: getActorInvitation(db, row.id)!, key };
+    db.query(
+      `UPDATE actor_invitations
+       SET actor_id = ?1, accepted_at = ?2
+       WHERE id = ?3 AND workspace_id = ?4`,
+    ).run(actor.id, timestamp, row.id, invitationWorkspaceId);
+    result = {
+      actor: actorInWorkspace(db, actor.id, invitationWorkspaceId),
+      invitation: getActorInvitation(db, row.id, invitationWorkspaceId)!,
+      key,
+    };
   })();
   return result!;
 }

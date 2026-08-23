@@ -270,4 +270,122 @@ describe("actor Workspace isolation", () => {
       { workspace_id: workspaceBId, status: "left" },
     ]);
   });
+
+  it("protects the last active admin in each Workspace", async () => {
+    const isolated = createTestApp();
+    try {
+      const created = await gql(
+        isolated,
+        `mutation { workspaceCreate(input: { name: "Admin guard", urlKey: "admin-guard" }) {
+          workspace { id }
+        } }`,
+      );
+      expect(created.errors).toBeUndefined();
+      const workspaceId = created.data!.workspaceCreate.workspace.id as string;
+      const adminId = (await gql(isolated, `{ viewer { id } }`)).data!.viewer.id as string;
+
+      for (const mutation of ["actorSuspend", "actorRevoke"]) {
+        const denied = await gql(
+          isolated,
+          `mutation($id: ID!) { ${mutation}(id: $id) { actor { id } } }`,
+          { id: adminId },
+          isolated.apiKey,
+          workspaceId,
+        );
+        expect(denied.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+      }
+      const leave = await gql(
+        isolated,
+        `mutation { actorLeave { actor { id } } }`,
+        {},
+        isolated.apiKey,
+        workspaceId,
+      );
+      expect(leave.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+      expect(
+        isolated.db
+          .query(
+            "SELECT role, status FROM workspace_memberships WHERE workspace_id = ?1 AND actor_id = ?2",
+          )
+          .get(workspaceId, adminId),
+      ).toEqual({ role: "admin", status: "active" });
+    } finally {
+      isolated.stop();
+    }
+  });
+
+  it("reuses a global Actor identity across Workspace invitations", async () => {
+    const createdWorkspace = await gql(
+      app,
+      `mutation {
+        workspaceCreate(input: { name: "Identity reuse", urlKey: "identity-reuse" }) {
+          workspace { id }
+        }
+      }`,
+    );
+    expect(createdWorkspace.errors).toBeUndefined();
+    const workspaceBId = createdWorkspace.data!.workspaceCreate.workspace.id as string;
+
+    const firstInvite = await gql(
+      app,
+      `mutation { actorInvite(input: { email: "global@example.com", type: AGENT }) {
+        token invitation { id }
+      } }`,
+      {},
+      app.apiKey,
+      "prime-board",
+    );
+    expect(firstInvite.errors).toBeUndefined();
+    const firstAccepted = await gql(
+      app,
+      `mutation($token: String!) { actorInvitationAccept(token: $token, input: { name: "global-agent" }) {
+        actor { id } key
+      } }`,
+      { token: firstInvite.data!.actorInvite.token },
+      null,
+      "prime-board",
+    );
+    expect(firstAccepted.errors).toBeUndefined();
+    const actorId = firstAccepted.data!.actorInvitationAccept.actor.id as string;
+
+    const secondInvite = await gql(
+      app,
+      `mutation { actorInvite(input: { email: "GLOBAL@example.com", type: AGENT }) {
+        token invitation { id }
+      } }`,
+      {},
+      app.apiKey,
+      workspaceBId,
+    );
+    expect(secondInvite.errors).toBeUndefined();
+    const secondAccepted = await gql(
+      app,
+      `mutation($token: String!) { actorInvitationAccept(token: $token, input: { name: "different-name" }) {
+        actor { id name } key
+      } }`,
+      { token: secondInvite.data!.actorInvite.token },
+      null,
+      workspaceBId,
+    );
+    expect(secondAccepted.errors).toBeUndefined();
+    expect(secondAccepted.data!.actorInvitationAccept.actor).toEqual({
+      id: actorId,
+      name: "global-agent",
+    });
+    expect(
+      app.db
+        .query("SELECT count(*) AS count FROM actors WHERE lower(email) = 'global@example.com'")
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(
+      app.db
+        .query(
+          "SELECT workspace_id, status FROM workspace_memberships WHERE actor_id = ?1 ORDER BY workspace_id",
+        )
+        .all(actorId),
+    ).toEqual([
+      { workspace_id: expect.any(String), status: "active" },
+      { workspace_id: workspaceBId, status: "active" },
+    ]);
+  });
 });

@@ -55,6 +55,36 @@ describe("actor access lifecycle", () => {
     expect(again.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
   });
 
+  it("allows only one concurrent invitation for an email", async () => {
+    const isolated = createTestApp();
+    try {
+      const responses = await Promise.all(
+        ["first", "second"].map((name) =>
+          gql(
+            isolated,
+            `mutation($name: String!) { actorInvite(input: { email: "race@example.com", name: $name }) {
+              invitation { id status }
+            } }`,
+            { name },
+          ),
+        ),
+      );
+      expect(responses.filter((response) => !response.errors)).toHaveLength(1);
+      expect(
+        responses.filter((response) => response.errors)?.[0]?.errors?.[0]?.extensions?.code,
+      ).toBe("VALIDATION_FAILED");
+      expect(
+        isolated.db
+          .query(
+            "SELECT count(*) AS count FROM actor_invitations WHERE lower(email) = 'race@example.com' AND status = 'pending'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      isolated.stop();
+    }
+  });
+
   it("rolls back a failed acceptance and leaves the invitation pending", async () => {
     const invited = await gql(
       app,
