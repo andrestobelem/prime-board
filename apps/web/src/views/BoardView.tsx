@@ -19,6 +19,7 @@ import {
   stateIdForDrop,
 } from "../board-grouping.ts";
 import { getVisibleBoardMetadata } from "../board-columns.ts";
+import { nextBoardFocusId } from "../board-keyboard.ts";
 import { navigate } from "../router.tsx";
 import {
   IssueActionMenu,
@@ -194,13 +195,12 @@ export function BoardView({
         event.key === "ArrowUp"
       ) {
         event.preventDefault();
-        const current = focusedId ? visible.findIndex((issue) => issue.id === focusedId) : -1;
-        const next =
-          event.key === "j" || event.key === "ArrowDown"
-            ? Math.min(current + 1, visible.length - 1)
-            : Math.max(current < 0 ? 0 : current - 1, 0);
-        const issue = visible[next];
-        if (issue) setFocusedId(issue.id);
+        const nextId = nextBoardFocusId(
+          visible.map((issue) => issue.id),
+          focusedId,
+          event.key,
+        );
+        if (nextId) setFocusedId(nextId);
       }
     }
     window.addEventListener("keydown", onKey);
