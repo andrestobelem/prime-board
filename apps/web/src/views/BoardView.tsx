@@ -19,7 +19,7 @@ import {
   stateIdForDrop,
 } from "../board-grouping.ts";
 import { getVisibleBoardMetadata } from "../board-columns.ts";
-import { isBoardInteractiveTarget, nextBoardFocusId } from "../board-keyboard.ts";
+import { focusBoardCard, isBoardInteractiveTarget, nextBoardFocusId } from "../board-keyboard.ts";
 import { navigate } from "../router.tsx";
 import {
   IssueActionMenu,
@@ -206,8 +206,7 @@ export function BoardView({
   useEffect(() => {
     if (!focusedId) return;
     const card = document.querySelector<HTMLElement>(`[data-board-issue-id="${focusedId}"]`);
-    card?.scrollIntoView?.({ block: "nearest" });
-    card?.focus();
+    focusBoardCard(card);
   }, [focusedId]);
 
   if (result.loading && !result.data) return <LoadingState />;

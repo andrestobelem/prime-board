@@ -3,7 +3,11 @@ import { JSDOM } from "jsdom";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { IssueActionMenu } from "../src/components/IssueActions.tsx";
-import { isBoardInteractiveTarget, nextBoardFocusId } from "../src/board-keyboard.ts";
+import {
+  focusBoardCard,
+  isBoardInteractiveTarget,
+  nextBoardFocusId,
+} from "../src/board-keyboard.ts";
 
 beforeAll(() => {
   const dom = new JSDOM("<!doctype html><div></div>");
@@ -22,6 +26,19 @@ describe("board keyboard focus", () => {
     expect(nextBoardFocusId(ids, "one", "ArrowDown")).toBe("two");
     expect(nextBoardFocusId(ids, "two", "k")).toBe("one");
     expect(nextBoardFocusId(ids, "three", "j")).toBe("three");
+  });
+  test("focuses and scrolls the visible card", () => {
+    const card = document.createElement("div");
+    card.tabIndex = 0;
+    let scrolled = false;
+    card.scrollIntoView = () => {
+      scrolled = true;
+    };
+    document.body.append(card);
+    focusBoardCard(card);
+    expect(scrolled).toBe(true);
+    expect(document.activeElement).toBe(card);
+    focusBoardCard(null);
   });
   test("isolates Enter and Space from card controls", () => {
     const root = document.createElement("div");

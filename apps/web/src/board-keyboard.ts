@@ -1,3 +1,9 @@
+export function focusBoardCard(card: HTMLElement | null): void {
+  if (!card) return;
+  card.scrollIntoView?.({ block: "nearest" });
+  card.focus();
+}
+
 export function isBoardInteractiveTarget(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement && Boolean(target.closest("button, input, select, textarea, a"))
