@@ -187,7 +187,7 @@ body {
     Helvetica,
     Arial,
     sans-serif;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
 }
@@ -244,7 +244,7 @@ select:focus {
 }
 .sidebar .workspace {
   font-weight: 600;
-  font-size: 13px;
+  font-size: 14px;
   padding: 6px 10px 12px;
   display: flex;
   align-items: center;
@@ -288,7 +288,7 @@ select:focus {
   padding: 7px 8px;
   border-radius: var(--radius);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
   text-align: left;
 }
 .sidebar .workspace-menu-item:hover {
@@ -325,7 +325,7 @@ select:focus {
   padding: 5px 10px;
   border-radius: var(--radius);
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 14px;
   width: 100%;
   text-align: left;
 }
@@ -420,7 +420,7 @@ select:focus {
   gap: 8px;
   padding: 4px 12px 8px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .sidebar .favorite-feedback span {
   flex: 1;
@@ -498,7 +498,7 @@ kbd {
   padding: 3px 10px;
   border-radius: 4px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .tabs button.active {
   background: var(--surface-hover);
@@ -510,7 +510,7 @@ kbd {
   color: var(--accent-contrast);
   border-radius: var(--radius);
   padding: 5px 12px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   display: inline-flex;
   align-items: center;
@@ -595,7 +595,7 @@ kbd {
 .my-issues-toolbar input,
 .my-issues-toolbar select {
   min-width: 110px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .inbox-unread-toggle {
   display: inline-flex;
@@ -624,6 +624,7 @@ kbd {
   padding: 8px 16px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg);
+  font-size: 13px;
   z-index: 2;
 }
 .issue-toolbar-main,
@@ -684,7 +685,7 @@ kbd {
 }
 .toolbar-status {
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: 12px;
 }
 .issue-select {
   width: 14px;
@@ -940,7 +941,7 @@ kbd {
   border-radius: 4px;
   color: var(--text-muted);
   text-align: left;
-  font-size: 12px;
+  font-size: 13px;
 }
 .issue-actions-menu button:hover,
 .issue-actions-menu a:hover {
@@ -984,6 +985,7 @@ kbd {
   align-items: center;
   padding: 7px 8px;
   border-radius: 5px;
+  font-size: 13px;
 }
 .issue-context-menu button:hover:not(:disabled) {
   background: var(--surface-hover);
@@ -1099,7 +1101,7 @@ kbd {
   gap: 8px;
   align-items: center;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: 12px;
   margin-bottom: 6px;
 }
 .comment .meta .author {
@@ -1233,6 +1235,7 @@ kbd {
   padding: 8px 10px;
   border-radius: var(--radius);
   color: var(--text-muted);
+  font-size: 13px;
 }
 .palette-item.selected {
   background: var(--selection);
@@ -2098,6 +2101,7 @@ kbd {
 }
 .team-home-card small {
   color: var(--text-muted);
+  font-size: 12px;
 }
 .team-home-summary {
   display: flex;
