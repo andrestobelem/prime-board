@@ -490,7 +490,7 @@ export function BoardView({
     <>
       <IssueFilterToolbar
         draft={draft}
-        states={isProject ? [] : container.states}
+        states={isProject ? container.teams.flatMap((team: any) => team.states) : container.states}
         actors={actors}
         labels={isProject ? container.teams.flatMap((team: any) => team.labels) : container.labels}
         projects={isProject ? [] : container.projects}

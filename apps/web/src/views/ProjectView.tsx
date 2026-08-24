@@ -288,11 +288,11 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const issues = [...result.data!.issues.nodes, ...extraIssues];
   const actors = result.data?.actors ?? [];
   const actionOptions: IssueActionOptions = {
-    states: project.teams.flatMap((team) => team.states),
-    actors,
-    labels: project.teams.flatMap((team) => team.labels),
+    states: [],
+    actors: [],
+    labels: [],
     projects: [],
-    cycles: project.teams.flatMap((team) => team.cycles),
+    cycles: [],
   };
   async function bulkAction(input: IssueActionInput): Promise<void> {
     const ids = [...selectedIds];
