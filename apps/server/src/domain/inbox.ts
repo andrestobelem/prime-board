@@ -47,6 +47,28 @@ function activityBody(row: ActivityRow): string {
 type InboxListOptions = { first?: number; includeArchived?: boolean };
 type ViewerRef = string | ActorRow;
 
+/** Las filas legacy con NULL solo son visibles con un único Workspace. */
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
+/** Resuelve el scope de Inbox antes de leer o escribir cualquier receipt. */
+function resolveWorkspaceScope(db: Database, workspaceId?: string): string | undefined {
+  const workspaces = (db.query("SELECT id FROM workspace ORDER BY id").values() as unknown[][]).map(
+    (row) => row[0] as string,
+  );
+  if (workspaceId) {
+    if (!workspaces.includes(workspaceId)) {
+      throw apiError("NOT_FOUND", "Workspace is not initialized");
+    }
+    return workspaceId;
+  }
+  if (workspaces.length > 1) {
+    throw apiError("NOT_FOUND", "Inbox requires a Workspace context");
+  }
+  return workspaces[0];
+}
+
 function resolveViewer(db: Database, viewer: ViewerRef): ActorRow | null {
   if (typeof viewer !== "string") return viewer;
   return db.query("SELECT * FROM actors WHERE id = ?1").get(viewer) as ActorRow | null;
@@ -64,6 +86,7 @@ function listInboxActivityInternal(
   workspaceId?: string,
 ): InboxActivityRow[] {
   const includeArchived = Boolean(opts.includeArchived);
+  const scope = resolveWorkspaceScope(db, workspaceId);
   const viewer = resolveViewer(db, viewerRef);
   if (!viewer) return [];
   const actorId = viewer.id;
@@ -73,7 +96,11 @@ function listInboxActivityInternal(
   // notificación que todavía no fue leída. Recuperamos todos los eventos que
   // pueden alimentar el inbox y reconstruimos el assignee al momento de cada
   // evento a partir del log append-only.
-  const workspaceCondition = workspaceId ? "AND i.workspace_id = ?3" : "";
+  const workspaceCondition = scope
+    ? `AND ${workspaceClause("a.workspace_id", "?3")}
+         AND ${workspaceClause("i.workspace_id", "?3")}`
+    : "";
+  const receiptCondition = scope ? `AND ${workspaceClause("r.workspace_id", "?3")}` : "";
   const rowsQuery = `SELECT a.*,
               i.assignee_id AS issue_assignee_id,
               i.team_id AS issue_team_id,
@@ -82,14 +109,15 @@ function listInboxActivityInternal(
               CASE WHEN r.archived_at IS NOT NULL THEN 1 ELSE 0 END AS is_archived
        FROM activity a
        JOIN issues i ON i.id = a.issue_id
-       LEFT JOIN inbox_receipts r ON r.activity_id = a.id AND r.actor_id = ?1
+       LEFT JOIN inbox_receipts r
+         ON r.activity_id = a.id AND r.actor_id = ?1 ${receiptCondition}
        WHERE (?2 = 1 OR r.archived_at IS NULL)
          ${workspaceCondition}
          AND a.type IN ('created', 'assigned', 'commented', 'state_changed', 'priority_changed', 'subscribed', 'unsubscribed')
        ORDER BY a.created_at DESC, a.id DESC`;
   const rows = (
-    workspaceId
-      ? db.query(rowsQuery).all(actorId, includeArchived ? 1 : 0, workspaceId)
+    scope
+      ? db.query(rowsQuery).all(actorId, includeArchived ? 1 : 0, scope)
       : db.query(rowsQuery).all(actorId, includeArchived ? 1 : 0)
   ) as InboxActivityRow[];
   const visibleRows = rows.filter((row) => canAccessTeam(db, viewer, row.issue_team_id));
@@ -103,11 +131,13 @@ function listInboxActivityInternal(
     byIssue.set(row.issue_id, issueRows);
   }
   const currentSubscribers = new Map<string, Set<string>>();
-  for (const row of db
-    .query(
-      `SELECT issue_id, actor_id FROM issue_subscribers${workspaceId ? " WHERE workspace_id = ?1" : ""}`,
-    )
-    .all(...(workspaceId ? [workspaceId] : [])) as Array<{ issue_id: string; actor_id: string }>) {
+  const subscriberQuery = scope
+    ? `SELECT issue_id, actor_id FROM issue_subscribers WHERE ${workspaceClause("workspace_id", "?1")}`
+    : "SELECT issue_id, actor_id FROM issue_subscribers";
+  for (const row of db.query(subscriberQuery).all(...(scope ? [scope] : [])) as Array<{
+    issue_id: string;
+    actor_id: string;
+  }>) {
     const subscribers = currentSubscribers.get(row.issue_id) ?? new Set<string>();
     subscribers.add(row.actor_id);
     currentSubscribers.set(row.issue_id, subscribers);
@@ -266,7 +296,12 @@ function ensureReceipt(
   actorId: string,
   workspaceId?: string,
 ): void {
-  const activity = db.query("SELECT id FROM activity WHERE id = ?1").get(activityId);
+  const query = workspaceId
+    ? `SELECT id FROM activity WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT id FROM activity WHERE id = ?1";
+  const activity = workspaceId
+    ? db.query(query).get(activityId, workspaceId)
+    : db.query(query).get(activityId);
   if (!activity) throw apiError("NOT_FOUND", "Inbox item not found");
   db.query(
     `INSERT INTO inbox_receipts (activity_id, actor_id, read_at, archived_at, workspace_id)
@@ -282,21 +317,23 @@ export function markInboxRead(
   workspaceId?: string,
 ): InboxActivityRow {
   const actorId = viewerId(viewer);
+  const scope = resolveWorkspaceScope(db, workspaceId);
   // Validar pertenencia/relevancia antes de crear el receipt evita escrituras
   // huérfanas cuando el id es una actividad ajena o ya no corresponde al inbox.
-  if (!findInboxActivity(db, viewer, activityId, workspaceId)) {
+  if (!findInboxActivity(db, viewer, activityId, scope)) {
     throw apiError("NOT_FOUND", "Inbox item not found");
   }
   db.transaction(() => {
-    ensureReceipt(db, activityId, actorId, workspaceId);
-    db.query(
-      `UPDATE inbox_receipts SET read_at = COALESCE(read_at, ?3)
-       WHERE activity_id = ?1 AND actor_id = ?2${workspaceId ? " AND workspace_id = ?4" : ""}`,
-    ).run(
-      ...(workspaceId ? [activityId, actorId, now(), workspaceId] : [activityId, actorId, now()]),
-    );
+    ensureReceipt(db, activityId, actorId, scope);
+    const query = scope
+      ? `UPDATE inbox_receipts SET read_at = COALESCE(read_at, ?3)
+         WHERE activity_id = ?1 AND actor_id = ?2 AND ${workspaceClause("workspace_id", "?4")}`
+      : `UPDATE inbox_receipts SET read_at = COALESCE(read_at, ?3)
+         WHERE activity_id = ?1 AND actor_id = ?2`;
+    if (scope) db.query(query).run(activityId, actorId, now(), scope);
+    else db.query(query).run(activityId, actorId, now());
   })();
-  const row = findInboxActivity(db, viewer, activityId, workspaceId);
+  const row = findInboxActivity(db, viewer, activityId, scope);
   if (!row) throw apiError("NOT_FOUND", "Inbox item not found");
   return row;
 }
@@ -308,23 +345,24 @@ export function archiveInboxItem(
   workspaceId?: string,
 ): InboxActivityRow {
   const actorId = viewerId(viewer);
-  if (!findInboxActivity(db, viewer, activityId, workspaceId)) {
+  const scope = resolveWorkspaceScope(db, workspaceId);
+  if (!findInboxActivity(db, viewer, activityId, scope)) {
     throw apiError("NOT_FOUND", "Inbox item not found");
   }
   db.transaction(() => {
-    ensureReceipt(db, activityId, actorId, workspaceId);
+    ensureReceipt(db, activityId, actorId, scope);
     const timestamp = now();
-    db.query(
-      `UPDATE inbox_receipts
-       SET archived_at = ?3, read_at = COALESCE(read_at, ?3)
-       WHERE activity_id = ?1 AND actor_id = ?2${workspaceId ? " AND workspace_id = ?4" : ""}`,
-    ).run(
-      ...(workspaceId
-        ? [activityId, actorId, timestamp, workspaceId]
-        : [activityId, actorId, timestamp]),
-    );
+    const query = scope
+      ? `UPDATE inbox_receipts
+         SET archived_at = ?3, read_at = COALESCE(read_at, ?3)
+         WHERE activity_id = ?1 AND actor_id = ?2 AND ${workspaceClause("workspace_id", "?4")}`
+      : `UPDATE inbox_receipts
+         SET archived_at = ?3, read_at = COALESCE(read_at, ?3)
+         WHERE activity_id = ?1 AND actor_id = ?2`;
+    if (scope) db.query(query).run(activityId, actorId, timestamp, scope);
+    else db.query(query).run(activityId, actorId, timestamp);
   })();
-  const row = findInboxActivity(db, viewer, activityId, workspaceId);
+  const row = findInboxActivity(db, viewer, activityId, scope);
   if (!row) throw apiError("NOT_FOUND", "Inbox item not found");
   return row;
 }
