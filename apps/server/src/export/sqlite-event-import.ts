@@ -6,7 +6,7 @@ export interface SQLiteEventImportOptions {
   readonly db: Database;
   readonly rootDir: string;
   readonly dryRun?: boolean;
-  /** Explicit Workspace scope for a multi-Workspace SQLite source. */
+  /** Alcance explícito de Workspace para una fuente SQLite multi-Workspace. */
   readonly workspaceId?: string;
 }
 
@@ -89,11 +89,7 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
       "SQLite event import requires workspaceId when the source contains multiple Workspaces",
     );
   }
-  if (
-    requestedWorkspaceId !== undefined &&
-    workspaceIds.length > 0 &&
-    !workspaceIds.includes(requestedWorkspaceId)
-  ) {
+  if (requestedWorkspaceId !== undefined && !workspaceIds.includes(requestedWorkspaceId)) {
     throw new Error(`SQLite event import Workspace ${requestedWorkspaceId} does not exist`);
   }
 
@@ -157,9 +153,9 @@ function activityQuery(scope: ImportScope): string {
 }
 
 /**
- * Import the durable history available in SQLite Activity into the canonical
- * event stream. It never reads legacy per-Issue logs and never talks to PG.
- * A multi-Workspace source always requires an explicit Workspace selector.
+ * Importa la historia durable disponible en Activity de SQLite al stream
+ * canónico. No lee logs históricos por Issue ni se conecta a PostgreSQL.
+ * Una fuente multi-Workspace siempre exige un selector explícito de Workspace.
  */
 export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteEventImportResult {
   const scope = resolveImportScope(options.db, options.workspaceId);
@@ -167,8 +163,8 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
 
   const writer = new EventLogWriter({ rootDir: options.rootDir });
   const warnings: string[] = [];
-  // Dry-run inspects the existing stream too. It never creates the file, but
-  // it reports the same duplicate/conflict result as a real import.
+  // El dry-run inspecciona el stream existente. Nunca crea el archivo, pero
+  // informa los mismos duplicados y conflictos que una importación real.
   const existing = new Map(writer.read().map((event) => [event.eventId, event]));
   const seen = new Map<string, DomainEvent>();
   const events: DomainEvent[] = [];

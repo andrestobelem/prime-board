@@ -236,6 +236,22 @@ describe("SQLite history import", () => {
     }
   });
 
+  it("rejects a selector when the source has no Workspace identity", () => {
+    const db = workspaceDatabase(0);
+    db.query("DELETE FROM workspace").run();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));
+    try {
+      addWorkspaceActivity(db, null, "legacy-event", "issue-1");
+      expect(() =>
+        importSqliteActivity({ db, rootDir: root, workspaceId: "missing-workspace" }),
+      ).toThrow("does not exist");
+      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("accepts a NULL legacy scope while the source has one Workspace", () => {
     const db = workspaceDatabase(1);
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));
