@@ -22,12 +22,18 @@ La comparación distingue la paridad del núcleo de la compatibilidad completa c
 
 El SDL es común, pero la capacidad operativa depende del backend configurado:
 
-- **SQLite** es el backend predeterminado. Usa `bun:sqlite`, migraciones `0001`–`00028` y
+- **SQLite** es el backend predeterminado. Usa `bun:sqlite`, migraciones `0001`–`0028` y
   expone Documents Markdown.
 - **PostgreSQL** es opcional. Se activa con `PRIME_BOARD_PERSISTENCE=postgres`, requiere
   `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0009` y conserva una
-  única Workspace. La migración es incremental: los dominios no migrados usan un SQLite
-  efímero; Documents ya está disponible en PostgreSQL desde la migración `0005`; la cobertura de suscriptores llega a `0006`.
+  única Workspace. La migración es incremental: los dominios sin path PG usan un SQLite efímero
+  o devuelven un error explícito. `0005` agrega Documents, `0006` suscriptores, `0007` Memberships
+  y grants de Workspace, `0008` el alcance de Workspace de los límites de Team de API keys y `0009`
+  el grant explícito del Workspace efectivo. Los paths directos incluyen Issues, Teams, Projects,
+  Milestones, Cycles, Labels, Documents, Activity, suscriptores, Relations, API keys y límites de
+  Team. Relations tiene lectura y mutaciones desde PRB-437; API keys y límites desde PRB-552.
+  Comments no tiene una ruta de persistencia PostgreSQL. El event log canónico y el proyector
+  Repository Source → PostgreSQL siguen pendientes según ADR-0019 y PRB-445/453.
 
 Por eso, un campo o una mutación presente en el SDL no implica que todos los backends la
 soporten. Esta auditoría cuenta el contrato y marca la limitación de persistencia cuando afecta

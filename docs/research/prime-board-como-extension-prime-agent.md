@@ -2,7 +2,7 @@
 
 > Investigación para PRB-422. Fecha: 2026-08-19 (snapshot histórico).\
 > Snapshot local de la investigación: `prime-agent 0.7.3`, `bun 1.3.14`, prime-board en `main`.\
-> Verificación del runtime local: 2026-08-23, base `1e9bf7d` (`main`) y cambios locales.
+> Verificación del runtime local: 2026-08-23, base `8899e11` (`main`) y cambios locales.
 
 ## Conclusión ejecutiva
 
@@ -19,7 +19,11 @@ Para prime-board, separa tres capas:
 La propuesta de package conserva una instancia por repositorio, una DB aislada y la réplica `.prime-board/`
 existente. El runtime SQLite actual ya permite varias Workspaces con selección y aislamiento incremental.
 El backend PostgreSQL mantiene un singleton, por lo que el package debe declarar el backend y no prometer
-multi-Workspace fuera de SQLite.
+multi-Workspace fuera de SQLite. Sus paths directos cubren Actors, autenticación, API keys y límites de Team,
+Teams, Issues, Relations, Projects, Milestones, Cycles, Labels, Documents, Activity, suscriptores, Reviews,
+Initiatives, Project Updates, Saved Views, Favorites, Inbox y Webhooks. Relations está implementado por
+PRB-437 y API keys/límites por PRB-552. Comments no tiene persistencia PostgreSQL; el event log canónico de
+ADR-0019 tampoco forma parte de este runtime.
 
 ## Qué soporta oficialmente Prime Agent
 
@@ -69,24 +73,25 @@ prime-agent package install ./prime-board-agent --local
 
 ## Inventario verificable de prime-board
 
-| Componente                                  | Ubicación actual                                                                                                       | Qué necesita el bundle                                                                                                                                |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Servidor GraphQL, webhooks y static serving | `apps/server`                                                                                                          | Runtime Bun, migraciones, schema y dependencias de producción.                                                                                        |
-| Schema compartido                           | `packages/schema`                                                                                                      | Debe entrar en el build del server/CLI/MCP; hoy usa `workspace:*`.                                                                                    |
-| SQLite                                      | `bun:sqlite` en `apps/server/src/db/database.ts`                                                                       | Backend predeterminado; Bun obligatorio para ejecutar fuente; aplica migraciones SQLite `0001`–`0027`.                                                |
-| PostgreSQL                                  | `Bun.SQL`, `apps/server/src/db/postgres/`                                                                              | Backend opcional; migrador independiente `0001`–`0004`, singleton de Workspace y cobertura incremental.                                               |
-| UI                                          | `apps/web`, salida `apps/web/dist` ignorada por Git                                                                    | Build previo y assets incluidos; el server sirve `index.html` y `/assets`.                                                                            |
-| CLI                                         | `apps/cli`, bin privado `pb`                                                                                           | Empaquetar entrypoint/runtime o reemplazarlo por un `prime-board` bin público.                                                                        |
-| MCP                                         | `apps/mcp/src/index.ts` (`StdioServerTransport`) y `apps/mcp/src/http.ts` (`WebStandardStreamableHTTPServerTransport`) | stdio funciona para clientes locales; Streamable HTTP escucha en `127.0.0.1:3334/mcp` por defecto y es el transporte compatible con `McpIntegration`. |
-| Launcher                                    | `scripts/prime-board-project.ts`                                                                                       | Reutilizar la lógica por repositorio, pero convertirla en lifecycle de la extensión.                                                                  |
-| DB operativa                                | `PRIME_BOARD_DB`, default `~/.prime-board/prime-board.db`                                                              | Mantenerla fuera del package, idealmente `~/.prime-board/projects/<slug-hash>.db`.                                                                    |
-| Réplica                                     | `PRIME_BOARD_REPO` → `<repo>/.prime-board/`                                                                            | Mantenerla en el proyecto; escribir solo mediante API/CLI, nunca desde el package directamente.                                                       |
-| Configuración de clientes                   | `PRIME_BOARD_URL`, `PRIME_BOARD_API_KEY`, `PRIME_BOARD_PROFILE`                                                        | Resolver por proceso y nunca persistir en settings de Prime Agent como texto plano.                                                                   |
-| Skills del proyecto                         | `.agents/skills/prime-board-workflow`                                                                                  | Reempaquetar o enlazar como `skills/prime-board-workflow`.                                                                                            |
+| Componente                                  | Ubicación actual                                                                                                       | Qué necesita el bundle                                                                                                                                                                                                   |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Servidor GraphQL, webhooks y static serving | `apps/server`                                                                                                          | Runtime Bun, migraciones, schema y dependencias de producción.                                                                                                                                                           |
+| Schema compartido                           | `packages/schema`                                                                                                      | Debe entrar en el build del server/CLI/MCP; hoy usa `workspace:*`.                                                                                                                                                       |
+| SQLite                                      | `bun:sqlite` en `apps/server/src/db/database.ts`                                                                       | Backend predeterminado; Bun obligatorio para ejecutar fuente; aplica migraciones SQLite `0001`–`0028`.                                                                                                                   |
+| PostgreSQL                                  | `Bun.SQL`, `apps/server/src/db/postgres/`                                                                              | Backend opcional; migrador independiente `0001`–`0009`, singleton de Workspace y cobertura incremental. Paths directos incluyen Issues, Relations, API keys y límites. Comments y event log canónico siguen fuera de PG. |
+| UI                                          | `apps/web`, salida `apps/web/dist` ignorada por Git                                                                    | Build previo y assets incluidos; el server sirve `index.html` y `/assets`.                                                                                                                                               |
+| CLI                                         | `apps/cli`, bin privado `pb`                                                                                           | Empaquetar entrypoint/runtime o reemplazarlo por un `prime-board` bin público.                                                                                                                                           |
+| MCP                                         | `apps/mcp/src/index.ts` (`StdioServerTransport`) y `apps/mcp/src/http.ts` (`WebStandardStreamableHTTPServerTransport`) | stdio funciona para clientes locales; Streamable HTTP escucha en `127.0.0.1:3334/mcp` por defecto y es el transporte compatible con `McpIntegration`.                                                                    |
+| Launcher                                    | `scripts/prime-board-project.ts`                                                                                       | Reutilizar la lógica por repositorio, pero convertirla en lifecycle de la extensión.                                                                                                                                     |
+| DB operativa                                | `PRIME_BOARD_DB`, default `~/.prime-board/prime-board.db`                                                              | Mantenerla fuera del package, idealmente `~/.prime-board/projects/<slug-hash>.db`.                                                                                                                                       |
+| Réplica                                     | `PRIME_BOARD_REPO` → `<repo>/.prime-board/`                                                                            | Mantenerla en el proyecto; escribir solo mediante API/CLI, nunca desde el package directamente.                                                                                                                          |
+| Configuración de clientes                   | `PRIME_BOARD_URL`, `PRIME_BOARD_API_KEY`, `PRIME_BOARD_PROFILE`                                                        | Resolver por proceso y nunca persistir en settings de Prime Agent como texto plano.                                                                                                                                      |
+| Skills del proyecto                         | `.agents/skills/prime-board-workflow`                                                                                  | Reempaquetar o enlazar como `skills/prime-board-workflow`.                                                                                                                                                               |
 
-El server importa las 27 migraciones SQLite como texto durante el build. El migrador PostgreSQL importa
-cuatro migraciones independientes. Esta separación favorece un binario compilado, pero el package debe
-seleccionar y validar el backend. La web se resuelve mediante `PRIME_BOARD_WEB_DIST`/`apps/web/dist`;
+El server importa las 28 migraciones SQLite como texto durante el build. El migrador PostgreSQL importa
+nueve migraciones independientes. `0008` y `0009` conservan el Workspace de los límites de Team de API keys
+y hacen explícito el grant del Workspace efectivo (PRB-552). Esta separación favorece un binario compilado,
+pero el package debe seleccionar y validar el backend. La web se resuelve mediante `PRIME_BOARD_WEB_DIST`/`apps/web/dist`;
 el package debe tratar de forma explícita los assets empaquetados.
 
 ### Estado actual de los transportes MCP
@@ -228,8 +233,10 @@ No uses esta opción para este objetivo: cambia local-first, añade auth/operaci
 - Publicar `@prime-board/agent` y los runtimes con versionado coordinado.
 - Smoke test en una instalación limpia de Prime Agent por plataforma.
 - `prime-agent package update` actualiza recursos; una migración de DB requiere backup, chequeo de versión y rollback documentado.
-- No anunciar multi-Workspace para el backend PostgreSQL hasta migrar Memberships, grants y selección.
-  El runtime SQLite ya expone esa capacidad de forma incremental; el package debe indicar cuál backend usa.
+- No anunciar multi-Workspace para el backend PostgreSQL hasta completar la selección y el aislamiento
+  multi-Workspace. Memberships, grants y límites de Team de API keys ya tienen paths PostgreSQL, pero el
+  backend conserva un singleton. El runtime SQLite ya expone esa capacidad de forma incremental; el package
+  debe indicar cuál backend usa.
 
 ## Matriz de decisión
 
@@ -266,8 +273,8 @@ No uses esta opción para este objetivo: cambia local-first, añade auth/operaci
 - [`README.md`](../../README.md): quick start, launcher por proyecto, CLI, MCP stdio/Streamable HTTP y réplica.
 - [`apps/server/src/config.ts`](../../apps/server/src/config.ts): `PRIME_BOARD_*`, DB, webDist y repo.
 - [`apps/server/src/server.ts`](../../apps/server/src/server.ts): GraphQL, static UI, health y proceso Bun.
-- [`apps/server/src/db/database.ts`](../../apps/server/src/db/database.ts): `bun:sqlite`, WAL, migraciones SQLite `0001`–`0027` y foreign keys.
-- [`apps/server/src/db/postgres/migrator.ts`](../../apps/server/src/db/postgres/migrator.ts): migraciones PostgreSQL `0001`–`0004` y checksums.
+- [`apps/server/src/db/database.ts`](../../apps/server/src/db/database.ts): `bun:sqlite`, WAL, migraciones SQLite `0001`–`0028` y foreign keys.
+- [`apps/server/src/db/postgres/migrator.ts`](../../apps/server/src/db/postgres/migrator.ts): migraciones PostgreSQL `0001`–`0009` y checksums.
 - [`apps/server/src/config.ts`](../../apps/server/src/config.ts): backend predeterminado SQLite y selección opcional de PostgreSQL.
 - [`scripts/prime-board-project.ts`](../../scripts/prime-board-project.ts): DB por proyecto, hash de ruta y `PRIME_BOARD_REPO`.
 - [`apps/cli/package.json`](../../apps/cli/package.json), [`apps/mcp/package.json`](../../apps/mcp/package.json) y [`apps/server/package.json`](../../apps/server/package.json): paquetes privados/workspace actuales; MCP publica los entrypoints `pb-mcp` (stdio) y `pb-mcp-http` (Streamable HTTP).

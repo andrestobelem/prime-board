@@ -6,7 +6,7 @@
 
 ## Contexto
 
-El server usa `bun:sqlite` de forma síncrona en el dominio, GraphQL, scripts y tests. La futura migración a PostgreSQL tendrá I/O de red y conexiones dedicadas. Por eso los módulos de negocio no deben propagar tipos del driver ni mantener callbacks síncronos.
+El server usa `bun:sqlite` de forma síncrona en parte del dominio, GraphQL, scripts y tests. PostgreSQL es un backend opcional y tiene I/O de red y conexiones dedicadas. Por eso los módulos de negocio no deben propagar tipos del driver ni mantener callbacks síncronos. El contrato async permite migrar los dominios por etapas sin cambiar sus interfaces públicas.
 
 ## Decisión
 
@@ -22,12 +22,16 @@ Los callers pasan los parámetros separados del SQL. Las sentencias del contrato
 
 ## Implementación actual
 
-`createSqlitePersistence()` en `db/sqlite-persistence.ts` adapta la conexión SQLite existente. Envuelve sus operaciones síncronas en Promises y usa `BEGIN`/`COMMIT`/`ROLLBACK` explícitos para esperar callbacks async. `openPersistence()` en `db/backend.ts` selecciona este adaptador por defecto y deja PostgreSQL como backend reservado. Falla explícitamente hasta que exista su implementación.
+`createSqlitePersistence()` en `db/sqlite-persistence.ts` adapta la conexión SQLite existente. Envuelve sus operaciones síncronas en Promises y usa `BEGIN`/`COMMIT`/`ROLLBACK` explícitos para ejecutar el callback de la transacción con el contrato async.
 
-Los módulos actuales todavía usan la API síncrona. Los tickets posteriores harán la migración incremental de los dominios a este seam. El adaptador PostgreSQL deberá reservar una conexión dedicada por transacción y normalizar `rowCount`/`RETURNING` al mismo resultado.
+`createPostgresPersistence()` en `db/postgres/persistence.ts` adapta `Bun.SQL`. Usa parámetros separados, normaliza filas afectadas y resultados `RETURNING`, convierte los errores del driver en `PersistenceError` y ejecuta `transaction()` con `sql.begin()`. `close()` es async e idempotente en ambos adaptadores.
+
+`resolvePersistenceBackend()` y `openPersistence()` en `db/backend.ts` seleccionan SQLite por defecto o PostgreSQL cuando la configuración lo solicita. PostgreSQL exige una URL explícita. El arranque del server aplica las migraciones PG antes de crear el adaptador y conserva un SQLite en memoria para los dominios que todavía no tienen una ruta PostgreSQL.
+
+Este contrato no implica un cutover completo. PostgreSQL mantiene una Workspace singleton y su cobertura es incremental. Los resolvers migrados usan `context.persistence` para Actors, autenticación, API keys y límites de Team, Teams, Issues, Relations, Projects, Milestones, Cycles, Labels, Documents, Activity, suscriptores, Reviews, Initiatives, Project Updates, Saved Views, Favorites, Inbox y Webhooks. Relations tiene lectura y mutaciones PostgreSQL desde PRB-437. API keys y límites de Team usan PostgreSQL desde PRB-552 mediante las migraciones `0008` y `0009`. Comments no tiene una ruta PostgreSQL. El event log canónico y el proyector Repository Source → PostgreSQL no forman parte de este runtime; ADR-0019 los deja para PRB-445/453.
 
 ## Consecuencias
 
-- El dominio futuro puede probarse contra una implementación async sin importar `bun:sqlite` ni `Bun.SQL`.
-- La adaptación todavía no cambia el comportamiento de producción ni habilita PostgreSQL.
+- El dominio puede probarse contra una implementación async sin importar `bun:sqlite` ni `Bun.SQL`.
+- La adaptación habilita PostgreSQL para los dominios migrados, pero no declara un cutover ni una paridad completa con SQLite.
 - Mientras SQLite sea el backend, una conexión no debe ejecutar transacciones concurrentes ni anidadas. Los callers deben esperar cada transacción.
