@@ -30,6 +30,14 @@ _Avoid_: Team membership, seat
 Agrupación de trabajo que posee sus Workflow States, Cycles y configuración team-scoped. También define el prefijo de los Identifiers (`AT`, `PB`, `PRB`). Cada Issue pertenece a un solo Team.
 _Avoid_: Squad, group
 
+**Team Visibility**:
+Regla de descubrimiento y lectura de un Team. `public` permite a los Actors activos del Workspace descubrir y leer el Team; `private` limita esa capacidad a sus Memberships activas y a los admins. No concede capacidad de escritura.
+_Avoid_: Public access, privacy
+
+**Team Access Policy**:
+Regla de escritura y asignación de un Team. `workspace_members` permite esas operaciones a los Actors activos del Workspace en un Team público; `team_members` exige Membership activa. Un Team privado siempre usa `team_members`; esta política es independiente de Team Visibility y Workspace Role.
+_Avoid_: Permission level, role
+
 **Membership**:
 Relación entre un Actor y un Team. Tiene rol `member` u `owner`. El owner administra el roster y no puede eliminar al último owner del Team. Membership y asignación de una Issue son relaciones distintas.
 _Avoid_: User assignment, seat
@@ -65,7 +73,7 @@ Actor que originó una Issue. Indica procedencia, pero no concede ownership ni p
 _Avoid_: Owner, author
 
 **Assignee**:
-Actor responsable de una Issue en un momento dado. Una Issue puede no tener Assignee. La asignación no crea una Membership ni exige que el Actor pertenezca al Team.
+Actor responsable de una Issue en un momento dado. Una Issue puede no tener Assignee. El Assignee debe ser un Actor `active` del Workspace; la Team Access Policy puede exigir una Membership activa en el Team. La asignación no crea una Membership.
 _Avoid_: Owner, member
 
 **Sub-issue**:
@@ -130,6 +138,12 @@ _Avoid_: Epic, theme, OKR
 Nota narrativa sobre la salud de un Project. Tiene estado `on_track`, `at_risk` u `off_track`, autor y cuerpo. Describe el seguimiento; no cambia el estado del Project.
 _Avoid_: Status report, pulse
 
+## Contenido
+
+**Document**:
+Unidad de contenido Markdown que pertenece a un Workspace. Puede ser global o vincularse a exactamente un recurso de trabajo: Issue, Project, Team, Initiative o Cycle. Es contenido largo independiente de la descripción operativa de una Issue.
+_Avoid_: Issue description, attachment, page
+
 ## Colaboración y superficies personales
 
 **Review**:
@@ -145,7 +159,7 @@ Relación privada y ordenada entre un Actor y un Project o Saved View. No cambia
 _Avoid_: Bookmark, shortcut
 
 **Activity**:
-Proyección legible de un evento de dominio observable asociado a una Issue. Incluye Actor y momento. Alimenta el historial, el Inbox y los snapshots Markdown. El Log conserva el evento de origen en la réplica actual y será la autoridad canónica en la topología PostgreSQL de ADR-0019. Activity no es por sí sola la fuente de verdad ni el estado actual.
+Proyección legible de un evento de dominio observable asociado a una Issue. Incluye Actor y momento. Alimenta el historial, el Inbox y los snapshots Markdown. El Event Log conserva el evento de origen en la réplica actual y será la autoridad canónica en la topología PostgreSQL de ADR-0019. Activity no es por sí sola la fuente de verdad ni el estado actual.
 _Avoid_: Audit log, changelog, CDC del WAL
 
 **Comment**:
@@ -171,7 +185,7 @@ Backend predeterminado de prime-board. Mantiene el modo local-first y la operaci
 _Avoid_: SQLite-only contract, cache
 
 **PostgreSQL backend**:
-Backend opcional que se activa de forma explícita. La migración es incremental: PostgreSQL recibe los dominios que ya tienen adaptador, mientras el resto conserva su camino de transición. Durante esta migración, PostgreSQL mantiene un solo Workspace por DB/proceso y no ofrece selección multi-Workspace. ADR-0019 define su arquitectura objetivo, con el Log del Repository Source como autoridad y PostgreSQL como proyección.
+Backend opcional que se activa de forma explícita. La migración es incremental: PostgreSQL recibe los dominios que ya tienen adaptador, mientras el resto conserva su camino de transición. Durante esta migración, PostgreSQL mantiene un solo Workspace por DB/proceso y no ofrece selección multi-Workspace. ADR-0019 define su arquitectura objetivo, con el Event Log del Repository Source como autoridad y PostgreSQL como proyección.
 _Avoid_: PostgreSQL default, replica completa
 
 ## Registro y réplica
@@ -181,13 +195,13 @@ Proyección vigente del Workspace. La API la consulta para permisos, filtros y r
 _Avoid_: Source of truth, cache
 
 **Repository Source**:
-Estado compartido y versionado del dominio. En el runtime SQLite actual, `.prime-board` es una réplica controlada de SQLite, según ADR-0004. ADR-0019 define la transición en la que su Log append-only será la autoridad canónica para la topología PostgreSQL objetivo. Los secretos y las proyecciones personales quedan fuera de esta fuente.
+Estado compartido y versionado del dominio. En el runtime SQLite actual, `.prime-board` es una réplica controlada de SQLite, según ADR-0004. ADR-0019 define la transición en la que su Event Log append-only será la autoridad canónica para la topología PostgreSQL objetivo. Los secretos y las proyecciones personales quedan fuera de esta fuente.
 _Avoid_: Repository Replica, backup, dump
 
-**Log**:
-Serie versionada de eventos de dominio append-only dentro del Repository Source (`.prime-board/log/AT-172.jsonl`). En el runtime SQLite actual, forma parte de la réplica y la DB conserva la autoridad operativa. En la topología PostgreSQL de ADR-0019, el Log será la fuente canónica y PostgreSQL podrá reproyectarse desde cero. Cada evento tiene identidad, tipo, actor, momento y payload suficiente para que un reducer reconstruya el estado de su agregado. Los merges se resuelven de forma determinista.
-_Avoid_: Activity, CDC del WAL, source of truth aislado del Repository Source
+**Event Log**:
+Registro append-only de eventos de dominio del Repository Source. Cada evento tiene identidad, tipo, Actor, momento y payload suficiente para reconstruir el estado de su agregado. En el runtime SQLite actual, forma parte de la réplica y la DB conserva la autoridad operativa; en la topología PostgreSQL de ADR-0019, será la fuente canónica y PostgreSQL podrá reproyectarse desde cero. No es Activity ni un historial operativo por Issue. Los merges se resuelven de forma determinista.
+_Avoid_: Log, Activity, Audit log, CDC del WAL
 
 **Issue Markdown**:
-Representación derivada y legible de una Issue dentro del Repository Source (`.prime-board/issues/AT-172.md`). En el runtime SQLite actual, se genera como parte de la réplica. En la topología PostgreSQL de ADR-0019, se regenerará desde el Log. Un importador explícito puede leerla y emitir eventos; la representación no escribe directamente en PostgreSQL ni actúa como autoridad.
+Representación derivada y legible de una Issue dentro del Repository Source (`.prime-board/issues/AT-172.md`). En el runtime SQLite actual, se genera como parte de la réplica. En la topología PostgreSQL de ADR-0019, se regenerará desde el Event Log. Un importador explícito puede leerla y emitir eventos; la representación no escribe directamente en PostgreSQL ni actúa como autoridad.
 _Avoid_: Snapshot editable, dump
