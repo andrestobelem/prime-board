@@ -75,23 +75,96 @@ function parseEvents(events: string | readonly string[]): string[] {
   }
 }
 
+function sqliteSingleWorkspaceId(db: Database): string | null {
+  const rows = db.query("SELECT id FROM workspace ORDER BY created_at, id").all() as Array<{
+    id: string;
+  }>;
+  return rows.length === 1 ? rows[0]!.id : null;
+}
+
+/** Deriva el alcance del evento antes de leer hooks o permisos. */
+function sqliteEventWorkspaceId(
+  db: Database,
+  event: WebhookEventName,
+  data: Record<string, unknown>,
+): string | null {
+  if (typeof data._workspaceId === "string") {
+    const workspace = db.query("SELECT id FROM workspace WHERE id = ?1").get(data._workspaceId) as {
+      id: string;
+    } | null;
+    return workspace?.id ?? null;
+  }
+
+  const teamId =
+    typeof data.teamId === "string"
+      ? data.teamId
+      : event.startsWith("team.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (teamId) {
+    const row = db.query("SELECT workspace_id FROM teams WHERE id = ?1").get(teamId) as {
+      workspace_id: string | null;
+    } | null;
+    if (row?.workspace_id) return row.workspace_id;
+  }
+
+  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  if (issueId) {
+    const row = db.query("SELECT workspace_id FROM issues WHERE id = ?1").get(issueId) as {
+      workspace_id: string | null;
+    } | null;
+    if (row?.workspace_id) return row.workspace_id;
+  }
+
+  const projectId =
+    typeof data.projectId === "string"
+      ? data.projectId
+      : event.startsWith("project.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (projectId) {
+    const project = db.query("SELECT workspace_id FROM projects WHERE id = ?1").get(projectId) as {
+      workspace_id: string | null;
+    } | null;
+    if (project?.workspace_id) return project.workspace_id;
+    const team = db
+      .query("SELECT workspace_id FROM project_teams WHERE project_id = ?1 LIMIT 1")
+      .get(projectId) as { workspace_id: string | null } | null;
+    if (team?.workspace_id) return team.workspace_id;
+  }
+
+  // `team.deleted` no longer has a root row. This fallback preserves legacy
+  // single-Workspace delivery and fails closed when the topology is ambiguous.
+  return sqliteSingleWorkspaceId(db);
+}
+
 function sqliteEventTeamIds(
   db: Database,
   event: WebhookEventName,
   data: Record<string, unknown>,
+  workspaceId: string,
 ): string[] {
+  const scope =
+    "(workspace_id = ?2 OR (workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1))";
   const direct =
     typeof data.teamId === "string"
       ? [data.teamId]
       : event.startsWith("team.") && typeof data.id === "string"
         ? [data.id]
         : [];
-  if (direct.length > 0) return direct;
+  if (direct.length > 0) {
+    const [teamId] = direct;
+    if (!teamId) return [];
+    const team = db
+      .query(`SELECT id FROM teams WHERE id = ?1 AND ${scope}`)
+      .get(teamId, workspaceId);
+    return team ? direct : [];
+  }
   const issueId = typeof data.issueId === "string" ? data.issueId : null;
   if (issueId) {
-    const row = db.query("SELECT team_id FROM issues WHERE id = ?1").get(issueId) as {
-      team_id: string;
-    } | null;
+    const row = db
+      .query(`SELECT team_id FROM issues WHERE id = ?1 AND ${scope}`)
+      .get(issueId, workspaceId) as { team_id: string } | null;
     return row ? [row.team_id] : [];
   }
   const projectId =
@@ -102,9 +175,9 @@ function sqliteEventTeamIds(
         : null;
   if (projectId) {
     return (
-      db.query("SELECT team_id FROM project_teams WHERE project_id = ?1").all(projectId) as Array<{
-        team_id: string;
-      }>
+      db
+        .query(`SELECT team_id FROM project_teams WHERE project_id = ?1 AND ${scope}`)
+        .all(projectId, workspaceId) as Array<{ team_id: string }>
     ).map((row) => row.team_id);
   }
   return [];
@@ -150,22 +223,35 @@ async function sqliteOwnerCanReceive(
   db: Database,
   ownerId: string | null,
   teamIds: readonly string[],
+  workspaceId: string,
   deletedTeamOwnerIds: readonly string[] = [],
 ): Promise<boolean> {
   if (!ownerId) return false;
-  const owner = db.query("SELECT * FROM actors WHERE id = ?1").get(ownerId) as ActorRow | null;
-  return Boolean(
-    owner &&
-    owner.status === "active" &&
-    teamIds.every((teamId) => {
-      const team = db.query("SELECT id FROM teams WHERE id = ?1").get(teamId);
-      return Boolean(
-        team
-          ? canAccessTeam(db, owner, teamId)
-          : isWorkspaceAdmin(owner) || deletedTeamOwnerIds.includes(ownerId),
-      );
-    }),
-  );
+  const owner = db
+    .query(
+      `SELECT actors.*, memberships.role AS workspace_role
+         FROM actors
+         JOIN workspace_memberships AS memberships
+           ON memberships.actor_id = actors.id
+          AND memberships.workspace_id = ?2
+          AND memberships.status = 'active'
+        WHERE actors.id = ?1`,
+    )
+    .get(ownerId, workspaceId) as ActorRow | null;
+  if (!owner || owner.status !== "active") return false;
+
+  const scope =
+    "(workspace_id = ?2 OR (workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1))";
+  return teamIds.every((teamId) => {
+    const team = db
+      .query(`SELECT id FROM teams WHERE id = ?1 AND ${scope}`)
+      .get(teamId, workspaceId);
+    return Boolean(
+      team
+        ? canAccessTeam(db, owner, teamId)
+        : isWorkspaceAdmin(owner) || deletedTeamOwnerIds.includes(ownerId),
+    );
+  });
 }
 
 async function postgresOwnerCanReceive(
@@ -233,12 +319,24 @@ export class WebhookDispatcher {
     data: Record<string, unknown>,
     changes?: Record<string, { from: unknown; to: unknown }>,
   ): Promise<void> {
+    const sqliteWorkspaceId = this.persistence
+      ? null
+      : sqliteEventWorkspaceId(this.db, event, data);
+    if (!this.persistence && !sqliteWorkspaceId) return;
+
     const hooks = this.persistence
       ? await this.persistence.many<WebhookRow>("SELECT * FROM webhooks WHERE enabled = TRUE")
-      : (this.db.query("SELECT * FROM webhooks WHERE enabled = 1").all() as WebhookRow[]);
+      : (this.db
+          .query(
+            `SELECT * FROM webhooks
+             WHERE enabled = 1
+               AND (workspace_id = ?1 OR
+                    (workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1))`,
+          )
+          .all(sqliteWorkspaceId!) as WebhookRow[]);
     const teamIds = this.persistence
       ? await postgresEventTeamIds(this.persistence, event, data)
-      : sqliteEventTeamIds(this.db, event, data);
+      : sqliteEventTeamIds(this.db, event, data, sqliteWorkspaceId!);
     const deletedTeamOwnerIds =
       event === "team.deleted" && Array.isArray(data._teamOwnerIds)
         ? data._teamOwnerIds.filter((id): id is string => typeof id === "string")
@@ -254,7 +352,13 @@ export class WebhookDispatcher {
             teamIds,
             deletedTeamOwnerIds,
           )
-        : await sqliteOwnerCanReceive(this.db, hook.owner_id, teamIds, deletedTeamOwnerIds);
+        : await sqliteOwnerCanReceive(
+            this.db,
+            hook.owner_id,
+            teamIds,
+            sqliteWorkspaceId!,
+            deletedTeamOwnerIds,
+          );
       if (
         hook.team_id &&
         (!teamIds.includes(hook.team_id) ||
@@ -269,6 +373,7 @@ export class WebhookDispatcher {
                 this.db,
                 hook.owner_id,
                 [hook.team_id],
+                sqliteWorkspaceId!,
                 deletedTeamOwnerIds,
               )))
       ) {
@@ -279,7 +384,7 @@ export class WebhookDispatcher {
     if (subscribed.length === 0) return;
 
     const publicData = Object.fromEntries(
-      Object.entries(data).filter(([key]) => key !== "_teamOwnerIds"),
+      Object.entries(data).filter(([key]) => key !== "_teamOwnerIds" && key !== "_workspaceId"),
     );
     const body = JSON.stringify({
       event,
