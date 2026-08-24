@@ -13,11 +13,15 @@ import { getTeam, listTeamStates, type TeamRow } from "../domain/teams.ts";
 import { storeBootstrapCredential, storeNamedCredential } from "../auth/credentials.ts";
 
 const config = loadConfig();
+const credentialDatabasePath =
+  config.persistenceBackend === "postgres" && config.postgresUrl
+    ? `${config.dbPath}|postgres:${config.postgresUrl}`
+    : config.dbPath;
 const db = openDatabase(config.dbPath);
 
 const seeded = bootstrap(db, config.bootstrap);
-if (seeded.created && seeded.adminApiKey) {
-  storeBootstrapCredential(config.repoRoot, config.dbPath, seeded.adminApiKey);
+if (config.authMode !== "local" && seeded.created && seeded.adminApiKey) {
+  storeBootstrapCredential(config.repoRoot, credentialDatabasePath, seeded.adminApiKey);
   console.log(
     "Admin API key stored outside the project under ~/.prime-board/credentials/ (mode 0600).",
   );
@@ -105,7 +109,9 @@ console.log(
   `  team ${team.key} · project "${project.name}" · 4 issues (${team.key}-1..${team.key}-4)`,
 );
 console.log(`  actors: admin (human), demo-agent (agent)`);
-storeNamedCredential(config.repoRoot, config.dbPath, "demo-agent", agentKey.key);
-console.log(
-  "Demo agent API key stored outside the project under ~/.prime-board/credentials/ (mode 0600).",
-);
+if (config.authMode !== "local") {
+  storeNamedCredential(config.repoRoot, credentialDatabasePath, "demo-agent", agentKey.key);
+  console.log(
+    "Demo agent API key stored outside the project under ~/.prime-board/credentials/ (mode 0600).",
+  );
+}

@@ -8,12 +8,28 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bootstrapCredentialPath, storeBootstrapCredential } from "./credentials.ts";
+import {
+  bootstrapCredentialPath,
+  prepareBootstrapCredentialPath,
+  storeBootstrapCredential,
+} from "./credentials.ts";
 
 describe("bootstrap credentials", () => {
+  it("separa credenciales fallback por identidad de backend", () => {
+    const home = join(tmpdir(), `prime-board-credentials-${crypto.randomUUID()}`);
+    try {
+      const postgresA = bootstrapCredentialPath(null, ":memory:|postgres:postgres://board-a", home);
+      const postgresB = bootstrapCredentialPath(null, ":memory:|postgres:postgres://board-b", home);
+      expect(postgresA).not.toBe(postgresB);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("stores the key outside the project with private permissions", () => {
     const home = join(tmpdir(), `prime-board-credentials-${crypto.randomUUID()}`);
     const projectRoot = join(home, "project with spaces");
@@ -34,6 +50,20 @@ describe("bootstrap credentials", () => {
       expect(statSync(join(credentialHome, ".prime-board", "credentials")).mode & 0o777).toBe(
         0o700,
       );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza un directorio de credenciales que no se puede preparar", () => {
+    const home = join(tmpdir(), `prime-board-credentials-${crypto.randomUUID()}`);
+    const projectRoot = join(home, "project");
+    const credentialsRoot = join(home, ".prime-board", "credentials");
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(join(home, ".prime-board"), { recursive: true });
+    writeFileSync(credentialsRoot, "not a directory");
+    try {
+      expect(() => prepareBootstrapCredentialPath(projectRoot, ":memory:", home)).toThrow();
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
