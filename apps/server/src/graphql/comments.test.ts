@@ -153,3 +153,46 @@ describe("activity", () => {
     expect(result.data!.issue.comments.length).toBe(1);
   });
 });
+
+describe("comment full-text search", () => {
+  it("tracks insert, update, and delete without leaking across issues", async () => {
+    const created = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "FTS comment target" }) { issue { id } } }`,
+    );
+    const issueId = created.data!.issueCreate.issue.id;
+    const other = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "FTS other" }) { issue { id } } }`,
+    );
+    const otherId = other.data!.issueCreate.issue.id;
+    await gql(
+      app,
+      `mutation($id: ID!) { commentCreate(input: { issueId: $id, body: "needle alpha" }) { success } }`,
+      { id: issueId },
+    );
+    await gql(
+      app,
+      `mutation($id: ID!) { commentCreate(input: { issueId: $id, body: "needle beta" }) { success } }`,
+      { id: otherId },
+    );
+    const found = await gql(app, `{ issues(filter: { search: "needle" }) { nodes { id } } }`);
+    expect(found.data!.issues.nodes.map((n: any) => n.id)).toEqual(
+      expect.arrayContaining([issueId, otherId]),
+    );
+    const row = app.db.query("SELECT id FROM comments WHERE issue_id = ?1").get(issueId) as {
+      id: string;
+    };
+    app.db.query("UPDATE comments SET body = ?1 WHERE id = ?2").run("updated marker", row.id);
+    const updated = await gql(app, `{ issues(filter: { search: "alpha" }) { nodes { id } } }`);
+    expect(updated.data!.issues.nodes).toEqual([]);
+    const updatedFound = await gql(
+      app,
+      `{ issues(filter: { search: "updated" }) { nodes { id } } }`,
+    );
+    expect(updatedFound.data!.issues.nodes.map((n: any) => n.id)).toContain(issueId);
+    app.db.query("DELETE FROM comments WHERE id = ?1").run(row.id);
+    const deleted = await gql(app, `{ issues(filter: { search: "updated" }) { nodes { id } } }`);
+    expect(deleted.data!.issues.nodes).toEqual([]);
+  });
+});
