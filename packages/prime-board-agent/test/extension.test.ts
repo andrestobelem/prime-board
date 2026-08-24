@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { chmodSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -177,9 +185,10 @@ describe("Prime Board extension lifecycle", () => {
           headers: { "content-type": "application/json" },
         });
       };
+      saveProjectCredential(project.root, { apiKey: "pb_admin" }, project.home);
       const extension = createPrimeBoardExtension({
         home: project.home,
-        env: { PRIME_BOARD_ROOT: project.runtimeRoot, PRIME_BOARD_API_KEY: "pb_admin" },
+        env: { PRIME_BOARD_ROOT: project.runtimeRoot },
         runtimeDependencies: {
           runStatus: () => ({
             status: running ? 0 : 1,
@@ -271,6 +280,44 @@ describe("Prime Board extension lifecycle", () => {
       }).toThrow("0600");
     } finally {
       rmSync(project.home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects credential directory symlinks when saving or reading", () => {
+    const home = join(tmpdir(), `prime-board-agent-symlink-${crypto.randomUUID()}`);
+    const projectRoot = join(home, "project");
+    const redirectedDirectory = join(projectRoot, ".prime-board");
+    mkdirSync(projectRoot, { recursive: true });
+    symlinkSync(redirectedDirectory, join(home, ".prime-board"));
+    try {
+      expect(() => saveProjectCredential(projectRoot, { apiKey: "pb_secret" }, home)).toThrow(
+        "cannot contain a symlink",
+      );
+      expect(() => readProjectCredential(projectRoot, home)).toThrow("cannot contain a symlink");
+      expect(existsSync(join(redirectedDirectory, "credentials"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlinked credential file when saving or reading", () => {
+    const home = join(tmpdir(), `prime-board-agent-file-symlink-${crypto.randomUUID()}`);
+    const projectRoot = join(home, "project");
+    const credentialsDirectory = join(home, ".prime-board", "credentials");
+    const target = join(projectRoot, "redirected-credential.json");
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(credentialsDirectory, { recursive: true });
+    writeFileSync(target, '{"apiKey":"redirected"}\n');
+    const credentialPath = projectCredentialPath(projectRoot, home);
+    symlinkSync(target, credentialPath);
+    try {
+      expect(() => saveProjectCredential(projectRoot, { apiKey: "pb_secret" }, home)).toThrow(
+        "cannot contain a symlink",
+      );
+      expect(() => readProjectCredential(projectRoot, home)).toThrow("cannot contain a symlink");
+      expect(() => readProjectCredential(projectRoot, home)).toThrow(credentialPath);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 

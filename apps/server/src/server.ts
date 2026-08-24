@@ -5,7 +5,7 @@ import { createSchema, createYoga } from "graphql-yoga";
 import { APP_NAME, APP_VERSION, typeDefs } from "@prime-board/schema";
 import { resolveAuth, resolveLocalAuth } from "./auth/viewer.ts";
 import { resolveLocalPostgresAuth, resolvePostgresAuth } from "./auth/postgres-viewer.ts";
-import type { Config } from "./config.ts";
+import { LOOPBACK_HOST, type Config } from "./config.ts";
 import type { Context } from "./graphql/context.ts";
 import { resolvers } from "./graphql/resolvers.ts";
 import { createRepoSync } from "./export/repo-sync.ts";
@@ -24,6 +24,9 @@ export interface AppDeps {
 }
 
 export function createApp({ db, config, webhookOptions, persistence }: AppDeps) {
+  if (config.authMode === "local" && config.host !== LOOPBACK_HOST) {
+    throw new Error("Local auth mode requires the loopback host");
+  }
   const events = new WebhookDispatcher(db, webhookOptions ?? { log: console.error }, persistence);
   const repo = persistence ? null : createRepoSync(db, config.repoRoot);
   let baseUrl = `http://localhost:${config.port}`;
@@ -39,8 +42,12 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
     // singleton, así que la escritura en sí sigue siendo una sola por mutation.
     context: async ({ request }): Promise<Context> => {
       const workspaceSelector = request.headers.get("x-workspace-id")?.trim() || null;
+      // GraphQL stays anonymous in local mode, but MCP must authenticate every
+      // bearer even when it targets the same loopback instance.
+      const mcpAuthenticationRequired =
+        request.headers.get("x-prime-board-mcp-auth") === "required";
       const auth =
-        config.authMode === "local"
+        config.authMode === "local" && !mcpAuthenticationRequired
           ? persistence
             ? await resolveLocalPostgresAuth(persistence)
             : resolveLocalAuth(db, workspaceSelector)

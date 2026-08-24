@@ -1,16 +1,19 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
 export type RuntimeState = "running" | "stopped" | "starting" | "unavailable" | "error";
@@ -87,12 +90,30 @@ export function saveProjectCredential(
   credential: ProjectCredential,
   home = homedir(),
 ): string {
-  if (!credential.apiKey.trim()) throw new Error("API key cannot be empty");
+  const apiKey = credential.apiKey.trim();
+  if (!apiKey) throw new Error("API key cannot be empty");
   const path = projectCredentialPath(projectRoot, home);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, `${JSON.stringify(credential)}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600);
-  return path;
+  const directory = dirname(path);
+  const homeRoot = dirname(dirname(resolve(directory)));
+  assertNoSymlinkAncestors(directory, homeRoot);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertNoSymlinkAncestors(path, homeRoot);
+  chmodSync(directory, 0o700);
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(temporaryPath, "wx", 0o600);
+    writeFileSync(descriptor, `${JSON.stringify({ ...credential, apiKey })}\n`, "utf8");
+    closeSync(descriptor);
+    descriptor = null;
+    chmodSync(temporaryPath, 0o600);
+    renameSync(temporaryPath, path);
+    chmodSync(path, 0o600);
+    return path;
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+    if (existsSync(temporaryPath)) rmSync(temporaryPath, { force: true });
+  }
 }
 
 function isProjectCredential(value: unknown): value is ProjectCredential {
@@ -105,17 +126,50 @@ function isMissingFile(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
+function assertNoSymlinkAncestors(path: string, basePath: string): void {
+  const absolutePath = resolve(path);
+  const absoluteBasePath = resolve(basePath);
+  if (absolutePath !== absoluteBasePath && !absolutePath.startsWith(`${absoluteBasePath}${sep}`)) {
+    throw new Error("Credential path must be below its base directory");
+  }
+
+  let currentPath = absoluteBasePath;
+  try {
+    if (lstatSync(currentPath).isSymbolicLink()) {
+      throw new Error(`Credential path cannot contain a symlink: ${currentPath}`);
+    }
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
+    return;
+  }
+
+  for (const component of absolutePath.slice(absoluteBasePath.length).split(sep)) {
+    if (!component) continue;
+    currentPath = join(currentPath, component);
+    try {
+      if (lstatSync(currentPath).isSymbolicLink()) {
+        throw new Error(`Credential path cannot contain a symlink: ${currentPath}`);
+      }
+    } catch (error) {
+      if (!isMissingFile(error)) throw error;
+      break;
+    }
+  }
+}
+
 export function readProjectCredential(
   projectRoot: string,
   home = homedir(),
 ): ProjectCredential | null {
   const path = projectCredentialPath(projectRoot, home);
+  const homeRoot = dirname(dirname(resolve(dirname(path))));
+  assertNoSymlinkAncestors(path, homeRoot);
   try {
     const value: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (!isProjectCredential(value)) return null;
     const mode = statSync(path).mode & 0o777;
     if (mode !== 0o600) throw new Error(`Credential file must have mode 0600: ${path}`);
-    return value;
+    return { ...value, apiKey: value.apiKey.trim() };
   } catch (error) {
     if (isMissingFile(error)) return null;
     throw error;
@@ -134,7 +188,9 @@ function redactSecrets(value: string): string {
 }
 
 function appendLog(path: string, chunk: Buffer | string): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
   const fd = openSync(path, "a", 0o600);
   try {
     writeFileSync(fd, redactSecrets(String(chunk)));

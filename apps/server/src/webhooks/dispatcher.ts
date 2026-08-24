@@ -43,6 +43,26 @@ export function signPayload(secret: string, body: string): string {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function redactSecrets(value: string): string {
+  return value
+    .replace(
+      /(\b(?:prime[_ -]?board[_ -]?api[_ -]?key|api[_ -]?key|access[_ -]?token|secret|password)\b\s*[:=]\s*)[^\s,;)}]+/gi,
+      "$1[redacted]",
+    )
+    .replace(/(\bbearer\s+)[^\s,;)}]+/gi, "$1[redacted]")
+    .replace(/\bpb_[A-Za-z0-9_-]+\b/g, "[redacted-api-key]");
+}
+
+export function safeWebhookUrl(value: string): string {
+  try {
+    // Keep only the origin. Query strings, fragments, userinfo and path values
+    // may contain arbitrary credentials, so no URL component is safe to log.
+    return new URL(value).origin;
+  } catch {
+    return "[redacted-webhook-url]";
+  }
+}
+
 function parseEvents(events: string | readonly string[]): string[] {
   if (typeof events !== "string") return [...events];
   try {
@@ -194,7 +214,7 @@ export class WebhookDispatcher {
     changes?: Record<string, { from: unknown; to: unknown }>,
   ): void {
     const dispatch = this.dispatch(event, actor, data, changes).catch((error) => {
-      this.options.log?.(`webhook dispatch failed: ${error}`);
+      this.options.log?.(`webhook dispatch failed: ${redactSecrets(String(error))}`);
     });
     this.pending.add(dispatch);
     void dispatch.finally(() => this.pending.delete(dispatch)).catch(() => undefined);
@@ -272,7 +292,9 @@ export class WebhookDispatcher {
     await allAsync(
       subscribed.map((hook) =>
         this.deliver(hook, body).catch((error) => {
-          this.options.log?.(`webhook delivery to ${hook.url} failed: ${error}`);
+          this.options.log?.(
+            `webhook delivery to ${safeWebhookUrl(hook.url)} failed: ${redactSecrets(String(error))}`,
+          );
           return false;
         }),
       ),

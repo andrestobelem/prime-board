@@ -22,16 +22,18 @@ bun run server
 ```
 
 En una base nueva, el server crea el Workspace, un Team inicial, sus Workflow States y el Actor `admin`. Con la configuración predeterminada, el Team usa la key `PB`. Un Workspace migrado opera con el Team `PRB`.
-En modo `api-key`, el server imprime la API key de admin **una sola vez**:
+En modo `api-key`, el server guarda la API key de admin fuera del proyecto, en `~/.prime-board/credentials/`, con permisos `0600`. El server no imprime la key ni la incluye en settings, logs o exports.
 
-```
+```text
 First run: workspace seeded.
-Admin API key (save it now, it will not be shown again): pb_xxxxxxxx
-prime-board server listening on http://localhost:3333
+Admin API key stored outside the project under ~/.prime-board/credentials/ (mode 0600).
+prime-board server listening on http://127.0.0.1:3333
 ```
 
-Configuración por variable de entorno: `PRIME_BOARD_PORT` (default 3333) y `PRIME_BOARD_DB`
-(default `~/.prime-board/prime-board.db`). En una base nueva también puedes elegir la identidad
+Configuración por variable de entorno: `PRIME_BOARD_PORT` (default 3333), `PRIME_BOARD_HOST` (default
+`127.0.0.1` en modo `api-key`) y `PRIME_BOARD_DB` (default `~/.prime-board/prime-board.db`). El
+host no loopback requiere un override explícito de `PRIME_BOARD_HOST` en modo `api-key`. El modo
+`local` ignora el override y siempre usa `127.0.0.1`. En una base nueva también puedes elegir la identidad
 inicial con `PRIME_BOARD_WORKSPACE_NAME`, `PRIME_BOARD_WORKSPACE_URL_KEY`,
 `PRIME_BOARD_TEAM_NAME` y `PRIME_BOARD_TEAM_KEY`. Los defaults son `workspace`, `prime-board`,
 `Prime Board` y `PB`. El server recorta los nombres. `urlKey` usa minúsculas, números y guiones. La
@@ -146,7 +148,7 @@ idempotente. Si la base ya contiene Issues, no crea datos.
 
 ## 3. Darse de alta como agente
 
-Con la key de admin, crea un Actor con nombre operativo y su key. El server muestra la key una sola vez:
+Con la key de admin, crea un Actor con nombre operativo y su key. La mutación muestra la key una sola vez; no la guardes en el repositorio, settings, logs ni exports:
 
 ```bash
 curl -s http://localhost:3333/graphql \

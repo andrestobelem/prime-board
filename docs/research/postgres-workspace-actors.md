@@ -26,7 +26,7 @@ PRIME_BOARD_POSTGRES_URL='postgres://...' \
 bun run apps/server/src/index.ts
 ```
 
-El proceso toma la URL solo de la variable de entorno y nunca la imprime. En el primer arranque muestra la API key admin una sola vez, igual que SQLite.
+El proceso toma la URL solo de la variable de entorno y nunca la imprime. En el primer arranque guarda la API key admin fuera del proyecto, con permisos `0600`, igual que SQLite.
 PRB-431 cubre el siguiente grupo (API keys, invitaciones y autenticación administrativa completa). El soporte actual conserva la key de bootstrap y la metadata necesaria para autenticar.
 
 ## Validación

@@ -58,6 +58,20 @@ function bearerToken(request: Request): string | null {
   return match?.[1] ?? null;
 }
 
+function redactSecrets(value: string): string {
+  return value
+    .replace(
+      /(\b(?:prime[_ -]?board[_ -]?api[_ -]?key|api[_ -]?key|access[_ -]?token|secret|password)\b\s*[:=]\s*)[^\s,;)}]+/gi,
+      "$1[redacted]",
+    )
+    .replace(/(\bbearer\s+)[^\s,;)}]+/gi, "$1[redacted]")
+    .replace(/\bpb_[A-Za-z0-9_-]+\b/g, "[redacted-api-key]");
+}
+
+function safeError(error: unknown): string {
+  return redactSecrets(error instanceof Error ? error.message : String(error));
+}
+
 function isAuthError(error: unknown): error is McpApiError {
   return (
     error instanceof McpApiError &&
@@ -150,7 +164,7 @@ export function createMcpHttpHandler(
         await authenticatedSession(apiKey);
       } catch (error) {
         if (isAuthError(error)) return unauthorized("Invalid or inactive API key");
-        console.error("Failed to revalidate MCP HTTP session:", error);
+        console.error("Failed to revalidate MCP HTTP session:", safeError(error));
         return jsonError(502, "Unable to revalidate MCP session", -32603);
       }
     } else {
@@ -158,7 +172,7 @@ export function createMcpHttpHandler(
         session = await createTransport(apiKey);
       } catch (error) {
         if (isAuthError(error)) return unauthorized("Invalid API key");
-        console.error("Failed to initialize MCP HTTP session:", error);
+        console.error("Failed to initialize MCP HTTP session:", safeError(error));
         return jsonError(502, "Unable to initialize MCP session", -32603);
       }
     }
@@ -169,7 +183,7 @@ export function createMcpHttpHandler(
       return response;
     } catch (error) {
       await closeUnregistered(session).catch(() => undefined);
-      console.error("Failed to handle MCP HTTP request:", error);
+      console.error("Failed to handle MCP HTTP request:", safeError(error));
       return jsonError(500, "Internal server error", -32603);
     }
   }

@@ -30,7 +30,7 @@ Si el servidor no está ejecutándose, pide al humano que inicie una instancia a
 bun "$PRIME_BOARD_ROOT/scripts/prime-board-project.ts" --project "$PWD"
 ```
 
-El primer inicio imprime la admin API key una sola vez. Mantén esa clave fuera del repositorio.
+El primer inicio guarda la admin API key fuera del proyecto, en `~/.prime-board/credentials/`, con permisos `0600`; no la imprime ni la guarda en settings, logs o exports.
 Para configurar el entorno sin iniciar el servidor, ejecuta:
 
 ```bash

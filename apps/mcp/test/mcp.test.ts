@@ -1,6 +1,6 @@
 // Tests e2e de AT-142: cliente MCP real → stdio → pb-mcp → GraphQL server.
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -21,6 +21,7 @@ beforeAll(async () => {
   server = Bun.spawn(["bun", join(ROOT, "apps/server/src/index.ts")], {
     env: {
       ...process.env,
+      HOME: join(tempDir, "home"),
       PRIME_BOARD_DB: join(tempDir, "test.db"),
       PRIME_BOARD_PORT: String(PORT),
     },
@@ -36,7 +37,15 @@ beforeAll(async () => {
     buffer += decoder.decode(value);
   }
   reader.releaseLock();
-  const apiKey = buffer.match(/Admin API key.*: (pb_\S+)/)![1]!;
+  const credentialDirectory = join(tempDir, "home", ".prime-board", "credentials");
+  const credentialFile = readdirSync(credentialDirectory).find((name) => name.endsWith(".json"));
+  if (!credentialFile) throw new Error("Server did not create a bootstrap credential");
+  const apiKey = (
+    JSON.parse(readFileSync(join(credentialDirectory, credentialFile), "utf8")) as {
+      apiKey: string;
+    }
+  ).apiKey;
+  expect(buffer).not.toContain(apiKey);
 
   // El cliente MCP lanza el server pb-mcp por stdio.
   client = new Client({ name: "test-client", version: "0.0.1" });

@@ -8,9 +8,20 @@ import { bootstrapPostgres } from "./db/postgres/bootstrap.ts";
 import { createPostgresPersistence } from "./db/postgres/persistence.ts";
 import { createApp } from "./server.ts";
 import { claimRuntimeOwnership } from "./runtime-ownership.ts";
+import { prepareBootstrapCredentialPath, storeBootstrapCredential } from "./auth/credentials.ts";
 
 const config = loadConfig();
 claimRuntimeOwnership(config.repoRoot ?? "", config.dbPath);
+if (config.authMode !== "local") {
+  // Valida y prepara el almacenamiento externo antes de sembrar la base.
+  prepareBootstrapCredentialPath(config.repoRoot, config.dbPath);
+}
+
+function serverUrl(port: number | undefined): string {
+  const host =
+    config.host.includes(":") && !config.host.startsWith("[") ? `[${config.host}]` : config.host;
+  return `http://${host}:${port ?? config.port}`;
+}
 
 function reportBootstrap(created: boolean, adminApiKey?: string): void {
   if (!created) return;
@@ -20,8 +31,10 @@ function reportBootstrap(created: boolean, adminApiKey?: string): void {
     return;
   }
   if (adminApiKey) {
-    // La key se muestra una única vez: solo se persiste su hash.
-    console.log(`Admin API key (save it now, it will not be shown again): ${adminApiKey}`);
+    storeBootstrapCredential(config.repoRoot, config.dbPath, adminApiKey);
+    console.log(
+      "Admin API key stored outside the project under ~/.prime-board/credentials/ (mode 0600).",
+    );
   }
 }
 
@@ -47,8 +60,8 @@ if (config.persistenceBackend === "postgres") {
   };
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
-  console.log(`prime-board server listening on http://localhost:${server.port}`);
-  console.log(`GraphQL endpoint: http://localhost:${server.port}/graphql`);
+  console.log(`prime-board server listening on ${serverUrl(server.port)}`);
+  console.log(`GraphQL endpoint: ${serverUrl(server.port)}/graphql`);
   console.log("database: PostgreSQL");
 } else {
   const db = openDatabase(config.dbPath);
@@ -56,7 +69,7 @@ if (config.persistenceBackend === "postgres") {
   reportBootstrap(result.created, result.adminApiKey);
 
   const { server } = createApp({ db, config });
-  console.log(`prime-board server listening on http://localhost:${server.port}`);
-  console.log(`GraphQL endpoint: http://localhost:${server.port}/graphql`);
+  console.log(`prime-board server listening on ${serverUrl(server.port)}`);
+  console.log(`GraphQL endpoint: ${serverUrl(server.port)}/graphql`);
   console.log(`database: ${config.dbPath}`);
 }

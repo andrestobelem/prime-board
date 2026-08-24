@@ -28,6 +28,16 @@ export interface McpSession extends McpConfig {
   readonly context: EffectiveWorkspaceContext;
 }
 
+export function safeEndpointUrl(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    // Las cadenas inválidas pueden incluir credenciales en una ruta aparente. No
+    // intentes una redacción parcial; el log de inicio debe quedar sin secretos.
+    return "[redacted-endpoint-url]";
+  }
+}
+
 export function loadMcpConfig(env: Record<string, string | undefined> = process.env): McpConfig {
   const url = env.PRIME_BOARD_URL ?? "http://localhost:3333";
   const apiKey = env.PRIME_BOARD_API_KEY;
@@ -47,6 +57,7 @@ export async function gqlRequest(
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${config.apiKey}`,
+      "x-prime-board-mcp-auth": "required",
     },
     body: JSON.stringify({ query, variables }),
   });

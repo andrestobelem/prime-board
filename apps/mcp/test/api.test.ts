@@ -1,9 +1,29 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { createMcpSession } from "../src/api.ts";
+import { createMcpSession, safeEndpointUrl } from "../src/api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+describe("MCP endpoint redaction", () => {
+  it("keeps only the origin and never exposes endpoint credentials", () => {
+    const safe = safeEndpointUrl(
+      "https://user:password@board.invalid/graphql/private?apiKey=pb_secret&note=arbitrary#fragment-secret",
+    );
+    expect(safe).toBe("https://board.invalid");
+    expect(safe).not.toContain("password");
+    expect(safe).not.toContain("pb_secret");
+    expect(safe).not.toContain("arbitrary");
+    expect(safe).not.toContain("fragment-secret");
+  });
+
+  it("redacts invalid endpoint strings completely", () => {
+    const safe = safeEndpointUrl("not a URL token=pb_secret path-secret");
+    expect(safe).toBe("[redacted-endpoint-url]");
+    expect(safe).not.toContain("pb_secret");
+    expect(safe).not.toContain("path-secret");
+  });
 });
 
 describe("MCP effective Workspace session", () => {
