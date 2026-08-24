@@ -198,7 +198,10 @@ export function buildIssueFilter(
       const query = ftsQuery(filter.search);
       if (query) {
         clauses.push(
-          `issues.rowid IN (SELECT rowid FROM issues_fts WHERE issues_fts MATCH ${params.add(query)})`,
+          `(issues.rowid IN (SELECT rowid FROM issues_fts WHERE issues_fts MATCH ${params.add(query)})
+            OR issues.id IN (SELECT comments.issue_id FROM comments
+              JOIN comments_fts ON comments_fts.rowid = comments.rowid
+              WHERE comments_fts MATCH ${params.add(query)}))`,
         );
       }
     }

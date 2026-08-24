@@ -432,7 +432,7 @@ describe("multi-workspace root migration", () => {
     });
     expect(membership.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 28 });
+    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 29 });
 
     migrate(db);
     expect(db.query("SELECT count(*) AS count FROM workspace_memberships").get()).toEqual({

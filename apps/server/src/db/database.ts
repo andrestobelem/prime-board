@@ -30,6 +30,7 @@ import migration0025 from "./migrations/0025_workspace_constraints.sql" with { t
 import migration0026 from "./migrations/0026_api_key_workspaces.sql" with { type: "text" };
 import migration0027 from "./migrations/0027_documents.sql" with { type: "text" };
 import migration0028 from "./migrations/0028_issue_subscribers.sql" with { type: "text" };
+import migration0029 from "./migrations/0029_comments_fts.sql" with { type: "text" };
 import { newId, now } from "./util.ts";
 
 interface Migration {
@@ -67,6 +68,7 @@ const MIGRATIONS: Migration[] = [
   { version: 26, name: "api_key_workspaces", sql: migration0026 },
   { version: 27, name: "documents", sql: migration0027 },
   { version: 28, name: "issue_subscribers", sql: migration0028 },
+  { version: 29, name: "comments_fts", sql: migration0029 },
 ];
 
 const WORKSPACE_ROOT_TABLES = [
