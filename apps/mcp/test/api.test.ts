@@ -18,10 +18,11 @@ describe("MCP endpoint redaction", () => {
     expect(safe).not.toContain("fragment-secret");
   });
 
-  it("redacts token values in an invalid endpoint fallback", () => {
+  it("redacts invalid endpoint strings completely", () => {
     const safe = safeEndpointUrl("not a URL token=pb_secret path-secret");
+    expect(safe).toBe("[redacted-endpoint-url]");
     expect(safe).not.toContain("pb_secret");
-    expect(safe).toContain("token=[redacted]");
+    expect(safe).not.toContain("path-secret");
   });
 });
 

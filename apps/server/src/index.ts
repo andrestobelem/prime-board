@@ -8,10 +8,14 @@ import { bootstrapPostgres } from "./db/postgres/bootstrap.ts";
 import { createPostgresPersistence } from "./db/postgres/persistence.ts";
 import { createApp } from "./server.ts";
 import { claimRuntimeOwnership } from "./runtime-ownership.ts";
-import { storeBootstrapCredential } from "./auth/credentials.ts";
+import { prepareBootstrapCredentialPath, storeBootstrapCredential } from "./auth/credentials.ts";
 
 const config = loadConfig();
 claimRuntimeOwnership(config.repoRoot ?? "", config.dbPath);
+if (config.authMode !== "local") {
+  // Valida y prepara el almacenamiento externo antes de sembrar la base.
+  prepareBootstrapCredentialPath(config.repoRoot, config.dbPath);
+}
 
 function serverUrl(port: number | undefined): string {
   const host =

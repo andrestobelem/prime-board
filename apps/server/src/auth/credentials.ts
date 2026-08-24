@@ -140,7 +140,7 @@ function assertNoSymlinkAncestors(path: string, basePath: string): void {
       }
     } catch (error) {
       if (!isMissingPath(error)) throw error;
-      // A missing ancestor means that all remaining ancestors are missing too.
+      // Si falta un ancestro, también faltan los ancestros restantes.
       break;
     }
   }
@@ -161,8 +161,8 @@ function writeCredential(path: string, apiKey: string): string {
   const homeRoot = dirname(dirname(directory));
   assertNoSymlinkAncestors(directory, homeRoot);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  // Check again after mkdir. This also rejects a symlink that appeared while
-  // creating the directory tree instead of following it on a later write.
+  // Comprueba de nuevo después de mkdir. Esto rechaza un symlink creado durante
+  // la creación del árbol, antes de seguirlo en una escritura posterior.
   assertNoSymlinkAncestors(directory, homeRoot);
   chmodSync(directory, 0o700);
 
@@ -181,6 +181,27 @@ function writeCredential(path: string, apiKey: string): string {
     if (descriptor !== null) closeSync(descriptor);
     if (existsSync(temporaryPath)) rmSync(temporaryPath, { force: true });
   }
+}
+
+/**
+ * Prepara el directorio externo antes del primer bootstrap.
+ *
+ * Ejecutar esta comprobación antes de sembrar la base evita dejar una base
+ * inicializada sin una ruta válida para su credencial.
+ */
+export function prepareBootstrapCredentialPath(
+  projectRoot: string | null,
+  databasePath: string,
+  home = homedir(),
+): string {
+  const path = bootstrapCredentialPath(projectRoot, databasePath, home);
+  const directory = dirname(path);
+  const homeRoot = dirname(dirname(directory));
+  assertNoSymlinkAncestors(directory, homeRoot);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertNoSymlinkAncestors(directory, homeRoot);
+  chmodSync(directory, 0o700);
+  return path;
 }
 
 /** Escribe una API key de bootstrap con permisos privados. */

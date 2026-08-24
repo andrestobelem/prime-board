@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { hashApiKey } from "../auth/keys.ts";
 import { migrate, openDatabase } from "./database.ts";
 import { bootstrap, seedWorkspace } from "./seed.ts";
@@ -95,6 +95,7 @@ describe("openDatabase", () => {
   it("protege la DB y sus archivos WAL contra lecturas de otros usuarios", () => {
     const path = tempDbPath();
     const db = openDatabase(path);
+    expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     db.close();
   });

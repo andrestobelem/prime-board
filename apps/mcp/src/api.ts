@@ -32,12 +32,9 @@ export function safeEndpointUrl(value: string): string {
   try {
     return new URL(value).origin;
   } catch {
-    return value
-      .replace(
-        /(\b(?:api[_ -]?key|access[_ -]?token|token|secret|password|auth)\b\s*[:=]\s*)[^\s,;)}]+/gi,
-        "$1[redacted]",
-      )
-      .replace(/\bpb_[A-Za-z0-9_-]+\b/g, "[redacted-api-key]");
+    // Las cadenas inválidas pueden incluir credenciales en una ruta aparente. No
+    // intentes una redacción parcial; el log de inicio debe quedar sin secretos.
+    return "[redacted-endpoint-url]";
   }
 }
 

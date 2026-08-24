@@ -201,7 +201,11 @@ function hardenDatabaseFiles(path: string): void {
 
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const directory = dirname(path);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    // Una ruta relativa puede usar el directorio de trabajo del proceso. No cambies
+    // los permisos de ese directorio compartido; la DB y los archivos WAL siguen privados.
+    if (directory !== ".") chmodSync(directory, 0o700);
   }
   const db = new Database(path, { create: true, strict: true });
   if (path !== ":memory:") hardenDatabaseFiles(path);
