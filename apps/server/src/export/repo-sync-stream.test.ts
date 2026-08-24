@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendActivityEvents, activityToDomainEvent } from "./activity-stream.ts";
+import type { DomainEvent } from "./event-log.ts";
 
 function database(): Database {
   const db = new Database(":memory:");
@@ -53,7 +54,7 @@ describe("canonical Activity stream bridge", () => {
         aggregate: "issue",
         aggregateKey: "PB-7",
         type: "created",
-        actor: "agent",
+        actor: "actor-1",
         occurredAt: "2025-01-01T00:00:00.000Z",
         payload: { title: "Shared issue" },
       });
@@ -61,6 +62,69 @@ describe("canonical Activity stream bridge", () => {
       db.close();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("reports partial and idempotent IDs so a later retry can commit them", () => {
+    const db = database();
+    const root = mkdtempSync(join(tmpdir(), "prb-repo-stream-partial-"));
+    const stored: DomainEvent[] = [];
+    const callbacks: string[][] = [];
+    let firstAttempt = true;
+    try {
+      db.query("INSERT INTO actors (id, name) VALUES (?1, ?2)").run("actor-1", "agent");
+      db.query("INSERT INTO teams (id, key) VALUES (?1, ?2)").run("team-1", "PB");
+      db.query("INSERT INTO issues (id, team_id, number) VALUES (?1, ?2, ?3)").run(
+        "issue-1",
+        "team-1",
+        7,
+      );
+      db.query(
+        "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      ).run(
+        "activity-1",
+        "issue-1",
+        "actor-1",
+        "created",
+        JSON.stringify({ title: "Shared issue" }),
+        "2025-01-01T00:00:00.000Z",
+      );
+      const eventLog = {
+        appendMany: (inputs: readonly unknown[]) => {
+          const event = inputs[0] as DomainEvent;
+          if (firstAttempt) {
+            firstAttempt = false;
+            stored.push(event);
+            throw new Error("partial append");
+          }
+          return [{ eventId: event.eventId, appended: false }];
+        },
+        read: () => stored,
+      };
+
+      expect(() =>
+        appendActivityEvents(db, root, eventLog, (ids) => callbacks.push([...ids])),
+      ).toThrow("partial append");
+      expect(callbacks).toEqual([["activity-1"]]);
+      callbacks.length = 0;
+      expect(appendActivityEvents(db, root, eventLog, (ids) => callbacks.push([...ids]))).toBe(1);
+      expect(callbacks).toEqual([["activity-1"]]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the immutable Actor ID when a display name changes", () => {
+    const current = activityToDomainEvent({
+      id: "activity-1",
+      issue_identifier: "PB-1",
+      actor_id: "actor-1",
+      actor: "renamed-agent",
+      type: "updated",
+      payload: "{}",
+      occurred_at: "2025-01-01T00:00:00.000Z",
+    });
+    expect(current?.actor).toBe("actor-1");
   });
 
   it("does not create events for sensitive or personal activity names", () => {

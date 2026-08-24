@@ -88,6 +88,41 @@ describe("SQLite issue event pipeline", () => {
     ]);
   });
 
+  it("commits uncommitted idempotent events after pipeline recreation", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-retry-"));
+    const writer = new EventLogWriter({ rootDir });
+    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    try {
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      writer.append(event("base"));
+      git("add", "--", ".prime-board/log/events.jsonl");
+      git("commit", "-qm", "base");
+
+      const partial = event("partial");
+      const next = event("next");
+      writer.append(partial);
+      const recreated = new IssueEventPipeline({
+        rootDir,
+        eventLog: writer,
+        commitGit: createGitCommitter(rootDir),
+      });
+      expect(recreated.append([partial, next])).toEqual([
+        { eventId: "partial", appended: false },
+        { eventId: "next", appended: true },
+      ]);
+      recreated.commit();
+
+      expect(git("log", "-1", "--format=%s").toString().trim()).toBe(
+        "chore(events): append canonical issue events",
+      );
+      expect(git("status", "--porcelain").toString()).toBe("");
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps append → Git commit → projector → checkpoint order and deduplicates retry", () => {
     const fixtureData = fixture();
     const applied: string[] = [];
@@ -162,6 +197,37 @@ describe("SQLite issue event pipeline", () => {
     expect(pipeline.project()).toMatchObject({ applied: 1, skipped: 0 });
     expect(applied).toEqual(["event-1"]);
     expect(pipeline.getCheckpoint()).toMatchObject({ stream: "issues", eventId: "event-1" });
+  });
+
+  it("rejects pre-staged event-log changes without replacing the index", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-committer-staged-"));
+    const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
+    const line = (eventId: string) => `${JSON.stringify(event(eventId))}\n`;
+    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    try {
+      mkdirSync(join(rootDir, ".prime-board", "log"), { recursive: true });
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      writeFileSync(logPath, line("base"));
+      git("add", "--", ".prime-board/log/events.jsonl");
+      git("commit", "-qm", "base");
+
+      writeFileSync(logPath, `${line("base")}${line("foreign")}`);
+      git("add", "--", ".prime-board/log/events.jsonl");
+      writeFileSync(logPath, `${line("base")}${line("generated")}`);
+      const committer = createGitCommitter(rootDir);
+      expect(() => committer({ rootDir, eventIds: ["generated"] })).toThrow(
+        "already has staged changes",
+      );
+      expect(git("show", ":.prime-board/log/events.jsonl").toString()).toBe(
+        `${line("base")}${line("foreign")}`,
+      );
+      expect(readFileSync(logPath, "utf8")).toBe(`${line("base")}${line("generated")}`);
+      expect(git("status", "--porcelain").toString()).toContain("MM");
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects unrelated event-log changes before Git add and keeps them for retry", () => {

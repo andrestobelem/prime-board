@@ -126,10 +126,13 @@ describe("repo sync en cada escritura", () => {
       "archived",
       "unarchived",
     ]);
+    const adminActor = app.db.query("SELECT id FROM actors WHERE name = 'admin'").get() as {
+      id: string;
+    };
     for (const current of events) {
       expect(current.schemaVersion).toBe(1);
       expect(current.eventId).toBeTruthy();
-      expect(current.actor).toBe("admin");
+      expect(current.actor).toBe(adminActor.id);
       expect(current.payload).toBeTruthy();
     }
   });
@@ -146,6 +149,65 @@ describe("repo sync en cada escritura", () => {
       expect(() => repo!.sync()).toThrow("git unavailable");
     } finally {
       rmSync(failingRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("propaga el fallo de sync hasta GraphQL sin informar éxito", async () => {
+    const failing = createTestApp(
+      undefined,
+      "api-key",
+      {},
+      {
+        root: "injected-repo",
+        sync() {
+          throw new Error("git unavailable");
+        },
+        syncIssue() {
+          throw new Error("git unavailable");
+        },
+      },
+    );
+    try {
+      const result = await gql(
+        failing,
+        `mutation { issueCreate(input: { teamKey: "PB", title: "must fail" }) { success } }`,
+      );
+      expect(result.errors?.length).toBeGreaterThan(0);
+      expect(result.data).toBeNull();
+    } finally {
+      failing.stop();
+    }
+  });
+
+  it("reescanea Activity de forma idempotente tras renombrar el Actor", async () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-actor-"));
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const created = await gql(
+        isolated,
+        `mutation { issueCreate(input: { teamKey: "PB", title: "Stable author" }) { success } }`,
+      );
+      expect(created.errors).toBeUndefined();
+      const actor = isolated.db.query("SELECT id FROM actors WHERE name = 'admin'").get() as {
+        id: string;
+      };
+      const renamed = await gql(
+        isolated,
+        `mutation($id: ID!) { actorUpdate(id: $id, input: { name: "renamed-admin" }) { success } }`,
+        { id: actor.id },
+      );
+      expect(renamed.errors).toBeUndefined();
+      expect(readEventLog({ rootDir: isolatedRoot })).toHaveLength(1);
+      expect(readEventLog({ rootDir: isolatedRoot })[0]?.actor).toBe(actor.id);
+
+      const comment = await gql(
+        isolated,
+        `mutation { commentCreate(input: { issueId: "PB-1", body: "still works" }) { success } }`,
+      );
+      expect(comment.errors).toBeUndefined();
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
     }
   });
 

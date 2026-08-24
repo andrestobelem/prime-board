@@ -11,6 +11,8 @@ import type { CanonicalEventLog } from "./issue-event-pipeline.ts";
 export interface ActivityEventRow {
   readonly id: string;
   readonly issue_identifier: string;
+  /** Stable Actor ID. Legacy fixtures may provide only `actor`. */
+  readonly actor_id?: string;
   readonly actor: string;
   readonly type: string;
   readonly payload: string;
@@ -47,13 +49,13 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
   try {
     return validateDomainEvent({
       schemaVersion: CURRENT_EVENT_SCHEMA_VERSION,
-      // Activity IDs are already immutable and unique. Keeping the ID directly
-      // makes repeated exports idempotent without inventing a second identity.
+      // Activity IDs and Actor IDs are immutable. Do not use the mutable
+      // display name as the canonical event author.
       eventId: row.id,
       aggregate: "issue",
       aggregateKey: row.issue_identifier,
       type: row.type,
-      actor: row.actor,
+      actor: row.actor_id ?? row.actor,
       occurredAt: row.occurred_at,
       payload,
     });
@@ -80,6 +82,7 @@ export function appendActivityEvents(
     .query(
       `SELECT activity.id,
               teams.key || '-' || issues.number AS issue_identifier,
+              activity.actor_id AS actor_id,
               actors.name AS actor,
               activity.type,
               activity.payload,
@@ -99,7 +102,10 @@ export function appendActivityEvents(
   const before = new Set(eventLog.read().map((event) => event.eventId));
   try {
     const results: AppendResult[] = eventLog.appendMany(events);
-    onEventIds?.(results.filter((result) => result.appended).map((result) => result.eventId));
+    // Include idempotent results: a previous process may have appended the
+    // event before its Git commit failed. The committer validates the delta
+    // against HEAD and ignores IDs that are already committed.
+    onEventIds?.(results.map((result) => result.eventId));
   } catch (error) {
     // appendMany writes one event at a time. Preserve only IDs that appeared
     // during this attempt so a later retry can commit the partial delta.

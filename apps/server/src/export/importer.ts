@@ -1132,9 +1132,11 @@ export function rebuildFromRepo(
     ): void => {
       const activityIds: string[] = [];
       for (const event of events) {
-        const actorName = typeof event.actor === "string" ? event.actor : null;
+        const actorReference = typeof event.actor === "string" ? event.actor : null;
         const actorId =
-          (actorName ? actorIds.get(actorName) : undefined) ?? [...actorIds.values()][0]!;
+          (actorReference
+            ? (actorIdsBySourceId.get(actorReference) ?? actorIds.get(actorReference))
+            : undefined) ?? [...actorIds.values()][0]!;
         // Los comentarios se reconstruyen desde el log: el evento `commented` ya
         // trae autor, fecha y body (AT-165), así que no se duplican en el snapshot.
         if (event.type === "commented" && event.payload?.body) {

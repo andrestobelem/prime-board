@@ -41,8 +41,8 @@ export interface RepoSyncOptions extends IssueEventPipelineOptions {
 export interface RepoSync {
   /**
    * Regenera el repo completo (cambios de metadata, borrados).
-   * Los fallos se registran y se pueden reintentar en la siguiente escritura;
-   * la interfaz histórica no expone todavía un estado de error al caller.
+   * Los fallos se propagan al caller para que la mutación no informe éxito
+   * cuando el append, Git, projector o export falla.
    */
   sync(): void;
   /** Camino caliente: reescribe solo el issue afectado (AT-166). */

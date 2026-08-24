@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   EVENT_LOG_RELATIVE_PATH,
@@ -143,9 +144,10 @@ export class IssueEventPipeline {
     const before = new Set(this.eventLog.read().map((event) => event.eventId));
     try {
       const results = this.eventLog.appendMany(events);
-      for (const result of results) {
-        if (result.appended) this.pendingEventIds.add(result.eventId);
-      }
+      // Keep idempotent IDs as candidates too: a prior process may have
+      // appended them before its Git commit failed. The Git committer checks
+      // which candidates are still in the working-tree delta.
+      for (const result of results) this.pendingEventIds.add(result.eventId);
       return results;
     } catch (error) {
       const after = new Set(this.eventLog.read().map((event) => event.eventId));
@@ -224,36 +226,117 @@ export class IssueEventPipeline {
 export function createGitCommitter(rootDir: string): GitCommitter {
   return ({ eventIds }) => {
     if (eventIds.length === 0 || !existsSync(join(rootDir, ".git"))) return;
-    const changedEventIds = validateEventLogDelta(rootDir, eventIds);
-    if (changedEventIds.size === 0) return;
-    runGit(rootDir, ["add", "--", EVENT_LOG_RELATIVE_PATH]);
-    const status = spawnSync(
-      "git",
-      ["-C", rootDir, "diff", "--cached", "--quiet", "--", EVENT_LOG_RELATIVE_PATH],
-      { encoding: "utf8" },
-    );
-    if (status.error) throw status.error;
-    if (status.status === 0) return;
-    if (status.status !== 1) {
-      throw new Error(status.stderr.trim() || "Cannot inspect staged event log changes");
-    }
-    runGit(rootDir, [
-      "commit",
-      "--only",
-      "-m",
-      "chore(events): append canonical issue events",
-      "--",
-      EVENT_LOG_RELATIVE_PATH,
-    ]);
+    assertEventLogIndexIsClean(rootDir);
+    const delta = validateEventLogDelta(rootDir, eventIds);
+    if (delta.eventIds.size === 0) return;
+    commitEventLogSnapshot(rootDir, delta.content);
   };
 }
 
 /**
- * Verify that the working-tree change is an append of only expected events.
- * This check runs before `git add`, so a concurrent or pre-existing change is
- * rejected and remains available for its owner to retry.
+ * Commit the validated bytes through an alternate index. The real index and
+ * the working tree stay untouched, so a concurrent append cannot be swept
+ * into this commit by `git add`.
  */
-function validateEventLogDelta(rootDir: string, expectedEventIds: readonly string[]): Set<string> {
+function commitEventLogSnapshot(rootDir: string, content: string): void {
+  const tempDir = mkdtempSync(join(tmpdir(), "prime-board-event-index-"));
+  const tempIndex = join(tempDir, "index");
+  const env = { GIT_INDEX_FILE: tempIndex };
+  const originalIndexEntry = readEventLogIndexEntry(rootDir);
+  try {
+    const hasHead = hasGitHead(rootDir);
+    runGit(rootDir, ["read-tree", hasHead ? "HEAD" : "--empty"], env);
+    const blob = hashEventLog(rootDir, content);
+    runGit(
+      rootDir,
+      ["update-index", "--add", "--cacheinfo", `100644,${blob},${EVENT_LOG_RELATIVE_PATH}`],
+      env,
+    );
+    runGit(rootDir, ["commit", "-m", "chore(events): append canonical issue events"], env);
+    // Refresh only our path. If another process staged it meanwhile, preserve
+    // that staged content instead of replacing it.
+    if (readEventLogIndexEntry(rootDir) === originalIndexEntry) {
+      runGit(rootDir, [
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        `100644,${blob},${EVENT_LOG_RELATIVE_PATH}`,
+      ]);
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function hashEventLog(rootDir: string, content: string): string {
+  const result = spawnSync("git", ["-C", rootDir, "hash-object", "-w", "--stdin"], {
+    encoding: "utf8",
+    input: content,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || "Cannot hash canonical event log");
+  }
+  const blob = result.stdout.trim();
+  if (!/^[0-9a-f]{40}$/u.test(blob)) throw new Error("Git returned an invalid event log blob");
+  return blob;
+}
+
+function hasGitHead(rootDir: string): boolean {
+  const result = spawnSync("git", ["-C", rootDir, "rev-parse", "--verify", "HEAD^{commit}"], {
+    encoding: "utf8",
+  });
+  if (result.error) throw result.error;
+  if (result.status === 0) return true;
+  if (result.status === 128) return false;
+  throw new Error(result.stderr.trim() || "Cannot inspect Git HEAD");
+}
+
+function readEventLogIndexEntry(rootDir: string): string | undefined {
+  const result = spawnSync(
+    "git",
+    ["-C", rootDir, "ls-files", "--stage", "--", EVENT_LOG_RELATIVE_PATH],
+    {
+      encoding: "utf8",
+    },
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || "Cannot inspect Git index");
+  }
+  const entry = result.stdout.trim();
+  return entry || undefined;
+}
+
+function assertEventLogIndexIsClean(rootDir: string): void {
+  const status = spawnSync(
+    "git",
+    ["-C", rootDir, "diff", "--cached", "--quiet", "--", EVENT_LOG_RELATIVE_PATH],
+    { encoding: "utf8" },
+  );
+  if (status.error) throw status.error;
+  if (status.status === 1) {
+    throw new Error("Canonical event log already has staged changes");
+  }
+  if (status.status !== 0) {
+    throw new Error(status.stderr.trim() || "Cannot inspect staged canonical event log");
+  }
+}
+
+interface EventLogDelta {
+  readonly content: string;
+  readonly eventIds: ReadonlySet<string>;
+}
+
+/**
+ * Verify that the working-tree change is an append of only expected events.
+ * The validated bytes are returned so a later Git operation cannot reread a
+ * concurrently changed working tree and capture an unrelated append.
+ */
+function validateEventLogDelta(
+  rootDir: string,
+  expectedEventIds: readonly string[],
+): EventLogDelta {
   const path = join(rootDir, EVENT_LOG_RELATIVE_PATH);
   if (!existsSync(path)) throw new Error("Canonical event log is missing");
   const current = readFileSync(path, "utf8");
@@ -265,7 +348,7 @@ function validateEventLogDelta(rootDir: string, expectedEventIds: readonly strin
     throw new Error("Canonical event log base is not newline-terminated");
   }
   const delta = base ? current.slice(base.length) : current;
-  if (delta.length === 0) return new Set();
+  if (delta.length === 0) return { content: current, eventIds: new Set() };
   const expected = new Set(expectedEventIds);
   const changed = new Set<string>();
   const lines = delta.split("\n");
@@ -283,7 +366,7 @@ function validateEventLogDelta(rootDir: string, expectedEventIds: readonly strin
     }
     changed.add(event.eventId);
   }
-  return changed;
+  return { content: current, eventIds: changed };
 }
 
 function readHeadEventLog(rootDir: string): string {
@@ -296,8 +379,11 @@ function readHeadEventLog(rootDir: string): string {
   throw new Error(result.stderr.trim() || "Cannot read HEAD event log");
 }
 
-function runGit(rootDir: string, args: readonly string[]): void {
-  const result = spawnSync("git", ["-C", rootDir, ...args], { encoding: "utf8" });
+function runGit(rootDir: string, args: readonly string[], environment?: NodeJS.ProcessEnv): void {
+  const result = spawnSync("git", ["-C", rootDir, ...args], {
+    encoding: "utf8",
+    env: environment ? { ...process.env, ...environment } : undefined,
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(result.stderr.trim() || `git ${args[0] ?? "command"} failed`);

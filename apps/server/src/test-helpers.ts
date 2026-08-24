@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { migrate } from "./db/database.ts";
 import { bootstrap } from "./db/seed.ts";
 import { createApp } from "./server.ts";
+import type { RepoSync } from "./export/repo-sync.ts";
 import { resolveBootstrapIdentity, type BootstrapIdentityInput } from "./db/bootstrap-config.ts";
 import type { AuthMode, Config } from "./config.ts";
 import type { WebhookDispatcher } from "./webhooks/dispatcher.ts";
@@ -19,6 +20,7 @@ export function createTestApp(
   repoRoot?: string,
   authMode: AuthMode = "api-key",
   bootstrapInput: BootstrapIdentityInput = {},
+  repoSync?: RepoSync,
 ): TestApp {
   const db = new Database(":memory:", { strict: true });
   db.exec("PRAGMA foreign_keys = ON;");
@@ -36,7 +38,12 @@ export function createTestApp(
     bootstrap: bootstrapIdentity,
   };
   // Reintentos casi inmediatos para que los tests de webhooks sean rápidos.
-  const { server, events } = createApp({ db, config, webhookOptions: { retryDelays: [5, 5, 5] } });
+  const { server, events } = createApp({
+    db,
+    config,
+    webhookOptions: { retryDelays: [5, 5, 5] },
+    repoSync,
+  });
   return {
     db,
     url: `http://localhost:${server.port}`,
