@@ -10,7 +10,11 @@ describe("board and project issue scope", () => {
       priority: "2",
       labelId: "label-1",
     };
-    expect({ ...buildIssueFilter(null, draft), project: { eq: "project-1" } }).toEqual({
+    const projectFilter: Record<string, unknown> = {
+      ...buildIssueFilter(null, draft),
+      project: { eq: "project-1" },
+    };
+    expect(projectFilter).toEqual({
       project: { eq: "project-1" },
       search: "roadmap",
       priority: { eq: 2 },

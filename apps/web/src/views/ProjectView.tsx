@@ -324,6 +324,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
     const ids = archiveSelection;
     if (!ids?.length) return;
     setBulkLoading(true);
+    setBulkError(null);
     try {
       await runIssueActions(
         ids,
@@ -333,6 +334,9 @@ export function ProjectView({ projectId }: { projectId: string }) {
       );
       setSelectedIds(new Set());
       setArchiveSelection(null);
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : "Could not archive selected issues.");
+      throw error;
     } finally {
       setBulkLoading(false);
     }
@@ -558,7 +562,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
           )
         }
         onClearSelection={() => setSelectedIds(new Set())}
-        onBulkState={(stateId) => bulkAction({ stateId })}
+        onBulkState={async (stateId) => bulkAction({ stateId })}
         actionOptions={actionOptions}
         onBulkAction={bulkAction}
         onBulkArchive={requestBulkArchive}

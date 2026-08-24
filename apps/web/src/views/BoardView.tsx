@@ -490,7 +490,7 @@ export function BoardView({
     <>
       <IssueFilterToolbar
         draft={draft}
-        states={isProject ? container.teams.flatMap((team: any) => team.states) : container.states}
+        states={isProject ? [] : container.states}
         actors={actors}
         labels={isProject ? container.teams.flatMap((team: any) => team.labels) : container.labels}
         projects={isProject ? [] : container.projects}
@@ -510,7 +510,7 @@ export function BoardView({
           )
         }
         onClearSelection={() => setSelectedIds(new Set())}
-        onBulkState={(stateId) => bulkAction({ stateId })}
+        onBulkState={isProject ? async () => {} : (stateId) => bulkAction({ stateId })}
         actionOptions={bulkOptions}
         onBulkAction={bulkAction}
         onBulkArchive={requestBulkArchive}
