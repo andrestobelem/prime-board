@@ -177,7 +177,7 @@ function activityReferenceTeams(context: Context, table: RefTable, value: string
     return cycle ? [cycle.team_id] : null;
   }
   if (table === "projects") {
-    if (!context.db.query("SELECT id FROM projects WHERE id = ?1").get(value)) return null;
+    if (!lookupProject(context, value)) return null;
     return listProjectTeamIds(context.db, value, context.workspace.workspaceId);
   }
   if (table === "milestones") {

@@ -79,7 +79,6 @@ import {
   assertCanManageProject,
   assertCanManageProjectTeams,
   apiKeyTeamsWithinLimit,
-  canAccessProject,
   canAccessTeam,
   accessibleTeamIds,
 } from "../auth/permissions.ts";
@@ -90,7 +89,9 @@ function projectTeamsAllowed(context: Context, projectId: string): boolean {
   const viewer = requireViewer(context);
   const teamIds = listProjectTeamIds(context.db, projectId, context.workspace.workspaceId);
   return (
-    canAccessProject(context.db, viewer, projectId) && apiKeyTeamsWithinLimit(context.auth, teamIds)
+    teamIds.length > 0 &&
+    teamIds.every((teamId) => canAccessTeam(context.db, viewer, teamId)) &&
+    apiKeyTeamsWithinLimit(context.auth, teamIds)
   );
 }
 
@@ -372,7 +373,7 @@ export const projectResolvers = {
           context.workspace.workspaceId,
         ),
       )
-        .filter((project) => canAccessProject(context.db, viewer, project.id))
+        .filter((project) => projectTeamsAllowed(context, project.id))
         .map(mapProject);
     },
     project: async (_parent: unknown, args: { id: string }, context: Context) => {
@@ -389,7 +390,7 @@ export const projectResolvers = {
           : null;
       }
       const row = lookupProject(context, args.id);
-      return row && canAccessProject(context.db, viewer, row.id) ? mapProject(row) : null;
+      return row && projectTeamsAllowed(context, row.id) ? mapProject(row) : null;
     },
   },
 
@@ -584,8 +585,8 @@ export const projectResolvers = {
         context.events.emit("project.updated", viewer, project);
         return { success: true, project };
       }
-      assertCanManageProject(context.db, viewer, args.id);
       requireProject(context, args.id);
+      assertCanManageProject(context.db, viewer, args.id);
       if (args.input.leadId) requireActor(context, args.input.leadId);
       if (args.input.teamIds !== undefined && args.input.teamIds !== null) {
         assertCanManageProjectTeams(context.db, viewer, args.input.teamIds);
@@ -626,8 +627,8 @@ export const projectResolvers = {
         });
         return { success: true, projectUpdate };
       }
-      assertCanManageProject(context.db, viewer, args.input.projectId);
       requireProject(context, args.input.projectId);
+      assertCanManageProject(context.db, viewer, args.input.projectId);
       const projectUpdate = mapProjectUpdate(
         createProjectUpdate(context.db, viewer.id, args.input, context.workspace.workspaceId),
       );
