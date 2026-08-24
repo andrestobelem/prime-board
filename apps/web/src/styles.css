@@ -730,19 +730,22 @@ kbd {
 .issue-row .identifier {
   color: var(--text-faint);
   font-size: 14px;
-  width: 52px;
+  width: 64px;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 .issue-row .title {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 1;
+  flex: 1 1 auto;
+  line-height: 1.35;
 }
 .issue-row .right {
   margin-left: auto;
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
   flex-shrink: 0;
 }
@@ -1027,11 +1030,11 @@ kbd {
 .issue-props .prop {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 .issue-props .prop > span {
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
@@ -1059,7 +1062,25 @@ kbd {
   line-height: 1.6;
 }
 .markdown p {
-  margin: 0 0 8px;
+  margin: 0 0 12px;
+}
+.markdown h2 {
+  margin: 24px 0 10px;
+  font-size: 22px;
+  line-height: 1.25;
+}
+.markdown h3 {
+  margin: 18px 0 8px;
+  font-size: 18px;
+  line-height: 1.3;
+}
+.markdown ul,
+.markdown ol {
+  margin: 0 0 16px;
+  padding-left: 24px;
+}
+.markdown li + li {
+  margin-top: 4px;
 }
 .markdown code {
   background: var(--surface);
@@ -1980,6 +2001,8 @@ kbd {
   }
   .issue-row .identifier {
     width: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
   .issue-row .right {
     max-width: 34%;
