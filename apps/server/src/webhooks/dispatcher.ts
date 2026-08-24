@@ -55,8 +55,8 @@ function redactSecrets(value: string): string {
 
 export function safeWebhookUrl(value: string): string {
   try {
-    // Keep only the origin. Query strings, fragments, userinfo and path values
-    // may contain arbitrary credentials, so no URL component is safe to log.
+    // Conserva solo el origen. Query strings, fragmentos, userinfo y rutas
+    // pueden contener credenciales, por lo que ningún componente es seguro en logs.
     return new URL(value).origin;
   } catch {
     return "[redacted-webhook-url]";

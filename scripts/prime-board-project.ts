@@ -246,7 +246,7 @@ try {
   const concurrent = await resolveInstanceStatus(identity);
   if (concurrent.state === "running" && concurrent.record) {
     console.error(
-      `prime-board already running for ${projectRoot} at http://127.0.0.1:${concurrent.record.port}`,
+      `prime-board already running for ${projectRoot} at http://${hostForUrl(concurrent.record.host ?? host)}:${concurrent.record.port}`,
     );
     process.exit(0);
   }
@@ -265,7 +265,7 @@ if (receivedSignal) {
 console.error(`prime-board project: ${projectRoot}`);
 console.error(`prime-board replica: ${resolve(projectRoot, ".prime-board")}`);
 console.error(`prime-board database: ${identity.databasePath}`);
-console.error(`prime-board URL: http://127.0.0.1:${port}`);
+console.error(`prime-board URL: http://${hostForUrl(host)}:${port}`);
 if (process.env.PRIME_BOARD_AUTH_MODE === "local") {
   console.error("Local auth mode is active; no API key is required.");
 } else {

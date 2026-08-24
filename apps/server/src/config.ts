@@ -47,8 +47,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const authMode = resolveAuthMode(env.PRIME_BOARD_AUTH_MODE);
   return {
     port: Number(env.PRIME_BOARD_PORT ?? 3333),
-    // API-key mode also remains local by default. A non-loopback bind requires
-    // the explicit PRIME_BOARD_HOST override; local mode never accepts it.
+    // El modo api-key también usa loopback por defecto. Un bind no loopback requiere
+    // el override explícito PRIME_BOARD_HOST; local nunca acepta ese override.
     host: authMode === "local" ? LOOPBACK_HOST : resolveHost(env.PRIME_BOARD_HOST),
     authMode,
     dbPath: env.PRIME_BOARD_DB ?? join(homedir(), ".prime-board", "prime-board.db"),

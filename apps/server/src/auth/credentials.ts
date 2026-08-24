@@ -1,5 +1,3 @@
-// Almacenamiento externo de la credencial creada durante el bootstrap.
-// La credencial nunca se escribe en el package, la réplica ni los logs.
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -26,10 +24,8 @@ function projectKey(projectRoot: string | null, databasePath: string): string {
 }
 
 /**
- * Devuelve una ruta externa y estable para la credencial de bootstrap.
- *
  * Cuando existe un repo se usa el mismo hash que el runtime de Prime Agent.
- * El fallback basado en DB permite iniciar el server sin PRIME_BOARD_REPO.
+ * El fallback usa la identidad de la base y del backend cuando no hay PRIME_BOARD_REPO.
  */
 export function bootstrapCredentialPath(
   projectRoot: string | null,
@@ -51,7 +47,6 @@ export function bootstrapCredentialPath(
   return join(credentialsRoot, fileName);
 }
 
-/** Devuelve una ruta externa para una credencial con nombre. */
 export function namedCredentialPath(
   projectRoot: string | null,
   databasePath: string,
@@ -184,8 +179,6 @@ function writeCredential(path: string, apiKey: string): string {
 }
 
 /**
- * Prepara el directorio externo antes del primer bootstrap.
- *
  * Ejecutar esta comprobación antes de sembrar la base evita dejar una base
  * inicializada sin una ruta válida para su credencial.
  */
@@ -201,10 +194,17 @@ export function prepareBootstrapCredentialPath(
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   assertNoSymlinkAncestors(directory, homeRoot);
   chmodSync(directory, 0o700);
+  const probePath = `${path}.${process.pid}.${randomUUID()}.probe`;
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(probePath, "wx", 0o600);
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+    if (existsSync(probePath)) rmSync(probePath, { force: true });
+  }
   return path;
 }
 
-/** Escribe una API key de bootstrap con permisos privados. */
 export function storeBootstrapCredential(
   projectRoot: string | null,
   databasePath: string,
@@ -214,7 +214,6 @@ export function storeBootstrapCredential(
   return writeCredential(bootstrapCredentialPath(projectRoot, databasePath, home), apiKey);
 }
 
-/** Escribe una credencial nombrada fuera del proyecto con permisos privados. */
 export function storeNamedCredential(
   projectRoot: string | null,
   databasePath: string,

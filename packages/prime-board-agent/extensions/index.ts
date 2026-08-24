@@ -310,9 +310,9 @@ async function projectCredential(
         : {}),
     };
   }
-  // The first server bootstrap stores a HUMAN admin key outside the project.
-  // Claim it once to create the project-scoped AGENT credential, then persist
-  // only the AGENT key through the caller.
+  // El primer bootstrap del servidor guarda una key admin HUMAN fuera del proyecto.
+  // Reclámala una vez para crear la credencial AGENT del proyecto y persiste
+  // solo la key AGENT mediante el caller.
   if (source !== "environment" && type !== "HUMAN") {
     throw new Error("The project credential must belong to an Actor AGENT.");
   }

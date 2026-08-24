@@ -372,9 +372,12 @@ flag. La prueba no usa ni reemplaza la DB operativa.
 ## 9. Receta completa para un agente nuevo
 
 ```bash
-bun run server &                 # 1. server corriendo (key de admin impresa)
-bun run seed                     # 2. datos de demo + key de demo-agent
-pb auth login --url http://localhost:3333 --key <key-del-agente>
+bun run server &                 # 1. inicia el server; no imprime ninguna key
+bun run seed                     # 2. datos de demo opcionales
+# Instala el package prime-board-agent y ejecuta /prime-board auth en Prime Agent.
+# El comando reclama la credencial HUMAN externa y guarda solo la credencial AGENT.
+# Define PRIME_BOARD_API_KEY desde esa credencial sin imprimirla.
+pb auth login --url http://localhost:3333 --key "$PRIME_BOARD_API_KEY"
 pb issue list --team PRB --assignee me --json    # 3. mi cola de trabajo
 pb issue update PRB-153 --state started            # 4. tomo el issue
 pb issue comment PRB-153 --body "On it"            # 5. aviso

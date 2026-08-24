@@ -38,7 +38,6 @@ beforeAll(async () => {
     stdout: "pipe",
     stderr: "pipe",
   });
-  // Espera el arranque y carga la credencial externa de bootstrap.
   const stdout = server.stdout as ReadableStream<Uint8Array>;
   const reader = stdout.getReader();
   const decoder = new TextDecoder();

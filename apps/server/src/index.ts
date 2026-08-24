@@ -11,10 +11,14 @@ import { claimRuntimeOwnership } from "./runtime-ownership.ts";
 import { prepareBootstrapCredentialPath, storeBootstrapCredential } from "./auth/credentials.ts";
 
 const config = loadConfig();
+const credentialDatabasePath =
+  config.persistenceBackend === "postgres" && config.postgresUrl
+    ? `${config.dbPath}|postgres:${config.postgresUrl}`
+    : config.dbPath;
 claimRuntimeOwnership(config.repoRoot ?? "", config.dbPath);
 if (config.authMode !== "local") {
   // Valida y prepara el almacenamiento externo antes de sembrar la base.
-  prepareBootstrapCredentialPath(config.repoRoot, config.dbPath);
+  prepareBootstrapCredentialPath(config.repoRoot, credentialDatabasePath);
 }
 
 function serverUrl(port: number | undefined): string {
@@ -31,7 +35,7 @@ function reportBootstrap(created: boolean, adminApiKey?: string): void {
     return;
   }
   if (adminApiKey) {
-    storeBootstrapCredential(config.repoRoot, config.dbPath, adminApiKey);
+    storeBootstrapCredential(config.repoRoot, credentialDatabasePath, adminApiKey);
     console.log(
       "Admin API key stored outside the project under ~/.prime-board/credentials/ (mode 0600).",
     );
