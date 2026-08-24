@@ -191,6 +191,10 @@ describe("comment full-text search", () => {
       `{ issues(filter: { search: "updated" }) { nodes { id } } }`,
     );
     expect(updatedFound.data!.issues.nodes.map((n: any) => n.id)).toContain(issueId);
+    await gql(app, `mutation($id: ID!) { issueArchive(id: $id) { success } }`, { id: issueId });
+    const archived = await gql(app, `{ issues(filter: { search: "updated" }) { nodes { id } } }`);
+    expect(archived.data!.issues.nodes.map((n: any) => n.id)).not.toContain(issueId);
+    await gql(app, `mutation($id: ID!) { issueUnarchive(id: $id) { success } }`, { id: issueId });
     app.db.query("DELETE FROM comments WHERE id = ?1").run(row.id);
     const deleted = await gql(app, `{ issues(filter: { search: "updated" }) { nodes { id } } }`);
     expect(deleted.data!.issues.nodes).toEqual([]);
