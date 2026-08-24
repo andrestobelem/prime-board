@@ -11,15 +11,28 @@ describe("server config", () => {
     expect(config.host).toBe("127.0.0.1");
   });
 
-  it("keeps API-key mode as the default", () => {
+  it("keeps API-key mode on loopback by default", () => {
     const config = loadConfig({});
     expect(config.authMode).toBe("api-key");
+    expect(config.host).toBe("127.0.0.1");
+  });
+
+  it("requires an explicit host override for a non-loopback API-key bind", () => {
+    const config = loadConfig({
+      PRIME_BOARD_HOST: "0.0.0.0",
+    });
     expect(config.host).toBe("0.0.0.0");
   });
 
   it("rejects unknown authentication modes", () => {
     expect(() => loadConfig({ PRIME_BOARD_AUTH_MODE: "shared" })).toThrow(
       "Invalid PRIME_BOARD_AUTH_MODE",
+    );
+  });
+
+  it("rejects host values that are not hostnames or addresses", () => {
+    expect(() => loadConfig({ PRIME_BOARD_HOST: "http://0.0.0.0" })).toThrow(
+      "Invalid PRIME_BOARD_HOST",
     );
   });
 

@@ -43,6 +43,32 @@ export function signPayload(secret: string, body: string): string {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function redactSecrets(value: string): string {
+  return value
+    .replace(
+      /(\b(?:prime[_ -]?board[_ -]?api[_ -]?key|api[_ -]?key|access[_ -]?token|secret|password)\b\s*[:=]\s*)[^\s,;)}]+/gi,
+      "$1[redacted]",
+    )
+    .replace(/(\bbearer\s+)[^\s,;)}]+/gi, "$1[redacted]")
+    .replace(/\bpb_[A-Za-z0-9_-]+\b/g, "[redacted-api-key]");
+}
+
+function safeWebhookUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "";
+      url.password = "";
+    }
+    for (const key of [...url.searchParams.keys()]) {
+      if (/(?:key|token|secret|password|auth)/i.test(key)) url.searchParams.set(key, "[redacted]");
+    }
+    return redactSecrets(url.toString());
+  } catch {
+    return redactSecrets(value);
+  }
+}
+
 function parseEvents(events: string | readonly string[]): string[] {
   if (typeof events !== "string") return [...events];
   try {
@@ -194,7 +220,7 @@ export class WebhookDispatcher {
     changes?: Record<string, { from: unknown; to: unknown }>,
   ): void {
     const dispatch = this.dispatch(event, actor, data, changes).catch((error) => {
-      this.options.log?.(`webhook dispatch failed: ${error}`);
+      this.options.log?.(`webhook dispatch failed: ${redactSecrets(String(error))}`);
     });
     this.pending.add(dispatch);
     void dispatch.finally(() => this.pending.delete(dispatch)).catch(() => undefined);
@@ -272,7 +298,9 @@ export class WebhookDispatcher {
     await allAsync(
       subscribed.map((hook) =>
         this.deliver(hook, body).catch((error) => {
-          this.options.log?.(`webhook delivery to ${hook.url} failed: ${error}`);
+          this.options.log?.(
+            `webhook delivery to ${safeWebhookUrl(hook.url)} failed: ${redactSecrets(String(error))}`,
+          );
           return false;
         }),
       ),

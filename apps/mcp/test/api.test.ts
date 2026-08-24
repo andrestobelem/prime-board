@@ -1,9 +1,18 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { createMcpSession } from "../src/api.ts";
+import { createMcpSession, safeEndpointUrl } from "../src/api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+describe("MCP endpoint redaction", () => {
+  it("does not expose endpoint credentials in process output", () => {
+    const safe = safeEndpointUrl("http://user:password@board.invalid/graphql?apiKey=pb_secret");
+    expect(safe).not.toContain("password");
+    expect(safe).not.toContain("pb_secret");
+    expect(safe).toContain("%5Bredacted%5D");
+  });
 });
 
 describe("MCP effective Workspace session", () => {

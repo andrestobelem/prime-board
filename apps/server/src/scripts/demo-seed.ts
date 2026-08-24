@@ -10,13 +10,17 @@ import { createIssue, updateIssue } from "../domain/issues.ts";
 import { createLabel } from "../domain/labels.ts";
 import { createProject } from "../domain/projects.ts";
 import { getTeam, listTeamStates, type TeamRow } from "../domain/teams.ts";
+import { storeBootstrapCredential, storeNamedCredential } from "../auth/credentials.ts";
 
 const config = loadConfig();
 const db = openDatabase(config.dbPath);
 
 const seeded = bootstrap(db, config.bootstrap);
 if (seeded.created && seeded.adminApiKey) {
-  console.log(`Admin API key (save it now, it will not be shown again): ${seeded.adminApiKey}`);
+  storeBootstrapCredential(config.repoRoot, config.dbPath, seeded.adminApiKey);
+  console.log(
+    "Admin API key stored outside the project under ~/.prime-board/credentials/ (mode 0600).",
+  );
 }
 
 const existing = db.query("SELECT count(*) AS n FROM issues").get() as { n: number };
@@ -101,4 +105,7 @@ console.log(
   `  team ${team.key} · project "${project.name}" · 4 issues (${team.key}-1..${team.key}-4)`,
 );
 console.log(`  actors: admin (human), demo-agent (agent)`);
-console.log(`Demo agent API key (save it now, it will not be shown again): ${agentKey.key}`);
+storeNamedCredential(config.repoRoot, config.dbPath, "demo-agent", agentKey.key);
+console.log(
+  "Demo agent API key stored outside the project under ~/.prime-board/credentials/ (mode 0600).",
+);

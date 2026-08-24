@@ -184,7 +184,7 @@ Los `*Payload` devuelven `{ success: Boolean!, <entidad> }` como en Linear.
 
 - **Bootstrap:** en el primer arranque, el server crea el Workspace, un Team default y el Actor
   `admin` (human). Las variables de entorno de configuración pueden elegir la identidad. El server
-  imprime la API key una sola vez.
+  guarda la API key fuera del proyecto, con permisos `0600`, y no la imprime en logs.
 - El sistema guarda las keys como hashes SHA-256. Sin key, devuelve `UNAUTHORIZED`, excepto para
   la UI servida y GraphiQL en dev cuando están configurables.
 - Cada agente se registra como `Actor(type: AGENT)` con un nombre operativo, no con el nombre del

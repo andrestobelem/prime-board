@@ -269,7 +269,9 @@ console.error(`prime-board URL: http://127.0.0.1:${port}`);
 if (process.env.PRIME_BOARD_AUTH_MODE === "local") {
   console.error("Local auth mode is active; no API key is required.");
 } else {
-  console.error("Save the admin API key printed by the first server start.");
+  console.error(
+    "The bootstrap API key is stored outside the project under ~/.prime-board/credentials/ with mode 0600.",
+  );
 }
 
 const environment = {

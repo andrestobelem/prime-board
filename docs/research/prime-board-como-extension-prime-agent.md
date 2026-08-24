@@ -202,7 +202,7 @@ No uses esta opción para este objetivo: cambia local-first, añade auth/operaci
 - El path del repositorio puede contener espacios o caracteres especiales: usar `spawn(command, argv, { cwd, env })`, nunca `sh -c`.
 - La réplica `.prime-board/` se genera vía API/CLI; el package no debe editarla a mano.
 - Una sesión de Prime Agent, una skill Python y una extensión no constituyen un sandbox: heredan permisos del usuario y pueden tocar la DB/repo.
-- El primer bootstrap imprime una API key una sola vez. El instalador debe capturarla de forma controlada o proveer un flujo explícito para crear una key de agente; nunca ponerla en `settings.json`, logs públicos ni commits.
+- El primer bootstrap guarda la API key fuera del proyecto, con permisos `0600`. El instalador debe leerla de forma controlada o proveer un flujo explícito para crear una key de agente; nunca ponerla en `settings.json`, logs públicos ni commits.
 - El paquete debe fijar versiones y verificar integridad de binarios; `prime-agent package update` no debe actualizar automáticamente una migración de DB sin backup/rollback.
 
 ## Plan por fases

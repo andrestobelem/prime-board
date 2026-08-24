@@ -28,6 +28,29 @@ export interface McpSession extends McpConfig {
   readonly context: EffectiveWorkspaceContext;
 }
 
+export function safeEndpointUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "";
+      url.password = "";
+    }
+    for (const key of [...url.searchParams.keys()]) {
+      if (/(?:key|token|secret|password|auth)/i.test(key)) {
+        url.searchParams.set(key, "[redacted]");
+      }
+    }
+    return url.toString();
+  } catch {
+    return value
+      .replace(
+        /(\b(?:api[_ -]?key|access[_ -]?token|secret|password)\b\s*[:=]\s*)[^\s,;)}]+/gi,
+        "$1[redacted]",
+      )
+      .replace(/\bpb_[A-Za-z0-9_-]+\b/g, "[redacted-api-key]");
+  }
+}
+
 export function loadMcpConfig(env: Record<string, string | undefined> = process.env): McpConfig {
   const url = env.PRIME_BOARD_URL ?? "http://localhost:3333";
   const apiKey = env.PRIME_BOARD_API_KEY;

@@ -1,6 +1,6 @@
 // Tests e2e de AT-140: el CLI contra un server real (subprocess con DB temporal).
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,13 +31,14 @@ beforeAll(async () => {
   server = Bun.spawn(["bun", join(ROOT, "apps/server/src/index.ts")], {
     env: {
       ...process.env,
+      HOME: join(tempDir, "home"),
       PRIME_BOARD_DB: join(tempDir, "test.db"),
       PRIME_BOARD_PORT: "0",
     },
     stdout: "pipe",
     stderr: "pipe",
   });
-  // Espera el arranque y captura la key impresa una única vez.
+  // Espera el arranque y carga la credencial externa de bootstrap.
   const stdout = server.stdout as ReadableStream<Uint8Array>;
   const reader = stdout.getReader();
   const decoder = new TextDecoder();
@@ -48,12 +49,18 @@ beforeAll(async () => {
     buffer += decoder.decode(value);
   }
   reader.releaseLock();
-  const portMatch = buffer.match(/listening on http:\/\/localhost:(\d+)/);
+  const portMatch = buffer.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/);
   if (!portMatch) throw new Error(`No server port in output: ${buffer}`);
   port = Number(portMatch[1]);
-  const match = buffer.match(/Admin API key.*: (pb_\S+)/);
-  if (!match) throw new Error(`No API key in server output: ${buffer}`);
-  apiKey = match[1]!;
+  const credentialDirectory = join(tempDir, "home", ".prime-board", "credentials");
+  const credentialFile = readdirSync(credentialDirectory).find((name) => name.endsWith(".json"));
+  if (!credentialFile) throw new Error("Server did not create a bootstrap credential");
+  apiKey = (
+    JSON.parse(readFileSync(join(credentialDirectory, credentialFile), "utf8")) as {
+      apiKey: string;
+    }
+  ).apiKey;
+  expect(buffer).not.toContain(apiKey);
 });
 
 afterAll(() => {

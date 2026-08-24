@@ -1,6 +1,6 @@
 // Apertura de la base SQLite (WAL) y corrida de migraciones versionadas.
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import migration0001 from "./migrations/0001_init.sql" with { type: "text" };
 import migration0002 from "./migrations/0002_project_teams.sql" with { type: "text" };
@@ -193,14 +193,23 @@ function validateApiKeyWorkspaceMigration(db: Database, phase: "before" | "after
   }
 }
 
+function hardenDatabaseFiles(path: string): void {
+  for (const file of [path, `${path}-wal`, `${path}-shm`]) {
+    if (existsSync(file)) chmodSync(file, 0o600);
+  }
+}
+
 export function openDatabase(path: string): Database {
   if (path !== ":memory:") {
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   }
   const db = new Database(path, { create: true, strict: true });
+  if (path !== ":memory:") hardenDatabaseFiles(path);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
+  if (path !== ":memory:") hardenDatabaseFiles(path);
   migrate(db);
+  if (path !== ":memory:") hardenDatabaseFiles(path);
   return db;
 }
 

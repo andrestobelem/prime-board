@@ -6,6 +6,8 @@ import { resolveBootstrapIdentity, type BootstrapIdentity } from "./db/bootstrap
 
 export type AuthMode = "api-key" | "local";
 
+export const LOOPBACK_HOST = "127.0.0.1";
+
 export interface Config {
   port: number;
   /** Interface where the HTTP server listens. Local auth always uses loopback. */
@@ -32,11 +34,22 @@ function resolveAuthMode(value: string | undefined): AuthMode {
   throw new Error(`Invalid PRIME_BOARD_AUTH_MODE: ${value}. Use api-key or local.`);
 }
 
+function resolveHost(value: string | undefined): string {
+  const host = value ?? LOOPBACK_HOST;
+  const normalized = host.trim();
+  if (!normalized || /\s/.test(normalized) || normalized.includes("/")) {
+    throw new Error(`Invalid PRIME_BOARD_HOST: ${host}`);
+  }
+  return normalized;
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
   const authMode = resolveAuthMode(env.PRIME_BOARD_AUTH_MODE);
   return {
     port: Number(env.PRIME_BOARD_PORT ?? 3333),
-    host: authMode === "local" ? "127.0.0.1" : (env.PRIME_BOARD_HOST ?? "0.0.0.0"),
+    // API-key mode also remains local by default. A non-loopback bind requires
+    // the explicit PRIME_BOARD_HOST override; local mode never accepts it.
+    host: authMode === "local" ? LOOPBACK_HOST : resolveHost(env.PRIME_BOARD_HOST),
     authMode,
     dbPath: env.PRIME_BOARD_DB ?? join(homedir(), ".prime-board", "prime-board.db"),
     postgresUrl: env.PRIME_BOARD_POSTGRES_URL,

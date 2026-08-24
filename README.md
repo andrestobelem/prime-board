@@ -66,7 +66,7 @@ presente en el SDL está disponible en PostgreSQL.
 ```bash
 bun install
 bun run build    # buildea la UI
-bun run server   # imprime la API key de admin en el primer arranque
+bun run server   # guarda la credencial de bootstrap fuera del proyecto
 bun run seed     # (opcional) datos de demo + un agente con su key
 bun run export   # exporta el estado operativo a la réplica .prime-board/
 # bun run rebuild --from /ruta/repo  # reconstruye el estado operativo desde un export completo
@@ -119,7 +119,7 @@ el ciclo de crear, reclamar, validar, comentar evidencia y resolver issues.
 
 ## Clientes de agentes
 
-Para operar con el CLI, guarda la API key que imprime el server y configura el cliente:
+Para operar con el CLI, usa la API key guardada fuera del proyecto en `~/.prime-board/credentials/` y configura el cliente:
 
 ```bash
 bun /ruta/a/prime-board/apps/cli/src/index.ts auth login \

@@ -2,7 +2,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hashApiKey } from "../auth/keys.ts";
@@ -89,6 +89,13 @@ describe("openDatabase", () => {
     }
     const mode = db.query("PRAGMA journal_mode").get() as { journal_mode: string };
     expect(mode.journal_mode).toBe("wal");
+    db.close();
+  });
+
+  it("protege la DB y sus archivos WAL contra lecturas de otros usuarios", () => {
+    const path = tempDbPath();
+    const db = openDatabase(path);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
     db.close();
   });
 

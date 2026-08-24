@@ -66,7 +66,7 @@ solo cuando se necesita un bind externo controlado.
 
 ## Credenciales y bootstrap
 
-El primer bootstrap solo persiste hashes en SQLite. La API key administrativa se muestra una vez
+El primer bootstrap solo persiste hashes en SQLite. La API key administrativa se guarda fuera del proyecto, con permisos `0600`, y no se imprime
 en la salida interactiva del servidor y no se copia al package, a la réplica ni a archivos de
 log del agente. Guarda la key en un almacén externo con modo `0600`. Para una instancia local,
 `PRIME_BOARD_AUTH_MODE=local` evita la necesidad de una key.
