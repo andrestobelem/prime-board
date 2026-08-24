@@ -2697,7 +2697,9 @@ export const resolvers = {
           const existing = getCycle(context.db, args.id, context.workspace.workspaceId);
           if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
           const affected = context.db
-            .query("SELECT id FROM issues WHERE cycle_id = ?1 AND workspace_id = ?2")
+            .query(
+              "SELECT id FROM issues WHERE cycle_id = ?1 AND (workspace_id = ?2 OR (workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1))",
+            )
             .all(args.id, context.workspace.workspaceId)
             .map((row) => (row as { id: string }).id);
           const success = deleteCycle(
