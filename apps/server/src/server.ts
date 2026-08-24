@@ -83,6 +83,21 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
         return yoga.fetch(request);
       }
       if (url.pathname === "/health") {
+        const instanceId = process.env.PRIME_BOARD_INSTANCE_ID;
+        if (
+          url.searchParams.get("details") === "1" &&
+          instanceId &&
+          url.searchParams.get("instance") === instanceId
+        ) {
+          return Response.json({
+            status: "ok",
+            pid: process.pid,
+            processGroupId: process.pid,
+            projectRoot: config.repoRoot ?? "",
+            databasePath: config.dbPath,
+            instanceId,
+          });
+        }
         return Response.json({ status: "ok" });
       }
       if (url.pathname === "/config") {

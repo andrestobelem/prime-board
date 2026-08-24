@@ -7,8 +7,10 @@ import { migratePostgres } from "./db/postgres/migrator.ts";
 import { bootstrapPostgres } from "./db/postgres/bootstrap.ts";
 import { createPostgresPersistence } from "./db/postgres/persistence.ts";
 import { createApp } from "./server.ts";
+import { claimRuntimeOwnership } from "./runtime-ownership.ts";
 
 const config = loadConfig();
+claimRuntimeOwnership(config.repoRoot ?? "", config.dbPath);
 
 function reportBootstrap(created: boolean, adminApiKey?: string): void {
   if (!created) return;

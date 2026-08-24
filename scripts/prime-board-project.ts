@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 // Inicia una instancia aislada de prime-board para otro repositorio.
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
   resolveBootstrapIdentity,
@@ -12,9 +13,12 @@ import {
   acquireDatabaseReservation,
   acquireInstanceLock,
   chooseAvailablePort,
-  reserveAvailablePort,
-  classifyInstance,
+  databaseReservationPaths,
   deriveProjectIdentity,
+  promoteDatabaseReservationOwner,
+  promoteInstanceOwner,
+  reserveAvailablePort,
+  resolveInstanceStatus,
   retireInstanceLock,
   type InstanceRecord,
   type InstanceStatus,
@@ -170,7 +174,7 @@ const webDist =
   values["web-dist"] ?? (inheritedConfigMatches ? process.env.PRIME_BOARD_WEB_DIST : undefined);
 const requestedPort = parsePort(values.port ?? inheritedPort ?? "3333");
 const portIsExplicit = values.port !== undefined || inheritedPort !== undefined;
-const status = classifyInstance(identity);
+const status = await resolveInstanceStatus(identity);
 assertDatabaseCompatibility(identity, status);
 
 if (values.status) {
@@ -214,12 +218,15 @@ process.once("SIGTERM", onSignal);
 
 const portReservation = await reserveAvailablePort(requestedPort, portIsExplicit, homedir());
 const port = portReservation.port;
+const instanceId = randomUUID();
 const instanceRecord: InstanceRecord = {
   version: 1,
   projectRoot,
   databasePath: identity.databasePath,
   port,
   pid: process.pid,
+  launcherPid: process.pid,
+  instanceId,
   host,
   startedAt: new Date().toISOString(),
 };
@@ -231,13 +238,15 @@ try {
     projectRoot,
     databasePath: identity.databasePath,
     pid: process.pid,
+    launcherPid: process.pid,
+    instanceId,
     reservedAt: instanceRecord.startedAt,
   });
   releaseLock = acquireInstanceLock(identity, instanceRecord);
 } catch (error) {
   releaseDatabaseReservation?.();
   portReservation.release();
-  const concurrent = classifyInstance(identity);
+  const concurrent = await resolveInstanceStatus(identity);
   if (concurrent.state === "running" && concurrent.record) {
     console.error(
       `prime-board already running for ${projectRoot} at http://127.0.0.1:${concurrent.record.port}`,
@@ -278,16 +287,29 @@ const environment = {
   PRIME_BOARD_WORKSPACE_URL_KEY: bootstrap.workspaceUrlKey,
   PRIME_BOARD_TEAM_NAME: bootstrap.teamName,
   PRIME_BOARD_TEAM_KEY: bootstrap.teamKey,
+  PRIME_BOARD_INSTANCE_ID: instanceId,
+  PRIME_BOARD_INSTANCE_METADATA: identity.metadataPath,
+  PRIME_BOARD_LAUNCHER_PID: String(process.pid),
+  PRIME_BOARD_DATABASE_RESERVATION_METADATA: JSON.stringify(
+    databaseReservationPaths(identity.databasePath, homedir()).map((path) =>
+      join(path, "reservation.json"),
+    ),
+  ),
 };
 let exitCode = 1;
 try {
   server = Bun.spawn([process.execPath, "run", "--cwd", "apps/server", "start"], {
     cwd: PRIME_BOARD_ROOT,
     env: environment,
+    detached: true,
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
   });
+  if (server.pid === undefined) throw new Error("prime-board server did not expose a PID");
+  const owner = { pid: server.pid, processGroupId: server.pid };
+  promoteDatabaseReservationOwner(identity, owner, instanceId);
+  promoteInstanceOwner(identity, owner, instanceId);
   await waitForHealth(host, port, server);
   console.error(`prime-board ready: http://${hostForUrl(host)}:${port}`);
   exitCode = await server.exited;

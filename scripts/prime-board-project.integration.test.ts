@@ -86,6 +86,21 @@ async function waitForInstance(
   throw new Error(`Timed out waiting for launcher instance: ${project}`);
 }
 
+async function waitForChildProcess(parentPid: number | undefined): Promise<number> {
+  if (parentPid === undefined) throw new Error("Launcher did not expose a PID");
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const ps = Bun.spawnSync(["ps", "-axo", "pid=,ppid="], { stdout: "pipe", stderr: "ignore" });
+    const child = ps.stdout
+      .toString()
+      .split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/).map(Number))
+      .find(([pid, ppid]) => ppid === parentPid && Number.isInteger(pid));
+    if (child?.[0] !== undefined) return child[0];
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for server child of ${parentPid}`);
+}
+
 describe("project launcher lifecycle", () => {
   test("reuses one process and releases its lock on termination", async () => {
     const root = mkdtempSync(join(tmpdir(), "prime-board-launcher-"));
@@ -118,6 +133,61 @@ describe("project launcher lifecycle", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 15_000);
+
+  test("conserva la instancia tras SIGKILL del launcher y rechaza duplicados", async () => {
+    const root = mkdtempSync(join(tmpdir(), "prime-board-orphan-launcher-"));
+    const home = join(root, "home");
+    const project = join(root, "project");
+    const port = 34935;
+    mkdirSync(home, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    Bun.spawnSync(["git", "init", "-q", project]);
+
+    const launcher = await runLauncher(project, home, { port });
+    let serverPid: number | undefined;
+    try {
+      await waitForHealth(port);
+      serverPid = await waitForChildProcess(launcher.pid);
+      launcher.kill("SIGKILL");
+      await launcher.exited;
+      await waitForHealth(port);
+
+      const identity = deriveProjectIdentity(realpathSync(project), home);
+      const status = Bun.spawn(
+        [process.execPath, "scripts/prime-board-project.ts", "--project", project, "--status"],
+        { cwd: repoRoot, env: { ...process.env, HOME: home }, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(await status.exited).toBe(0);
+      const statusOutput = await streamText(status.stdout);
+      expect(statusOutput).toContain("running");
+      expect(statusOutput).toContain(`port=${port}`);
+      expect(statusOutput).toContain(`pid=${serverPid}`);
+
+      const explicit = await runLauncher(project, home, { port, captureOutput: true });
+      const explicitOutput = `${await streamText(explicit.stdout)}${await streamText(explicit.stderr)}`;
+      expect(await explicit.exited).toBe(0);
+      expect(explicitOutput).toContain("already running");
+
+      const implicit = await runLauncher(project, home, { captureOutput: true });
+      const implicitOutput = `${await streamText(implicit.stdout)}${await streamText(implicit.stderr)}`;
+      expect(await implicit.exited).toBe(0);
+      expect(implicitOutput).toContain("already running");
+
+      const after = classifyInstance(identity);
+      expect(after.state).toBe("running");
+      expect(after.record?.port).toBe(port);
+      expect(after.record?.pid).toBe(serverPid);
+    } finally {
+      if (serverPid !== undefined) {
+        try {
+          process.kill(serverPid, "SIGTERM");
+        } catch {
+          // El server ya terminó durante la aserción.
+        }
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 async function readIdentity(port: number): Promise<{

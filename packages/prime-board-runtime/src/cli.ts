@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -9,8 +10,12 @@ import {
   acquireInstanceLock,
   chooseAvailablePort,
   classifyInstance,
+  databaseReservationPaths,
   deriveProjectIdentity,
+  promoteDatabaseReservationOwner,
+  promoteInstanceOwner,
   reserveAvailablePort,
+  resolveInstanceStatus,
   retireInstanceLock,
   type InstanceRecord,
   type ProjectInstanceIdentity,
@@ -165,8 +170,8 @@ function inheritedProjectMatches(projectRoot: string): boolean {
   }
 }
 
-function classifyAndDescribe(identity: ProjectInstanceIdentity): never {
-  const status = classifyInstance(identity);
+async function classifyAndDescribe(identity: ProjectInstanceIdentity): Promise<never> {
+  const status = await resolveInstanceStatus(identity);
   describeStatus(identity, status);
   process.exit(statusExitCode(status.state));
 }
@@ -196,10 +201,10 @@ const portIsExplicit = parsed.port !== undefined || envPort !== undefined;
 const requestedHost = parsed.host ?? process.env.PRIME_BOARD_HOST ?? DEFAULT_HOST;
 const host = process.env.PRIME_BOARD_AUTH_MODE === "local" ? DEFAULT_HOST : requestedHost;
 const webDist = parsed.webDist ?? process.env.PRIME_BOARD_WEB_DIST ?? join(import.meta.dir, "web");
-const status = classifyInstance(identity);
+const status = await resolveInstanceStatus(identity);
 assertDatabaseCompatibility(identity, status);
 
-if (parsed.status) classifyAndDescribe(identity);
+if (parsed.status) await classifyAndDescribe(identity);
 if (parsed.printEnv) {
   if (status.state === "running" && status.record) {
     printEnvironment(
@@ -240,12 +245,15 @@ process.once("SIGINT", onSigint);
 process.once("SIGTERM", onSigterm);
 
 const portReservation = await reserveAvailablePort(requestedPort, portIsExplicit, home);
+const instanceId = randomUUID();
 const instanceRecord: InstanceRecord = {
   version: 1,
   projectRoot,
   databasePath: identity.databasePath,
   port: portReservation.port,
   pid: process.pid,
+  launcherPid: process.pid,
+  instanceId,
   host,
   startedAt: new Date().toISOString(),
 };
@@ -257,6 +265,8 @@ try {
     projectRoot,
     databasePath: identity.databasePath,
     pid: process.pid,
+    launcherPid: process.pid,
+    instanceId,
     reservedAt: instanceRecord.startedAt,
   });
   releaseLock = acquireInstanceLock(identity, instanceRecord);
@@ -273,11 +283,24 @@ try {
     PRIME_BOARD_HOST: host,
     PRIME_BOARD_WEB_DIST: webDist,
     PRIME_BOARD_PERSISTENCE: "sqlite",
+    PRIME_BOARD_INSTANCE_ID: instanceId,
+    PRIME_BOARD_INSTANCE_METADATA: identity.metadataPath,
+    PRIME_BOARD_LAUNCHER_PID: String(process.pid),
+    PRIME_BOARD_DATABASE_RESERVATION_METADATA: JSON.stringify(
+      databaseReservationPaths(identity.databasePath, home).map((path) =>
+        join(path, "reservation.json"),
+      ),
+    ),
   };
   server = spawn(process.execPath, [join(import.meta.dir, "server.js")], {
     env: environment,
+    detached: true,
     stdio: "inherit",
   });
+  if (server.pid === undefined) throw new Error("prime-board server did not expose a PID");
+  const owner = { pid: server.pid, processGroupId: server.pid };
+  promoteDatabaseReservationOwner(identity, owner, instanceId);
+  promoteInstanceOwner(identity, owner, instanceId);
   const serverExit = new Promise<number>((resolveExit) => {
     server?.once("exit", (code, signal) => resolveExit(code ?? (signal ? 1 : 0)));
   });
