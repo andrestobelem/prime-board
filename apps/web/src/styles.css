@@ -732,6 +732,9 @@ kbd {
   font-size: 14px;
   width: 64px;
   flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .issue-row .title {
@@ -2001,6 +2004,7 @@ kbd {
   }
   .issue-row .identifier {
     width: auto;
+    max-width: 30%;
     flex: 0 0 auto;
     white-space: nowrap;
   }

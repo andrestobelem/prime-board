@@ -10,6 +10,8 @@ describe("issue layout typography", () => {
 
     expect(identifier).toContain("width: 64px;");
     expect(identifier).toContain("white-space: nowrap;");
+    expect(identifier).toContain("overflow: hidden;");
+    expect(identifier).toContain("text-overflow: ellipsis;");
     expect(title).toContain("min-width: 0;");
     expect(title).toContain("flex: 1 1 auto;");
   });
@@ -21,5 +23,6 @@ describe("issue layout typography", () => {
     expect(styles).toContain("font-size: 18px;");
     expect(styles).toContain(".issue-props .prop > span {");
     expect(styles).toContain("font-size: 12px;");
+    expect(styles).toContain("max-width: 30%;");
   });
 });
