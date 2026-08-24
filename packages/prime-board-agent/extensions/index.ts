@@ -310,7 +310,10 @@ async function projectCredential(
         : {}),
     };
   }
-  if (source !== "environment") {
+  // The first server bootstrap stores a HUMAN admin key outside the project.
+  // Claim it once to create the project-scoped AGENT credential, then persist
+  // only the AGENT key through the caller.
+  if (source !== "environment" && type !== "HUMAN") {
     throw new Error("The project credential must belong to an Actor AGENT.");
   }
   const agentKey = await createProjectAgent(projectRoot, url, key, fetchImpl);

@@ -55,17 +55,11 @@ function redactSecrets(value: string): string {
 
 function safeWebhookUrl(value: string): string {
   try {
-    const url = new URL(value);
-    if (url.username || url.password) {
-      url.username = "";
-      url.password = "";
-    }
-    for (const key of [...url.searchParams.keys()]) {
-      if (/(?:key|token|secret|password|auth)/i.test(key)) url.searchParams.set(key, "[redacted]");
-    }
-    return redactSecrets(url.toString());
+    // Keep only the origin. Query strings, fragments, userinfo and path values
+    // may contain arbitrary credentials, so no URL component is safe to log.
+    return new URL(value).origin;
   } catch {
-    return redactSecrets(value);
+    return "[redacted-webhook-url]";
   }
 }
 

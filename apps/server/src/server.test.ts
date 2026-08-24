@@ -26,6 +26,47 @@ describe("graphql auth", () => {
     expect(result.data!.workspace).toEqual({ name: "workspace", urlKey: "prime-board" });
   });
 
+  it("exige un bearer válido para el transporte MCP incluso en modo local", async () => {
+    const missing = await fetch(`${localApp.url}/graphql`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-prime-board-mcp-auth": "required",
+      },
+      body: JSON.stringify({ query: "{ viewer { id } }" }),
+    });
+    const missingPayload = (await missing.json()) as {
+      errors?: Array<{ extensions?: { code?: string } }>;
+    };
+    expect(missingPayload.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+    const response = await fetch(`${localApp.url}/graphql`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer pb_invalid",
+        "x-prime-board-mcp-auth": "required",
+      },
+      body: JSON.stringify({ query: "{ viewer { id } }" }),
+    });
+    const payload = (await response.json()) as {
+      errors?: Array<{ extensions?: { code?: string } }>;
+    };
+    expect(payload.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+    const valid = await fetch(`${localApp.url}/graphql`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${localApp.apiKey}`,
+        "x-prime-board-mcp-auth": "required",
+      },
+      body: JSON.stringify({ query: "{ viewer { name } }" }),
+    });
+    const validPayload = (await valid.json()) as { data?: { viewer?: { name?: string } } };
+    expect(validPayload.data?.viewer?.name).toBe("admin");
+  });
+
   it("resuelve el viewer sin key en modo local", async () => {
     const result = await gql(localApp, "{ viewer { name type } }", {}, null);
     expect(result.errors).toBeUndefined();

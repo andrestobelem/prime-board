@@ -70,6 +70,7 @@ export async function gqlRequest(
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${config.apiKey}`,
+      "x-prime-board-mcp-auth": "required",
     },
     body: JSON.stringify({ query, variables }),
   });

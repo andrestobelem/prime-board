@@ -42,8 +42,12 @@ export function createApp({ db, config, webhookOptions, persistence }: AppDeps) 
     // singleton, así que la escritura en sí sigue siendo una sola por mutation.
     context: async ({ request }): Promise<Context> => {
       const workspaceSelector = request.headers.get("x-workspace-id")?.trim() || null;
+      // GraphQL stays anonymous in local mode, but MCP must authenticate every
+      // bearer even when it targets the same loopback instance.
+      const mcpAuthenticationRequired =
+        request.headers.get("x-prime-board-mcp-auth") === "required";
       const auth =
-        config.authMode === "local"
+        config.authMode === "local" && !mcpAuthenticationRequired
           ? persistence
             ? await resolveLocalPostgresAuth(persistence)
             : resolveLocalAuth(db, workspaceSelector)

@@ -25,10 +25,11 @@ Para inspeccionar la configuración sin iniciar el servidor, ejecuta:
 eval "$(bun scripts/prime-board-project.ts --project /ruta/al/proyecto --print-env)"
 ```
 
-La admin key se guarda fuera del proyecto durante el primer inicio. El server no la imprime. Define esa clave solo para
-`/prime-board auth` o para el bootstrap inicial. La extensión crea un Actor `AGENT` por proyecto,
+La admin key se guarda fuera del proyecto durante el primer inicio. El server no la imprime. La extensión
+lee esa credencial externa cuando no existe `PRIME_BOARD_API_KEY`, crea un Actor `AGENT` por proyecto,
 crea una API key limitada al Team y guarda solo esa credencial verificada. Después exporta la clave
-AGENT como `PRIME_BOARD_API_KEY` para el trabajo normal.
+AGENT como `PRIME_BOARD_API_KEY` para el trabajo normal. También puedes definir una key admin solo para
+`/prime-board auth` o para el bootstrap inicial.
 
 ## 2. Instalar el package en el proyecto objetivo
 
@@ -50,9 +51,10 @@ La extensión puede guardar la API key activa fuera del repositorio:
 /prime-board auth
 ```
 
-El comando solo lee `PRIME_BOARD_API_KEY` del entorno del proceso. Escribe un archivo con
-permisos `0600` bajo `~/.prime-board/credentials/`. También puedes omitir este paso y mantener
-la key únicamente en el entorno de cada proceso. Nunca pegues una key en `settings.json`, en
+El comando usa `PRIME_BOARD_API_KEY` del entorno del proceso si necesitas forzar una credencial.
+En una base nueva, la extensión puede usar la admin key externa de bootstrap y reemplazarla por la
+credencial `AGENT` verificada. Escribe el archivo con permisos `0600` bajo
+`~/.prime-board/credentials/`. También puedes mantener la key únicamente en el entorno de cada proceso. Nunca pegues una key en `settings.json`, en
 `.prime-board/` ni en un comentario del Issue.
 
 ## 4. Configurar el CLI
