@@ -5,3 +5,5 @@
 {"actor":"admin","issue":"PRB-494","payload":{"from":"Needs Triage","to":"Ready for Human"},"ts":"2026-08-21T21:20:24.492Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-494","payload":{"from":null,"to":"Andrés Tobelem"},"ts":"2026-08-23T04:03:17.019Z","type":"assigned"}
 {"actor":"admin","issue":"PRB-494","payload":{"from":"Andrés Tobelem","to":null},"ts":"2026-08-23T04:04:24.627Z","type":"assigned"}
+{"actor":"admin","issue":"PRB-494","payload":{"body":"Revisión humana y cierre.\n\n- Corrección integrada en `677fb26`: el test CLI usa puerto dinámico (`PRIME_BOARD_PORT=0`), captura el puerto real y no detiene servidores externos.\n- Validación registrada: suite CLI 25/25.\n- Validación actual del alcance explícito del hook: `579 pass, 2 skip, 0 fail`; no descubre `scratchpad/worktrees`.\n\nEl comando manual sin rutas explícitas aún puede descubrir worktrees, pero no es el hook corregido ni un gap de esta Issue.\n\nSiguiente estado: `Done`."},"ts":"2026-08-24T01:42:19.833Z","type":"commented"}
+{"actor":"admin","issue":"PRB-494","payload":{"from":"Ready for Human","to":"PRB/Done"},"ts":"2026-08-24T01:42:20.004Z","type":"state_changed"}
