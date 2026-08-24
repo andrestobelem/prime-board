@@ -53,7 +53,7 @@ function redactSecrets(value: string): string {
     .replace(/\bpb_[A-Za-z0-9_-]+\b/g, "[redacted-api-key]");
 }
 
-function safeWebhookUrl(value: string): string {
+export function safeWebhookUrl(value: string): string {
   try {
     // Keep only the origin. Query strings, fragments, userinfo and path values
     // may contain arbitrary credentials, so no URL component is safe to log.

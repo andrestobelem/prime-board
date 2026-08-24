@@ -1,7 +1,7 @@
 // Tests de AT-139: entregas firmadas (criterio de aceptación 5), filtro por
 // evento y reintentos con backoff.
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { signPayload } from "../webhooks/dispatcher.ts";
+import { safeWebhookUrl, signPayload } from "../webhooks/dispatcher.ts";
 import { WEBHOOK_EVENT_NAMES } from "../webhooks/events.ts";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 
@@ -37,6 +37,15 @@ beforeAll(async () => {
 afterAll(() => {
   receiver.stop(true);
   app.stop();
+});
+
+describe("webhook log redaction", () => {
+  it("does not log query, fragment, path, or userinfo credentials", () => {
+    const safe = safeWebhookUrl(
+      "https://user:password@receiver.test/hook/SECRET?sig=SECRET#fragment-SECRET",
+    );
+    expect(safe).toBe("https://receiver.test");
+  });
 });
 
 describe("webhooks", () => {
