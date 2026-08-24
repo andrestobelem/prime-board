@@ -13,19 +13,21 @@ let issueA2: string;
 let issueB1: string;
 let issueB2: string;
 let projectB: string;
+let labelB: string;
 let relationB: string;
 
 async function createIssue(
   selector: string | null,
   teamKey: string,
   title: string,
+  labelIds: string[] = [],
 ): Promise<string> {
   const result = await gql(
     app,
-    `mutation($teamKey: String!, $title: String!) {
-      issueCreate(input: { teamKey: $teamKey, title: $title }) { issue { id } }
+    `mutation($teamKey: String!, $title: String!, $labelIds: [ID!]) {
+      issueCreate(input: { teamKey: $teamKey, title: $title, labelIds: $labelIds }) { issue { id } }
     }`,
-    { teamKey, title },
+    { teamKey, title, labelIds },
     app.apiKey,
     selector,
   );
@@ -64,7 +66,16 @@ describe("issue Workspace isolation", () => {
     );
     expect(project.errors).toBeUndefined();
     projectB = project.data!.projectCreate.project.id;
-    issueB1 = await createIssue(workspaceBKey, selectedTeam.key, "B one");
+    const label = await gql(
+      app,
+      `mutation { labelCreate(input: { name: "B label" }) { label { id } } }`,
+      {},
+      app.apiKey,
+      workspaceBKey,
+    );
+    expect(label.errors).toBeUndefined();
+    labelB = label.data!.labelCreate.label.id;
+    issueB1 = await createIssue(workspaceBKey, selectedTeam.key, "B one", [labelB]);
     issueB2 = await createIssue(workspaceBKey, selectedTeam.key, "B two");
 
     const comment = await gql(
@@ -119,7 +130,7 @@ describe("issue Workspace isolation", () => {
 
     const b = await gql(
       app,
-      `query { issues { nodes { id } } issue(id: \"${issueB1}\") { comments { body } relations { id } } }`,
+      `query { issues { nodes { id } } issue(id: \"${issueB1}\") { comments { body } labels { id } relations { id } } }`,
       {},
       app.apiKey,
       workspaceBKey,
@@ -128,6 +139,7 @@ describe("issue Workspace isolation", () => {
     expect(b.data!.issues.nodes.map((row: { id: string }) => row.id)).toContain(issueB1);
     expect(b.data!.issues.nodes.map((row: { id: string }) => row.id)).not.toContain(issueA1);
     expect(b.data!.issue.comments).toEqual([{ body: "B comment" }]);
+    expect(b.data!.issue.labels).toEqual([{ id: labelB }]);
     expect(b.data!.issue.relations).toEqual([{ id: relationB }]);
 
     expect(
@@ -156,6 +168,13 @@ describe("issue Workspace isolation", () => {
         app.db.query("SELECT workspace_id FROM comments WHERE issue_id = ?1").get(issueB1) as {
           workspace_id: string;
         }
+      ).workspace_id,
+    ).toBe(workspaceBId);
+    expect(
+      (
+        app.db
+          .query("SELECT workspace_id FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2")
+          .get(issueB1, labelB) as { workspace_id: string }
       ).workspace_id,
     ).toBe(workspaceBId);
     expect(

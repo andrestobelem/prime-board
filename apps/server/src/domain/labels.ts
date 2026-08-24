@@ -221,9 +221,10 @@ export function applyLabelOps(
 
   for (const labelId of toAdd) {
     const label = assertApplicable(db, issue, labelId);
-    db.query("INSERT INTO issue_labels (issue_id, label_id) VALUES (?1, ?2)").run(
+    db.query("INSERT INTO issue_labels (issue_id, label_id, workspace_id) VALUES (?1, ?2, ?3)").run(
       issue.id,
       labelId,
+      issue.workspace_id ?? null,
     );
     recordActivity(
       db,
@@ -236,13 +237,23 @@ export function applyLabelOps(
     );
   }
   for (const labelId of toRemove) {
-    const label = db.query("SELECT name FROM labels WHERE id = ?1").get(labelId) as {
-      name: string;
-    } | null;
-    db.query("DELETE FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2").run(
-      issue.id,
-      labelId,
-    );
+    const label = issue.workspace_id
+      ? (db
+          .query("SELECT name FROM labels WHERE id = ?1 AND workspace_id = ?2")
+          .get(labelId, issue.workspace_id) as { name: string } | null)
+      : (db.query("SELECT name FROM labels WHERE id = ?1").get(labelId) as {
+          name: string;
+        } | null);
+    if (issue.workspace_id) {
+      db.query(
+        "DELETE FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2 AND workspace_id = ?3",
+      ).run(issue.id, labelId, issue.workspace_id);
+    } else {
+      db.query("DELETE FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2").run(
+        issue.id,
+        labelId,
+      );
+    }
     recordActivity(
       db,
       issue.id,
