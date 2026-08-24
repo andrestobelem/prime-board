@@ -78,8 +78,40 @@ export function assertTeamMember(db: Database, teamId: string, actorId: string):
   if (!isTeamMember(db, teamId, actorId)) throw apiError("NOT_FOUND", "Team resource not found");
 }
 
+function isWorkspaceAdminForTeam(db: Database, teamId: string, actorId: string): boolean {
+  const team = db.query("SELECT workspace_id FROM teams WHERE id = ?1").get(teamId) as {
+    workspace_id: string | null;
+  } | null;
+  if (!team) return false;
+
+  let workspaceId = team.workspace_id;
+  if (!workspaceId) {
+    const workspace = db
+      .query(
+        "SELECT id FROM workspace WHERE (SELECT count(*) FROM workspace) = 1 ORDER BY created_at, id",
+      )
+      .get() as { id: string } | null;
+    workspaceId = workspace?.id ?? null;
+  }
+  if (!workspaceId) return false;
+
+  return Boolean(
+    db
+      .query(
+        `SELECT 1
+         FROM workspace_memberships
+         WHERE workspace_id = ?1
+           AND actor_id = ?2
+           AND role = 'admin'
+           AND status = 'active'`,
+      )
+      .get(workspaceId, actorId),
+  );
+}
+
 function assertTeamOwner(db: Database, teamId: string, actorId: string, allowAdmin = false): void {
-  if (!allowAdmin && !isTeamOwner(db, teamId, actorId)) {
+  if (allowAdmin && isWorkspaceAdminForTeam(db, teamId, actorId)) return;
+  if (!isTeamOwner(db, teamId, actorId)) {
     throw apiError("NOT_FOUND", "Team resource not found");
   }
 }
