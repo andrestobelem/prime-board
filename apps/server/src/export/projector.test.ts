@@ -1,0 +1,94 @@
+import { describe, expect, it } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type DomainEvent, EventLogWriter } from "./event-log.ts";
+import { EventProjector } from "./projector.ts";
+
+const event = (eventId: string, occurredAt: string): DomainEvent => ({
+  schemaVersion: 1,
+  eventId,
+  aggregate: "issue",
+  aggregateKey: "issue-1",
+  type: "issue.updated",
+  actor: "agent",
+  occurredAt,
+  payload: { eventId },
+});
+
+describe("event projector", () => {
+  it("replays from a checkpoint and advances only after apply succeeds", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-projector-"));
+    const writer = new EventLogWriter({ rootDir });
+    writer.append(event("one", "2025-01-01T00:00:00.000Z"));
+    writer.append(event("two", "2025-01-02T00:00:00.000Z"));
+    const applied: string[] = [];
+    const projector = new EventProjector((current) => applied.push(current.eventId), {
+      rootDir,
+      stream: "issues",
+      checkpoint: { stream: "issues", eventId: "one", occurredAt: "2025-01-01T00:00:00.000Z" },
+    });
+
+    const result = projector.replay();
+    expect(result).toMatchObject({ applied: 1, skipped: 1, failed: false });
+    expect(applied).toEqual(["two"]);
+    expect(projector.getCheckpoint()).toEqual({
+      stream: "issues",
+      eventId: "two",
+      occurredAt: "2025-01-02T00:00:00.000Z",
+    });
+  });
+
+  it("supports a complete replay and an explicit resume checkpoint", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-projector-"));
+    const writer = new EventLogWriter({ rootDir });
+    writer.append(event("one", "2025-01-01T00:00:00.000Z"));
+    writer.append(event("two", "2025-01-02T00:00:00.000Z"));
+    const applied: string[] = [];
+    const projector = new EventProjector((current) => applied.push(current.eventId), {
+      rootDir,
+      stream: "issues",
+    });
+
+    expect(projector.replayFromBeginning()).toMatchObject({ applied: 2, failed: false });
+    expect(
+      projector.resume({
+        stream: "issues",
+        eventId: "one",
+        occurredAt: "2025-01-01T00:00:00.000Z",
+      }),
+    ).toMatchObject({ applied: 1, skipped: 1, failed: false });
+    expect(applied).toEqual(["one", "two", "two"]);
+  });
+
+  it("returns a retry-visible failure and does not advance the checkpoint", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-projector-"));
+    const writer = new EventLogWriter({ rootDir });
+    writer.append(event("one", "2025-01-01T00:00:00.000Z"));
+    writer.append(event("two", "2025-01-02T00:00:00.000Z"));
+    let shouldFail = true;
+    const applied: string[] = [];
+    const projector = new EventProjector(
+      (current) => {
+        if (shouldFail && current.eventId === "two") throw new Error("temporary failure");
+        applied.push(current.eventId);
+      },
+      { rootDir, stream: "issues" },
+    );
+
+    const failed = projector.replay();
+    expect(failed).toMatchObject({ applied: 1, skipped: 0, failed: true });
+    expect(failed.error).toBeInstanceOf(Error);
+    expect(failed.checkpoint).toEqual({
+      stream: "issues",
+      eventId: "one",
+      occurredAt: "2025-01-01T00:00:00.000Z",
+    });
+    expect(projector.getCheckpoint()).toEqual(failed.checkpoint);
+
+    shouldFail = false;
+    const retried = projector.replay();
+    expect(retried).toMatchObject({ applied: 1, failed: false });
+    expect(applied).toEqual(["one", "two"]);
+  });
+});
