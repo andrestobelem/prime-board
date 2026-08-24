@@ -144,6 +144,34 @@ describe("SQLite issue event pipeline", () => {
     }
   });
 
+  it("commits an event log whose base exceeds the child-process buffer", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-large-event-log-"));
+    const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
+    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    const base = `${Array.from({ length: 5_400 }, (_, index) =>
+      JSON.stringify(event(`base-${index}`)),
+    ).join("\n")}\n`;
+    try {
+      expect(Buffer.byteLength(base)).toBeGreaterThan(1024 * 1024);
+      mkdirSync(join(rootDir, ".prime-board", "log"), { recursive: true });
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      writeFileSync(logPath, base);
+      git("add", "--", ".prime-board/log/events.jsonl");
+      git("commit", "-qm", "base");
+      writeFileSync(logPath, `${base}${JSON.stringify(event("generated"))}\n`);
+
+      expect(() => createGitCommitter(rootDir)({ rootDir, eventIds: ["generated"] })).not.toThrow();
+      expect(git("log", "-1", "--format=%s").toString().trim()).toBe(
+        "chore(events): append canonical issue events",
+      );
+      expect(git("status", "--porcelain").toString()).toBe("");
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps append → Git commit → projector → checkpoint order and deduplicates retry", () => {
     const fixtureData = fixture();
     const applied: string[] = [];

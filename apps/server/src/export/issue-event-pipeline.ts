@@ -498,13 +498,28 @@ function validateEventLogDelta(
 }
 
 function readHeadEventLog(rootDir: string): string {
-  const result = spawnSync("git", ["-C", rootDir, "show", `HEAD:${EVENT_LOG_RELATIVE_PATH}`], {
-    encoding: "utf8",
-  });
-  if (result.error) throw result.error;
-  if (result.status === 0) return result.stdout;
-  if (result.status === 128) return "";
-  throw new Error(result.stderr.trim() || "Cannot read HEAD event log");
+  const tempDir = mkdtempSync(join(tmpdir(), "prime-board-head-event-log-"));
+  const outputPath = join(tempDir, "events.jsonl");
+  let outputFd: number | undefined;
+  try {
+    outputFd = openSync(
+      outputPath,
+      constants.O_CREAT | constants.O_TRUNC | constants.O_WRONLY,
+      0o600,
+    );
+    const result = spawnSync("git", ["-C", rootDir, "show", `HEAD:${EVENT_LOG_RELATIVE_PATH}`], {
+      encoding: "utf8",
+      stdio: ["ignore", outputFd, "pipe"],
+    });
+    if (result.error) throw result.error;
+    if (result.status === 0) return readFileSync(outputPath, "utf8");
+    if (result.status === 128) return "";
+    const stderr = (result.stderr ?? "").trim();
+    throw new Error(stderr || "Cannot read HEAD event log");
+  } finally {
+    if (outputFd !== undefined) closeSync(outputFd);
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function runGit(rootDir: string, args: readonly string[], environment?: NodeJS.ProcessEnv): void {
