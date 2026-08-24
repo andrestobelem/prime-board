@@ -19,7 +19,7 @@ import {
   stateIdForDrop,
 } from "../board-grouping.ts";
 import { getVisibleBoardMetadata } from "../board-columns.ts";
-import { nextBoardFocusId } from "../board-keyboard.ts";
+import { isBoardInteractiveTarget, nextBoardFocusId } from "../board-keyboard.ts";
 import { navigate } from "../router.tsx";
 import {
   IssueActionMenu,
@@ -169,11 +169,7 @@ export function BoardView({
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (isIssueShortcutTarget(event.target) || document.querySelector(".overlay")) return;
-      if (
-        event.target instanceof HTMLElement &&
-        event.target.closest("button, input, select, textarea, a")
-      )
-        return;
+      if (isBoardInteractiveTarget(event.target)) return;
       const visible = [...(result.data?.issues?.nodes ?? []), ...extraIssues];
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
@@ -639,10 +635,7 @@ export function BoardView({
                   onMouseEnter={() => setFocusedId(issue.id)}
                   onKeyDown={(event) => {
                     const target = event.target;
-                    if (
-                      target instanceof HTMLElement &&
-                      target.closest("button, input, select, textarea, a")
-                    ) {
+                    if (isBoardInteractiveTarget(target)) {
                       if (event.key === "Enter" || event.key === " ") event.stopPropagation();
                       return;
                     }

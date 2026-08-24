@@ -1,3 +1,9 @@
+export function isBoardInteractiveTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement && Boolean(target.closest("button, input, select, textarea, a"))
+  );
+}
+
 export function nextBoardFocusId(
   ids: readonly string[],
   focusedId: string | null,
