@@ -19,7 +19,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isSharedActivityType(type: string): boolean {
+export function isSharedActivityType(type: string): boolean {
   const normalized = type.toLowerCase().replace(/[^a-z0-9]+/gu, "");
   return !(
     normalized.includes("secret") ||

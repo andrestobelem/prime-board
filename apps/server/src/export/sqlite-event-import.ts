@@ -1,10 +1,6 @@
 import type { Database } from "bun:sqlite";
-import {
-  EventLogWriter,
-  serializeDomainEvent,
-  type DomainEvent,
-  validateDomainEvent,
-} from "./event-log.ts";
+import { EventLogWriter, serializeDomainEvent, type DomainEvent } from "./event-log.ts";
+import { activityToDomainEvent, type ActivityEventRow } from "./activity-stream.ts";
 
 export interface SQLiteEventImportOptions {
   readonly db: Database;
@@ -34,37 +30,8 @@ interface ActivityRow {
   readonly occurred_at: string;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function warning(warnings: string[], kind: string, id: string): void {
   if (warnings.length < 100) warnings.push(`${kind}:${id}`);
-}
-
-function rowEvent(row: ActivityRow): DomainEvent | undefined {
-  if (!row.issue_identifier || !row.actor || !row.issue_id || !row.team_id) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(row.payload);
-  } catch {
-    return undefined;
-  }
-  if (!isPlainObject(parsed)) return undefined;
-  try {
-    return validateDomainEvent({
-      schemaVersion: 1,
-      eventId: row.id,
-      aggregate: "issue",
-      aggregateKey: row.issue_identifier,
-      type: row.type,
-      actor: row.actor,
-      occurredAt: row.occurred_at,
-      payload: parsed,
-    });
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -108,7 +75,14 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
       warning(warnings, "orphaned", row.id);
       continue;
     }
-    const event = rowEvent(row);
+    const event = activityToDomainEvent({
+      id: row.id,
+      issue_identifier: row.issue_identifier,
+      actor: row.actor,
+      type: row.type,
+      payload: row.payload,
+      occurred_at: row.occurred_at,
+    } satisfies ActivityEventRow);
     if (!event) {
       rejected += 1;
       warning(warnings, "rejected", row.id);
