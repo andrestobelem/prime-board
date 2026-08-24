@@ -25,6 +25,11 @@ export interface SavedViewRow {
 
 type ViewerRef = string | ActorRow;
 
+/** Las filas legacy con NULL solo son visibles con un único Workspace. */
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
 function resolveViewer(db: Database, viewer: ViewerRef): ActorRow | null {
   if (typeof viewer !== "string") return viewer;
   return db.query("SELECT * FROM actors WHERE id = ?1").get(viewer) as ActorRow | null;
@@ -66,7 +71,7 @@ export function mapSavedView(row: SavedViewRow) {
 
 export function getSavedView(db: Database, id: string, workspaceId?: string): SavedViewRow | null {
   const query = workspaceId
-    ? "SELECT * FROM saved_views WHERE id = ?1 AND workspace_id = ?2"
+    ? `SELECT * FROM saved_views WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
     : "SELECT * FROM saved_views WHERE id = ?1";
   return (
     workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
@@ -79,11 +84,27 @@ export function canViewSavedView(row: SavedViewRow, viewer: ViewerRef): boolean 
 }
 
 /** ACL completa: las vistas TEAM requieren membership vigente; admins bypass. */
-export function canAccessSavedView(db: Database, row: SavedViewRow, viewer: ViewerRef): boolean {
+export function canAccessSavedView(
+  db: Database,
+  row: SavedViewRow,
+  viewer: ViewerRef,
+  workspaceId?: string,
+): boolean {
   if (!canViewSavedView(row, viewer)) return false;
   if (row.scope !== "team") return true;
   const actor = resolveViewer(db, viewer);
-  return Boolean(actor && row.team_id && canWriteTeam(db, actor, row.team_id));
+  if (!actor || !row.team_id) return false;
+
+  // La referencia al Team forma parte del límite del Workspace. Sin esta
+  // comprobación, un administrador podría asociar una vista a un Team de otro
+  // Workspace porque la autorización sola permite escribir a cualquier admin.
+  const effectiveWorkspaceId = workspaceId ?? row.workspace_id;
+  const team = effectiveWorkspaceId
+    ? db
+        .query(`SELECT id FROM teams WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`)
+        .get(row.team_id, effectiveWorkspaceId)
+    : db.query("SELECT id FROM teams WHERE id = ?1").get(row.team_id);
+  return Boolean(team && canWriteTeam(db, actor, row.team_id));
 }
 
 export function listSavedViews(
@@ -94,7 +115,7 @@ export function listSavedViews(
   workspaceId?: string,
 ): SavedViewRow[] {
   const query = workspaceId
-    ? "SELECT * FROM saved_views WHERE workspace_id = ?1 ORDER BY created_at"
+    ? `SELECT * FROM saved_views WHERE ${workspaceClause("workspace_id", "?1")} ORDER BY created_at`
     : "SELECT * FROM saved_views ORDER BY created_at";
   const rows = (
     workspaceId ? db.query(query).all(workspaceId) : db.query(query).all()
@@ -102,12 +123,17 @@ export function listSavedViews(
   return rows.filter((row) => {
     if (!includeArchived && row.archived_at) return false;
     if (!includeArchived && row.team_id) {
-      const team = db.query("SELECT archived_at FROM teams WHERE id = ?1").get(row.team_id) as {
-        archived_at: string | null;
-      } | null;
+      const teamQuery = workspaceId
+        ? `SELECT archived_at FROM teams WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+        : "SELECT archived_at FROM teams WHERE id = ?1";
+      const team = (
+        workspaceId
+          ? db.query(teamQuery).get(row.team_id, workspaceId)
+          : db.query(teamQuery).get(row.team_id)
+      ) as { archived_at: string | null } | null;
       if (team?.archived_at) return false;
     }
-    if (!canAccessSavedView(db, row, viewer)) return false;
+    if (!canAccessSavedView(db, row, viewer, workspaceId)) return false;
     if (teamId) {
       if (row.scope === "team") return row.team_id === teamId;
       return row.scope === "workspace" || row.scope === "personal";
@@ -151,14 +177,19 @@ export function createSavedView(
   if (!name) throw apiError("VALIDATION_FAILED", "Saved view name cannot be empty");
   const scope = resolveScope(input.scope);
   let teamId: string | null = input.teamId ?? null;
+  let savedViewWorkspaceId = workspaceId ?? null;
   if (scope === "team") {
     if (!teamId) throw apiError("VALIDATION_FAILED", "Team saved views require teamId");
-    const team = db.query("SELECT id, archived_at FROM teams WHERE id = ?1").get(teamId) as {
-      id: string;
-      archived_at: string | null;
-    } | null;
+    const teamQuery = workspaceId
+      ? `SELECT id, archived_at, workspace_id FROM teams WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+      : "SELECT id, archived_at, workspace_id FROM teams WHERE id = ?1";
+    const team = (
+      workspaceId ? db.query(teamQuery).get(teamId, workspaceId) : db.query(teamQuery).get(teamId)
+    ) as { id: string; archived_at: string | null; workspace_id: string | null } | null;
     if (!team) throw apiError("NOT_FOUND", "Team not found");
     if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
+    // Una referencia a un Team legacy con NULL conserva el mismo alcance.
+    savedViewWorkspaceId = team.workspace_id;
   } else {
     teamId = null;
   }
@@ -189,9 +220,9 @@ export function createSavedView(
     groupBy,
     parseColumns(input.columns),
     timestamp,
-    workspaceId ?? null,
+    savedViewWorkspaceId,
   );
-  return getSavedView(db, id, workspaceId)!;
+  return getSavedView(db, id, savedViewWorkspaceId ?? undefined)!;
 }
 
 export function updateSavedView(
@@ -210,7 +241,7 @@ export function updateSavedView(
 ): SavedViewRow {
   const existing = getSavedView(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Saved view not found");
-  if (!canAccessSavedView(db, existing, viewer))
+  if (!canAccessSavedView(db, existing, viewer, workspaceId))
     throw apiError("NOT_FOUND", "Saved view not found");
   if (existing.scope === "personal" && existing.owner_id !== viewerId(viewer)) {
     throw apiError("NOT_FOUND", "Saved view not found");
@@ -251,7 +282,7 @@ export function updateSavedView(
     if (workspaceId) {
       params.push(workspaceId);
       db.query(
-        `UPDATE saved_views SET ${sets.join(", ")} WHERE id = ?${params.length - 1} AND workspace_id = ?${params.length}`,
+        `UPDATE saved_views SET ${sets.join(", ")} WHERE id = ?${params.length - 1} AND ${workspaceClause("workspace_id", `?${params.length}`)}`,
       ).run(...(params as never[]));
     } else {
       db.query(`UPDATE saved_views SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
@@ -270,7 +301,7 @@ export function duplicateSavedView(
 ): SavedViewRow {
   const existing = getSavedView(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Saved view not found");
-  if (!canAccessSavedView(db, existing, viewer))
+  if (!canAccessSavedView(db, existing, viewer, workspaceId))
     throw apiError("NOT_FOUND", "Saved view not found");
   return createSavedView(
     db,
@@ -296,15 +327,26 @@ export function deleteSavedView(
 ): boolean {
   const existing = getSavedView(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Saved view not found");
-  if (!canAccessSavedView(db, existing, viewer))
+  if (!canAccessSavedView(db, existing, viewer, workspaceId))
     throw apiError("NOT_FOUND", "Saved view not found");
   if (existing.scope === "personal" && existing.owner_id !== viewerId(viewer)) {
     throw apiError("NOT_FOUND", "Saved view not found");
   }
-  if (workspaceId) {
-    db.query("DELETE FROM saved_views WHERE id = ?1 AND workspace_id = ?2").run(id, workspaceId);
-  } else {
-    db.query("DELETE FROM saved_views WHERE id = ?1").run(id);
-  }
+  db.transaction(() => {
+    if (workspaceId) {
+      // SQLite no aplica ON DELETE CASCADE cuando la FK compuesta contiene
+      // NULL. Borrar explícitamente evita Favorites huérfanos legacy.
+      db.query(
+        `DELETE FROM favorites
+         WHERE saved_view_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+      ).run(id, workspaceId);
+      db.query(
+        `DELETE FROM saved_views WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+      ).run(id, workspaceId);
+    } else {
+      db.query("DELETE FROM favorites WHERE saved_view_id = ?1").run(id);
+      db.query("DELETE FROM saved_views WHERE id = ?1").run(id);
+    }
+  })();
   return true;
 }

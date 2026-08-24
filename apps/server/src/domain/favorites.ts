@@ -2,9 +2,10 @@
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
-import { canAccessSavedView, type SavedViewRow } from "./saved-views.ts";
+import { canAccessSavedView, getSavedView, type SavedViewRow } from "./saved-views.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 import { canAccessProject } from "../auth/permissions.ts";
+import { getProject, type ProjectRow } from "./projects.ts";
 
 export interface FavoriteRow {
   id: string;
@@ -17,6 +18,11 @@ export interface FavoriteRow {
 }
 
 type ViewerRef = string | ActorRow;
+
+/** Las filas legacy con NULL solo son visibles con un único Workspace. */
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
 
 function resolveViewer(db: Database, viewer: ViewerRef): ActorRow | null {
   if (typeof viewer !== "string") return viewer;
@@ -39,7 +45,7 @@ export function mapFavorite(row: FavoriteRow) {
 
 function getFavorite(db: Database, id: string, workspaceId?: string): FavoriteRow | null {
   const query = workspaceId
-    ? "SELECT * FROM favorites WHERE id = ?1 AND workspace_id = ?2"
+    ? `SELECT * FROM favorites WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
     : "SELECT * FROM favorites WHERE id = ?1";
   return (
     workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
@@ -54,7 +60,7 @@ export function listFavorites(
   const actor = resolveViewer(db, viewer);
   if (!actor) return [];
   const actorId = actor.id;
-  const workspaceCondition = workspaceId ? "AND f.workspace_id = ?2" : "";
+  const workspaceCondition = workspaceId ? `AND ${workspaceClause("f.workspace_id", "?2")}` : "";
   const query = `
        SELECT f.*
        FROM favorites f
@@ -68,27 +74,28 @@ export function listFavorites(
   const rows = (
     workspaceId ? db.query(query).all(actorId, workspaceId) : db.query(query).all(actorId)
   ) as FavoriteRow[];
-  return rows.filter((row) =>
-    row.project_id
-      ? canAccessProject(db, actor, row.project_id)
-      : row.saved_view_id
-        ? (() => {
-            const savedView = (
-              workspaceId
-                ? db
-                    .query("SELECT * FROM saved_views WHERE id = ?1 AND workspace_id = ?2")
-                    .get(row.saved_view_id, workspaceId)
-                : db.query("SELECT * FROM saved_views WHERE id = ?1").get(row.saved_view_id)
-            ) as SavedViewRow | null;
-            return Boolean(savedView && canAccessSavedView(db, savedView, actor));
-          })()
-        : false,
-  );
+  return rows.filter((row) => {
+    if (row.project_id) {
+      const project = getProject(db, row.project_id, workspaceId);
+      return Boolean(project && !project.archived_at && canAccessProject(db, actor, project.id));
+    }
+    if (row.saved_view_id) {
+      const savedView = getSavedView(db, row.saved_view_id, workspaceId) as SavedViewRow | null;
+      return Boolean(
+        savedView &&
+        !savedView.archived_at &&
+        canAccessSavedView(db, savedView, actor, workspaceId),
+      );
+    }
+    return false;
+  });
 }
 
 function nextPosition(db: Database, actorId: string, workspaceId?: string): number {
   const query = workspaceId
-    ? "SELECT COALESCE(MAX(position), -1) + 1 AS position FROM favorites WHERE actor_id = ?1 AND workspace_id = ?2"
+    ? `SELECT COALESCE(MAX(position), -1) + 1 AS position
+       FROM favorites
+       WHERE actor_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
     : "SELECT COALESCE(MAX(position), -1) + 1 AS position FROM favorites WHERE actor_id = ?1";
   const row = (
     workspaceId ? db.query(query).get(actorId, workspaceId) : db.query(query).get(actorId)
@@ -104,27 +111,23 @@ function assertPosition(position: number): void {
   }
 }
 
-function assertProject(db: Database, id: string, workspaceId?: string): void {
-  const query = workspaceId
-    ? "SELECT id, archived_at FROM projects WHERE id = ?1 AND workspace_id = ?2"
-    : "SELECT id, archived_at FROM projects WHERE id = ?1";
-  const row = (workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)) as {
-    id: string;
-    archived_at: string | null;
-  } | null;
+function assertProject(db: Database, id: string, workspaceId?: string): ProjectRow {
+  const row = getProject(db, id, workspaceId);
   if (!row || row.archived_at) throw apiError("NOT_FOUND", "Project not found");
+  return row;
 }
 
-function assertSavedView(db: Database, id: string, viewer: ViewerRef, workspaceId?: string): void {
-  const query = workspaceId
-    ? "SELECT * FROM saved_views WHERE id = ?1 AND workspace_id = ?2"
-    : "SELECT * FROM saved_views WHERE id = ?1";
-  const row = (
-    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
-  ) as SavedViewRow | null;
-  if (!row || row.archived_at || !canAccessSavedView(db, row, viewer)) {
+function assertSavedView(
+  db: Database,
+  id: string,
+  viewer: ViewerRef,
+  workspaceId?: string,
+): SavedViewRow {
+  const row = getSavedView(db, id, workspaceId) as SavedViewRow | null;
+  if (!row || row.archived_at || !canAccessSavedView(db, row, viewer, workspaceId)) {
     throw apiError("NOT_FOUND", "Saved view not found");
   }
+  return row;
 }
 
 export function createFavorite(
@@ -139,19 +142,27 @@ export function createFavorite(
   if ((projectId == null) === (savedViewId == null)) {
     throw apiError("VALIDATION_FAILED", "Favorite requires exactly one projectId or savedViewId");
   }
-  if (projectId) assertProject(db, projectId, workspaceId);
-  if (savedViewId) assertSavedView(db, savedViewId, viewer, workspaceId);
+  const project = projectId ? assertProject(db, projectId, workspaceId) : null;
+  const savedView = savedViewId ? assertSavedView(db, savedViewId, viewer, workspaceId) : null;
+  // Un Workspace singleton puede conservar una fila legacy con NULL. El
+  // Favorite debe usar el mismo alcance que su recurso para satisfacer la FK
+  // compuesta y mantener la compatibilidad de lectura/escritura.
+  const favoriteWorkspaceId = project
+    ? project.workspace_id
+    : savedView
+      ? savedView.workspace_id
+      : (workspaceId ?? null);
 
   const existing = db
     .query(
       `SELECT * FROM favorites
        WHERE actor_id = ?1
-         ${workspaceId ? "AND workspace_id = ?4" : ""}
+         ${favoriteWorkspaceId ? `AND ${workspaceClause("workspace_id", "?4")}` : ""}
          AND ((project_id = ?2 AND ?2 IS NOT NULL) OR (saved_view_id = ?3 AND ?3 IS NOT NULL))`,
     )
     .get(
-      ...(workspaceId
-        ? [actorId, projectId, savedViewId, workspaceId]
+      ...(favoriteWorkspaceId
+        ? [actorId, projectId, savedViewId, favoriteWorkspaceId]
         : [actorId, projectId, savedViewId]),
     ) as FavoriteRow | null;
   if (existing) return existing;
@@ -165,11 +176,11 @@ export function createFavorite(
     actorId,
     projectId,
     savedViewId,
-    nextPosition(db, actorId, workspaceId),
+    nextPosition(db, actorId, favoriteWorkspaceId ?? undefined),
     now(),
-    workspaceId ?? null,
+    favoriteWorkspaceId,
   );
-  return getFavorite(db, id, workspaceId)!;
+  return getFavorite(db, id, favoriteWorkspaceId ?? undefined)!;
 }
 
 export function deleteFavorite(
@@ -182,7 +193,9 @@ export function deleteFavorite(
   if (!existing) return true;
   if (existing.actor_id !== actorId) throw apiError("NOT_FOUND", "Favorite not found");
   if (workspaceId) {
-    db.query("DELETE FROM favorites WHERE id = ?1 AND workspace_id = ?2").run(id, workspaceId);
+    db.query(
+      `DELETE FROM favorites WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+    ).run(id, workspaceId);
   } else {
     db.query("DELETE FROM favorites WHERE id = ?1").run(id);
   }
@@ -201,7 +214,9 @@ export function reorderFavorite(
   if (!existing || existing.actor_id !== actorId) throw apiError("NOT_FOUND", "Favorite not found");
 
   const query = workspaceId
-    ? "SELECT * FROM favorites WHERE actor_id = ?1 AND workspace_id = ?2 ORDER BY position, created_at, id"
+    ? `SELECT * FROM favorites
+       WHERE actor_id = ?1 AND ${workspaceClause("workspace_id", "?2")}
+       ORDER BY position, created_at, id`
     : "SELECT * FROM favorites WHERE actor_id = ?1 ORDER BY position, created_at, id";
   const rows = (
     workspaceId ? db.query(query).all(actorId, workspaceId) : db.query(query).all(actorId)
@@ -212,7 +227,11 @@ export function reorderFavorite(
   rows.splice(targetIndex, 0, selected!);
   db.transaction(() => {
     for (const [index, row] of rows.entries()) {
-      db.query("UPDATE favorites SET position = ?1 WHERE id = ?2").run(index, row.id);
+      const update = workspaceId
+        ? `UPDATE favorites SET position = ?1 WHERE id = ?2 AND ${workspaceClause("workspace_id", "?3")}`
+        : "UPDATE favorites SET position = ?1 WHERE id = ?2";
+      if (workspaceId) db.query(update).run(index, row.id, workspaceId);
+      else db.query(update).run(index, row.id);
     }
   })();
   return getFavorite(db, id, workspaceId)!;
