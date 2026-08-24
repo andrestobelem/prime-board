@@ -2808,6 +2808,10 @@ export const resolvers = {
           if (existing) {
             const issue = lookupIssueById(context, existing.issue_id);
             assertCanManageIssue(context.db, viewer, issue?.team_id);
+            if (args.input.reviewerId) {
+              requireActor(context, args.input.reviewerId);
+              assertCanAssignToTeam(context.db, viewer, issue!.team_id, args.input.reviewerId);
+            }
           }
           return {
             success: true,
