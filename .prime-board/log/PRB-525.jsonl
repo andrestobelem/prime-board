@@ -3,3 +3,4 @@
 {"actor":"admin","issue":"PRB-525","payload":{"from":null,"to":"admin"},"ts":"2026-08-23T04:27:43.208Z","type":"assigned"}
 {"actor":"admin","issue":"PRB-525","payload":{"from":3,"to":2},"ts":"2026-08-23T21:04:57.050Z","type":"priority_changed"}
 {"actor":"admin","issue":"PRB-525","payload":{"body":"Se asigna agente dedicado para corregir la ruta de Command Palette y agregar regresión de éxito/error sin mezclar cambios de backend."},"ts":"2026-08-24T01:27:59.424Z","type":"commented"}
+{"actor":"admin","issue":"PRB-525","payload":{"body":"La primera implementación fue descartada: el hook pre-commit creó el commit fixture `8aacd7f` y contaminó el worktree completo. No se integró. Se relanza desde main limpio con validaciones que excluyen `scratchpad/worktrees` y sin aceptar commits `fixture`."},"ts":"2026-08-24T01:39:59.150Z","type":"commented"}
