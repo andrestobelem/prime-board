@@ -6,6 +6,8 @@ import issueSearch from "./0004_issue_search.sql" with { type: "text" };
 import documents from "./0005_documents.sql" with { type: "text" };
 import issueSubscribers from "./0006_issue_subscribers.sql" with { type: "text" };
 import workspaceAuth from "./0007_workspace_auth.sql" with { type: "text" };
+import apiKeyTeamLimitsWorkspace from "./0008_api_key_team_limits_workspace.sql" with { type: "text" };
+import apiKeyWorkspaceGrantScope from "./0009_api_key_workspace_grant_scope.sql" with { type: "text" };
 
 export interface PostgresMigration {
   readonly version: number;
@@ -21,6 +23,8 @@ export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
   { version: 5, name: "documents", sql: documents },
   { version: 6, name: "issue_subscribers", sql: issueSubscribers },
   { version: 7, name: "workspace_auth", sql: workspaceAuth },
+  { version: 8, name: "api_key_team_limits_workspace", sql: apiKeyTeamLimitsWorkspace },
+  { version: 9, name: "api_key_workspace_grant_scope", sql: apiKeyWorkspaceGrantScope },
 ];
 
 interface AppliedMigration {

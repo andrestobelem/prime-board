@@ -129,16 +129,34 @@ export async function resolvePostgresAuth(
     status: grant.workspace_status,
   };
 
-  // Actualiza el uso solo después de validar toda la autenticación.
-  await persistence.execute("UPDATE api_keys SET last_used_at = $1 WHERE id = $2", [now(), key.id]);
   const scopes = await persistence.many<{ scope: ApiKeyScope }>(
     "SELECT scope FROM api_key_scopes WHERE api_key_id = $1 ORDER BY CASE scope WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 END",
     [key.id],
   );
-  const teams = await persistence.many<{ team_id: string }>(
-    "SELECT team_id FROM api_key_team_limits WHERE api_key_id = $1 ORDER BY team_id",
+  const teamRows = await persistence.many<{
+    team_id: string;
+    workspace_id: string;
+    has_workspace_grant: boolean;
+  }>(
+    `SELECT limits.team_id,
+            limits.workspace_id,
+            EXISTS (
+              SELECT 1
+              FROM api_key_workspaces AS limit_grants
+              WHERE limit_grants.api_key_id = limits.api_key_id
+                AND limit_grants.workspace_id = limits.workspace_id
+            ) AS has_workspace_grant
+     FROM api_key_team_limits AS limits
+     WHERE limits.api_key_id = $1
+     ORDER BY limits.workspace_id, limits.team_id`,
     [key.id],
   );
+  if (teamRows.some((row) => !row.has_workspace_grant)) {
+    throw apiError("UNAUTHORIZED", "API key Team limits are not granted in a Workspace");
+  }
+  const teams = teamRows.filter((row) => row.workspace_id === grant.workspace_id);
+  // Actualiza el uso solo después de validar toda la autenticación.
+  await persistence.execute("UPDATE api_keys SET last_used_at = $1 WHERE id = $2", [now(), key.id]);
   return {
     actor,
     keyId: key.id,

@@ -254,10 +254,33 @@ export interface PostgresApiKeyView extends ApiKeyRow {
 export async function listPostgresApiKeys(
   persistence: Persistence,
   actorId: string,
+  workspaceId: string,
 ): Promise<PostgresApiKeyView[]> {
   const rows = await persistence.many<ApiKeyRow>(
-    "SELECT * FROM api_keys WHERE actor_id = $1 AND revoked_at IS NULL ORDER BY created_at",
-    [actorId],
+    `SELECT api_keys.*
+     FROM api_keys
+     JOIN api_key_workspaces AS grants
+       ON grants.api_key_id = api_keys.id
+      AND grants.workspace_id = $2
+     JOIN workspace_memberships AS memberships
+       ON memberships.workspace_id = grants.workspace_id
+      AND memberships.actor_id = api_keys.actor_id
+      AND memberships.status = 'active'
+     WHERE api_keys.actor_id = $1
+       AND api_keys.revoked_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1
+         FROM api_key_team_limits AS invalid_limits
+         WHERE invalid_limits.api_key_id = api_keys.id
+           AND NOT EXISTS (
+             SELECT 1
+             FROM api_key_workspaces AS limit_grants
+             WHERE limit_grants.api_key_id = invalid_limits.api_key_id
+               AND limit_grants.workspace_id = invalid_limits.workspace_id
+           )
+       )
+     ORDER BY api_keys.created_at`,
+    [actorId, workspaceId],
   );
   const result: PostgresApiKeyView[] = [];
   for (const row of rows) {
@@ -266,8 +289,15 @@ export async function listPostgresApiKeys(
       [row.id],
     );
     const teamIds = await persistence.many<{ team_id: string }>(
-      "SELECT team_id FROM api_key_team_limits WHERE api_key_id = $1 ORDER BY team_id",
-      [row.id],
+      `SELECT limits.team_id
+       FROM api_key_team_limits AS limits
+       JOIN api_key_workspaces AS grants
+         ON grants.api_key_id = limits.api_key_id
+        AND grants.workspace_id = $2
+       WHERE limits.api_key_id = $1
+         AND limits.workspace_id = $2
+       ORDER BY limits.team_id`,
+      [row.id, workspaceId],
     );
     result.push({
       ...row,

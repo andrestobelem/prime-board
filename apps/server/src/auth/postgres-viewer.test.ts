@@ -35,6 +35,7 @@ function fakePersistence(fixture: Fixture = {}): Persistence {
     },
     async many<Row extends object>(sql: string, params?: SqlParameters): Promise<readonly Row[]> {
       calls.push(sql);
+      if (sql.includes("FROM api_key_team_limits")) return [];
       if (sql.includes("FROM api_key_workspaces")) {
         expect(sql).toContain("workspace_memberships");
         expect(sql).toContain("memberships.status = 'active'");

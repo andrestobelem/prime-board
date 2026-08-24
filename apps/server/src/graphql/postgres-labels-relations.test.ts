@@ -73,8 +73,12 @@ describe("PostgreSQL labels and relations", () => {
       ]);
     }
     await persistence.execute(
-      "INSERT INTO api_key_team_limits (api_key_id, team_id) VALUES ($1, $2)",
-      [limitedKeyId, team.id],
+      "INSERT INTO api_key_team_limits (api_key_id, team_id, workspace_id) VALUES ($1, $2, $3)",
+      [
+        limitedKeyId,
+        team.id,
+        (await persistence.one<{ id: string }>("SELECT id FROM workspace"))!.id,
+      ],
     );
 
     const app = createApp({ db, config, persistence });

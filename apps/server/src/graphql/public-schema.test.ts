@@ -108,11 +108,11 @@ function backendBullet(document: string, backend: "SQLite" | "PostgreSQL"): stri
 const EXPECTED_SQLITE_TABLE_ROW =
   "**SQLite** | `bun:sqlite`, archivo definido por `PRIME_BOARD_DB`, migraciones `0001`–`00028`. | Es el camino operativo completo. Incluye Documents Markdown, FTS5 y el soporte de Workspace Context y aislamiento de las migraciones `0024`–`0027`.";
 const EXPECTED_POSTGRES_TABLE_ROW =
-  "**PostgreSQL** | Se activa con `PRIME_BOARD_PERSISTENCE=postgres` y requiere `PRIME_BOARD_POSTGRES_URL`; usa migraciones independientes `0001`–`0007`. | Mantiene una única Workspace, tiene dominios migrados de forma parcial y usa un SQLite efímero para dominios todavía no migrados. Documents está migrado en `0005`; las demás superficies de planificación siguen teniendo cobertura parcial.";
+  "**PostgreSQL** | Se activa con `PRIME_BOARD_PERSISTENCE=postgres` y requiere `PRIME_BOARD_POSTGRES_URL`; usa migraciones independientes `0001`–`0009`. | Mantiene una única Workspace, tiene dominios migrados de forma parcial y usa un SQLite efímero para dominios todavía no migrados. Documents está migrado en `0005`; las demás superficies de planificación siguen teniendo cobertura parcial.";
 const EXPECTED_SQLITE_AUDIT_BULLET =
   "- **SQLite** es el backend predeterminado. Usa `bun:sqlite`, migraciones `0001`–`00028` y expone Documents Markdown.";
 const EXPECTED_POSTGRES_AUDIT_BULLET =
-  "- **PostgreSQL** es opcional. Se activa con `PRIME_BOARD_PERSISTENCE=postgres`, requiere `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0007` y conserva una única Workspace. La migración es incremental: los dominios no migrados usan un SQLite efímero; Documents ya está disponible en PostgreSQL desde la migración `0005`; la cobertura de suscriptores llega a `0006`.";
+  "- **PostgreSQL** es opcional. Se activa con `PRIME_BOARD_PERSISTENCE=postgres`, requiere `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0009` y conserva una única Workspace. La migración es incremental: los dominios no migrados usan un SQLite efímero; Documents ya está disponible en PostgreSQL desde la migración `0005`; la cobertura de suscriptores llega a `0006`.";
 
 function publicDescriptions(): string[] {
   const descriptions: string[] = [];

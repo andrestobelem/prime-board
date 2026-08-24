@@ -33,13 +33,27 @@ function normalizeScopes(scopes: readonly string[] | null | undefined): ApiKeySc
   return API_KEY_SCOPES.filter((scope) => unique.includes(scope));
 }
 
+async function assertWorkspaceExists(
+  persistence: Persistence | PersistenceTransaction,
+  workspaceId: string,
+): Promise<void> {
+  if (!(await persistence.one("SELECT id FROM workspace WHERE id = $1", [workspaceId]))) {
+    throw apiError("NOT_FOUND", `Workspace not found: ${workspaceId}`);
+  }
+}
+
 async function normalizeTeamIds(
   persistence: Persistence | PersistenceTransaction,
   teamIds: readonly string[] | null | undefined,
+  workspaceId: string,
 ): Promise<string[]> {
   if (teamIds == null || teamIds.length === 0) return [];
+  await assertWorkspaceExists(persistence, workspaceId);
   const unique = [...new Set(teamIds)];
   for (const teamId of unique) {
+    // PostgreSQL still keeps Teams installation-scoped. The Workspace check
+    // above prevents a selector from authorizing a Team against a missing
+    // Workspace while the future Team scope migration is pending.
     if (!(await persistence.one("SELECT id FROM teams WHERE id = $1", [teamId]))) {
       throw apiError("NOT_FOUND", `Team not found: ${teamId}`);
     }
@@ -59,10 +73,11 @@ function normalizeExpiry(expiresAt: string | null | undefined): string | null {
 async function metadata(
   persistence: Persistence | PersistenceTransaction,
   input: ApiKeyInput,
+  workspaceId: string,
 ): Promise<{ scopes: ApiKeyScope[]; teamIds: string[]; expiresAt: string | null }> {
   return {
     scopes: normalizeScopes(input.scopes),
-    teamIds: await normalizeTeamIds(persistence, input.teamIds),
+    teamIds: await normalizeTeamIds(persistence, input.teamIds, workspaceId),
     expiresAt: normalizeExpiry(input.expiresAt),
   };
 }
@@ -70,8 +85,9 @@ async function metadata(
 export async function postgresApiKeyMetadata(
   persistence: Persistence,
   input: ApiKeyInput,
+  workspaceId: string,
 ): Promise<{ scopes: ApiKeyScope[]; teamIds: string[]; expiresAt: string | null }> {
-  return metadata(persistence, input);
+  return metadata(persistence, input, workspaceId);
 }
 
 export async function getPostgresApiKey(
@@ -79,6 +95,72 @@ export async function getPostgresApiKey(
   id: string,
 ): Promise<ApiKeyRow | null> {
   return persistence.one<ApiKeyRow>("SELECT * FROM api_keys WHERE id = $1", [id]);
+}
+
+async function assertActiveWorkspaceMembership(
+  persistence: Persistence | PersistenceTransaction,
+  actorId: string,
+  workspaceId: string,
+): Promise<void> {
+  const membership = await persistence.one<{ status: "active" | "suspended" | "left" }>(
+    `SELECT status
+     FROM workspace_memberships
+     WHERE workspace_id = $1 AND actor_id = $2`,
+    [workspaceId, actorId],
+  );
+  if (!membership) throw apiError("NOT_FOUND", "Actor not found in this Workspace");
+  if (membership.status !== "active") {
+    throw apiError("UNAUTHORIZED", "Only active actors can receive API keys");
+  }
+}
+
+async function assertApiKeyWorkspaceGrant(
+  persistence: Persistence | PersistenceTransaction,
+  keyId: string,
+  workspaceId: string,
+): Promise<void> {
+  if (
+    !(await persistence.one(
+      `SELECT 1
+       FROM api_key_workspaces
+       WHERE api_key_id = $1 AND workspace_id = $2`,
+      [keyId, workspaceId],
+    ))
+  ) {
+    throw apiError("NOT_FOUND", "API key is not available in this Workspace");
+  }
+}
+
+async function assertApiKeyTeamLimitsGranted(
+  persistence: Persistence | PersistenceTransaction,
+  keyId: string,
+): Promise<void> {
+  if (
+    await persistence.one(
+      `SELECT 1
+       FROM api_key_team_limits AS limits
+       WHERE limits.api_key_id = $1
+         AND NOT EXISTS (
+           SELECT 1
+           FROM api_key_workspaces AS grants
+           WHERE grants.api_key_id = limits.api_key_id
+             AND grants.workspace_id = limits.workspace_id
+         )`,
+      [keyId],
+    )
+  ) {
+    throw apiError("UNAUTHORIZED", "API key Team limits are not granted in a Workspace");
+  }
+}
+
+async function assertApiKeyWorkspaceAccess(
+  persistence: Persistence | PersistenceTransaction,
+  row: ApiKeyRow,
+  workspaceId: string,
+): Promise<void> {
+  await assertApiKeyWorkspaceGrant(persistence, row.id, workspaceId);
+  await assertApiKeyTeamLimitsGranted(persistence, row.id);
+  await assertActiveWorkspaceMembership(persistence, row.actor_id, workspaceId);
 }
 
 async function listKeyScopes(
@@ -95,10 +177,20 @@ async function listKeyScopes(
 async function listKeyTeams(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  workspaceId?: string,
 ): Promise<string[]> {
   const rows = await persistence.many<{ team_id: string }>(
-    "SELECT team_id FROM api_key_team_limits WHERE api_key_id = $1 ORDER BY team_id",
-    [id],
+    workspaceId
+      ? `SELECT limits.team_id
+         FROM api_key_team_limits AS limits
+         JOIN api_key_workspaces AS grants
+           ON grants.api_key_id = limits.api_key_id
+          AND grants.workspace_id = $2
+         WHERE limits.api_key_id = $1
+           AND limits.workspace_id = $2
+         ORDER BY limits.team_id`
+      : "SELECT team_id FROM api_key_team_limits WHERE api_key_id = $1 ORDER BY team_id",
+    workspaceId ? [id, workspaceId] : [id],
   );
   return rows.map((row) => row.team_id);
 }
@@ -118,7 +210,13 @@ async function viewKey(
 
 async function insertApiKey(
   tx: PersistenceTransaction,
-  input: { actorId: string; name: string; expiresAt: string | null; rotatedFromId?: string | null },
+  input: {
+    actorId: string;
+    name: string;
+    expiresAt: string | null;
+    rotatedFromId?: string | null;
+    workspaceId?: string;
+  },
   key: string,
   scopes: readonly ApiKeyScope[],
   teamIds: readonly string[],
@@ -138,14 +236,32 @@ async function insertApiKey(
       createdAt,
     ],
   );
+  if (input.workspaceId) {
+    // 0007 seeds the initial grant through a trigger. Keep mutations scoped to
+    // the effective Workspace instead of retaining grants from other scopes.
+    await tx.execute(
+      "DELETE FROM api_key_workspaces WHERE api_key_id = $1 AND workspace_id <> $2",
+      [id, input.workspaceId],
+    );
+    await tx.execute(
+      `INSERT INTO api_key_workspaces (api_key_id, workspace_id, is_default, created_at)
+       VALUES ($1, $2, 1, $3)
+       ON CONFLICT (api_key_id, workspace_id)
+       DO UPDATE SET is_default = 1`,
+      [id, input.workspaceId, createdAt],
+    );
+  }
   for (const scope of scopes) {
     await tx.execute("INSERT INTO api_key_scopes (api_key_id, scope) VALUES ($1, $2)", [id, scope]);
   }
   for (const teamId of teamIds) {
-    await tx.execute("INSERT INTO api_key_team_limits (api_key_id, team_id) VALUES ($1, $2)", [
-      id,
-      teamId,
-    ]);
+    if (!input.workspaceId) {
+      throw new Error("PostgreSQL API key Team limits require a Workspace");
+    }
+    await tx.execute(
+      "INSERT INTO api_key_team_limits (api_key_id, team_id, workspace_id) VALUES ($1, $2, $3)",
+      [id, teamId, input.workspaceId],
+    );
   }
   const row = await tx.one<ApiKeyRow>("SELECT * FROM api_keys WHERE id = $1", [id]);
   if (!row) throw new Error("PostgreSQL API key insert returned no row");
@@ -162,14 +278,13 @@ export async function createPostgresApiKey(
     expiresAt?: string | null;
     rotatedFromId?: string | null;
   },
+  workspaceId: string,
 ): Promise<{ row: PostgresApiKeyView; key: string }> {
   const actor = await getPostgresActor(persistence, input.actorId);
   if (!actor) throw apiError("NOT_FOUND", "Actor not found");
-  if (actor.status !== "active") {
-    throw apiError("UNAUTHORIZED", "Only active actors can receive API keys");
-  }
+  await assertActiveWorkspaceMembership(persistence, input.actorId, workspaceId);
   if (!input.name?.trim()) throw apiError("VALIDATION_FAILED", "API key name cannot be empty");
-  const values = await metadata(persistence, input);
+  const values = await metadata(persistence, input, workspaceId);
   const key = generateApiKey();
   const result = await persistence.transaction((tx) =>
     insertApiKey(
@@ -179,21 +294,45 @@ export async function createPostgresApiKey(
         name: input.name!.trim(),
         expiresAt: values.expiresAt,
         rotatedFromId: input.rotatedFromId,
+        workspaceId,
       },
       key,
       values.scopes,
       values.teamIds,
     ),
   );
-  return { row: await viewKey(persistence, result.row, values.scopes, values.teamIds), key };
+  return {
+    row: await viewKey(persistence, result.row, values.scopes, values.teamIds),
+    key,
+  };
 }
 
-export async function deletePostgresApiKey(persistence: Persistence, id: string): Promise<boolean> {
+export async function deletePostgresApiKey(
+  persistence: Persistence,
+  id: string,
+  workspaceId: string,
+): Promise<boolean> {
   const existing = await getPostgresApiKey(persistence, id);
   if (!existing) throw apiError("NOT_FOUND", "API key not found");
-  if (!existing.revoked_at) {
-    await persistence.execute("UPDATE api_keys SET revoked_at = $1 WHERE id = $2", [now(), id]);
-  }
+  await assertApiKeyWorkspaceAccess(persistence, existing, workspaceId);
+  const timestamp = now();
+  await persistence.transaction(async (tx) => {
+    await assertApiKeyWorkspaceAccess(tx, existing, workspaceId);
+    await tx.execute(
+      "DELETE FROM api_key_team_limits WHERE api_key_id = $1 AND workspace_id = $2",
+      [id, workspaceId],
+    );
+    await tx.execute("DELETE FROM api_key_workspaces WHERE api_key_id = $1 AND workspace_id = $2", [
+      id,
+      workspaceId,
+    ]);
+    await tx.execute(
+      `UPDATE api_keys SET revoked_at = $1
+       WHERE id = $2 AND revoked_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM api_key_workspaces WHERE api_key_id = $2)`,
+      [timestamp, id],
+    );
+  });
   return true;
 }
 
@@ -201,20 +340,30 @@ export async function rotatePostgresApiKey(
   persistence: Persistence,
   id: string,
   input: ApiKeyInput,
+  workspaceId: string,
 ): Promise<{ row: PostgresApiKeyView; key: string }> {
   const existing = await getPostgresApiKey(persistence, id);
   if (!existing) throw apiError("NOT_FOUND", "API key not found");
   if (existing.revoked_at) throw apiError("VALIDATION_FAILED", "API key is already revoked");
-  const values = await metadata(persistence, {
-    ...input,
-    scopes: input.scopes === undefined ? await listKeyScopes(persistence, id) : input.scopes,
-    teamIds: input.teamIds === undefined ? await listKeyTeams(persistence, id) : input.teamIds,
-    expiresAt: input.expiresAt === undefined ? existing.expires_at : input.expiresAt,
-  });
+  await assertApiKeyWorkspaceAccess(persistence, existing, workspaceId);
+  const values = await metadata(
+    persistence,
+    {
+      ...input,
+      scopes: input.scopes === undefined ? await listKeyScopes(persistence, id) : input.scopes,
+      teamIds:
+        input.teamIds === undefined
+          ? await listKeyTeams(persistence, id, workspaceId)
+          : input.teamIds,
+      expiresAt: input.expiresAt === undefined ? existing.expires_at : input.expiresAt,
+    },
+    workspaceId,
+  );
   const actor = await getPostgresActor(persistence, existing.actor_id);
   if (!actor) throw apiError("NOT_FOUND", "Actor not found");
   const key = generateApiKey();
   const result = await persistence.transaction(async (tx) => {
+    await assertApiKeyWorkspaceAccess(tx, existing, workspaceId);
     const replacement = await insertApiKey(
       tx,
       {
@@ -222,19 +371,39 @@ export async function rotatePostgresApiKey(
         name: input.name?.trim() || existing.name,
         expiresAt: values.expiresAt,
         rotatedFromId: existing.id,
+        workspaceId,
       },
       key,
       values.scopes,
       values.teamIds,
     );
+    await tx.execute(
+      "DELETE FROM api_key_team_limits WHERE api_key_id = $1 AND workspace_id = $2",
+      [id, workspaceId],
+    );
+    await tx.execute("DELETE FROM api_key_workspaces WHERE api_key_id = $1 AND workspace_id = $2", [
+      id,
+      workspaceId,
+    ]);
     const revoked = await tx.execute(
-      "UPDATE api_keys SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL",
+      `UPDATE api_keys SET revoked_at = $1
+       WHERE id = $2 AND revoked_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM api_key_workspaces WHERE api_key_id = $2)`,
       [now(), id],
     );
-    if (revoked.rowCount !== 1) throw apiError("VALIDATION_FAILED", "API key is already revoked");
+    if (revoked.rowCount !== 1 && existing.revoked_at === null) {
+      // A remaining Workspace grant keeps the old key valid in that scope.
+      const stillGranted = await tx.one("SELECT 1 FROM api_key_workspaces WHERE api_key_id = $1", [
+        id,
+      ]);
+      if (!stillGranted) throw apiError("VALIDATION_FAILED", "API key is already revoked");
+    }
     return replacement;
   });
-  return { row: await viewKey(persistence, result.row, values.scopes, values.teamIds), key };
+  return {
+    row: await viewKey(persistence, result.row, values.scopes, values.teamIds),
+    key,
+  };
 }
 
 export type PostgresActorInvitation = ActorInvitationRow;
