@@ -279,6 +279,18 @@ async function requirePostgresIssueWrite(
   return team;
 }
 
+/** Comprueba escritura de una Issue sin consultar la DB SQLite de compatibilidad. */
+export async function assertPostgresIssueWrite(
+  persistence: Persistence | PersistenceTransaction,
+  viewer: ActorRow,
+  ref: string,
+): Promise<IssueRow> {
+  const issue = await getPostgresIssueByRef(persistence, ref);
+  if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
+  await requirePostgresIssueWrite(persistence, viewer, issue.team_id);
+  return issue;
+}
+
 async function assertPostgresAssignee(
   persistence: Persistence | PersistenceTransaction,
   viewer: ActorRow,
@@ -592,9 +604,12 @@ export async function updatePostgresIssue(
       });
     }
     const labelsChanged = await applyPostgresLabelOps(tx, viewer.id, issue, input);
-    if (labelsChanged && sets.length === 0) {
-      // label operations are part of the same transaction and still advance updated_at.
-      push("updated_at", now());
+    if (labelsChanged) {
+      changes.push({ field: "labels", from: null, to: null });
+      if (sets.length === 0) {
+        // Las operaciones de labels forman parte de la misma transacción y avanzan updated_at.
+        push("updated_at", now());
+      }
     }
     if (sets.length > 0) {
       const updatedAt = now();

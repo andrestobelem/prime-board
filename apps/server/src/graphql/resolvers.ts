@@ -544,7 +544,9 @@ export const resolvers = {
       const viewer = requireViewer(context);
       if (context.persistence) {
         const row = await getPostgresTeam(context.persistence, { id: team.id });
-        return row && (await canDiscoverPostgresTeam(context.persistence, viewer, row))
+        return row &&
+          (await canDiscoverPostgresTeam(context.persistence, viewer, row)) &&
+          apiKeyTeamsWithinLimit(context.auth, [row.id])
           ? (await listPostgresLabels(context.persistence, team.id)).map(mapPostgresLabel)
           : [];
       }
@@ -1098,7 +1100,9 @@ export const resolvers = {
             : null;
           if (
             args.team &&
-            (!team || !(await canDiscoverPostgresTeam(context.persistence, viewer, team)))
+            (!team ||
+              !(await canDiscoverPostgresTeam(context.persistence, viewer, team)) ||
+              !apiKeyTeamsWithinLimit(context.auth, [team.id]))
           ) {
             return [];
           }
@@ -1117,7 +1121,8 @@ export const resolvers = {
             const labelTeam = await getPostgresTeam(context.persistence, { id: label.team_id });
             if (
               labelTeam &&
-              (await canDiscoverPostgresTeam(context.persistence, viewer, labelTeam))
+              (await canDiscoverPostgresTeam(context.persistence, viewer, labelTeam)) &&
+              apiKeyTeamsWithinLimit(context.auth, [labelTeam.id])
             ) {
               visible.push(label);
             }

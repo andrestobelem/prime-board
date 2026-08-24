@@ -77,6 +77,7 @@ import {
 import { apiError, requireViewer } from "./errors.ts";
 import {
   accessiblePostgresTeamIds,
+  assertPostgresIssueWrite,
   getPostgresIssue,
   getPostgresIssueByRef,
   listPostgresChildren,
@@ -89,7 +90,15 @@ import {
 import { getPostgresActor, mapPostgresActor } from "../domain/postgres-actors.ts";
 import { documentResolvers } from "./document-resolvers.ts";
 import { listPostgresIssueLabels, mapPostgresLabel } from "../domain/postgres-labels.ts";
-import { listPostgresRelations, mapPostgresRelation } from "../domain/postgres-relations.ts";
+import {
+  createPostgresRelation,
+  deletePostgresRelation,
+  getPostgresRelation,
+  listPostgresRelations,
+  mapPostgresRelation,
+  type PostgresRelationType,
+  type PostgresStoredRelationType,
+} from "../domain/postgres-relations.ts";
 import {
   canDiscoverPostgresTeam,
   getPostgresTeam,
@@ -295,6 +304,18 @@ async function postgresActivityPayload(
         else delete payload[ref.field];
       }
     }
+    if (activity.type === "relation_added" || activity.type === "relation_removed") {
+      const value = payload.issue;
+      const related =
+        typeof value === "string" ? await getPostgresIssueByRef(persistence, value) : null;
+      if (
+        !source ||
+        !related ||
+        !apiKeyTeamsWithinLimit(context.auth, [source.team_id, related.team_id])
+      ) {
+        delete payload.issue;
+      }
+    }
   }
   const queries: Record<RefTable, string> = {
     states: "SELECT name FROM workflow_states WHERE id = $1",
@@ -422,7 +443,23 @@ export const issueResolvers = {
     },
     labels: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
-        return (await listPostgresIssueLabels(context.persistence, issue.id)).map(mapPostgresLabel);
+        const viewer = requireViewer(context);
+        const visible = [];
+        for (const label of await listPostgresIssueLabels(context.persistence, issue.id)) {
+          if (!label.team_id) {
+            visible.push(label);
+            continue;
+          }
+          const labelTeam = await getPostgresTeam(context.persistence, { id: label.team_id });
+          if (
+            labelTeam &&
+            (await canDiscoverPostgresTeam(context.persistence, viewer, labelTeam)) &&
+            apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, label.team_id])
+          ) {
+            visible.push(label);
+          }
+        }
+        return visible.map(mapPostgresLabel);
       }
       return listIssueLabels(context.db, issue.id)
         .filter(
@@ -976,12 +1013,55 @@ export const issueResolvers = {
       if (wasArchived) context.events.emit("issue.unarchived", viewer, issueEventData(row));
       return { success: true, issue: mapIssue(row) };
     },
-    issueRelationCreate: (
+    issueRelationCreate: async (
       _parent: unknown,
       args: { input: { issueId: string; relatedIssueId: string; type: RelationType } },
       context: Context,
     ) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const issue = await getPostgresIssueByRef(context.persistence, args.input.issueId);
+        if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${args.input.issueId}`);
+        const relatedIssue = await getPostgresIssueByRef(
+          context.persistence,
+          args.input.relatedIssueId,
+        );
+        if (!relatedIssue) {
+          throw apiError("NOT_FOUND", `Issue not found: ${args.input.relatedIssueId}`);
+        }
+        if (!apiKeyTeamsWithinLimit(context.auth, [issue.team_id, relatedIssue.team_id])) {
+          throw apiError("NOT_FOUND", "Issue resource not found");
+        }
+        await assertPostgresIssueWrite(context.persistence, viewer, issue.id);
+        await assertPostgresIssueWrite(context.persistence, viewer, relatedIssue.id);
+        const created = await createPostgresRelation(context.persistence, viewer.id, args.input);
+        const inverse: Record<PostgresRelationType, PostgresRelationType> = {
+          blocks: "blocked_by",
+          blocked_by: "blocks",
+          related: "related",
+          duplicate_of: "duplicated_by",
+          duplicated_by: "duplicate_of",
+        };
+        context.events.emit("issue.updated", viewer, issueEventData(created.issue), {
+          relations: {
+            from: null,
+            to: { type: created.view.type, issue: identifierOf(created.relatedIssue) },
+          },
+        });
+        context.events.emit("issue.updated", viewer, issueEventData(created.relatedIssue), {
+          relations: {
+            from: null,
+            to: { type: inverse[created.view.type], issue: identifierOf(created.issue) },
+          },
+        });
+        return {
+          success: true,
+          relation: {
+            ...mapPostgresRelation(created.view),
+            _sourceTeamId: created.issue.team_id,
+          },
+        };
+      }
       assertIssueAccess(context, viewer, args.input.issueId);
       assertIssueAccess(context, viewer, args.input.relatedIssueId);
       const created = createRelation(context.db, viewer.id, args.input);
@@ -1009,8 +1089,45 @@ export const issueResolvers = {
         relation: { ...mapRelation(created.view), _sourceTeamId: created.issue.team_id },
       };
     },
-    issueRelationDelete: (_parent: unknown, args: { id: string }, context: Context) => {
+    issueRelationDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
+      if (context.persistence) {
+        const relation = await getPostgresRelation(context.persistence, args.id);
+        if (!relation) throw apiError("NOT_FOUND", "Relation not found");
+        const source = await getPostgresIssue(context.persistence, relation.issue_id);
+        const target = await getPostgresIssue(context.persistence, relation.related_id);
+        if (!source || !target) throw apiError("NOT_FOUND", "Issue not found");
+        if (!apiKeyTeamsWithinLimit(context.auth, [source.team_id, target.team_id])) {
+          throw apiError("NOT_FOUND", "Issue resource not found");
+        }
+        await assertPostgresIssueWrite(context.persistence, viewer, source.id);
+        await assertPostgresIssueWrite(context.persistence, viewer, target.id);
+        const removed = await deletePostgresRelation(context.persistence, viewer.id, args.id);
+        const inverse: Record<PostgresStoredRelationType, PostgresRelationType> = {
+          blocks: "blocked_by",
+          related: "related",
+          duplicate_of: "duplicated_by",
+        };
+        context.events.emit("issue.updated", viewer, issueEventData(removed.source), {
+          relations: {
+            from: {
+              type: removed.type,
+              issue: identifierOf(removed.target),
+            },
+            to: null,
+          },
+        });
+        context.events.emit("issue.updated", viewer, issueEventData(removed.target), {
+          relations: {
+            from: {
+              type: inverse[removed.type],
+              issue: identifierOf(removed.source),
+            },
+            to: null,
+          },
+        });
+        return { success: true };
+      }
       assertRelationAccess(context, viewer, args.id);
       const removed = deleteRelation(context.db, viewer.id, args.id);
       const source = lookupIssueById(context, removed.issueId)!;

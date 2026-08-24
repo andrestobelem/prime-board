@@ -82,7 +82,7 @@ async function assertNoBlockingCycle(
   if (cycle) {
     throw apiError(
       "VALIDATION_FAILED",
-      `Relation would create a blocking cycle: ${source.team_id}-${source.number} → ${target.team_id}-${target.number}`,
+      `Relation would create a blocking cycle: ${source.team_key}-${source.number} → ${target.team_key}-${target.number}`,
     );
   }
 }

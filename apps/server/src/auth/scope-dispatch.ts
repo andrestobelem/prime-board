@@ -455,6 +455,13 @@ async function operationTeamIds(
       return input.teamId ? [scalar(input.teamId) ?? "__missing__"] : null;
     case "labelUpdate":
     case "labelDelete": {
+      if (context.persistence) {
+        const row = await context.persistence.one<{ team_id: string | null }>(
+          "SELECT team_id FROM labels WHERE id = $1",
+          [scalar(args.id)],
+        );
+        return row?.team_id ? [row.team_id] : null;
+      }
       const row = context.db
         .query("SELECT team_id FROM labels WHERE id = ?1")
         .get(scalar(args.id)) as { team_id: string | null } | null;
