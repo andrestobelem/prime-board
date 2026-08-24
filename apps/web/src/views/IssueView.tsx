@@ -5,7 +5,7 @@ import { gql, mutate, useQuery } from "../api.ts";
 import { ErrorState } from "../components/AsyncState.tsx";
 import { Avatar, LabelChip, PRIORITY_NAMES, StateIcon } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
-import { renderMarkdown } from "../markdown.ts";
+import { MarkdownContent } from "../components/MarkdownContent.tsx";
 import { Link, navigate } from "../router.tsx";
 import { ArchiveConfirmModal } from "../components/ArchiveConfirmModal.tsx";
 import { appendUniqueById } from "../pagination.ts";
@@ -48,11 +48,6 @@ export const ISSUE_QUERY = `query($id: ID!) {
   }
   actors { id name type status }
 }`;
-
-function Markdown({ text }: { text: string }) {
-  // El HTML ya viene sanitizado por renderMarkdown (ver markdown.ts).
-  return <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
-}
 
 // AT-190: state_changed/assigned/project_changed/milestone_changed/parent_changed/cycle_changed
 // llegan con nombres reales (no ids) porque el resolver de Activity.payload ya
@@ -581,7 +576,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
                 }
                 style={{ cursor: "text" }}
               >
-                <Markdown text={issue.description} />
+                <MarkdownContent text={issue.description} />
               </div>
             ) : (
               <div
@@ -719,7 +714,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
                 <span className="author">{entry.actor.name}</span>
                 <span>{timeAgo(entry.createdAt)}</span>
               </div>
-              <Markdown text={entry.body} />
+              <MarkdownContent text={entry.body} />
             </div>
           ))}
           <div className="composer">

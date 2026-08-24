@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { GqlError, mutate, useQuery } from "../api.ts";
 import { ErrorState } from "../components/AsyncState.tsx";
+import { MarkdownContent } from "../components/MarkdownContent.tsx";
 import { Link } from "../router.tsx";
 import { Icon } from "../components/icons.tsx";
 import { EntityModal } from "../components/EntityModal.tsx";
@@ -95,9 +96,10 @@ export function InitiativeView({ initiativeId }: { initiativeId: string }) {
       </div>
       {error && <div className="error-banner">{error}</div>}
       {initiative.description && (
-        <p style={{ padding: "12px 16px", color: "var(--text-muted)", margin: 0 }}>
-          {initiative.description}
-        </p>
+        <MarkdownContent
+          text={initiative.description}
+          className="markdown initiative-description"
+        />
       )}
       <div className="section" style={{ padding: "8px 16px" }}>
         Projects

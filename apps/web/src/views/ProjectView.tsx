@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { gql, mutate, useQuery } from "../api.ts";
 import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.tsx";
+import { MarkdownContent } from "../components/MarkdownContent.tsx";
 import { Link, navigate } from "../router.tsx";
 import { Avatar } from "../components/bits.tsx";
 import { Icon } from "../components/icons.tsx";
@@ -446,9 +447,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
           <span>{issues.length} issues</span>
         </div>
         {project.description && (
-          <p style={{ color: "var(--text-muted)", margin: "10px 0 0", maxWidth: 640 }}>
-            {project.description}
-          </p>
+          <MarkdownContent text={project.description} className="markdown project-description" />
         )}
       </div>
       {archiveOpen && (
@@ -530,10 +529,11 @@ export function ProjectView({ projectId }: { projectId: string }) {
                   {formatProjectDate(update.createdAt)}
                 </span>
               </div>
-              <div>{update.body}</div>
+              <MarkdownContent text={update.body} className="markdown project-update-body" />
               {update.risks && (
-                <div style={{ color: "var(--text-muted)", marginTop: 4 }}>
-                  Risks: {update.risks}
+                <div className="project-update-risks">
+                  <strong>Risks:</strong>
+                  <MarkdownContent text={update.risks} />
                 </div>
               )}
             </div>

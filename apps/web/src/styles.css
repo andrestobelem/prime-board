@@ -1064,6 +1064,29 @@ kbd {
   color: var(--text);
   line-height: 1.6;
 }
+.initiative-description {
+  max-width: 72ch;
+  margin: 0;
+  padding: 12px 16px;
+  color: var(--text-muted);
+}
+.project-description {
+  max-width: 72ch;
+  margin: 10px 0 0;
+  color: var(--text-muted);
+}
+.project-update-body {
+  margin-top: 6px;
+}
+.project-update-risks {
+  margin-top: 10px;
+  color: var(--text-muted);
+}
+.project-update-risks > strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+}
 .markdown p {
   margin: 0 0 12px;
 }

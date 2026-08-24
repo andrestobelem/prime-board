@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { gql, mutate, useQuery } from "../api.ts";
 import { ErrorState, LoadingState } from "../components/AsyncState.tsx";
-import { renderMarkdown } from "../markdown.ts";
+import { MarkdownContent } from "../components/MarkdownContent.tsx";
 import { Link, navigate } from "../router.tsx";
 
 const DOCUMENT_QUERY = `query($id: ID!) {
@@ -117,10 +117,7 @@ export function DocumentView({ documentId }: { documentId: string }) {
           <p className="hint">
             Edited {new Date(document.updatedAt).toLocaleString()} by {document.creator.name}
           </p>
-          <div
-            className="markdown"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(document.content) }}
-          />
+          <MarkdownContent text={document.content} />
           {error && <p className="error">{error}</p>}
         </>
       )}
