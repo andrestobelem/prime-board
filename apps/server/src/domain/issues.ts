@@ -659,7 +659,12 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
     order.column === "issues.updated_at" ? row.updated_at : row.created_at;
   const params = new ParamSink();
   const filter = options.filter ?? {};
-  const clauses = [buildIssueFilter(filter, params, { subscriberId: options.subscriberId })];
+  const clauses = [
+    buildIssueFilter(filter, params, {
+      subscriberId: options.subscriberId,
+      workspaceId: options.workspaceId,
+    }),
+  ];
   if (options.teamIds) {
     if (options.teamIds.length === 0) {
       clauses.push("1 = 0");
@@ -686,7 +691,10 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
     const cursorParams = new ParamSink();
     const cursorId = cursorParams.add(decoded.id);
     const cursorClauses = [
-      buildIssueFilter(filter, cursorParams, { subscriberId: options.subscriberId }),
+      buildIssueFilter(filter, cursorParams, {
+        subscriberId: options.subscriberId,
+        workspaceId: options.workspaceId,
+      }),
     ];
     if (options.teamIds) {
       if (options.teamIds.length === 0) {

@@ -118,6 +118,18 @@ export interface IssueFilterSqlOptions {
   searchClause?: (search: string, params: ParamSink) => string;
   /** Actor autenticado para el filtro subscribed. */
   subscriberId?: string | null;
+  /** Alcance de Workspace para subconsultas derivadas de SQLite. */
+  workspaceId?: string | null;
+}
+
+function workspacePredicate(
+  table: string,
+  workspaceId: string | null | undefined,
+  params: ParamSink,
+): string {
+  return workspaceId
+    ? ` AND (${table}.workspace_id = ${params.add(workspaceId)} OR (${table}.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1))`
+    : "";
 }
 
 export function buildIssueFilter(
@@ -139,28 +151,35 @@ export function buildIssueFilter(
 
   if (filter.stateType?.eq) {
     clauses.push(
-      `issues.state_id IN (SELECT id FROM workflow_states WHERE type = ${params.add(filter.stateType.eq)})`,
+      `issues.state_id IN (SELECT id FROM workflow_states WHERE type = ${params.add(filter.stateType.eq)}${workspacePredicate("workflow_states", options.workspaceId, params)})`,
     );
   }
   if (filter.stateType?.in?.length) {
     const list = filter.stateType.in.map((v) => params.add(v)).join(", ");
-    clauses.push(`issues.state_id IN (SELECT id FROM workflow_states WHERE type IN (${list}))`);
+    clauses.push(
+      `issues.state_id IN (SELECT id FROM workflow_states WHERE type IN (${list})${workspacePredicate("workflow_states", options.workspaceId, params)})`,
+    );
   }
 
   if (filter.labels?.includes) {
+    const labelId = params.add(filter.labels.includes);
     clauses.push(
-      `issues.id IN (SELECT issue_id FROM issue_labels WHERE label_id = ${params.add(filter.labels.includes)})`,
+      `issues.id IN (SELECT issue_labels.issue_id FROM issue_labels JOIN labels ON labels.id = issue_labels.label_id WHERE issue_labels.label_id = ${labelId}${workspacePredicate("issue_labels", options.workspaceId, params)}${workspacePredicate("labels", options.workspaceId, params)})`,
     );
   }
   for (const labelId of filter.labels?.includesAll ?? []) {
+    const labelParameter = params.add(labelId);
     clauses.push(
-      `issues.id IN (SELECT issue_id FROM issue_labels WHERE label_id = ${params.add(labelId)})`,
+      `issues.id IN (SELECT issue_labels.issue_id FROM issue_labels JOIN labels ON labels.id = issue_labels.label_id WHERE issue_labels.label_id = ${labelParameter}${workspacePredicate("issue_labels", options.workspaceId, params)}${workspacePredicate("labels", options.workspaceId, params)})`,
     );
   }
 
   if (filter.unblocked != null) {
     // Bloqueante abierto: origen de una arista blocks hacia este issue, cuyo
     // estado no es completed/canceled. Los bloqueantes archivados no cuentan.
+    const relationWorkspace = workspacePredicate("issue_relations", options.workspaceId, params);
+    const blockerWorkspace = workspacePredicate("blockers", options.workspaceId, params);
+    const blockerStateWorkspace = workspacePredicate("blocker_states", options.workspaceId, params);
     const openBlocker = `EXISTS (
       SELECT 1 FROM issue_relations
       JOIN issues AS blockers ON blockers.id = issue_relations.issue_id
@@ -169,10 +188,11 @@ export function buildIssueFilter(
         AND issue_relations.related_id = issues.id
         AND blockers.archived_at IS NULL
         AND blocker_states.type NOT IN ('completed', 'canceled')
+        ${relationWorkspace}${blockerWorkspace}${blockerStateWorkspace}
     )`;
     if (filter.unblocked) {
       clauses.push(
-        `issues.state_id IN (SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled'))`,
+        `issues.state_id IN (SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled')${workspacePredicate("workflow_states", options.workspaceId, params)})`,
       );
       clauses.push(`NOT ${openBlocker}`);
     } else {
@@ -184,7 +204,7 @@ export function buildIssueFilter(
     if (!options.subscriberId) {
       clauses.push(filter.subscribed ? "1 = 0" : "1 = 1");
     } else {
-      const membership = `EXISTS (SELECT 1 FROM issue_subscribers WHERE issue_subscribers.issue_id = issues.id AND issue_subscribers.actor_id = ${params.add(options.subscriberId)})`;
+      const membership = `EXISTS (SELECT 1 FROM issue_subscribers WHERE issue_subscribers.issue_id = issues.id AND issue_subscribers.actor_id = ${params.add(options.subscriberId)}${workspacePredicate("issue_subscribers", options.workspaceId, params)})`;
       clauses.push(filter.subscribed ? membership : `NOT ${membership}`);
     }
   }
@@ -201,7 +221,7 @@ export function buildIssueFilter(
           `(issues.rowid IN (SELECT rowid FROM issues_fts WHERE issues_fts MATCH ${params.add(query)})
             OR issues.id IN (SELECT comments.issue_id FROM comments
               JOIN comments_fts ON comments_fts.rowid = comments.rowid
-              WHERE comments_fts MATCH ${params.add(query)}))`,
+              WHERE comments_fts MATCH ${params.add(query)}${workspacePredicate("comments", options.workspaceId, params)}))`,
         );
       }
     }
