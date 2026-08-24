@@ -1,5 +1,10 @@
 import type { Database } from "bun:sqlite";
-import { EventLogWriter, type DomainEvent, validateDomainEvent } from "./event-log.ts";
+import {
+  EventLogWriter,
+  serializeDomainEvent,
+  type DomainEvent,
+  validateDomainEvent,
+} from "./event-log.ts";
 
 export interface SQLiteEventImportOptions {
   readonly db: Database;
@@ -87,14 +92,15 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
 
   const writer = new EventLogWriter({ rootDir: options.rootDir });
   const warnings: string[] = [];
-  const existing = options.dryRun
-    ? new Set<string>()
-    : new Set(writer.read().map((event) => event.eventId));
-  const seen = new Set<string>();
+  // Dry-run inspects the existing stream too. It never creates the file, but
+  // it reports the same duplicate/conflict result as a real import.
+  const existing = new Map(writer.read().map((event) => [event.eventId, event]));
+  const seen = new Map<string, DomainEvent>();
   const events: DomainEvent[] = [];
   let orphaned = 0;
   let rejected = 0;
   let ambiguous = 0;
+  let duplicates = 0;
 
   for (const row of rows) {
     if (!row.issue_identifier || !row.actor || !row.issue_id || !row.team_id) {
@@ -108,12 +114,17 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
       warning(warnings, "rejected", row.id);
       continue;
     }
-    if (seen.has(event.eventId) || existing.has(event.eventId)) {
-      if (seen.has(event.eventId)) ambiguous += 1;
-      else existing.add(event.eventId);
+    const previous = seen.get(event.eventId) ?? existing.get(event.eventId);
+    if (previous) {
+      if (serializeDomainEvent(previous) !== serializeDomainEvent(event)) {
+        ambiguous += 1;
+        warning(warnings, "ambiguous", event.eventId);
+      } else {
+        duplicates += 1;
+      }
       continue;
     }
-    seen.add(event.eventId);
+    seen.set(event.eventId, event);
     events.push(event);
   }
 
@@ -123,8 +134,8 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
   return {
     status: "completed",
     scanned: rows.length,
-    emitted: options.dryRun ? events.length : events.length,
-    duplicates: rows.length - orphaned - rejected - ambiguous - events.length,
+    emitted: events.length,
+    duplicates,
     orphaned,
     rejected,
     ambiguous,

@@ -61,6 +61,15 @@ describe("SQLite history import", () => {
       const second = importSqliteActivity({ db, rootDir: root });
       expect(first.emitted).toBe(1);
       expect(second.duplicates).toBe(1);
+      const dryExisting = importSqliteActivity({ db, rootDir: root, dryRun: true });
+      expect(dryExisting).toMatchObject({ emitted: 0, duplicates: 1, ambiguous: 0 });
+      db.query("UPDATE activity SET payload = ?1 WHERE id = ?2").run(
+        JSON.stringify({ title: "changed after import" }),
+        "activity-1",
+      );
+      const conflict = importSqliteActivity({ db, rootDir: root, dryRun: true });
+      expect(conflict).toMatchObject({ emitted: 0, duplicates: 0, ambiguous: 1 });
+      expect(conflict.warnings).toContain("ambiguous:activity-1");
       expect(readEventLog(root).map((event) => event.eventId)).toEqual(["activity-1"]);
     } finally {
       db.close();
