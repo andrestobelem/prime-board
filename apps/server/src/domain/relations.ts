@@ -20,6 +20,7 @@ export interface RelationRow {
   related_id: string;
   type: StoredRelationType;
   created_at: string;
+  workspace_id: string | null;
 }
 
 /** La inversa con la que el otro extremo ve cada tipo ('related' es simétrica). */
@@ -54,12 +55,24 @@ export function mapRelation(view: RelationView) {
   return { id: view.id, type: view.type, _relatedId: view.relatedId, createdAt: view.createdAt };
 }
 
-export function listRelations(db: Database, issueId: string): RelationView[] {
-  const rows = db
-    .query(
-      "SELECT * FROM issue_relations WHERE issue_id = ?1 OR related_id = ?1 ORDER BY created_at, id",
-    )
-    .all(issueId) as RelationRow[];
+export function getRelation(db: Database, id: string, workspaceId?: string): RelationRow | null {
+  const query = workspaceId
+    ? "SELECT * FROM issue_relations WHERE id = ?1 AND workspace_id = ?2"
+    : "SELECT * FROM issue_relations WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as RelationRow | null;
+}
+
+export function listRelations(db: Database, issueId: string, workspaceId?: string): RelationView[] {
+  const query = workspaceId
+    ? `SELECT * FROM issue_relations
+       WHERE workspace_id = ?2 AND (issue_id = ?1 OR related_id = ?1)
+       ORDER BY created_at, id`
+    : "SELECT * FROM issue_relations WHERE issue_id = ?1 OR related_id = ?1 ORDER BY created_at, id";
+  const rows = (
+    workspaceId ? db.query(query).all(issueId, workspaceId) : db.query(query).all(issueId)
+  ) as RelationRow[];
   return rows.map((row) =>
     row.issue_id === issueId
       ? { id: row.id, type: row.type, relatedId: row.related_id, createdAt: row.created_at }
@@ -72,7 +85,12 @@ export function listRelations(db: Database, issueId: string): RelationView[] {
  * ya bloquea (transitivamente) al bloqueante, agregar blocks(source → target)
  * dejaría el grafo sin solución y el frontier de /wayfinder vacío para siempre.
  */
-function assertNoBlockingCycle(db: Database, source: IssueRow, target: IssueRow): void {
+function assertNoBlockingCycle(
+  db: Database,
+  source: IssueRow,
+  target: IssueRow,
+  workspaceId?: string,
+): void {
   // BFS sobre las aristas blocks desde target: ¿se llega a source?
   const parents = new Map<string, string>();
   const queue = [target.id];
@@ -86,17 +104,24 @@ function assertNoBlockingCycle(db: Database, source: IssueRow, target: IssueRow)
         path.push(node);
       }
       const cycle = [source.id, target.id, ...path.reverse().slice(1)].map((id) =>
-        identifierOf(getIssue(db, id)!),
+        identifierOf(getIssue(db, id, workspaceId)!),
       );
       throw apiError(
         "VALIDATION_FAILED",
         `Relation would create a blocking cycle: ${cycle.join(" → ")}`,
       );
     }
-    const next = db
-      .query("SELECT related_id FROM issue_relations WHERE issue_id = ?1 AND type = 'blocks'")
-      .values(current)
-      .map((row) => row[0] as string);
+    const next = workspaceId
+      ? db
+          .query(
+            "SELECT related_id FROM issue_relations WHERE issue_id = ?1 AND workspace_id = ?2 AND type = 'blocks'",
+          )
+          .values(current, workspaceId)
+          .map((row) => row[0] as string)
+      : db
+          .query("SELECT related_id FROM issue_relations WHERE issue_id = ?1 AND type = 'blocks'")
+          .values(current)
+          .map((row) => row[0] as string);
     for (const neighbor of next) {
       if (seen.has(neighbor)) continue;
       seen.add(neighbor);
@@ -125,10 +150,11 @@ export function createRelation(
   db: Database,
   actorId: string,
   input: RelationCreateInput,
+  workspaceId?: string,
 ): CreatedRelation {
-  const issue = getIssueByRef(db, input.issueId);
+  const issue = getIssueByRef(db, input.issueId, workspaceId);
   if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${input.issueId}`);
-  const related = getIssueByRef(db, input.relatedIssueId);
+  const related = getIssueByRef(db, input.relatedIssueId, workspaceId);
   if (!related) throw apiError("NOT_FOUND", `Issue not found: ${input.relatedIssueId}`);
   if (issue.id === related.id) {
     throw apiError("VALIDATION_FAILED", "An issue cannot be related to itself");
@@ -143,15 +169,17 @@ export function createRelation(
     type === "related"
       ? db
           .query(
-            `SELECT id FROM issue_relations WHERE type = 'related'
-         AND ((issue_id = ?1 AND related_id = ?2) OR (issue_id = ?2 AND related_id = ?1))`,
+            `SELECT id FROM issue_relations
+             WHERE type = 'related'
+               AND workspace_id IS ?3
+               AND ((issue_id = ?1 AND related_id = ?2) OR (issue_id = ?2 AND related_id = ?1))`,
           )
-          .get(source.id, target.id)
+          .get(source.id, target.id, workspaceId ?? null)
       : db
           .query(
-            "SELECT id FROM issue_relations WHERE issue_id = ?1 AND related_id = ?2 AND type = ?3",
+            "SELECT id FROM issue_relations WHERE issue_id = ?1 AND related_id = ?2 AND type = ?3 AND workspace_id IS ?4",
           )
-          .get(source.id, target.id, type);
+          .get(source.id, target.id, type, workspaceId ?? null);
   if (existing) {
     throw apiError(
       "VALIDATION_FAILED",
@@ -160,31 +188,53 @@ export function createRelation(
   }
 
   // Solo las relaciones de bloqueo forman un grafo con solución que cuidar (AT-178).
-  if (type === "blocks") assertNoBlockingCycle(db, source, target);
+  if (type === "blocks") assertNoBlockingCycle(db, source, target, workspaceId);
 
   const id = newId();
   db.transaction(() => {
     const timestamp = now();
     db.query(
-      "INSERT INTO issue_relations (id, issue_id, related_id, type, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-    ).run(id, source.id, target.id, type, timestamp);
-    db.query("UPDATE issues SET updated_at = ?1 WHERE id IN (?2, ?3)").run(
-      timestamp,
-      source.id,
-      target.id,
-    );
+      `INSERT INTO issue_relations
+        (id, issue_id, related_id, type, created_at, workspace_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+    ).run(id, source.id, target.id, type, timestamp, workspaceId ?? null);
+    if (workspaceId) {
+      db.query("UPDATE issues SET updated_at = ?1 WHERE workspace_id = ?4 AND id IN (?2, ?3)").run(
+        timestamp,
+        source.id,
+        target.id,
+        workspaceId,
+      );
+    } else {
+      db.query("UPDATE issues SET updated_at = ?1 WHERE id IN (?2, ?3)").run(
+        timestamp,
+        source.id,
+        target.id,
+      );
+    }
     // El payload usa identificadores (claves naturales): sobreviven a un rebuild.
-    recordActivity(db, source.id, actorId, "relation_added", {
-      type,
-      issue: identifierOf(target),
-    });
-    recordActivity(db, target.id, actorId, "relation_added", {
-      type: INVERSE[type],
-      issue: identifierOf(source),
-    });
+    recordActivity(
+      db,
+      source.id,
+      actorId,
+      "relation_added",
+      { type, issue: identifierOf(target) },
+      undefined,
+      workspaceId,
+    );
+    recordActivity(
+      db,
+      target.id,
+      actorId,
+      "relation_added",
+      { type: INVERSE[type], issue: identifierOf(source) },
+      undefined,
+      workspaceId,
+    );
   })();
 
-  const row = db.query("SELECT * FROM issue_relations WHERE id = ?1").get(id) as RelationRow;
+  const row = getRelation(db, id, workspaceId);
+  if (!row) throw apiError("NOT_FOUND", `Relation not found: ${id}`);
   const view: RelationView =
     row.issue_id === issue.id
       ? { id: row.id, type: row.type, relatedId: row.related_id, createdAt: row.created_at }
@@ -196,27 +246,52 @@ export function deleteRelation(
   db: Database,
   actorId: string,
   id: string,
+  workspaceId?: string,
 ): { issueId: string; relatedId: string; type: StoredRelationType } {
-  const row = db.query("SELECT * FROM issue_relations WHERE id = ?1").get(id) as RelationRow | null;
+  const row = getRelation(db, id, workspaceId);
   if (!row) throw apiError("NOT_FOUND", `Relation not found: ${id}`);
-  const source = getIssueByRef(db, row.issue_id)!;
-  const target = getIssueByRef(db, row.related_id)!;
+  const source = getIssueByRef(db, row.issue_id, workspaceId);
+  const target = getIssueByRef(db, row.related_id, workspaceId);
+  if (!source || !target) throw apiError("NOT_FOUND", "Issue not found");
   db.transaction(() => {
     const timestamp = now();
-    db.query("DELETE FROM issue_relations WHERE id = ?1").run(id);
-    db.query("UPDATE issues SET updated_at = ?1 WHERE id IN (?2, ?3)").run(
-      timestamp,
+    if (workspaceId) {
+      db.query("DELETE FROM issue_relations WHERE id = ?1 AND workspace_id = ?2").run(
+        id,
+        workspaceId,
+      );
+      db.query("UPDATE issues SET updated_at = ?1 WHERE workspace_id = ?4 AND id IN (?2, ?3)").run(
+        timestamp,
+        source.id,
+        target.id,
+        workspaceId,
+      );
+    } else {
+      db.query("DELETE FROM issue_relations WHERE id = ?1").run(id);
+      db.query("UPDATE issues SET updated_at = ?1 WHERE id IN (?2, ?3)").run(
+        timestamp,
+        source.id,
+        target.id,
+      );
+    }
+    recordActivity(
+      db,
       source.id,
-      target.id,
+      actorId,
+      "relation_removed",
+      { type: row.type, issue: identifierOf(target) },
+      undefined,
+      workspaceId,
     );
-    recordActivity(db, source.id, actorId, "relation_removed", {
-      type: row.type,
-      issue: identifierOf(target),
-    });
-    recordActivity(db, target.id, actorId, "relation_removed", {
-      type: INVERSE[row.type],
-      issue: identifierOf(source),
-    });
+    recordActivity(
+      db,
+      target.id,
+      actorId,
+      "relation_removed",
+      { type: INVERSE[row.type], issue: identifierOf(source) },
+      undefined,
+      workspaceId,
+    );
   })();
   return { issueId: row.issue_id, relatedId: row.related_id, type: row.type };
 }

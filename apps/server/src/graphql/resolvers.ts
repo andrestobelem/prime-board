@@ -2343,10 +2343,17 @@ export const resolvers = {
             else assertCanManageTeam(context.db, viewer, existing.team_id);
           }
           const affectedIds = context.db
-            .query("SELECT issue_id AS id FROM issue_labels WHERE label_id = ?1")
-            .all(args.id)
+            .query(
+              "SELECT issue_id AS id FROM issue_labels WHERE label_id = ?1 AND workspace_id = ?2",
+            )
+            .all(args.id, context.workspace.workspaceId)
             .map((row) => (row as { id: string }).id);
-          const affected = deleteLabel(context.db, viewer.id, args.id);
+          const affected = deleteLabel(
+            context.db,
+            viewer.id,
+            args.id,
+            context.workspace.workspaceId,
+          );
           emitBulkIssueUpdates(context, viewer, affectedIds, {
             labels: { from: args.id, to: null },
           });

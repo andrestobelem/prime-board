@@ -7,7 +7,7 @@ import { canAccessTeam } from "../auth/permissions.ts";
 import type { ActivityRow } from "./activity.ts";
 
 export interface InboxActivityRow extends ActivityRow {
-  workspace_id?: string | null;
+  workspace_id: string | null;
   is_read: number;
   is_archived: number;
   issue_assignee_id: string | null;

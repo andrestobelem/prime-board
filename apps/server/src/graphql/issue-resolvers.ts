@@ -155,7 +155,7 @@ export async function canQueryPostgresIssueFilter(
 function activityReferenceTeams(context: Context, table: RefTable, value: string): string[] | null {
   if (table === "actors") return [];
   if (table === "issues") {
-    const issue = getIssueByRef(context.db, value);
+    const issue = getIssueByRef(context.db, value, context.workspace.workspaceId);
     return issue ? [issue.team_id] : null;
   }
   if (table === "teams") {
@@ -213,7 +213,10 @@ function sanitizeActivityPayload(
   // fuera de ACTIVITY_REFS. Nunca conservamos una clave no permitida.
   if (activity.type === "relation_added" || activity.type === "relation_removed") {
     const value = payload.issue;
-    const related = typeof value === "string" ? getIssueByRef(context.db, value) : null;
+    const related =
+      typeof value === "string"
+        ? getIssueByRef(context.db, value, context.workspace.workspaceId)
+        : null;
     if (
       !source ||
       !related ||
@@ -461,7 +464,7 @@ export const issueResolvers = {
         }
         return visible.map(mapPostgresLabel);
       }
-      return listIssueLabels(context.db, issue.id)
+      return listIssueLabels(context.db, issue.id, context.workspace.workspaceId)
         .filter(
           (label) =>
             label.team_id === null ||
@@ -559,7 +562,7 @@ export const issueResolvers = {
           "Issue comments are not yet available with PostgreSQL persistence",
         );
       }
-      return listComments(context.db, issue.id).map(mapComment);
+      return listComments(context.db, issue.id, context.workspace.workspaceId).map(mapComment);
     },
     relations: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
@@ -611,7 +614,7 @@ export const issueResolvers = {
           return [];
         return (await listPostgresActivity(context.persistence, issue.id)).map(mapActivity);
       }
-      return listActivity(context.db, issue.id).map(mapActivity);
+      return listActivity(context.db, issue.id, context.workspace.workspaceId).map(mapActivity);
     },
     url: (issue: MappedIssue, _args: unknown, context: Context) =>
       `http://localhost:${context.config.port}/issue/${issue.identifier}`,
@@ -809,7 +812,10 @@ export const issueResolvers = {
         assertCanManageProject(context.db, viewer, args.input.projectId);
       }
       if (args.input.creatorId) requireActor(context, args.input.creatorId);
-      const row = createIssue(context.db, viewer.id, args.input);
+      const row = createIssue(context.db, viewer.id, {
+        ...args.input,
+        workspaceId: context.workspace.workspaceId,
+      });
       context.events.emit("issue.created", viewer, issueEventData(row));
       return { success: true, issue: mapIssue(row) };
     },
@@ -870,7 +876,10 @@ export const issueResolvers = {
           args.input.projectId !== undefined ? args.input.projectId : currentIssue.project_id;
         if (projectId) assertCanManageProject(context.db, viewer, projectId);
       }
-      const { row, changes } = updateIssue(context.db, viewer.id, args.id, args.input);
+      const { row, changes } = updateIssue(context.db, viewer.id, args.id, {
+        ...args.input,
+        workspaceId: context.workspace.workspaceId,
+      });
       if (changes.length > 0) {
         const changeMap = Object.fromEntries(
           changes.map((change) => [change.field, { from: change.from, to: change.to }]),
@@ -991,7 +1000,7 @@ export const issueResolvers = {
       }
       const existing = assertIssueAccess(context, viewer, args.id);
       const changed = !existing.archived_at;
-      const row = archiveIssue(context.db, viewer.id, args.id);
+      const row = archiveIssue(context.db, viewer.id, args.id, context.workspace.workspaceId);
       if (changed) context.events.emit("issue.archived", viewer, issueEventData(row));
       return { success: true, issue: mapIssue(row) };
     },
@@ -1009,7 +1018,7 @@ export const issueResolvers = {
       }
       const existing = assertIssueAccess(context, viewer, args.id);
       const wasArchived = Boolean(existing.archived_at);
-      const row = unarchiveIssue(context.db, viewer.id, args.id);
+      const row = unarchiveIssue(context.db, viewer.id, args.id, context.workspace.workspaceId);
       if (wasArchived) context.events.emit("issue.unarchived", viewer, issueEventData(row));
       return { success: true, issue: mapIssue(row) };
     },
@@ -1064,7 +1073,12 @@ export const issueResolvers = {
       }
       assertIssueAccess(context, viewer, args.input.issueId);
       assertIssueAccess(context, viewer, args.input.relatedIssueId);
-      const created = createRelation(context.db, viewer.id, args.input);
+      const created = createRelation(
+        context.db,
+        viewer.id,
+        args.input,
+        context.workspace.workspaceId,
+      );
       const inverse: Record<RelationType, RelationType> = {
         blocks: "blocked_by",
         blocked_by: "blocks",
@@ -1129,7 +1143,7 @@ export const issueResolvers = {
         return { success: true };
       }
       assertRelationAccess(context, viewer, args.id);
-      const removed = deleteRelation(context.db, viewer.id, args.id);
+      const removed = deleteRelation(context.db, viewer.id, args.id, context.workspace.workspaceId);
       const source = lookupIssueById(context, removed.issueId)!;
       const target = lookupIssueById(context, removed.relatedId)!;
       const inverse: Record<StoredRelationType, RelationType> = {
@@ -1167,7 +1181,7 @@ export const issueResolvers = {
       assertCanUseImportFields(viewer, args.input);
       assertIssueAccess(context, viewer, args.input.issueId);
       if (args.input.authorId) requireActor(context, args.input.authorId);
-      const row = createComment(context.db, viewer.id, args.input);
+      const row = createComment(context.db, viewer.id, args.input, context.workspace.workspaceId);
       const issue = lookupIssueById(context, row.issue_id)!;
       context.events.emit("comment.created", viewer, {
         id: row.id,

@@ -364,21 +364,24 @@ export function deleteWorkflowState(
   db.transaction(() => {
     if (target) {
       const issues = db
-        .query("SELECT id FROM issues WHERE state_id = ?1")
-        .values(id)
-        .map((row) => row[0] as string);
+        .query("SELECT id, workspace_id FROM issues WHERE state_id = ?1")
+        .all(id) as Array<{ id: string; workspace_id?: string | null }>;
       db.query("UPDATE issues SET state_id = ?1, updated_at = ?2 WHERE state_id = ?3").run(
         target.id,
         now(),
         id,
       );
       // Cada migración queda en el historial, como cualquier cambio de estado.
-      for (const issueId of issues) {
-        recordActivity(db, issueId, actorId, "state_changed", {
-          from: id,
-          to: target.id,
-          reason: "state_deleted",
-        });
+      for (const issue of issues) {
+        recordActivity(
+          db,
+          issue.id,
+          actorId,
+          "state_changed",
+          { from: id, to: target.id, reason: "state_deleted" },
+          undefined,
+          issue.workspace_id ?? undefined,
+        );
       }
     }
     // Si se borra el estado default, se reasigna: al destino de la migración o

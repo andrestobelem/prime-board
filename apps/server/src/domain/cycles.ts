@@ -193,8 +193,11 @@ function preserveCycleActivityReferences(db: Database, cycleId: string, referenc
 export function deleteCycle(db: Database, actorId: string, id: string): boolean {
   const existing = getCycle(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
-  const affected = db.query("SELECT id FROM issues WHERE cycle_id = ?1").all(id) as Array<{
+  const affected = db
+    .query("SELECT id, workspace_id FROM issues WHERE cycle_id = ?1")
+    .all(id) as Array<{
     id: string;
+    workspace_id?: string | null;
   }>;
   const reference = cycleReference(db, existing);
   db.transaction(() => {
@@ -209,7 +212,15 @@ export function deleteCycle(db: Database, actorId: string, id: string): boolean 
     for (const issue of affected) {
       // El cycle se elimina en esta misma transacción; conservar la clave estable
       // evita que el exportador dependa de una fila que ya no existirá.
-      recordActivity(db, issue.id, actorId, "cycle_changed", { from: reference, to: null });
+      recordActivity(
+        db,
+        issue.id,
+        actorId,
+        "cycle_changed",
+        { from: reference, to: null },
+        undefined,
+        issue.workspace_id ?? undefined,
+      );
     }
     db.query("DELETE FROM cycles WHERE id = ?1").run(id);
   })();
@@ -253,14 +264,14 @@ export function carryOverCycle(
   }
   const affected = db
     .query(
-      `SELECT id FROM issues
+      `SELECT id, workspace_id FROM issues
        WHERE cycle_id = ?1
          AND archived_at IS NULL
          AND state_id IN (
            SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled')
          )`,
     )
-    .all(fromCycleId) as Array<{ id: string }>;
+    .all(fromCycleId) as Array<{ id: string; workspace_id?: string | null }>;
   const timestamp = now();
   db.transaction(() => {
     db.query(
@@ -272,17 +283,31 @@ export function carryOverCycle(
          )`,
     ).run(fromCycleId, toCycleId, timestamp);
     for (const issue of affected) {
-      recordActivity(db, issue.id, actorId, "cycle_changed", {
-        from: fromCycleId,
-        to: toCycleId,
-      });
+      recordActivity(
+        db,
+        issue.id,
+        actorId,
+        "cycle_changed",
+        { from: fromCycleId, to: toCycleId },
+        undefined,
+        issue.workspace_id ?? undefined,
+      );
     }
   })();
   return affected.length;
 }
 
-export function validateCycleForTeam(db: Database, cycleId: string, teamId: string): void {
-  const cycle = getCycle(db, cycleId);
+export function validateCycleForTeam(
+  db: Database,
+  cycleId: string,
+  teamId: string,
+  workspaceId?: string,
+): void {
+  const cycle = workspaceId
+    ? (db
+        .query("SELECT * FROM cycles WHERE id = ?1 AND workspace_id = ?2")
+        .get(cycleId, workspaceId) as CycleRow | null)
+    : getCycle(db, cycleId);
   if (!cycle) throw apiError("NOT_FOUND", "Cycle not found");
   if (cycle.team_id !== teamId) {
     throw apiError("VALIDATION_FAILED", "Cycle belongs to a different team");

@@ -164,22 +164,25 @@ export function deleteMilestone(db: Database, actorId: string, id: string): numb
   const historicalReference = `${project.project_name}/${milestone.name}`;
   db.transaction(() => {
     const issues = db
-      .query("SELECT id FROM issues WHERE milestone_id = ?1")
-      .values(id)
-      .map((row) => row[0] as string);
+      .query("SELECT id, workspace_id FROM issues WHERE milestone_id = ?1")
+      .all(id) as Array<{ id: string; workspace_id?: string | null }>;
     affected = issues.length;
     const timestamp = now();
     db.query("UPDATE issues SET milestone_id = NULL, updated_at = ?1 WHERE milestone_id = ?2").run(
       timestamp,
       id,
     );
-    for (const issueId of issues) {
+    for (const issue of issues) {
       // Keep the natural reference because the milestone row is deleted below.
-      recordActivity(db, issueId, actorId, "milestone_changed", {
-        from: historicalReference,
-        to: null,
-        reason: "milestone_deleted",
-      });
+      recordActivity(
+        db,
+        issue.id,
+        actorId,
+        "milestone_changed",
+        { from: historicalReference, to: null, reason: "milestone_deleted" },
+        undefined,
+        issue.workspace_id ?? undefined,
+      );
     }
     preserveMilestoneActivityReferences(db, id, historicalReference);
     db.query("DELETE FROM milestones WHERE id = ?1").run(id);
@@ -192,8 +195,13 @@ export function assertMilestoneMatchesProject(
   db: Database,
   milestoneId: string,
   projectId: string | null,
+  workspaceId?: string,
 ): void {
-  const milestone = getMilestone(db, milestoneId);
+  const milestone = workspaceId
+    ? (db
+        .query("SELECT * FROM milestones WHERE id = ?1 AND workspace_id = ?2")
+        .get(milestoneId, workspaceId) as MilestoneRow | null)
+    : getMilestone(db, milestoneId);
   if (!milestone) throw apiError("NOT_FOUND", "Milestone not found");
   if (!projectId) {
     throw apiError("VALIDATION_FAILED", "Issue must belong to a project to have a milestone");

@@ -77,6 +77,7 @@ function changeSubscription(
         action === "subscribe" ? "subscribed" : "unsubscribed",
         { actorId },
         timestamp,
+        workspaceId,
       );
     }
   })();

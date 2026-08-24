@@ -90,26 +90,65 @@ export function updateLabel(
 }
 
 /** Borra la label y la quita de todos los issues que la tenían. */
-export function deleteLabel(db: Database, actorId: string, id: string): number {
-  const label = db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow | null;
+export function deleteLabel(
+  db: Database,
+  actorId: string,
+  id: string,
+  workspaceId?: string,
+): number {
+  const label = workspaceId
+    ? (db
+        .query("SELECT * FROM labels WHERE id = ?1 AND workspace_id = ?2")
+        .get(id, workspaceId) as LabelRow | null)
+    : (db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow | null);
   if (!label) throw apiError("NOT_FOUND", "Label not found");
   let affected = 0;
   db.transaction(() => {
-    const issues = db
-      .query("SELECT issue_id FROM issue_labels WHERE label_id = ?1")
-      .values(id)
-      .map((row) => row[0] as string);
+    const issues = workspaceId
+      ? (
+          db
+            .query("SELECT issue_id FROM issue_labels WHERE label_id = ?1 AND workspace_id = ?2")
+            .all(id, workspaceId) as Array<{ issue_id: string }>
+        ).map((row) => row.issue_id)
+      : db
+          .query("SELECT issue_id FROM issue_labels WHERE label_id = ?1")
+          .values(id)
+          .map((row) => row[0] as string);
     affected = issues.length;
-    db.query("DELETE FROM issue_labels WHERE label_id = ?1").run(id);
+    if (workspaceId) {
+      db.query("DELETE FROM issue_labels WHERE label_id = ?1 AND workspace_id = ?2").run(
+        id,
+        workspaceId,
+      );
+    } else {
+      db.query("DELETE FROM issue_labels WHERE label_id = ?1").run(id);
+    }
     const timestamp = now();
     for (const issueId of issues) {
-      db.query("UPDATE issues SET updated_at = ?1 WHERE id = ?2").run(timestamp, issueId);
-      recordActivity(db, issueId, actorId, "unlabeled", {
-        label: label.name,
-        reason: "label_deleted",
-      });
+      if (workspaceId) {
+        db.query("UPDATE issues SET updated_at = ?1 WHERE id = ?2 AND workspace_id = ?3").run(
+          timestamp,
+          issueId,
+          workspaceId,
+        );
+      } else {
+        db.query("UPDATE issues SET updated_at = ?1 WHERE id = ?2").run(timestamp, issueId);
+      }
+      recordActivity(
+        db,
+        issueId,
+        actorId,
+        "unlabeled",
+        { label: label.name, reason: "label_deleted" },
+        undefined,
+        workspaceId,
+      );
     }
-    db.query("DELETE FROM labels WHERE id = ?1").run(id);
+    if (workspaceId) {
+      db.query("DELETE FROM labels WHERE id = ?1 AND workspace_id = ?2").run(id, workspaceId);
+    } else {
+      db.query("DELETE FROM labels WHERE id = ?1").run(id);
+    }
   })();
   return affected;
 }
@@ -124,18 +163,29 @@ export function listLabels(db: Database, teamId?: string | null): LabelRow[] {
   return db.query("SELECT * FROM labels ORDER BY name").all() as LabelRow[];
 }
 
-export function listIssueLabels(db: Database, issueId: string): LabelRow[] {
-  return db
-    .query(
-      `SELECT labels.* FROM labels
+export function listIssueLabels(db: Database, issueId: string, workspaceId?: string): LabelRow[] {
+  const query = workspaceId
+    ? `SELECT labels.* FROM labels
        JOIN issue_labels ON issue_labels.label_id = labels.id
-       WHERE issue_labels.issue_id = ?1 ORDER BY labels.name`,
-    )
-    .all(issueId) as LabelRow[];
+       WHERE issue_labels.issue_id = ?1
+         AND issue_labels.workspace_id = ?2
+         AND labels.workspace_id = ?2
+       ORDER BY labels.name`
+    : `SELECT labels.* FROM labels
+       JOIN issue_labels ON issue_labels.label_id = labels.id
+       WHERE issue_labels.issue_id = ?1 ORDER BY labels.name`;
+  return (
+    workspaceId ? db.query(query).all(issueId, workspaceId) : db.query(query).all(issueId)
+  ) as LabelRow[];
 }
 
 function assertApplicable(db: Database, issue: IssueRow, labelId: string): LabelRow {
-  const label = db.query("SELECT * FROM labels WHERE id = ?1").get(labelId) as LabelRow | null;
+  const workspaceId = issue.workspace_id ?? undefined;
+  const label = workspaceId
+    ? (db
+        .query("SELECT * FROM labels WHERE id = ?1 AND workspace_id = ?2")
+        .get(labelId, workspaceId) as LabelRow | null)
+    : (db.query("SELECT * FROM labels WHERE id = ?1").get(labelId) as LabelRow | null);
   if (!label) throw apiError("NOT_FOUND", `Label not found: ${labelId}`);
   if (label.team_id !== null && label.team_id !== issue.team_id) {
     throw apiError("VALIDATION_FAILED", `Label ${label.name} belongs to another team`);
@@ -156,7 +206,9 @@ export function applyLabelOps(
   issue: IssueRow,
   ops: LabelOps,
 ): boolean {
-  const current = new Set(listIssueLabels(db, issue.id).map((label) => label.id));
+  const current = new Set(
+    listIssueLabels(db, issue.id, issue.workspace_id ?? undefined).map((label) => label.id),
+  );
   let target = new Set(current);
 
   if (ops.labelIds != null) target = new Set(ops.labelIds);
@@ -173,7 +225,15 @@ export function applyLabelOps(
       issue.id,
       labelId,
     );
-    recordActivity(db, issue.id, actorId, "labeled", { label: label.name });
+    recordActivity(
+      db,
+      issue.id,
+      actorId,
+      "labeled",
+      { label: label.name },
+      undefined,
+      issue.workspace_id ?? undefined,
+    );
   }
   for (const labelId of toRemove) {
     const label = db.query("SELECT name FROM labels WHERE id = ?1").get(labelId) as {
@@ -183,7 +243,15 @@ export function applyLabelOps(
       issue.id,
       labelId,
     );
-    recordActivity(db, issue.id, actorId, "unlabeled", { label: label?.name ?? labelId });
+    recordActivity(
+      db,
+      issue.id,
+      actorId,
+      "unlabeled",
+      { label: label?.name ?? labelId },
+      undefined,
+      issue.workspace_id ?? undefined,
+    );
   }
   return true;
 }

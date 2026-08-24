@@ -32,6 +32,7 @@ export interface ActivityRow {
   type: ActivityType;
   payload: string;
   created_at: string;
+  workspace_id: string | null;
 }
 
 export function mapActivity(row: ActivityRow) {
@@ -47,10 +48,13 @@ export function mapActivity(row: ActivityRow) {
   };
 }
 
-export function listActivity(db: Database, issueId: string): ActivityRow[] {
-  return db
-    .query("SELECT * FROM activity WHERE issue_id = ?1 ORDER BY created_at, id")
-    .all(issueId) as ActivityRow[];
+export function listActivity(db: Database, issueId: string, workspaceId?: string): ActivityRow[] {
+  const query = workspaceId
+    ? "SELECT * FROM activity WHERE issue_id = ?1 AND workspace_id = ?2 ORDER BY created_at, id"
+    : "SELECT * FROM activity WHERE issue_id = ?1 ORDER BY created_at, id";
+  return (
+    workspaceId ? db.query(query).all(issueId, workspaceId) : db.query(query).all(issueId)
+  ) as ActivityRow[];
 }
 
 export function recordActivity(
@@ -61,8 +65,19 @@ export function recordActivity(
   payload: Record<string, unknown> = {},
   /** Timestamp explícito (imports); default: ahora. */
   createdAt?: string,
+  workspaceId?: string,
 ): void {
   db.query(
-    "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-  ).run(newId(), issueId, actorId, type, JSON.stringify(payload), createdAt ?? now());
+    `INSERT INTO activity
+      (id, issue_id, actor_id, type, payload, created_at, workspace_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+  ).run(
+    newId(),
+    issueId,
+    actorId,
+    type,
+    JSON.stringify(payload),
+    createdAt ?? now(),
+    workspaceId ?? null,
+  );
 }

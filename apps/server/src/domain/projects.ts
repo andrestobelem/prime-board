@@ -86,7 +86,22 @@ export function listProjectTeamIds(db: Database, projectId: string): string[] {
     .map((row) => row[0] as string);
 }
 
-export function projectIncludesTeam(db: Database, projectId: string, teamId: string): boolean {
+export function projectIncludesTeam(
+  db: Database,
+  projectId: string,
+  teamId: string,
+  workspaceId?: string,
+): boolean {
+  if (workspaceId) {
+    return Boolean(
+      db
+        .query(
+          `SELECT 1 FROM project_teams
+           WHERE project_id = ?1 AND team_id = ?2 AND workspace_id = ?3`,
+        )
+        .get(projectId, teamId, workspaceId),
+    );
+  }
   return Boolean(
     db
       .query("SELECT 1 FROM project_teams WHERE project_id = ?1 AND team_id = ?2")

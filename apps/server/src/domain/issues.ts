@@ -37,6 +37,7 @@ export interface IssueRow {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  workspace_id?: string | null;
   team_key: string;
 }
 
@@ -72,23 +73,33 @@ export function mapIssue(row: IssueRow) {
   };
 }
 
-export function getIssue(db: Database, id: string): IssueRow | null {
-  return db.query(`${SELECT_ISSUE} WHERE issues.id = ?1`).get(id) as IssueRow | null;
+export function getIssue(db: Database, id: string, workspaceId?: string): IssueRow | null {
+  const query = workspaceId
+    ? `${SELECT_ISSUE} WHERE issues.id = ?1 AND issues.workspace_id = ?2`
+    : `${SELECT_ISSUE} WHERE issues.id = ?1`;
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as IssueRow | null;
 }
 
 /** Acepta UUID o identificador legible tipo AT-126 (spec §4, Convenciones). */
-export function getIssueByRef(db: Database, ref: string): IssueRow | null {
+export function getIssueByRef(db: Database, ref: string, workspaceId?: string): IssueRow | null {
   const match = ref.match(/^([A-Za-z][A-Za-z0-9]{0,7})-(\d+)$/);
   if (match) {
-    return db
-      .query(`${SELECT_ISSUE} WHERE teams.key = ?1 AND issues.number = ?2`)
-      .get(match[1]!.toUpperCase(), Number(match[2])) as IssueRow | null;
+    const query = workspaceId
+      ? `${SELECT_ISSUE} WHERE teams.key = ?1 AND issues.number = ?2 AND issues.workspace_id = ?3`
+      : `${SELECT_ISSUE} WHERE teams.key = ?1 AND issues.number = ?2`;
+    return (
+      workspaceId
+        ? db.query(query).get(match[1]!.toUpperCase(), Number(match[2]), workspaceId)
+        : db.query(query).get(match[1]!.toUpperCase(), Number(match[2]))
+    ) as IssueRow | null;
   }
-  return getIssue(db, ref);
+  return getIssue(db, ref, workspaceId);
 }
 
-function requireIssue(db: Database, ref: string): IssueRow {
-  const row = getIssueByRef(db, ref);
+function requireIssue(db: Database, ref: string, workspaceId?: string): IssueRow {
+  const row = getIssueByRef(db, ref, workspaceId);
   if (!row) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
   return row;
 }
@@ -99,24 +110,60 @@ function validatePriority(priority: number): void {
   }
 }
 
-function validateState(db: Database, teamId: string, stateId: string): void {
-  const state = db
-    .query("SELECT id FROM workflow_states WHERE id = ?1 AND team_id = ?2")
-    .get(stateId, teamId);
+function scopedTeam(
+  db: Database,
+  ref: { id?: string | null; key?: string | null },
+  workspaceId?: string,
+): ReturnType<typeof getTeam> {
+  if (!workspaceId) return getTeam(db, ref);
+  if (ref.id) {
+    return db
+      .query("SELECT * FROM teams WHERE id = ?1 AND workspace_id = ?2")
+      .get(ref.id, workspaceId) as ReturnType<typeof getTeam>;
+  }
+  if (ref.key) {
+    return db
+      .query("SELECT * FROM teams WHERE key = ?1 AND workspace_id = ?2")
+      .get(ref.key.toUpperCase(), workspaceId) as ReturnType<typeof getTeam>;
+  }
+  return null;
+}
+
+function validateState(db: Database, teamId: string, stateId: string, workspaceId?: string): void {
+  const state = workspaceId
+    ? db
+        .query(
+          "SELECT id FROM workflow_states WHERE id = ?1 AND team_id = ?2 AND workspace_id = ?3",
+        )
+        .get(stateId, teamId, workspaceId)
+    : db
+        .query("SELECT id FROM workflow_states WHERE id = ?1 AND team_id = ?2")
+        .get(stateId, teamId);
   if (!state) throw apiError("VALIDATION_FAILED", "State does not belong to the issue's team");
 }
 
-function validateAssignee(db: Database, assigneeId: string): void {
-  const actor = db.query("SELECT id FROM actors WHERE id = ?1").get(assigneeId);
+function validateAssignee(db: Database, assigneeId: string, workspaceId?: string): void {
+  const actor = workspaceId
+    ? db
+        .query(
+          `SELECT actors.id FROM actors
+           JOIN workspace_memberships
+             ON workspace_memberships.actor_id = actors.id
+            AND workspace_memberships.workspace_id = ?2
+           WHERE actors.id = ?1`,
+        )
+        .get(assigneeId, workspaceId)
+    : db.query("SELECT id FROM actors WHERE id = ?1").get(assigneeId);
   if (!actor) throw apiError("NOT_FOUND", "Assignee not found");
 }
 
 function validateParent(
   db: Database,
-  issue: { id: string; team_id: string },
+  issue: { id: string; team_id: string; workspace_id?: string | null },
   parentId: string,
+  workspaceId?: string,
 ): void {
-  const parent = getIssue(db, parentId);
+  const parent = getIssue(db, parentId, workspaceId);
   if (!parent) throw apiError("NOT_FOUND", "Parent issue not found");
   if (parent.team_id !== issue.team_id) {
     throw apiError("VALIDATION_FAILED", "Parent issue must belong to the same team");
@@ -134,9 +181,13 @@ function validateParent(
       throw apiError("VALIDATION_FAILED", "Parent chain already contains a cycle");
     }
     seen.add(cursor);
-    const next = db.query("SELECT parent_id FROM issues WHERE id = ?1").get(cursor) as {
-      parent_id: string | null;
-    } | null;
+    const next: { parent_id: string | null } | null = workspaceId
+      ? (db
+          .query("SELECT parent_id FROM issues WHERE id = ?1 AND workspace_id = ?2")
+          .get(cursor, workspaceId) as { parent_id: string | null } | null)
+      : (db.query("SELECT parent_id FROM issues WHERE id = ?1").get(cursor) as {
+          parent_id: string | null;
+        } | null);
     cursor = next?.parent_id ?? null;
   }
 }
@@ -160,20 +211,27 @@ export interface IssueCreateInput {
   createdAt?: string | null;
   /** Autor original (imports); default: el actor de la API key. */
   creatorId?: string | null;
+  /** Workspace efectivo de la operación; omitido para llamadas legacy. */
+  workspaceId?: string | null;
 }
 
 export function createIssue(db: Database, actorId: string, input: IssueCreateInput): IssueRow {
-  const team = getTeam(db, { id: input.teamId, key: input.teamKey });
+  const workspaceId = input.workspaceId ?? undefined;
+  const team = scopedTeam(db, { id: input.teamId, key: input.teamKey }, workspaceId);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   const title = input.title.trim();
   if (!title) throw apiError("VALIDATION_FAILED", "Issue title cannot be empty");
   if (input.priority != null) validatePriority(input.priority);
-  if (input.stateId) validateState(db, team.id, input.stateId);
-  if (input.assigneeId) validateAssignee(db, input.assigneeId);
+  if (input.stateId) validateState(db, team.id, input.stateId, workspaceId);
+  if (input.assigneeId) validateAssignee(db, input.assigneeId, workspaceId);
   if (input.projectId) {
-    const project = db.query("SELECT id FROM projects WHERE id = ?1").get(input.projectId);
+    const project = workspaceId
+      ? db
+          .query("SELECT id FROM projects WHERE id = ?1 AND workspace_id = ?2")
+          .get(input.projectId, workspaceId)
+      : db.query("SELECT id FROM projects WHERE id = ?1").get(input.projectId);
     if (!project) throw apiError("NOT_FOUND", "Project not found");
-    if (!projectIncludesTeam(db, input.projectId, team.id)) {
+    if (!projectIncludesTeam(db, input.projectId, team.id, workspaceId)) {
       throw apiError("VALIDATION_FAILED", "Project does not include the issue's team");
     }
   }
@@ -182,9 +240,13 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
     if (!Number.isInteger(input.number) || input.number < 1) {
       throw apiError("VALIDATION_FAILED", "Issue number must be a positive integer");
     }
-    const taken = db
-      .query("SELECT id FROM issues WHERE team_id = ?1 AND number = ?2")
-      .get(team.id, input.number);
+    const taken = workspaceId
+      ? db
+          .query("SELECT id FROM issues WHERE team_id = ?1 AND number = ?2 AND workspace_id = ?3")
+          .get(team.id, input.number, workspaceId)
+      : db
+          .query("SELECT id FROM issues WHERE team_id = ?1 AND number = ?2")
+          .get(team.id, input.number);
     if (taken) {
       throw apiError(
         "VALIDATION_FAILED",
@@ -194,15 +256,24 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
   }
 
   if (input.milestoneId) {
-    assertMilestoneMatchesProject(db, input.milestoneId, input.projectId ?? null);
+    assertMilestoneMatchesProject(db, input.milestoneId, input.projectId ?? null, workspaceId);
   }
   if (input.createdAt != null) parseDateTime(input.createdAt, "createdAt");
-  if (
-    input.creatorId != null &&
-    !db.query("SELECT id FROM actors WHERE id = ?1").get(input.creatorId)
-  ) {
-    throw apiError("NOT_FOUND", "Creator actor not found");
+  if (input.creatorId != null) {
+    const creator = workspaceId
+      ? db
+          .query(
+            `SELECT actors.id FROM actors
+             JOIN workspace_memberships
+               ON workspace_memberships.actor_id = actors.id
+              AND workspace_memberships.workspace_id = ?2
+             WHERE actors.id = ?1`,
+          )
+          .get(input.creatorId, workspaceId)
+      : db.query("SELECT id FROM actors WHERE id = ?1").get(input.creatorId);
+    if (!creator) throw apiError("NOT_FOUND", "Creator actor not found");
   }
+  if (!input.creatorId) validateAssignee(db, actorId, workspaceId);
   // En imports, autoría y fecha originales; si no, el actor de la key y ahora.
   const creatorId = input.creatorId ?? actorId;
   const createdAt = input.createdAt ?? null;
@@ -227,13 +298,22 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
     // Estado default explícito del team (AT-180); posición más baja como fallback.
     const stateId = input.stateId ?? getDefaultState(db, team).id;
 
-    if (input.parentId) validateParent(db, { id, team_id: team.id }, input.parentId);
+    if (input.parentId) {
+      validateParent(
+        db,
+        { id, team_id: team.id, workspace_id: workspaceId ?? null },
+        input.parentId,
+        workspaceId,
+      );
+    }
 
     const timestamp = createdAt ?? now();
     db.query(
-      `INSERT INTO issues (id, team_id, number, title, description, state_id, priority,
-         assignee_id, parent_id, project_id, milestone_id, creator_id, sort_order, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)`,
+      `INSERT INTO issues
+        (id, team_id, number, title, description, state_id, priority,
+         assignee_id, parent_id, project_id, milestone_id, creator_id, sort_order,
+         created_at, updated_at, workspace_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15)`,
     ).run(
       id,
       team.id,
@@ -249,6 +329,7 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
       creatorId,
       0,
       timestamp,
+      workspaceId ?? null,
     );
     // Payload completo: el log tiene que alcanzar para reconstruir el issue
     // sin depender del snapshot (AT-165, prerequisito de la Fase 3).
@@ -270,15 +351,22 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
         milestoneId: input.milestoneId ?? null,
       },
       createdAt ?? undefined,
+      workspaceId,
     );
     if (input.labelIds?.length) {
-      applyLabelOps(db, actorId, getIssue(db, id)!, { labelIds: input.labelIds });
+      const created = getIssue(db, id, workspaceId);
+      if (!created) throw apiError("NOT_FOUND", `Issue not found: ${id}`);
+      applyLabelOps(db, actorId, created, { labelIds: input.labelIds });
     }
   })();
-  return getIssue(db, id)!;
+  const created = getIssue(db, id, workspaceId);
+  if (!created) throw apiError("NOT_FOUND", `Issue not found: ${id}`);
+  return created;
 }
 
 export interface IssueUpdateInput extends LabelOps {
+  /** Workspace efectivo de la operación; omitido para llamadas legacy. */
+  workspaceId?: string | null;
   title?: string | null;
   description?: string | null;
   stateId?: string | null;
@@ -303,10 +391,17 @@ export function updateIssue(
   ref: string,
   input: IssueUpdateInput,
 ): { row: IssueRow; changes: IssueChange[] } {
-  const issue = requireIssue(db, ref);
+  const workspaceId = input.workspaceId ?? undefined;
+  const issue = requireIssue(db, ref, workspaceId);
+  const effectiveWorkspaceId = workspaceId ?? issue.workspace_id ?? undefined;
   const changes: IssueChange[] = [];
   const sets: string[] = [];
   const params: unknown[] = [];
+  const addActivity = (
+    type: Parameters<typeof recordActivity>[3],
+    payload: Record<string, unknown> = {},
+    createdAt?: string,
+  ) => recordActivity(db, issue.id, actorId, type, payload, createdAt, effectiveWorkspaceId);
 
   const push = (column: string, value: unknown) => {
     sets.push(`${column} = ?${params.length + 1}`);
@@ -320,21 +415,21 @@ export function updateIssue(
       if (title !== issue.title) {
         push("title", title);
         changes.push({ field: "title", from: issue.title, to: title });
-        recordActivity(db, issue.id, actorId, "title_changed", { from: issue.title, to: title });
+        addActivity("title_changed", { from: issue.title, to: title });
       }
     }
     if (input.description !== undefined && input.description !== issue.description) {
       push("description", input.description);
       changes.push({ field: "description", from: issue.description, to: input.description });
-      recordActivity(db, issue.id, actorId, "description_changed", {
+      addActivity("description_changed", {
         to: input.description ?? null,
       });
     }
     if (input.stateId != null && input.stateId !== issue.state_id) {
-      validateState(db, issue.team_id, input.stateId);
+      validateState(db, issue.team_id, input.stateId, effectiveWorkspaceId);
       push("state_id", input.stateId);
       changes.push({ field: "state", from: issue.state_id, to: input.stateId });
-      recordActivity(db, issue.id, actorId, "state_changed", {
+      addActivity("state_changed", {
         from: issue.state_id,
         to: input.stateId,
       });
@@ -343,40 +438,44 @@ export function updateIssue(
       validatePriority(input.priority);
       push("priority", input.priority);
       changes.push({ field: "priority", from: issue.priority, to: input.priority });
-      recordActivity(db, issue.id, actorId, "priority_changed", {
+      addActivity("priority_changed", {
         from: issue.priority,
         to: input.priority,
       });
     }
     if (input.assigneeId !== undefined && input.assigneeId !== issue.assignee_id) {
-      if (input.assigneeId !== null) validateAssignee(db, input.assigneeId);
+      if (input.assigneeId !== null) validateAssignee(db, input.assigneeId, effectiveWorkspaceId);
       push("assignee_id", input.assigneeId);
       changes.push({ field: "assignee", from: issue.assignee_id, to: input.assigneeId });
-      recordActivity(db, issue.id, actorId, "assigned", {
+      addActivity("assigned", {
         from: issue.assignee_id,
         to: input.assigneeId,
       });
     }
     if (input.parentId !== undefined && input.parentId !== issue.parent_id) {
-      if (input.parentId !== null) validateParent(db, issue, input.parentId);
+      if (input.parentId !== null) validateParent(db, issue, input.parentId, effectiveWorkspaceId);
       push("parent_id", input.parentId);
       changes.push({ field: "parent", from: issue.parent_id, to: input.parentId });
-      recordActivity(db, issue.id, actorId, "parent_changed", {
+      addActivity("parent_changed", {
         from: issue.parent_id,
         to: input.parentId,
       });
     }
     if (input.projectId !== undefined && input.projectId !== issue.project_id) {
       if (input.projectId !== null) {
-        const project = db.query("SELECT id FROM projects WHERE id = ?1").get(input.projectId);
+        const project = effectiveWorkspaceId
+          ? db
+              .query("SELECT id FROM projects WHERE id = ?1 AND workspace_id = ?2")
+              .get(input.projectId, effectiveWorkspaceId)
+          : db.query("SELECT id FROM projects WHERE id = ?1").get(input.projectId);
         if (!project) throw apiError("NOT_FOUND", "Project not found");
-        if (!projectIncludesTeam(db, input.projectId, issue.team_id)) {
+        if (!projectIncludesTeam(db, input.projectId, issue.team_id, effectiveWorkspaceId)) {
           throw apiError("VALIDATION_FAILED", "Project does not include the issue's team");
         }
       }
       push("project_id", input.projectId);
       changes.push({ field: "project", from: issue.project_id, to: input.projectId });
-      recordActivity(db, issue.id, actorId, "project_changed", {
+      addActivity("project_changed", {
         from: issue.project_id,
         to: input.projectId,
       });
@@ -386,7 +485,7 @@ export function updateIssue(
       if (issue.milestone_id && input.milestoneId === undefined) {
         push("milestone_id", null);
         changes.push({ field: "milestone", from: issue.milestone_id, to: null });
-        recordActivity(db, issue.id, actorId, "milestone_changed", {
+        addActivity("milestone_changed", {
           from: issue.milestone_id,
           to: null,
         });
@@ -396,27 +495,28 @@ export function updateIssue(
       if (input.milestoneId !== null) {
         // El proyecto efectivo: el que se está seteando en esta misma mutación, o el actual.
         const projectId = input.projectId !== undefined ? input.projectId : issue.project_id;
-        assertMilestoneMatchesProject(db, input.milestoneId, projectId);
+        assertMilestoneMatchesProject(db, input.milestoneId, projectId, effectiveWorkspaceId);
       }
       push("milestone_id", input.milestoneId);
       changes.push({ field: "milestone", from: issue.milestone_id, to: input.milestoneId });
-      recordActivity(db, issue.id, actorId, "milestone_changed", {
+      addActivity("milestone_changed", {
         from: issue.milestone_id,
         to: input.milestoneId,
       });
     }
     if (input.cycleId !== undefined && input.cycleId !== issue.cycle_id) {
-      if (input.cycleId !== null) validateCycleForTeam(db, input.cycleId, issue.team_id);
+      if (input.cycleId !== null)
+        validateCycleForTeam(db, input.cycleId, issue.team_id, effectiveWorkspaceId);
       push("cycle_id", input.cycleId);
       changes.push({ field: "cycle", from: issue.cycle_id, to: input.cycleId });
-      recordActivity(db, issue.id, actorId, "cycle_changed", {
+      addActivity("cycle_changed", {
         from: issue.cycle_id,
         to: input.cycleId,
       });
     }
     if (input.sortOrder != null && input.sortOrder !== issue.sort_order) {
       push("sort_order", input.sortOrder);
-      recordActivity(db, issue.id, actorId, "sort_order_changed", {
+      addActivity("sort_order_changed", {
         from: issue.sort_order,
         to: input.sortOrder,
       });
@@ -428,7 +528,14 @@ export function updateIssue(
       if (sets.length === 0) {
         push("updated_at", now());
         params.push(issue.id);
-        db.query(`UPDATE issues SET updated_at = ?1 WHERE id = ?2`).run(...(params as never[]));
+        if (effectiveWorkspaceId) {
+          params.push(effectiveWorkspaceId);
+          db.query(`UPDATE issues SET updated_at = ?1 WHERE id = ?2 AND workspace_id = ?3`).run(
+            ...(params as never[]),
+          );
+        } else {
+          db.query(`UPDATE issues SET updated_at = ?1 WHERE id = ?2`).run(...(params as never[]));
+        }
         // updated_at ya quedó seteado; evita duplicar el UPDATE de abajo.
         sets.length = 0;
         params.length = 0;
@@ -438,47 +545,84 @@ export function updateIssue(
     if (sets.length > 0) {
       push("updated_at", now());
       params.push(issue.id);
-      db.query(`UPDATE issues SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
-        ...(params as never[]),
-      );
+      const where = effectiveWorkspaceId
+        ? `WHERE id = ?${params.length} AND workspace_id = ?${params.length + 1}`
+        : `WHERE id = ?${params.length}`;
+      if (effectiveWorkspaceId) params.push(effectiveWorkspaceId);
+      db.query(`UPDATE issues SET ${sets.join(", ")} ${where}`).run(...(params as never[]));
     }
   })();
 
-  return { row: getIssue(db, issue.id)!, changes };
+  const row = getIssue(db, issue.id, effectiveWorkspaceId);
+  if (!row) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
+  return { row, changes };
 }
 
-export function archiveIssue(db: Database, actorId: string, ref: string): IssueRow {
-  const issue = requireIssue(db, ref);
+export function archiveIssue(
+  db: Database,
+  actorId: string,
+  ref: string,
+  workspaceId?: string,
+): IssueRow {
+  const issue = requireIssue(db, ref, workspaceId);
+  const effectiveWorkspaceId = workspaceId ?? issue.workspace_id ?? undefined;
   if (!issue.archived_at) {
-    db.query("UPDATE issues SET archived_at = ?1, updated_at = ?1 WHERE id = ?2").run(
-      now(),
-      issue.id,
-    );
-    recordActivity(db, issue.id, actorId, "archived", {});
+    if (effectiveWorkspaceId) {
+      db.query(
+        "UPDATE issues SET archived_at = ?1, updated_at = ?1 WHERE id = ?2 AND workspace_id = ?3",
+      ).run(now(), issue.id, effectiveWorkspaceId);
+    } else {
+      db.query("UPDATE issues SET archived_at = ?1, updated_at = ?1 WHERE id = ?2").run(
+        now(),
+        issue.id,
+      );
+    }
+    recordActivity(db, issue.id, actorId, "archived", {}, undefined, effectiveWorkspaceId);
   }
-  return getIssue(db, issue.id)!;
+  const row = getIssue(db, issue.id, effectiveWorkspaceId);
+  if (!row) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
+  return row;
 }
 
-export function unarchiveIssue(db: Database, actorId: string, ref: string): IssueRow {
-  const issue = requireIssue(db, ref);
+export function unarchiveIssue(
+  db: Database,
+  actorId: string,
+  ref: string,
+  workspaceId?: string,
+): IssueRow {
+  const issue = requireIssue(db, ref, workspaceId);
+  const effectiveWorkspaceId = workspaceId ?? issue.workspace_id ?? undefined;
   if (issue.archived_at) {
     const updatedAt = now();
-    db.query("UPDATE issues SET archived_at = NULL, updated_at = ?1 WHERE id = ?2").run(
-      updatedAt,
-      issue.id,
-    );
-    recordActivity(db, issue.id, actorId, "unarchived", {});
+    if (effectiveWorkspaceId) {
+      db.query(
+        "UPDATE issues SET archived_at = NULL, updated_at = ?1 WHERE id = ?2 AND workspace_id = ?3",
+      ).run(updatedAt, issue.id, effectiveWorkspaceId);
+    } else {
+      db.query("UPDATE issues SET archived_at = NULL, updated_at = ?1 WHERE id = ?2").run(
+        updatedAt,
+        issue.id,
+      );
+    }
+    recordActivity(db, issue.id, actorId, "unarchived", {}, undefined, effectiveWorkspaceId);
   }
-  return getIssue(db, issue.id)!;
+  const row = getIssue(db, issue.id, effectiveWorkspaceId);
+  if (!row) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
+  return row;
 }
 
-export function listChildren(db: Database, issueId: string, includeArchived = false): IssueRow[] {
+export function listChildren(
+  db: Database,
+  issueId: string,
+  includeArchived = false,
+  workspaceId?: string,
+): IssueRow[] {
   const archivedClause = includeArchived ? "" : " AND issues.archived_at IS NULL";
-  return db
-    .query(
-      `${SELECT_ISSUE} WHERE issues.parent_id = ?1${archivedClause} ORDER BY issues.created_at`,
-    )
-    .all(issueId) as IssueRow[];
+  const workspaceClause = workspaceId ? " AND issues.workspace_id = ?2" : "";
+  const query = `${SELECT_ISSUE} WHERE issues.parent_id = ?1${workspaceClause}${archivedClause} ORDER BY issues.created_at`;
+  return (
+    workspaceId ? db.query(query).all(issueId, workspaceId) : db.query(query).all(issueId)
+  ) as IssueRow[];
 }
 
 // Listado con filtros componibles, orden estable y paginación por cursor (AT-138).
@@ -492,6 +636,8 @@ export interface ListIssuesOptions {
   teamIds?: readonly string[] | null;
   /** Actor used by the subscribed filter. */
   subscriberId?: string | null;
+  /** Workspace scope; omitted for legacy single-workspace calls. */
+  workspaceId?: string | null;
 }
 
 export interface IssuePage {
@@ -522,6 +668,7 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
       clauses.push(`issues.team_id IN (${placeholders.join(", ")})`);
     }
   }
+  if (options.workspaceId) clauses.push(`issues.workspace_id = ${params.add(options.workspaceId)}`);
   if (!filter.includeArchived) {
     clauses.push("issues.archived_at IS NULL");
     clauses.push("teams.archived_at IS NULL");
@@ -548,6 +695,9 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
         const placeholders = options.teamIds.map((teamId) => cursorParams.add(teamId));
         cursorClauses.push(`issues.team_id IN (${placeholders.join(", ")})`);
       }
+    }
+    if (options.workspaceId) {
+      cursorClauses.push(`issues.workspace_id = ${cursorParams.add(options.workspaceId)}`);
     }
     if (!filter.includeArchived) {
       cursorClauses.push("issues.archived_at IS NULL");

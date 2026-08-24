@@ -13,7 +13,7 @@ import { getIssue, getIssueByRef, listChildren, listIssues, type IssueRow } from
 import { getProject, type ProjectRow } from "./projects.ts";
 import { getTeam, type TeamRow } from "./teams.ts";
 import { listWebhooks } from "./webhooks.ts";
-import { listRelations, type RelationView } from "./relations.ts";
+import { getRelation, listRelations, type RelationView } from "./relations.ts";
 import type { WebhookRow } from "../webhooks/dispatcher.ts";
 
 /** El subconjunto de Context que necesitan los guards; evita un ciclo de imports. */
@@ -63,7 +63,7 @@ export function scopeWorkspaceRows<T extends object>(
 }
 
 export function lookupIssue(context: WorkspaceLookupContext, ref: string): IssueRow | null {
-  const row = getIssueByRef(context.db, ref);
+  const row = getIssueByRef(context.db, ref, context.workspace.workspaceId);
   if (!row) {
     assertActiveWorkspace(context);
     return null;
@@ -81,7 +81,10 @@ export function listIssuesInWorkspace<T extends Parameters<typeof listIssues>[1]
   context: WorkspaceLookupContext,
   options: T,
 ): ReturnType<typeof listIssues> {
-  const page = listIssues(context.db, options);
+  const page = listIssues(context.db, {
+    ...options,
+    workspaceId: context.workspace.workspaceId,
+  });
   return { ...page, rows: scopeWorkspaceRows(context, page.rows) };
 }
 
@@ -90,14 +93,17 @@ export function listChildrenInWorkspace(
   issueId: string,
   includeArchived = false,
 ): IssueRow[] {
-  return scopeWorkspaceRows(context, listChildren(context.db, issueId, includeArchived));
+  return scopeWorkspaceRows(
+    context,
+    listChildren(context.db, issueId, includeArchived, context.workspace.workspaceId),
+  );
 }
 
 export function listRelationsInWorkspace(
   context: WorkspaceLookupContext,
   issueId: string,
 ): RelationView[] {
-  return listRelations(context.db, issueId).filter((relation) => {
+  return listRelations(context.db, issueId, context.workspace.workspaceId).filter((relation) => {
     // listRelations ya parte de un issue scoped; filtrar el otro extremo evita
     // que un relation huérfano llegue a un nested resolver obligatorio.
     return lookupIssueById(context, relation.relatedId) !== null;
@@ -105,7 +111,7 @@ export function listRelationsInWorkspace(
 }
 
 export function lookupIssueById(context: WorkspaceLookupContext, id: string): IssueRow | null {
-  const row = getIssue(context.db, id);
+  const row = getIssue(context.db, id, context.workspace.workspaceId);
   if (!row) {
     assertActiveWorkspace(context);
     return null;
@@ -243,15 +249,18 @@ export interface ScopedRelationRow {
   related_id: string;
   type: "blocks" | "related" | "duplicate_of";
   created_at: string;
+  workspace_id: string | null;
 }
 
 export function lookupRelation(
   context: WorkspaceLookupContext,
   id: string,
 ): ScopedRelationRow | null {
-  const row = context.db
-    .query("SELECT * FROM issue_relations WHERE id = ?1")
-    .get(id) as ScopedRelationRow | null;
+  const row = getRelation(
+    context.db,
+    id,
+    context.workspace.workspaceId,
+  ) as ScopedRelationRow | null;
   if (!row) {
     assertActiveWorkspace(context);
     return null;
