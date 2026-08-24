@@ -30,21 +30,11 @@ export interface McpSession extends McpConfig {
 
 export function safeEndpointUrl(value: string): string {
   try {
-    const url = new URL(value);
-    if (url.username || url.password) {
-      url.username = "";
-      url.password = "";
-    }
-    for (const key of [...url.searchParams.keys()]) {
-      if (/(?:key|token|secret|password|auth)/i.test(key)) {
-        url.searchParams.set(key, "[redacted]");
-      }
-    }
-    return url.toString();
+    return new URL(value).origin;
   } catch {
     return value
       .replace(
-        /(\b(?:api[_ -]?key|access[_ -]?token|secret|password)\b\s*[:=]\s*)[^\s,;)}]+/gi,
+        /(\b(?:api[_ -]?key|access[_ -]?token|token|secret|password|auth)\b\s*[:=]\s*)[^\s,;)}]+/gi,
         "$1[redacted]",
       )
       .replace(/\bpb_[A-Za-z0-9_-]+\b/g, "[redacted-api-key]");

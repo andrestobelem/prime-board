@@ -7,11 +7,21 @@ afterEach(() => {
 });
 
 describe("MCP endpoint redaction", () => {
-  it("does not expose endpoint credentials in process output", () => {
-    const safe = safeEndpointUrl("http://user:password@board.invalid/graphql?apiKey=pb_secret");
+  it("keeps only the origin and never exposes endpoint credentials", () => {
+    const safe = safeEndpointUrl(
+      "https://user:password@board.invalid/graphql/private?apiKey=pb_secret&note=arbitrary#fragment-secret",
+    );
+    expect(safe).toBe("https://board.invalid");
     expect(safe).not.toContain("password");
     expect(safe).not.toContain("pb_secret");
-    expect(safe).toContain("%5Bredacted%5D");
+    expect(safe).not.toContain("arbitrary");
+    expect(safe).not.toContain("fragment-secret");
+  });
+
+  it("redacts token values in an invalid endpoint fallback", () => {
+    const safe = safeEndpointUrl("not a URL token=pb_secret path-secret");
+    expect(safe).not.toContain("pb_secret");
+    expect(safe).toContain("token=[redacted]");
   });
 });
 
