@@ -319,15 +319,26 @@ export function SettingsView({ localAuth = false }: { localAuth?: boolean }) {
                   {adminData.teams.map((team) => {
                     const archived = Boolean(team.archivedAt);
                     return (
-                      <div className="team-setting-row" key={team.id}>
-                        <div className="team-setting-identity">
-                          <strong>{team.name}</strong>
-                          <span>
-                            {team.key} · {archived ? "archived" : "active"}
-                          </span>
-                          <small>{teamDeletionDependencyMessage(team)}</small>
+                      <div className="workspace-team-row" key={team.id}>
+                        <div className="workspace-team-main">
+                          <div className="workspace-team-heading">
+                            <strong>{team.name}</strong>
+                            <span
+                              className={`workspace-team-status ${archived ? "archived" : "active"}`}
+                            >
+                              <span aria-hidden="true" className="workspace-team-status-dot" />
+                              {archived ? "Archived" : "Active"}
+                            </span>
+                          </div>
+                          <span className="workspace-team-key">{team.key}</span>
+                          <small className="workspace-team-dependencies">
+                            <span className="workspace-team-dependencies-label">
+                              Deletion safeguards
+                            </span>
+                            {teamDeletionDependencyMessage(team)}
+                          </small>
                         </div>
-                        <div className="team-setting-controls">
+                        <div className="workspace-team-controls">
                           <button
                             className="btn secondary"
                             type="button"
@@ -338,9 +349,8 @@ export function SettingsView({ localAuth = false }: { localAuth?: boolean }) {
                             {archived ? "Restore" : "Archive"}
                           </button>
                           <button
-                            className="btn"
+                            className="btn danger"
                             type="button"
-                            style={{ background: "var(--danger)" }}
                             onClick={() => setTeamAction({ team, kind: "delete" })}
                           >
                             Delete permanently
