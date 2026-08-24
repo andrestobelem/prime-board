@@ -168,6 +168,11 @@ export function BoardView({
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (isIssueShortcutTarget(event.target) || document.querySelector(".overlay")) return;
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest("button, input, select, textarea, a")
+      )
+        return;
       const visible = [...(result.data?.issues?.nodes ?? []), ...extraIssues];
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
@@ -182,11 +187,32 @@ export function BoardView({
           const focused = visible.find((issue) => issue.id === focusedId);
           if (focused) setArchiveIssueTarget({ id: focused.id, identifier: focused.identifier });
         }
+      } else if (
+        event.key === "j" ||
+        event.key === "ArrowDown" ||
+        event.key === "k" ||
+        event.key === "ArrowUp"
+      ) {
+        event.preventDefault();
+        const current = focusedId ? visible.findIndex((issue) => issue.id === focusedId) : -1;
+        const next =
+          event.key === "j" || event.key === "ArrowDown"
+            ? Math.min(current + 1, visible.length - 1)
+            : Math.max(current < 0 ? 0 : current - 1, 0);
+        const issue = visible[next];
+        if (issue) setFocusedId(issue.id);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [extraIssues, focusedId, result.data, selectedIds]);
+
+  useEffect(() => {
+    if (!focusedId) return;
+    const card = document.querySelector<HTMLElement>(`[data-board-issue-id="${focusedId}"]`);
+    card?.scrollIntoView?.({ block: "nearest" });
+    card?.focus();
+  }, [focusedId]);
 
   if (result.loading && !result.data) return <LoadingState />;
   if (result.error) return <ErrorState message={result.error.message} onRetry={result.refetch} />;
@@ -226,7 +252,7 @@ export function BoardView({
       ...actionOptions,
       // En un Project, Move to… solo ofrece estados del Team de la issue.
       states: isProject ? (team?.states ?? []) : actionOptions.states,
-      stateActionLabel: isProject ? "Move to" : actionOptions.stateActionLabel,
+      stateActionLabel: "Move to",
       actors: actorsForTeam(team),
     };
   }
@@ -609,7 +635,24 @@ export function BoardView({
                   tabIndex={focusedId === issue.id ? 0 : -1}
                   aria-current={focusedId === issue.id ? "true" : undefined}
                   draggable
+                  data-board-issue-id={issue.id}
                   onMouseEnter={() => setFocusedId(issue.id)}
+                  onKeyDown={(event) => {
+                    const target = event.target;
+                    if (
+                      target instanceof HTMLElement &&
+                      target.closest("button, input, select, textarea, a")
+                    ) {
+                      if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+                      return;
+                    }
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      navigate(`/issue/${issue.identifier}`);
+                    } else if (event.key === " ") {
+                      event.preventDefault();
+                    }
+                  }}
                   onDragStart={() => setDragId(issue.id)}
                   onDragEnd={() => {
                     setDragId(null);
