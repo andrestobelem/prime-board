@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync, rmSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
+import { readEventLog } from "./event-log.ts";
 
 let app: TestApp;
 let repoDir: string;
@@ -68,6 +69,68 @@ describe("repo sync en cada escritura", () => {
     expect(snapshot).toContain("state: In Progress");
     // El comentario vive en el log, no duplicado en el snapshot.
     expect(logFor("PB-1").at(-1)).toContain('"body":"listo"');
+  });
+
+  it("conecta create/update/archive/unarchive/comment/relation/subscribe al log canónico", async () => {
+    const target = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Canonical target" }) { issue { id } } }`,
+    );
+    const targetId = target.data!.issueCreate.issue.id as string;
+    const state = await gql(app, `{ team(key: "PB") { states { id type } } }`);
+    const started = state.data!.team.states.find(
+      (item: { type: string }) => item.type === "STARTED",
+    ).id;
+    await gql(
+      app,
+      `mutation($id: ID!, $state: ID!) { issueUpdate(id: $id, input: { stateId: $state }) { success } }`,
+      { id: targetId, state: started },
+    );
+    await gql(
+      app,
+      `mutation($id: ID!) { commentCreate(input: { issueId: $id, body: "canonical comment" }) { success } }`,
+      { id: targetId },
+    );
+    await gql(app, `mutation($id: ID!) { issueSubscribe(id: $id) { success } }`, { id: targetId });
+    await gql(app, `mutation($id: ID!) { issueUnsubscribe(id: $id) { success } }`, {
+      id: targetId,
+    });
+    const relation = await gql(
+      app,
+      `mutation($issue: ID!, $related: ID!) {
+        issueRelationCreate(input: { issueId: $issue, relatedIssueId: $related, type: RELATED }) {
+          relation { id }
+        }
+      }`,
+      { issue: targetId, related: "PB-1" },
+    );
+    expect(relation.errors).toBeUndefined();
+    await gql(app, `mutation($id: ID!) { issueRelationDelete(id: $id) { success } }`, {
+      id: relation.data!.issueRelationCreate.relation.id,
+    });
+    await gql(app, `mutation($id: ID!) { issueArchive(id: $id) { success } }`, { id: targetId });
+    await gql(app, `mutation($id: ID!) { issueUnarchive(id: $id) { success } }`, { id: targetId });
+
+    const events = readEventLog({ rootDir: repoDir }).filter(
+      (current) => current.aggregateKey === "PB-2",
+    );
+    expect(events.map((current) => current.type)).toEqual([
+      "created",
+      "state_changed",
+      "commented",
+      "subscribed",
+      "unsubscribed",
+      "relation_added",
+      "relation_removed",
+      "archived",
+      "unarchived",
+    ]);
+    for (const current of events) {
+      expect(current.schemaVersion).toBe(1);
+      expect(current.eventId).toBeTruthy();
+      expect(current.actor).toBe("admin");
+      expect(current.payload).toBeTruthy();
+    }
   });
 
   it("los cambios de metadata también se replican", async () => {

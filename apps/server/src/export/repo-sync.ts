@@ -12,8 +12,28 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { exportBoard, exportIssue } from "./exporter.ts";
 import { appendActivityEvents } from "./activity-stream.ts";
+import {
+  createGitCommitter,
+  IssueEventPipeline,
+  type IssueEventPipelineOptions,
+} from "./issue-event-pipeline.ts";
 
 export { appendActivityEvents, activityToDomainEvent } from "./activity-stream.ts";
+export {
+  createGitCommitter,
+  IssueEventPipeline,
+  type CanonicalEventLog,
+  type GitCommitInput,
+  type GitCommitter,
+  type IssueEventCheckpointStore,
+  type IssueEventPipelineOptions,
+  type IssueEventProjector,
+} from "./issue-event-pipeline.ts";
+
+export interface RepoSyncOptions extends IssueEventPipelineOptions {
+  /** Pipeline precargado para tests y adapters de runtime. */
+  readonly eventPipeline?: IssueEventPipeline;
+}
 
 export interface RepoSync {
   /** Regenera el repo completo (cambios de metadata, borrados). */
@@ -23,19 +43,36 @@ export interface RepoSync {
   readonly root: string;
 }
 
-export function createRepoSync(db: Database, root: string | null): RepoSync | null {
+export function createRepoSync(
+  db: Database,
+  root: string | null,
+  options: RepoSyncOptions = {},
+): RepoSync | null {
   if (!root) return null;
   if (!existsSync(root)) {
     console.error(`PRIME_BOARD_REPO points to a missing directory: ${root}`);
     return null;
   }
   ensureGitAttributes(root);
+  const eventPipeline =
+    options.eventPipeline ??
+    new IssueEventPipeline({
+      ...options,
+      rootDir: root,
+      commitGit: options.commitGit ?? createGitCommitter(root),
+    });
+  const sync = (exporter: () => void): void => {
+    // El evento queda durable antes de tocar cualquier proyección.
+    appendActivityEvents(db, root, eventPipeline.eventLog);
+    eventPipeline.commit();
+    eventPipeline.project();
+    exporter();
+  };
   return {
     root,
     sync() {
       try {
-        exportBoard(db, root);
-        appendActivityEvents(db, root);
+        sync(() => exportBoard(db, root));
       } catch (error) {
         // Nunca romper una mutación por un problema de escritura en el repo.
         console.error(`repo sync failed: ${error}`);
@@ -46,9 +83,10 @@ export function createRepoSync(db: Database, root: string | null): RepoSync | nu
         // Un repo vacío o histórico sin metadata todavía no es una réplica
         // reconstruible: inicializarlo con el export completo deja también la
         // identidad y el alcance del Workspace.
-        const metadata = join(root, ".prime-board", "meta", "export.json");
-        if (!existsSync(metadata) || !exportIssue(db, root, issueId)) exportBoard(db, root);
-        appendActivityEvents(db, root);
+        sync(() => {
+          const metadata = join(root, ".prime-board", "meta", "export.json");
+          if (!existsSync(metadata) || !exportIssue(db, root, issueId)) exportBoard(db, root);
+        });
       } catch (error) {
         console.error(`repo sync failed: ${error}`);
       }

@@ -8,7 +8,7 @@ import { resolveLocalPostgresAuth, resolvePostgresAuth } from "./auth/postgres-v
 import { LOOPBACK_HOST, type Config } from "./config.ts";
 import type { Context } from "./graphql/context.ts";
 import { resolvers } from "./graphql/resolvers.ts";
-import { createRepoSync } from "./export/repo-sync.ts";
+import { createRepoSync, type RepoSync, type RepoSyncOptions } from "./export/repo-sync.ts";
 import { trackedRepoSync } from "./graphql/repo-sync-dispatch.ts";
 import { WebhookDispatcher, type DispatcherOptions } from "./webhooks/dispatcher.ts";
 import { resolveWorkspaceContext } from "./domain/workspace-context.ts";
@@ -21,14 +21,27 @@ export interface AppDeps {
   webhookOptions?: DispatcherOptions;
   /** Persistence for domains migrated incrementally to PostgreSQL. */
   persistence?: Persistence;
+  /** Repo seam for integration tests and alternative runtimes. */
+  repoSync?: RepoSync;
+  /** Adapters for the SQLite canonical issue-event pipeline. */
+  repoSyncOptions?: RepoSyncOptions;
 }
 
-export function createApp({ db, config, webhookOptions, persistence }: AppDeps) {
+export function createApp({
+  db,
+  config,
+  webhookOptions,
+  persistence,
+  repoSync: injectedRepoSync,
+  repoSyncOptions,
+}: AppDeps) {
   if (config.authMode === "local" && config.host !== LOOPBACK_HOST) {
     throw new Error("Local auth mode requires the loopback host");
   }
   const events = new WebhookDispatcher(db, webhookOptions ?? { log: console.error }, persistence);
-  const repo = persistence ? null : createRepoSync(db, config.repoRoot);
+  const repo = persistence
+    ? null
+    : (injectedRepoSync ?? createRepoSync(db, config.repoRoot, repoSyncOptions));
   let baseUrl = `http://localhost:${config.port}`;
   const yoga = createYoga({
     schema: createSchema<Context>({ typeDefs, resolvers }),

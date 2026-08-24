@@ -5,6 +5,7 @@ import {
   type DomainEvent,
   validateDomainEvent,
 } from "./event-log.ts";
+import type { CanonicalEventLog } from "./issue-event-pipeline.ts";
 
 export interface ActivityEventRow {
   readonly id: string;
@@ -66,7 +67,11 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
  * Append the shared Activity projection to the canonical stream. This does not
  * import SQLite and does not transform the existing per-issue log files.
  */
-export function appendActivityEvents(db: Database, root: string): number {
+export function appendActivityEvents(
+  db: Database,
+  root: string,
+  eventLog: Pick<CanonicalEventLog, "appendMany"> = new EventLogWriter({ rootDir: root }),
+): number {
   const rows = db
     .query(
       `SELECT activity.id,
@@ -87,6 +92,6 @@ export function appendActivityEvents(db: Database, root: string): number {
     return event ? [event] : [];
   });
   if (events.length === 0) return 0;
-  new EventLogWriter({ rootDir: root }).appendMany(events);
+  eventLog.appendMany(events);
   return events.length;
 }
