@@ -159,21 +159,18 @@ function activityReferenceTeams(context: Context, table: RefTable, value: string
     return issue ? [issue.team_id] : null;
   }
   if (table === "teams") {
-    const team = context.db.query("SELECT id FROM teams WHERE id = ?1 OR key = ?1").get(value) as {
-      id: string;
-    } | null;
+    const team = lookupTeam(context, { id: value }) ?? lookupTeam(context, { key: value });
     return team ? [team.id] : null;
   }
   if (table === "states") {
     const state = context.db
       .query("SELECT team_id FROM workflow_states WHERE id = ?1")
       .get(value) as { team_id: string } | null;
-    return state ? [state.team_id] : null;
+    const team = state ? lookupTeam(context, { id: state.team_id }) : null;
+    return team ? [team.id] : null;
   }
   if (table === "cycles") {
-    const cycle = context.db.query("SELECT team_id FROM cycles WHERE id = ?1").get(value) as {
-      team_id: string;
-    } | null;
+    const cycle = getCycle(context.db, value, context.workspace.workspaceId);
     return cycle ? [cycle.team_id] : null;
   }
   if (table === "projects") {
