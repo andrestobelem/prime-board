@@ -24,6 +24,71 @@ function database(): Database {
   return db;
 }
 
+function workspaceDatabase(workspaceCount = 2): Database {
+  const db = new Database(":memory:");
+  db.exec(`
+    CREATE TABLE workspace (id TEXT PRIMARY KEY);
+    CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE teams (
+      workspace_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, id)
+    );
+    CREATE TABLE issues (
+      workspace_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      team_id TEXT NOT NULL,
+      number INTEGER NOT NULL,
+      PRIMARY KEY (workspace_id, id)
+    );
+    CREATE TABLE activity (
+      workspace_id TEXT,
+      id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, id)
+    );
+  `);
+  db.query("INSERT INTO actors VALUES (?1, ?2)").run("actor-1", "agent");
+  db.query("INSERT INTO workspace VALUES (?1)").run("workspace-1");
+  db.query("INSERT INTO teams VALUES (?1, ?2, ?3)").run("workspace-1", "team-1", "PB");
+  db.query("INSERT INTO issues VALUES (?1, ?2, ?3, ?4)").run("workspace-1", "issue-1", "team-1", 7);
+  if (workspaceCount > 1) {
+    db.query("INSERT INTO workspace VALUES (?1)").run("workspace-2");
+    db.query("INSERT INTO teams VALUES (?1, ?2, ?3)").run("workspace-2", "team-2", "PB");
+    db.query("INSERT INTO issues VALUES (?1, ?2, ?3, ?4)").run(
+      "workspace-2",
+      "issue-2",
+      "team-2",
+      7,
+    );
+  }
+  return db;
+}
+
+function addWorkspaceActivity(
+  db: Database,
+  workspaceId: string | null,
+  id: string,
+  issueId: string,
+): void {
+  db.query(
+    "INSERT INTO activity(workspace_id, id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+  ).run(
+    workspaceId,
+    id,
+    issueId,
+    "actor-1",
+    "created",
+    JSON.stringify({ title: id }),
+    "2025-01-01T00:00:00.000Z",
+  );
+}
+
 function addActivity(
   db: Database,
   id: string,
@@ -115,6 +180,70 @@ describe("SQLite history import", () => {
       expect(readFileSync(join(root, ".prime-board/log/events.jsonl"), "utf8")).not.toContain(
         "never",
       );
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("requires an explicit Workspace and imports only the selected scope", () => {
+    const db = workspaceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));
+    try {
+      addWorkspaceActivity(db, "workspace-1", "workspace-1-event", "issue-1");
+      addWorkspaceActivity(db, "workspace-2", "workspace-2-event", "issue-2");
+
+      expect(() => importSqliteActivity({ db, rootDir: root })).toThrow("requires workspaceId");
+      const dry = importSqliteActivity({
+        db,
+        rootDir: root,
+        dryRun: true,
+        workspaceId: "workspace-1",
+      });
+      expect(dry).toMatchObject({
+        scanned: 2,
+        emitted: 1,
+        outOfScope: 1,
+        orphaned: 0,
+      });
+      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+
+      const imported = importSqliteActivity({ db, rootDir: root, workspaceId: "workspace-1" });
+      expect(imported.emitted).toBe(1);
+      expect(readEventLog(root).map((event) => event.eventId)).toEqual(["workspace-1-event"]);
+      expect(() =>
+        importSqliteActivity({ db, rootDir: root, workspaceId: "missing-workspace" }),
+      ).toThrow("does not exist");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for NULL activity scope in a multi-Workspace source", () => {
+    const db = workspaceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));
+    try {
+      addWorkspaceActivity(db, null, "legacy-event", "issue-1");
+      addWorkspaceActivity(db, "workspace-1", "scoped-event", "issue-1");
+      const result = importSqliteActivity({ db, rootDir: root, workspaceId: "workspace-1" });
+      expect(result).toMatchObject({ scanned: 2, emitted: 1, orphaned: 1, outOfScope: 0 });
+      expect(result.warnings).toContain("orphaned:legacy-event");
+      expect(readEventLog(root).map((event) => event.eventId)).toEqual(["scoped-event"]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a NULL legacy scope while the source has one Workspace", () => {
+    const db = workspaceDatabase(1);
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));
+    try {
+      addWorkspaceActivity(db, null, "legacy-singleton-event", "issue-1");
+      const result = importSqliteActivity({ db, rootDir: root });
+      expect(result).toMatchObject({ scanned: 1, emitted: 1, orphaned: 0, outOfScope: 0 });
+      expect(readEventLog(root).map((event) => event.eventId)).toEqual(["legacy-singleton-event"]);
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

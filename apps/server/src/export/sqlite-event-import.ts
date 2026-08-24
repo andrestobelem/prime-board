@@ -6,6 +6,8 @@ export interface SQLiteEventImportOptions {
   readonly db: Database;
   readonly rootDir: string;
   readonly dryRun?: boolean;
+  /** Explicit Workspace scope for a multi-Workspace SQLite source. */
+  readonly workspaceId?: string;
 }
 
 export interface SQLiteEventImportResult {
@@ -14,6 +16,7 @@ export interface SQLiteEventImportResult {
   readonly emitted: number;
   readonly duplicates: number;
   readonly orphaned: number;
+  readonly outOfScope: number;
   readonly rejected: number;
   readonly ambiguous: number;
   readonly warnings: readonly string[];
@@ -26,38 +29,141 @@ interface ActivityRow {
   readonly actor: string | null;
   readonly issue_id: string | null;
   readonly team_id: string | null;
+  readonly activity_workspace_id: string | null;
+  readonly issue_workspace_id: string | null;
+  readonly team_workspace_id: string | null;
   readonly type: string;
   readonly payload: string;
   readonly occurred_at: string;
+}
+
+interface ImportScope {
+  readonly workspaceId: string | undefined;
+  readonly multipleWorkspaces: boolean;
+  readonly activityHasWorkspace: boolean;
+  readonly issueHasWorkspace: boolean;
+  readonly teamHasWorkspace: boolean;
 }
 
 function warning(warnings: string[], kind: string, id: string): void {
   if (warnings.length < 100) warnings.push(`${kind}:${id}`);
 }
 
+function hasTable(db: Database, table: string): boolean {
+  return (
+    db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1").get(table) !=
+    null
+  );
+}
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  return (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
+    (entry) => entry.name === column,
+  );
+}
+
+function validateRequestedWorkspace(workspaceId: string | undefined): void {
+  if (
+    workspaceId !== undefined &&
+    (workspaceId.trim().length === 0 || /[\r\n]/u.test(workspaceId))
+  ) {
+    throw new Error("SQLite event import workspaceId must be a non-empty safe string");
+  }
+}
+
+function resolveImportScope(db: Database, requestedWorkspaceId: string | undefined): ImportScope {
+  validateRequestedWorkspace(requestedWorkspaceId);
+  const workspaceTable = hasTable(db, "workspace");
+  if (requestedWorkspaceId !== undefined && !workspaceTable) {
+    throw new Error("SQLite event import workspaceId requires a workspace table");
+  }
+
+  const workspaceIds = workspaceTable
+    ? (db.query("SELECT id FROM workspace ORDER BY id").all() as Array<{ id: string }>).map(
+        (row) => row.id,
+      )
+    : [];
+  const multipleWorkspaces = workspaceIds.length > 1;
+  if (multipleWorkspaces && requestedWorkspaceId === undefined) {
+    throw new Error(
+      "SQLite event import requires workspaceId when the source contains multiple Workspaces",
+    );
+  }
+  if (
+    requestedWorkspaceId !== undefined &&
+    workspaceIds.length > 0 &&
+    !workspaceIds.includes(requestedWorkspaceId)
+  ) {
+    throw new Error(`SQLite event import Workspace ${requestedWorkspaceId} does not exist`);
+  }
+
+  const activityHasWorkspace = hasColumn(db, "activity", "workspace_id");
+  const issueHasWorkspace = hasColumn(db, "issues", "workspace_id");
+  const teamHasWorkspace = hasColumn(db, "teams", "workspace_id");
+  if (multipleWorkspaces && (!activityHasWorkspace || !issueHasWorkspace || !teamHasWorkspace)) {
+    throw new Error(
+      "SQLite event import cannot scope a multi-Workspace source without workspace_id on activity, issues, and teams",
+    );
+  }
+
+  return {
+    workspaceId: requestedWorkspaceId ?? workspaceIds[0],
+    multipleWorkspaces,
+    activityHasWorkspace,
+    issueHasWorkspace,
+    teamHasWorkspace,
+  };
+}
+
+function activityQuery(scope: ImportScope): string {
+  const activityWorkspace = scope.activityHasWorkspace
+    ? "activity.workspace_id AS activity_workspace_id"
+    : "NULL AS activity_workspace_id";
+  const issueWorkspace = scope.issueHasWorkspace
+    ? "issues.workspace_id AS issue_workspace_id"
+    : "NULL AS issue_workspace_id";
+  const teamWorkspace = scope.teamHasWorkspace
+    ? "teams.workspace_id AS team_workspace_id"
+    : "NULL AS team_workspace_id";
+  const issueJoin =
+    scope.activityHasWorkspace && scope.issueHasWorkspace
+      ? scope.multipleWorkspaces
+        ? "LEFT JOIN issues ON issues.id = activity.issue_id AND activity.workspace_id IS NOT NULL AND issues.workspace_id = activity.workspace_id"
+        : "LEFT JOIN issues ON issues.id = activity.issue_id AND (activity.workspace_id IS NULL OR issues.workspace_id = activity.workspace_id)"
+      : "LEFT JOIN issues ON issues.id = activity.issue_id";
+  const teamJoin =
+    scope.issueHasWorkspace && scope.teamHasWorkspace
+      ? scope.multipleWorkspaces
+        ? "LEFT JOIN teams ON teams.id = issues.team_id AND issues.workspace_id IS NOT NULL AND teams.workspace_id = issues.workspace_id"
+        : "LEFT JOIN teams ON teams.id = issues.team_id AND (issues.workspace_id IS NULL OR teams.workspace_id = issues.workspace_id)"
+      : "LEFT JOIN teams ON teams.id = issues.team_id";
+  return `SELECT activity.id,
+                 teams.key || '-' || issues.number AS issue_identifier,
+                 activity.actor_id AS actor_id,
+                 actors.name AS actor,
+                 issues.id AS issue_id,
+                 teams.id AS team_id,
+                 ${activityWorkspace},
+                 ${issueWorkspace},
+                 ${teamWorkspace},
+                 activity.type,
+                 activity.payload,
+                 activity.created_at AS occurred_at
+          FROM activity
+          ${issueJoin}
+          ${teamJoin}
+          LEFT JOIN actors ON actors.id = activity.actor_id
+          ORDER BY activity.created_at, activity.id`;
+}
+
 /**
  * Import the durable history available in SQLite Activity into the canonical
  * event stream. It never reads legacy per-Issue logs and never talks to PG.
+ * A multi-Workspace source always requires an explicit Workspace selector.
  */
 export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteEventImportResult {
-  const rows = options.db
-    .query(
-      `SELECT activity.id,
-              teams.key || '-' || issues.number AS issue_identifier,
-              activity.actor_id AS actor_id,
-              actors.name AS actor,
-              issues.id AS issue_id,
-              teams.id AS team_id,
-              activity.type,
-              activity.payload,
-              activity.created_at AS occurred_at
-       FROM activity
-       LEFT JOIN issues ON issues.id = activity.issue_id
-       LEFT JOIN teams ON teams.id = issues.team_id
-       LEFT JOIN actors ON actors.id = activity.actor_id
-       ORDER BY activity.created_at, activity.id`,
-    )
-    .all() as ActivityRow[];
+  const scope = resolveImportScope(options.db, options.workspaceId);
+  const rows = options.db.query(activityQuery(scope)).all() as ActivityRow[];
 
   const writer = new EventLogWriter({ rootDir: options.rootDir });
   const warnings: string[] = [];
@@ -67,11 +173,31 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
   const seen = new Map<string, DomainEvent>();
   const events: DomainEvent[] = [];
   let orphaned = 0;
+  let outOfScope = 0;
   let rejected = 0;
   let ambiguous = 0;
   let duplicates = 0;
 
   for (const row of rows) {
+    const rowWorkspaceId =
+      row.activity_workspace_id ?? row.issue_workspace_id ?? row.team_workspace_id;
+    if (
+      scope.workspaceId !== undefined &&
+      rowWorkspaceId !== undefined &&
+      rowWorkspaceId !== null
+    ) {
+      if (rowWorkspaceId !== scope.workspaceId) {
+        outOfScope += 1;
+        warning(warnings, "out_of_scope", row.id);
+        continue;
+      }
+    }
+    if (scope.multipleWorkspaces && row.activity_workspace_id == null) {
+      orphaned += 1;
+      warning(warnings, "orphaned", row.id);
+      continue;
+    }
+
     const actor = row.actor_id ?? row.actor;
     if (!row.issue_identifier || !actor || !row.issue_id || !row.team_id) {
       orphaned += 1;
@@ -115,6 +241,7 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
     emitted: events.length,
     duplicates,
     orphaned,
+    outOfScope,
     rejected,
     ambiguous,
     warnings,
