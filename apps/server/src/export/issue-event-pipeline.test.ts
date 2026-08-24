@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLogWriter, type DomainEvent } from "./event-log.ts";
@@ -86,6 +93,20 @@ describe("SQLite issue event pipeline", () => {
       "project",
       "checkpoint:event-1",
     ]);
+  });
+
+  it("recovers a torn JSONL tail before retrying an append", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-torn-event-log-"));
+    const writer = new EventLogWriter({ rootDir });
+    try {
+      writer.append(event("base"));
+      appendFileSync(writer.filePath, '{"schemaVersion":1,"eventId":"torn"');
+      const pipeline = new IssueEventPipeline({ rootDir, eventLog: writer });
+      expect(pipeline.append([event("torn")])).toEqual([{ eventId: "torn", appended: true }]);
+      expect(writer.read().map((current) => current.eventId)).toEqual(["base", "torn"]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("commits uncommitted idempotent events after pipeline recreation", () => {

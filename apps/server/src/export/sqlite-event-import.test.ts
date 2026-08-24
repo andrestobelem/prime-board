@@ -64,6 +64,10 @@ describe("SQLite history import", () => {
       expect(second.duplicates).toBe(1);
       const dryExisting = importSqliteActivity({ db, rootDir: root, dryRun: true });
       expect(dryExisting).toMatchObject({ emitted: 0, duplicates: 1, ambiguous: 0 });
+      db.query("UPDATE actors SET name = ?1 WHERE id = ?2").run("renamed-agent", "actor-1");
+      const dryAfterActorRename = importSqliteActivity({ db, rootDir: root, dryRun: true });
+      expect(dryAfterActorRename).toMatchObject({ emitted: 0, duplicates: 1, ambiguous: 0 });
+      expect(readEventLog(root)[0]?.actor).toBe("actor-1");
       db.query("UPDATE activity SET payload = ?1 WHERE id = ?2").run(
         JSON.stringify({ title: "changed after import" }),
         "activity-1",

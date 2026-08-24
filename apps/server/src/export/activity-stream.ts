@@ -73,7 +73,7 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
 export function appendActivityEvents(
   db: Database,
   root: string,
-  eventLog: Pick<CanonicalEventLog, "appendMany" | "read"> = new EventLogWriter({
+  eventLog: Pick<CanonicalEventLog, "appendMany" | "read" | "recover"> = new EventLogWriter({
     rootDir: root,
   }),
   onEventIds?: (eventIds: readonly string[]) => void,
@@ -94,6 +94,7 @@ export function appendActivityEvents(
        ORDER BY activity.created_at, activity.id`,
     )
     .all() as ActivityEventRow[];
+  eventLog.recover?.();
   const events = rows.flatMap((row) => {
     const event = activityToDomainEvent(row);
     return event ? [event] : [];

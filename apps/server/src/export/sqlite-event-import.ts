@@ -22,6 +22,7 @@ export interface SQLiteEventImportResult {
 interface ActivityRow {
   readonly id: string;
   readonly issue_identifier: string | null;
+  readonly actor_id: string | null;
   readonly actor: string | null;
   readonly issue_id: string | null;
   readonly team_id: string | null;
@@ -43,6 +44,7 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
     .query(
       `SELECT activity.id,
               teams.key || '-' || issues.number AS issue_identifier,
+              activity.actor_id AS actor_id,
               actors.name AS actor,
               issues.id AS issue_id,
               teams.id AS team_id,
@@ -70,7 +72,8 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
   let duplicates = 0;
 
   for (const row of rows) {
-    if (!row.issue_identifier || !row.actor || !row.issue_id || !row.team_id) {
+    const actor = row.actor_id ?? row.actor;
+    if (!row.issue_identifier || !actor || !row.issue_id || !row.team_id) {
       orphaned += 1;
       warning(warnings, "orphaned", row.id);
       continue;
@@ -78,7 +81,8 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
     const event = activityToDomainEvent({
       id: row.id,
       issue_identifier: row.issue_identifier,
-      actor: row.actor,
+      actor_id: row.actor_id ?? undefined,
+      actor,
       type: row.type,
       payload: row.payload,
       occurred_at: row.occurred_at,

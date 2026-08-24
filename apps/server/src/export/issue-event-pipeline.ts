@@ -16,6 +16,8 @@ import type { ProjectorCheckpoint } from "./projector.ts";
 export interface CanonicalEventLog {
   appendMany(eventInputs: readonly unknown[]): AppendResult[];
   read(): DomainEvent[];
+  /** Remove a torn JSONL tail before the next append/retry when supported. */
+  recover?(): void;
 }
 
 export interface GitCommitInput {
@@ -141,6 +143,7 @@ export class IssueEventPipeline {
 
   /** Agrega eventos validados e idempotentes al log canónico. */
   append(events: readonly DomainEvent[]): readonly AppendResult[] {
+    this.eventLog.recover?.();
     const before = new Set(this.eventLog.read().map((event) => event.eventId));
     try {
       const results = this.eventLog.appendMany(events);
@@ -239,20 +242,37 @@ export function createGitCommitter(rootDir: string): GitCommitter {
  * into this commit by `git add`.
  */
 function commitEventLogSnapshot(rootDir: string, content: string): void {
+  const originalIndexEntry = readEventLogIndexEntry(rootDir);
   const tempDir = mkdtempSync(join(tmpdir(), "prime-board-event-index-"));
   const tempIndex = join(tempDir, "index");
   const env = { GIT_INDEX_FILE: tempIndex };
-  const originalIndexEntry = readEventLogIndexEntry(rootDir);
   try {
-    const hasHead = hasGitHead(rootDir);
-    runGit(rootDir, ["read-tree", hasHead ? "HEAD" : "--empty"], env);
+    assertEventLogSnapshotUnchanged(rootDir, content);
+    const parent = readGitHead(rootDir);
+    runGit(rootDir, ["read-tree", parent ?? "--empty"], env);
     const blob = hashEventLog(rootDir, content);
     runGit(
       rootDir,
       ["update-index", "--add", "--cacheinfo", `100644,${blob},${EVENT_LOG_RELATIVE_PATH}`],
       env,
     );
-    runGit(rootDir, ["commit", "-m", "chore(events): append canonical issue events"], env);
+    // Reject a concurrent append or commit before creating the commit tree.
+    assertEventLogSnapshotUnchanged(rootDir, content);
+    if (readGitHead(rootDir) !== parent) {
+      throw new Error("Git HEAD changed during canonical event commit");
+    }
+    const tree = runGitOutput(rootDir, ["write-tree"], env).trim();
+    const commit = createGitCommit(rootDir, tree, parent);
+    // The expected old ref makes a concurrent commit fail closed instead of
+    // creating a child commit that could drop its event-log changes.
+    runGit(rootDir, [
+      "update-ref",
+      "-m",
+      "chore(events): append canonical issue events",
+      "HEAD",
+      commit,
+      parent ?? "",
+    ]);
     // Refresh only our path. If another process staged it meanwhile, preserve
     // that staged content instead of replacing it.
     if (readEventLogIndexEntry(rootDir) === originalIndexEntry) {
@@ -265,6 +285,13 @@ function commitEventLogSnapshot(rootDir: string, content: string): void {
     }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function assertEventLogSnapshotUnchanged(rootDir: string, content: string): void {
+  const path = join(rootDir, EVENT_LOG_RELATIVE_PATH);
+  if (readFileSync(path, "utf8") !== content) {
+    throw new Error("Canonical event log changed during validation");
   }
 }
 
@@ -282,14 +309,47 @@ function hashEventLog(rootDir: string, content: string): string {
   return blob;
 }
 
-function hasGitHead(rootDir: string): boolean {
+function readGitHead(rootDir: string): string | undefined {
   const result = spawnSync("git", ["-C", rootDir, "rev-parse", "--verify", "HEAD^{commit}"], {
     encoding: "utf8",
   });
   if (result.error) throw result.error;
-  if (result.status === 0) return true;
-  if (result.status === 128) return false;
+  if (result.status === 0) return result.stdout.trim();
+  if (result.status === 128) return undefined;
   throw new Error(result.stderr.trim() || "Cannot inspect Git HEAD");
+}
+
+function runGitOutput(
+  rootDir: string,
+  args: readonly string[],
+  environment?: NodeJS.ProcessEnv,
+): string {
+  const result = spawnSync("git", ["-C", rootDir, ...args], {
+    encoding: "utf8",
+    env: environment ? { ...process.env, ...environment } : undefined,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || `git ${args[0] ?? "command"} failed`);
+  }
+  return result.stdout;
+}
+
+function createGitCommit(rootDir: string, tree: string, parent: string | undefined): string {
+  const args = ["-C", rootDir, "commit-tree", tree];
+  if (parent) args.push("-p", parent);
+  args.push("-F", "-");
+  const result = spawnSync("git", args, {
+    encoding: "utf8",
+    input: "chore(events): append canonical issue events\n",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || "Cannot create canonical event commit");
+  }
+  const commit = result.stdout.trim();
+  if (!/^[0-9a-f]{40}$/u.test(commit)) throw new Error("Git returned an invalid event commit");
+  return commit;
 }
 
 function readEventLogIndexEntry(rootDir: string): string | undefined {
