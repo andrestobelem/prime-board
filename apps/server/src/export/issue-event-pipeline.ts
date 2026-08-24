@@ -1,7 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   EVENT_LOG_RELATIVE_PATH,
   EventLogWriter,
@@ -263,26 +274,83 @@ function commitEventLogSnapshot(rootDir: string, content: string): void {
     }
     const tree = runGitOutput(rootDir, ["write-tree"], env).trim();
     const commit = createGitCommit(rootDir, tree, parent);
-    // The expected old ref makes a concurrent commit fail closed instead of
-    // creating a child commit that could drop its event-log changes.
-    runGit(rootDir, [
-      "update-ref",
-      "-m",
-      "chore(events): append canonical issue events",
-      "HEAD",
-      commit,
-      parent ?? "",
-    ]);
-    // Refresh only our path. If another process staged it meanwhile, preserve
-    // that staged content instead of replacing it.
-    if (readEventLogIndexEntry(rootDir) === originalIndexEntry) {
+    // Mantiene el lock del índice Git durante la comparación final, la
+    // actualización de la referencia y la sincronización. Un `git add`
+    // concurrente se conserva o falla antes de mover HEAD; no se reemplaza
+    // entre la comparación y la actualización.
+    const indexPath = resolveGitIndexPath(rootDir);
+    withRealGitIndexLock(rootDir, indexPath, () => {
+      const refreshIndex = readEventLogIndexEntry(rootDir) === originalIndexEntry;
+      // The expected old ref makes a concurrent commit fail closed instead of
+      // creating a child commit that could drop its event-log changes.
       runGit(rootDir, [
-        "update-index",
-        "--add",
-        "--cacheinfo",
-        `100644,${blob},${EVENT_LOG_RELATIVE_PATH}`,
+        "update-ref",
+        "-m",
+        "chore(events): append canonical issue events",
+        "HEAD",
+        commit,
+        parent ?? "",
       ]);
+      if (refreshIndex) updateRealEventLogIndex(rootDir, indexPath, blob);
+    });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function resolveGitIndexPath(rootDir: string): string {
+  const indexPath = runGitOutput(rootDir, ["rev-parse", "--git-path", "index"]).trim();
+  if (!indexPath) throw new Error("Git returned an empty index path");
+  return resolve(rootDir, indexPath);
+}
+
+/** Ejecuta una operación con el lock exclusivo del índice Git real. */
+function withRealGitIndexLock<T>(rootDir: string, indexPath: string, operation: () => T): T {
+  const lockPath = `${indexPath}.lock`;
+  let lockFd: number;
+  try {
+    lockFd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+  } catch (error) {
+    throw new Error(`Cannot lock Git index: ${String(error)}`);
+  }
+
+  try {
+    return operation();
+  } finally {
+    closeSync(lockFd);
+    try {
+      unlinkSync(lockPath);
+    } catch (error) {
+      if (!(
+        error !== null &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "ENOENT"
+      )) {
+        throw error;
+      }
     }
+  }
+}
+
+/** Actualiza solo la entrada del event log en una copia del índice real. */
+function updateRealEventLogIndex(rootDir: string, indexPath: string, blob: string): void {
+  const tempDir = mkdtempSync(join(tmpdir(), "prime-board-real-index-"));
+  const tempIndex = join(tempDir, "index");
+  try {
+    const env = { GIT_INDEX_FILE: tempIndex };
+    if (existsSync(indexPath)) {
+      copyFileSync(indexPath, tempIndex);
+    } else {
+      const parent = readGitHead(rootDir);
+      runGit(rootDir, ["read-tree", parent ?? "--empty"], env);
+    }
+    runGit(
+      rootDir,
+      ["update-index", "--add", "--cacheinfo", `100644,${blob},${EVENT_LOG_RELATIVE_PATH}`],
+      env,
+    );
+    renameSync(tempIndex, indexPath);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

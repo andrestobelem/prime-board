@@ -9,7 +9,7 @@ import {
   mkdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { EventLogWriter, type DomainEvent } from "./event-log.ts";
 import {
   createGitCommitter,
@@ -218,6 +218,39 @@ describe("SQLite issue event pipeline", () => {
     expect(pipeline.project()).toMatchObject({ applied: 1, skipped: 0 });
     expect(applied).toEqual(["event-1"]);
     expect(pipeline.getCheckpoint()).toMatchObject({ stream: "issues", eventId: "event-1" });
+  });
+
+  it("fails closed when another process holds the Git index lock", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-committer-lock-"));
+    const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
+    const line = (eventId: string) => `${JSON.stringify(event(eventId))}\n`;
+    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    try {
+      mkdirSync(join(rootDir, ".prime-board", "log"), { recursive: true });
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      writeFileSync(logPath, line("base"));
+      git("add", "--", ".prime-board/log/events.jsonl");
+      git("commit", "-qm", "base");
+      writeFileSync(logPath, `${line("base")}${line("generated")}`);
+
+      const indexPath = resolve(rootDir, git("rev-parse", "--git-path", "index").toString().trim());
+      const lockPath = `${indexPath}.lock`;
+      writeFileSync(lockPath, "");
+      try {
+        expect(() => createGitCommitter(rootDir)({ rootDir, eventIds: ["generated"] })).toThrow(
+          "Cannot lock Git index",
+        );
+        expect(git("log", "-1", "--format=%s").toString().trim()).toBe("base");
+        expect(git("show", ":.prime-board/log/events.jsonl").toString()).toBe(line("base"));
+        expect(readFileSync(logPath, "utf8")).toBe(`${line("base")}${line("generated")}`);
+      } finally {
+        rmSync(lockPath, { force: true });
+      }
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects pre-staged event-log changes without replacing the index", () => {
