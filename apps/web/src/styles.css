@@ -437,7 +437,7 @@ select:focus {
 .sidebar .favorites-heading {
   color: var(--text-faint);
   font-size: 11px;
-  text-transform: uppercase;
+  text-transform: none;
   letter-spacing: 0.4px;
 }
 
