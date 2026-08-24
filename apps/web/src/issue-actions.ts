@@ -14,6 +14,17 @@ export function unarchiveMutation(): string {
   return `mutation($id: ID!) { issueUnarchive(id: $id) { success } }`;
 }
 
+/** Ejecuta el archive de la Command Palette y usa el destino solo después del éxito. */
+export async function archiveIssueFromPalette(
+  issueRef: string,
+  archive: (issueRef: string) => Promise<{ success: boolean }>,
+  onSuccess: () => void,
+): Promise<void> {
+  const result = await archive(issueRef);
+  if (!result.success) throw new Error("The issue could not be archived.");
+  onSuccess();
+}
+
 export function issueUpdateMutation(): string {
   return `mutation($id: ID!, $input: IssueUpdateInput!) {
     issueUpdate(id: $id, input: $input) { success }

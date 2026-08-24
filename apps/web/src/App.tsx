@@ -39,6 +39,7 @@ import { InitiativeView } from "./views/InitiativeView.tsx";
 import { ReviewsView } from "./views/ReviewsView.tsx";
 import { CycleView } from "./views/CycleView.tsx";
 import { MyIssuesView } from "./views/MyIssuesView.tsx";
+import { archiveIssueFromPalette, archiveMutation } from "./issue-actions.ts";
 import { InboxView } from "./views/InboxView.tsx";
 import { TeamSettingsView } from "./views/TeamSettingsView.tsx";
 import { TeamView } from "./views/TeamView.tsx";
@@ -313,17 +314,19 @@ export function App() {
 
   async function confirmArchiveCurrentIssue(): Promise<void> {
     if (!archiveIssueRef) return;
-    try {
-      const response = await mutate<{ issueArchive: { success: boolean } }>(
-        `mutation($id: ID!) { issueArchive(id: $id) { success } }`,
-        { id: archiveIssueRef },
-      );
-      if (!response.issueArchive.success) throw new Error("The issue could not be archived.");
-      setArchiveIssueRef(null);
-      navigate("/my-issues");
-    } catch (error) {
-      throw error instanceof Error ? error : new Error(String(error));
-    }
+    await archiveIssueFromPalette(
+      archiveIssueRef,
+      async (issueRef) => {
+        const response = await mutate<{ issueArchive: { success: boolean } }>(archiveMutation(), {
+          id: issueRef,
+        });
+        return response.issueArchive;
+      },
+      () => {
+        setArchiveIssueRef(null);
+        navigate("/my");
+      },
+    );
   }
 
   const favoriteContext = (): FavoriteOperationContext | null => {
