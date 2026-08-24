@@ -216,7 +216,6 @@ export function useQuery<T = any>(
       setLoading(false);
       return;
     }
-    setData(null);
     setError(null);
     run();
     listeners.add(run);
