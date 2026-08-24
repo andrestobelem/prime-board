@@ -5,6 +5,10 @@ import { newId, now } from "../db/util.ts";
 import { getActor } from "./actors.ts";
 import { parseDateTime } from "./datetime.ts";
 
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
 export const PROJECT_STATES = [
   "backlog",
   "planned",
@@ -41,19 +45,35 @@ export function mapProject(row: ProjectRow) {
   };
 }
 
-export function getProject(db: Database, id: string): ProjectRow | null {
-  return db.query("SELECT * FROM projects WHERE id = ?1").get(id) as ProjectRow | null;
+export function getProject(db: Database, id: string, workspaceId?: string): ProjectRow | null {
+  const query = workspaceId
+    ? `SELECT * FROM projects WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT * FROM projects WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as ProjectRow | null;
 }
 
-export function archiveProject(db: Database, id: string, archived: boolean): ProjectRow {
-  const project = getProject(db, id);
+export function archiveProject(
+  db: Database,
+  id: string,
+  archived: boolean,
+  workspaceId?: string,
+): ProjectRow {
+  const project = getProject(db, id, workspaceId);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
-  db.query("UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3").run(
-    archived ? now() : null,
-    now(),
-    id,
-  );
-  return getProject(db, id)!;
+  if (workspaceId) {
+    db.query(
+      `UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3 AND ${workspaceClause("workspace_id", "?4")}`,
+    ).run(archived ? now() : null, now(), id, workspaceId);
+  } else {
+    db.query("UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3").run(
+      archived ? now() : null,
+      now(),
+      id,
+    );
+  }
+  return getProject(db, id, workspaceId)!;
 }
 
 export function listProjects(
@@ -61,9 +81,14 @@ export function listProjects(
   state?: string | null,
   teamId?: string | null,
   includeArchived = false,
+  workspaceId?: string,
 ): ProjectRow[] {
   const where: string[] = includeArchived ? [] : ["archived_at IS NULL"];
   const params: unknown[] = [];
+  if (workspaceId) {
+    params.push(workspaceId);
+    where.push(workspaceClause("workspace_id", `?${params.length}`));
+  }
   if (state) {
     params.push(state);
     where.push(`state = ?${params.length}`);
@@ -79,11 +104,17 @@ export function listProjects(
 }
 
 /** Teams asociados a un proyecto (relación N:M, paridad con Linear). */
-export function listProjectTeamIds(db: Database, projectId: string): string[] {
-  return db
-    .query("SELECT team_id FROM project_teams WHERE project_id = ?1")
-    .values(projectId)
-    .map((row) => row[0] as string);
+export function listProjectTeamIds(
+  db: Database,
+  projectId: string,
+  workspaceId?: string,
+): string[] {
+  const query = workspaceId
+    ? `SELECT team_id FROM project_teams WHERE project_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT team_id FROM project_teams WHERE project_id = ?1";
+  return (
+    workspaceId ? db.query(query).values(projectId, workspaceId) : db.query(query).values(projectId)
+  ).map((row) => row[0] as string);
 }
 
 export function projectIncludesTeam(
@@ -97,7 +128,7 @@ export function projectIncludesTeam(
       db
         .query(
           `SELECT 1 FROM project_teams
-           WHERE project_id = ?1 AND team_id = ?2 AND workspace_id = ?3`,
+           WHERE project_id = ?1 AND team_id = ?2 AND ${workspaceClause("workspace_id", "?3")}`,
         )
         .get(projectId, teamId, workspaceId),
     );
@@ -119,14 +150,17 @@ function setProjectTeams(
     throw apiError("VALIDATION_FAILED", "A project must belong to at least one team");
   }
   for (const teamId of teamIds) {
-    const team = db.query("SELECT id FROM teams WHERE id = ?1").get(teamId);
+    const team = workspaceId
+      ? db
+          .query(`SELECT id FROM teams WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`)
+          .get(teamId, workspaceId)
+      : db.query("SELECT id FROM teams WHERE id = ?1").get(teamId);
     if (!team) throw apiError("NOT_FOUND", `Team not found: ${teamId}`);
   }
   if (workspaceId) {
-    db.query("DELETE FROM project_teams WHERE project_id = ?1 AND workspace_id = ?2").run(
-      projectId,
-      workspaceId,
-    );
+    db.query(
+      `DELETE FROM project_teams WHERE project_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+    ).run(projectId, workspaceId);
   } else {
     db.query("DELETE FROM project_teams WHERE project_id = ?1").run(projectId);
   }
@@ -139,7 +173,7 @@ function setProjectTeams(
 
 function allTeamIds(db: Database, workspaceId?: string): string[] {
   const query = workspaceId
-    ? "SELECT id FROM teams WHERE archived_at IS NULL AND workspace_id = ?1"
+    ? `SELECT id FROM teams WHERE archived_at IS NULL AND ${workspaceClause("workspace_id", "?1")}`
     : "SELECT id FROM teams WHERE archived_at IS NULL";
   return (workspaceId ? db.query(query).values(workspaceId) : db.query(query).values()).map(
     (row) => row[0] as string,
@@ -195,7 +229,7 @@ export function createProject(
     // (compatibilidad con clientes previos a AT-152).
     setProjectTeams(db, id, input.teamIds ?? allTeamIds(db, workspaceId), workspaceId);
   })();
-  return getProject(db, id)!;
+  return getProject(db, id, workspaceId)!;
 }
 
 export function updateProject(
@@ -209,11 +243,12 @@ export function updateProject(
     targetDate?: string | null;
     teamIds?: string[] | null;
   },
+  workspaceId?: string,
 ): ProjectRow {
-  const project = getProject(db, id);
+  const project = getProject(db, id, workspaceId);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
   validate(db, input);
-  if (input.teamIds) setProjectTeams(db, id, input.teamIds);
+  if (input.teamIds) setProjectTeams(db, id, input.teamIds, workspaceId);
 
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -233,10 +268,15 @@ export function updateProject(
 
   if (sets.length > 0) {
     push("updated_at", now());
+    const idParameter = params.length + 1;
     params.push(id);
-    db.query(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
+    const scope = workspaceId
+      ? ` AND ${workspaceClause("workspace_id", `?${params.length + 1}`)}`
+      : "";
+    if (workspaceId) params.push(workspaceId);
+    db.query(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?${idParameter}${scope}`).run(
       ...(params as never[]),
     );
   }
-  return getProject(db, id)!;
+  return getProject(db, id, workspaceId)!;
 }

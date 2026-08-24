@@ -88,7 +88,7 @@ type MappedProject = ReturnType<typeof mapProject> | ReturnType<typeof mapPostgr
 
 function projectTeamsAllowed(context: Context, projectId: string): boolean {
   const viewer = requireViewer(context);
-  const teamIds = listProjectTeamIds(context.db, projectId);
+  const teamIds = listProjectTeamIds(context.db, projectId, context.workspace.workspaceId);
   return (
     canAccessProject(context.db, viewer, projectId) && apiKeyTeamsWithinLimit(context.auth, teamIds)
   );
@@ -131,7 +131,7 @@ export const projectResolvers = {
           : [];
       }
       return projectTeamsAllowed(context, project.id)
-        ? listMilestones(context.db, project.id).map(mapMilestone)
+        ? listMilestones(context.db, project.id, context.workspace.workspaceId).map(mapMilestone)
         : [];
     },
     teams: async (project: MappedProject, _args: unknown, context: Context) => {
@@ -151,7 +151,7 @@ export const projectResolvers = {
         }
         return teams;
       }
-      return listProjectTeamIds(context.db, project.id)
+      return listProjectTeamIds(context.db, project.id, context.workspace.workspaceId)
         .filter((teamId) => canAccessTeam(context.db, requireViewer(context), teamId))
         .filter((teamId) => apiKeyTeamsWithinLimit(context.auth, [teamId]))
         .map((teamId) => mapTeam(lookupTeam(context, { id: teamId })!));
@@ -204,7 +204,9 @@ export const projectResolvers = {
           : [];
       }
       return projectTeamsAllowed(context, project.id)
-        ? listProjectUpdates(context.db, project.id).map(mapProjectUpdate)
+        ? listProjectUpdates(context.db, project.id, context.workspace.workspaceId).map(
+            mapProjectUpdate,
+          )
         : [];
     },
     documents: (project: MappedProject, args: { includeArchived?: boolean }, context: Context) =>
@@ -280,7 +282,7 @@ export const projectResolvers = {
           pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
         };
       }
-      const milestoneRow = getMilestone(context.db, milestone.id);
+      const milestoneRow = getMilestone(context.db, milestone.id, context.workspace.workspaceId);
       if (!milestoneRow || !projectTeamsAllowed(context, milestoneRow.project_id)) {
         return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
       }
@@ -312,9 +314,11 @@ export const projectResolvers = {
           `SELECT count(*) AS total,
                 sum(CASE WHEN workflow_states.type IN ('completed', 'canceled') THEN 1 ELSE 0 END) AS done
          FROM issues JOIN workflow_states ON workflow_states.id = issues.state_id
-         WHERE issues.milestone_id = ?1 AND issues.archived_at IS NULL`,
+         WHERE issues.milestone_id = ?1
+           AND (issues.workspace_id = ?2 OR (issues.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1))
+           AND issues.archived_at IS NULL`,
         )
-        .get(milestone.id) as { total: number; done: number | null };
+        .get(milestone.id, context.workspace.workspaceId) as { total: number; done: number | null };
       return row.total === 0 ? 0 : (row.done ?? 0) / row.total;
     },
   },
@@ -360,7 +364,13 @@ export const projectResolvers = {
       }
       return scopeWorkspaceRows(
         context,
-        listProjects(context.db, args.state, args.team, args.includeArchived),
+        listProjects(
+          context.db,
+          args.state,
+          args.team,
+          args.includeArchived,
+          context.workspace.workspaceId,
+        ),
       )
         .filter((project) => canAccessProject(context.db, viewer, project.id))
         .map(mapProject);
@@ -424,13 +434,20 @@ export const projectResolvers = {
         const orphaned = await deletePostgresMilestone(context.persistence, viewer, args.id);
         return { success: true, orphanedIssues: orphaned };
       }
-      const milestone = getMilestone(context.db, args.id);
+      const milestone = getMilestone(context.db, args.id, context.workspace.workspaceId);
       if (milestone) assertCanManageProject(context.db, viewer, milestone.project_id);
       const affected = context.db
-        .query("SELECT id FROM issues WHERE milestone_id = ?1")
-        .all(args.id)
+        .query(
+          "SELECT id FROM issues WHERE milestone_id = ?1 AND (workspace_id = ?2 OR (workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1))",
+        )
+        .all(args.id, context.workspace.workspaceId)
         .map((row) => (row as { id: string }).id);
-      const orphaned = deleteMilestone(context.db, viewer.id, args.id);
+      const orphaned = deleteMilestone(
+        context.db,
+        viewer.id,
+        args.id,
+        context.workspace.workspaceId,
+      );
       for (const issueId of affected) {
         const issue = lookupIssueById(context, issueId);
         if (issue) {
@@ -463,7 +480,9 @@ export const projectResolvers = {
       }
       assertCanManageProject(context.db, viewer, args.id);
       const projectBefore = requireProject(context, args.id);
-      const archived = mapProject(archiveProject(context.db, args.id, true));
+      const archived = mapProject(
+        archiveProject(context.db, args.id, true, context.workspace.workspaceId),
+      );
       context.events.emit("project.updated", viewer, archived, {
         archivedAt: { from: projectBefore.archived_at, to: archived.archivedAt },
       });
@@ -491,7 +510,9 @@ export const projectResolvers = {
       }
       assertCanManageProject(context.db, viewer, args.id);
       const projectBefore = requireProject(context, args.id);
-      const restored = mapProject(archiveProject(context.db, args.id, false));
+      const restored = mapProject(
+        archiveProject(context.db, args.id, false, context.workspace.workspaceId),
+      );
       context.events.emit("project.updated", viewer, restored, {
         archivedAt: { from: projectBefore.archived_at, to: restored.archivedAt },
       });
@@ -515,7 +536,9 @@ export const projectResolvers = {
       }
       assertCanManageProject(context.db, viewer, args.input.projectId);
       requireProject(context, args.input.projectId);
-      const created = mapMilestone(createMilestone(context.db, args.input));
+      const created = mapMilestone(
+        createMilestone(context.db, args.input, context.workspace.workspaceId),
+      );
       return { success: true, milestone: created };
     },
     milestoneUpdate: async (
@@ -537,9 +560,11 @@ export const projectResolvers = {
         );
         return { success: true, milestone: updated };
       }
-      const milestone = getMilestone(context.db, args.id);
+      const milestone = getMilestone(context.db, args.id, context.workspace.workspaceId);
       if (milestone) assertCanManageProject(context.db, viewer, milestone.project_id);
-      const updated = mapMilestone(updateMilestone(context.db, args.id, args.input));
+      const updated = mapMilestone(
+        updateMilestone(context.db, args.id, args.input, context.workspace.workspaceId),
+      );
       return { success: true, milestone: updated };
     },
     projectUpdate: async (
@@ -566,7 +591,9 @@ export const projectResolvers = {
         assertCanManageProjectTeams(context.db, viewer, args.input.teamIds);
         for (const teamId of args.input.teamIds) requireTeam(context, { id: teamId });
       }
-      const project = mapProject(updateProject(context.db, args.id, args.input));
+      const project = mapProject(
+        updateProject(context.db, args.id, args.input, context.workspace.workspaceId),
+      );
       context.events.emit("project.updated", viewer, project);
       return { success: true, project };
     },
@@ -602,7 +629,7 @@ export const projectResolvers = {
       assertCanManageProject(context.db, viewer, args.input.projectId);
       requireProject(context, args.input.projectId);
       const projectUpdate = mapProjectUpdate(
-        createProjectUpdate(context.db, viewer.id, args.input),
+        createProjectUpdate(context.db, viewer.id, args.input, context.workspace.workspaceId),
       );
       context.events.emit("project.updated", viewer, {
         id: args.input.projectId,
@@ -624,9 +651,9 @@ export const projectResolvers = {
         }
         return { success: await deletePostgresProjectUpdate(context.persistence, viewer, args.id) };
       }
-      const projectUpdate = getProjectUpdate(context.db, args.id);
+      const projectUpdate = getProjectUpdate(context.db, args.id, context.workspace.workspaceId);
       if (projectUpdate) assertCanManageProject(context.db, viewer, projectUpdate.project_id);
-      return { success: deleteProjectUpdate(context.db, args.id) };
+      return { success: deleteProjectUpdate(context.db, args.id, context.workspace.workspaceId) };
     },
   },
 };

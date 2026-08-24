@@ -178,11 +178,13 @@ function activityReferenceTeams(context: Context, table: RefTable, value: string
   }
   if (table === "projects") {
     if (!context.db.query("SELECT id FROM projects WHERE id = ?1").get(value)) return null;
-    return listProjectTeamIds(context.db, value);
+    return listProjectTeamIds(context.db, value, context.workspace.workspaceId);
   }
   if (table === "milestones") {
-    const milestone = getMilestone(context.db, value);
-    return milestone ? listProjectTeamIds(context.db, milestone.project_id) : null;
+    const milestone = getMilestone(context.db, value, context.workspace.workspaceId);
+    return milestone
+      ? listProjectTeamIds(context.db, milestone.project_id, context.workspace.workspaceId)
+      : null;
   }
   return null;
 }
@@ -489,10 +491,13 @@ export const issueResolvers = {
       const project = lookupProject(context, issue._row.project_id);
       if (
         !project ||
-        !listProjectTeamIds(context.db, project.id).every((teamId) =>
+        !listProjectTeamIds(context.db, project.id, context.workspace.workspaceId).every((teamId) =>
           canAccessTeam(context.db, requireViewer(context), teamId),
         ) ||
-        !apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, project.id))
+        !apiKeyTeamsWithinLimit(
+          context.auth,
+          listProjectTeamIds(context.db, project.id, context.workspace.workspaceId),
+        )
       )
         return null;
       return mapProject(project);
@@ -516,13 +521,20 @@ export const issueResolvers = {
           ? mapPostgresMilestone(milestone)
           : null;
       }
-      const milestone = getMilestone(context.db, issue._row.milestone_id);
+      const milestone = getMilestone(
+        context.db,
+        issue._row.milestone_id,
+        context.workspace.workspaceId,
+      );
       if (
         !milestone ||
-        !listProjectTeamIds(context.db, milestone.project_id).every((teamId) =>
-          canAccessTeam(context.db, requireViewer(context), teamId),
+        !listProjectTeamIds(context.db, milestone.project_id, context.workspace.workspaceId).every(
+          (teamId) => canAccessTeam(context.db, requireViewer(context), teamId),
         ) ||
-        !apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, milestone.project_id))
+        !apiKeyTeamsWithinLimit(
+          context.auth,
+          listProjectTeamIds(context.db, milestone.project_id, context.workspace.workspaceId),
+        )
       )
         return null;
       return mapMilestone(milestone);

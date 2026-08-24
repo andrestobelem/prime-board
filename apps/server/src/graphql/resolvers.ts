@@ -572,10 +572,13 @@ export const resolvers = {
         }
         return visible;
       }
-      return listProjects(context.db, null, team.id)
+      return listProjects(context.db, null, team.id, false, context.workspace.workspaceId)
         .filter((project) => canAccessProject(context.db, viewer, project.id))
         .filter((project) =>
-          apiKeyTeamsWithinLimit(context.auth, listProjectTeamIds(context.db, project.id)),
+          apiKeyTeamsWithinLimit(
+            context.auth,
+            listProjectTeamIds(context.db, project.id, context.workspace.workspaceId),
+          ),
         )
         .map(mapProject);
     },

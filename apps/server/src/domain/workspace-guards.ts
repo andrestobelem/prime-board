@@ -167,7 +167,7 @@ export function requireTeam(
 }
 
 export function lookupProject(context: WorkspaceLookupContext, id: string): ProjectRow | null {
-  const row = getProject(context.db, id);
+  const row = getProject(context.db, id, context.workspace.workspaceId);
   if (!row) {
     assertActiveWorkspace(context);
     return null;

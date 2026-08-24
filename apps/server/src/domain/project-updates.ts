@@ -4,6 +4,10 @@ import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { getProject } from "./projects.ts";
 
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
 export type ProjectUpdateHealth = "on_track" | "at_risk" | "off_track";
 
 export interface ProjectUpdateRow {
@@ -15,6 +19,7 @@ export interface ProjectUpdateRow {
   risks: string | null;
   created_at: string;
   updated_at: string;
+  workspace_id: string | null;
 }
 
 export function mapProjectUpdate(row: ProjectUpdateRow) {
@@ -30,14 +35,30 @@ export function mapProjectUpdate(row: ProjectUpdateRow) {
   };
 }
 
-export function getProjectUpdate(db: Database, id: string): ProjectUpdateRow | null {
-  return db.query("SELECT * FROM project_updates WHERE id = ?1").get(id) as ProjectUpdateRow | null;
+export function getProjectUpdate(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+): ProjectUpdateRow | null {
+  const query = workspaceId
+    ? `SELECT * FROM project_updates WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT * FROM project_updates WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as ProjectUpdateRow | null;
 }
 
-export function listProjectUpdates(db: Database, projectId: string): ProjectUpdateRow[] {
-  return db
-    .query("SELECT * FROM project_updates WHERE project_id = ?1 ORDER BY created_at DESC, id DESC")
-    .all(projectId) as ProjectUpdateRow[];
+export function listProjectUpdates(
+  db: Database,
+  projectId: string,
+  workspaceId?: string,
+): ProjectUpdateRow[] {
+  const query = workspaceId
+    ? `SELECT * FROM project_updates WHERE project_id = ?1 AND ${workspaceClause("workspace_id", "?2")} ORDER BY created_at DESC, id DESC`
+    : "SELECT * FROM project_updates WHERE project_id = ?1 ORDER BY created_at DESC, id DESC";
+  return (
+    workspaceId ? db.query(query).all(projectId, workspaceId) : db.query(query).all(projectId)
+  ) as ProjectUpdateRow[];
 }
 
 function resolveHealth(health: string): ProjectUpdateHealth {
@@ -57,16 +78,18 @@ export function createProjectUpdate(
     body: string;
     risks?: string | null;
   },
+  workspaceId?: string,
 ): ProjectUpdateRow {
-  if (!getProject(db, input.projectId)) throw apiError("NOT_FOUND", "Project not found");
+  if (!getProject(db, input.projectId, workspaceId))
+    throw apiError("NOT_FOUND", "Project not found");
   const body = input.body.trim();
   if (!body) throw apiError("VALIDATION_FAILED", "Project update body cannot be empty");
   const id = newId();
   const timestamp = now();
   db.query(
     `INSERT INTO project_updates
-      (id, project_id, author_id, health, body, risks, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
+      (id, project_id, author_id, health, body, risks, created_at, updated_at, workspace_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
   ).run(
     id,
     input.projectId,
@@ -75,13 +98,20 @@ export function createProjectUpdate(
     body,
     input.risks?.trim() || null,
     timestamp,
+    workspaceId ?? null,
   );
-  return getProjectUpdate(db, id)!;
+  return getProjectUpdate(db, id, workspaceId)!;
 }
 
-export function deleteProjectUpdate(db: Database, id: string): boolean {
-  const existing = getProjectUpdate(db, id);
+export function deleteProjectUpdate(db: Database, id: string, workspaceId?: string): boolean {
+  const existing = getProjectUpdate(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Project update not found");
-  db.query("DELETE FROM project_updates WHERE id = ?1").run(id);
+  if (workspaceId) {
+    db.query(
+      `DELETE FROM project_updates WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+    ).run(id, workspaceId);
+  } else {
+    db.query("DELETE FROM project_updates WHERE id = ?1").run(id);
+  }
   return true;
 }
