@@ -141,6 +141,55 @@ describe("PRB-543 Git preflight", () => {
     }
   });
 
+  test("PRB-495: creates, uses, and removes one worktree without touching the user's worktree", () => {
+    const fixture = createGitFixture();
+    const userWorktree = join(fixture.root, "user-worktree");
+    const diagnosticWorktree = join(fixture.root, "diagnostic-worktree");
+    const git = (path: string, args: string[]) =>
+      Bun.spawnSync(["git", "-C", path, ...args], { stdout: "pipe", stderr: "pipe" });
+    try {
+      const user = git(fixture.root, ["worktree", "add", "-qb", "user/worktree", userWorktree]);
+      expect(user.exitCode).toBe(0);
+      const before = git(fixture.root, ["worktree", "list", "--porcelain"]);
+      expect(before.exitCode).toBe(0);
+      expect(
+        git(fixture.root, ["config", "--local", "--bool", "--get", "core.bare"])
+          .stdout.toString()
+          .trim(),
+      ).toBe("false");
+
+      const created = git(fixture.root, [
+        "worktree",
+        "add",
+        "-qb",
+        "diagnostic/worktree",
+        diagnosticWorktree,
+      ]);
+      expect(created.exitCode).toBe(0);
+      expect(git(diagnosticWorktree, ["status", "--short", "--branch"]).exitCode).toBe(0);
+      expect(
+        git(fixture.root, ["config", "--local", "--bool", "--get", "core.bare"])
+          .stdout.toString()
+          .trim(),
+      ).toBe("false");
+
+      const removed = git(fixture.root, ["worktree", "remove", diagnosticWorktree]);
+      expect(removed.exitCode).toBe(0);
+      const after = git(fixture.root, ["worktree", "list", "--porcelain"]);
+      expect(after.exitCode).toBe(0);
+      expect(after.stdout.toString()).toBe(before.stdout.toString());
+      expect(existsSync(userWorktree)).toBe(true);
+      expect(git(userWorktree, ["status", "--short", "--branch"]).exitCode).toBe(0);
+      expect(
+        git(fixture.root, ["config", "--local", "--bool", "--get", "core.bare"])
+          .stdout.toString()
+          .trim(),
+      ).toBe("false");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test("PRB-495: reports core.bare without modifying the repository", async () => {
     const fixture = createGitFixture();
     try {

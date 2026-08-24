@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseRuntimeArgs, type RuntimeOptions } from "./options.ts";
 import {
+  assertNonBareGitWorktree,
   acquireDatabaseReservation,
   acquireInstanceLock,
   chooseAvailablePort,
@@ -45,11 +45,7 @@ The installed package requires Bun >= 1.3.14. Runtime data is stored outside thi
 `;
 
 function gitProjectRoot(projectPath: string): string {
-  const check = Bun.spawnSync(["git", "-C", projectPath, "rev-parse", "--show-toplevel"]);
-  if (check.exitCode !== 0) throw new Error(`Project is not a Git repository: ${projectPath}`);
-  const root = check.stdout.toString().trim();
-  if (!root) throw new Error(`Git returned an empty project root: ${projectPath}`);
-  return realpathSync(root);
+  return assertNonBareGitWorktree(projectPath);
 }
 
 function parsePort(value: string | undefined, fallback: number): number {

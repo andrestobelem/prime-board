@@ -9,6 +9,7 @@ import {
   resolveBootstrapIdentity,
   type BootstrapIdentity,
 } from "../apps/server/src/db/bootstrap-config.ts";
+import { assertNonBareGitWorktree } from "../packages/prime-board-runtime/src/project.ts";
 import {
   acquireDatabaseReservation,
   acquireInstanceLock,
@@ -65,11 +66,7 @@ function parsePort(raw: string | undefined): number {
 }
 
 function gitProjectRoot(projectPath: string): string {
-  const projectCheck = Bun.spawnSync(["git", "-C", projectPath, "rev-parse", "--show-toplevel"]);
-  if (projectCheck.exitCode !== 0) {
-    throw new Error(`Project is not a Git repository: ${projectPath}`);
-  }
-  return realpathSync(projectCheck.stdout.toString().trim());
+  return assertNonBareGitWorktree(projectPath);
 }
 
 function inheritedProjectMatches(projectRoot: string): boolean {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyInstance, deriveProjectIdentity } from "./prime-board-project-lib.ts";
@@ -203,6 +203,39 @@ async function readIdentity(port: number): Promise<{
   if (payload.errors?.length) throw new Error(JSON.stringify(payload.errors));
   return payload.data;
 }
+
+test("rejects a linked worktree when shared core.bare is true", async () => {
+  const root = mkdtempSync(join(tmpdir(), "prime-board-bare-guard-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const linked = join(root, "linked");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(project, { recursive: true });
+  Bun.spawnSync(["git", "init", "-q", "-b", "main", project]);
+  Bun.spawnSync(["git", "-C", project, "config", "user.email", "launcher@example.test"]);
+  Bun.spawnSync(["git", "-C", project, "config", "user.name", "Launcher Test"]);
+  writeFileSync(join(project, "README.md"), "fixture\n");
+  Bun.spawnSync(["git", "-C", project, "add", "README.md"]);
+  const commit = Bun.spawnSync(["git", "-C", project, "commit", "-qm", "fixture"]);
+  expect(commit.exitCode).toBe(0);
+  const added = Bun.spawnSync(["git", "-C", project, "worktree", "add", "-qb", "linked", linked]);
+  expect(added.exitCode).toBe(0);
+  const configured = Bun.spawnSync(["git", "-C", linked, "config", "--local", "core.bare", "true"]);
+  expect(configured.exitCode).toBe(0);
+  const launcher = await runLauncher(linked, home, { port: 34935, captureOutput: true });
+  try {
+    const output = `${await streamText(launcher.stdout)}${await streamText(launcher.stderr)}`;
+    expect(await launcher.exited).not.toBe(0);
+    expect(output).toContain("core.bare=true");
+    expect(
+      Bun.spawnSync(["git", "-C", project, "config", "--local", "--bool", "--get", "core.bare"])
+        .stdout.toString()
+        .trim(),
+    ).toBe("true");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
 
 test("configura la identidad inicial con flags y variables de entorno", async () => {
   const root = mkdtempSync(join(tmpdir(), "prime-board-identity-launcher-"));

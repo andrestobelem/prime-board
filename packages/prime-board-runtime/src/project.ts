@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -13,6 +14,103 @@ import {
 import { homedir } from "node:os";
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
+
+export interface GitWorktreeInspection {
+  projectPath: string;
+  projectRoot: string | null;
+  insideWorktree: boolean | null;
+  bareRepository: boolean | null;
+  coreBare: boolean | null;
+  error: string | null;
+}
+
+interface GitCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+function runGit(projectPath: string, args: string[]): GitCommandResult {
+  const result = Bun.spawnSync(["git", "-C", projectPath, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString().trim(),
+    stderr: result.stderr.toString().trim(),
+  };
+}
+
+function parseGitBoolean(value: string): boolean | null {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return null;
+}
+
+/**
+ * Reads the worktree state without changing Git configuration or worktree records.
+ * `core.bare` lives in the shared repository config, so a value of true is unsafe
+ * even when Git still reports the linked checkout as a worktree.
+ */
+export function inspectGitWorktree(projectPath: string): GitWorktreeInspection {
+  const resolvedPath = resolve(projectPath);
+  const rootResult = runGit(resolvedPath, ["rev-parse", "--show-toplevel"]);
+  const insideResult = runGit(resolvedPath, ["rev-parse", "--is-inside-work-tree"]);
+  const bareResult = runGit(resolvedPath, ["rev-parse", "--is-bare-repository"]);
+  const coreBareResult = runGit(resolvedPath, [
+    "config",
+    "--local",
+    "--bool",
+    "--get",
+    "core.bare",
+  ]);
+  let projectRoot: string | null = null;
+  if (rootResult.exitCode === 0 && rootResult.stdout) {
+    try {
+      projectRoot = realpathSync(rootResult.stdout);
+    } catch {
+      projectRoot = resolve(rootResult.stdout);
+    }
+  }
+  const commandError = [rootResult, insideResult, bareResult].find(
+    (result) => result.exitCode !== 0,
+  )?.stderr;
+  return {
+    projectPath: resolvedPath,
+    projectRoot,
+    insideWorktree: parseGitBoolean(insideResult.stdout),
+    bareRepository: parseGitBoolean(bareResult.stdout),
+    coreBare: parseGitBoolean(coreBareResult.stdout),
+    error: commandError || null,
+  };
+}
+
+/**
+ * Resolves a project root only when the checkout is a usable non-bare worktree.
+ * This guard is read-only. Callers must report and repair Git configuration
+ * outside the launcher when it fails.
+ */
+export function assertNonBareGitWorktree(projectPath: string): string {
+  const inspection = inspectGitWorktree(projectPath);
+  const projectRoot = inspection.projectRoot;
+  const unsafe =
+    projectRoot === null ||
+    inspection.insideWorktree !== true ||
+    inspection.bareRepository === true ||
+    inspection.coreBare === true;
+  if (unsafe) {
+    const details = [
+      `path=${inspection.projectPath}`,
+      `core.bare=${inspection.coreBare === null ? "unset" : String(inspection.coreBare)}`,
+      `is-bare-repository=${inspection.bareRepository === null ? "unknown" : String(inspection.bareRepository)}`,
+      `is-inside-work-tree=${inspection.insideWorktree === null ? "unknown" : String(inspection.insideWorktree)}`,
+      inspection.error,
+    ].filter(Boolean);
+    throw new Error(`Git checkout must be a usable non-bare worktree (${details.join(", ")})`);
+  }
+  return projectRoot;
+}
 
 export interface ProjectInstanceIdentity {
   projectRoot: string;
