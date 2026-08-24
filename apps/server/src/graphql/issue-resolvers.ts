@@ -706,21 +706,32 @@ export const issueResolvers = {
       context: Context,
     ) => {
       if (context.persistence) return postgresActivityPayload(activity, context);
-      const queries: Record<RefTable, string> = {
-        states: "SELECT name FROM workflow_states WHERE id = ?1",
-        actors: "SELECT name FROM actors WHERE id = ?1",
-        projects: "SELECT name FROM projects WHERE id = ?1",
-        milestones: "SELECT name FROM milestones WHERE id = ?1",
-        cycles:
-          "SELECT teams.key || '/' || cycles.number AS name FROM cycles " +
-          "JOIN teams ON teams.id = cycles.team_id WHERE cycles.id = ?1",
-        teams: "SELECT key AS name FROM teams WHERE id = ?1",
-        issues:
-          "SELECT teams.key || '-' || issues.number AS name FROM issues " +
-          "JOIN teams ON teams.id = issues.team_id WHERE issues.id = ?1",
+      const resolve = (table: RefTable, value: string): string | undefined => {
+        if (table === "actors") return lookupActor(context, value)?.name;
+        if (table === "projects") return lookupProject(context, value)?.name;
+        if (table === "milestones")
+          return getMilestone(context.db, value, context.workspace.workspaceId)?.name;
+        if (table === "teams") {
+          return (lookupTeam(context, { id: value }) ?? lookupTeam(context, { key: value }))?.key;
+        }
+        if (table === "states") {
+          const state = context.db
+            .query("SELECT name, team_id FROM workflow_states WHERE id = ?1")
+            .get(value) as { name: string; team_id: string } | null;
+          return state && lookupTeam(context, { id: state.team_id }) ? state.name : undefined;
+        }
+        if (table === "cycles") {
+          const cycle = getCycle(context.db, value, context.workspace.workspaceId);
+          const team = cycle ? lookupTeam(context, { id: cycle.team_id }) : null;
+          return cycle && team ? `${team.key}/${cycle.number}` : undefined;
+        }
+        if (table === "issues") {
+          const issue = getIssueByRef(context.db, value, context.workspace.workspaceId);
+          const team = issue ? lookupTeam(context, { id: issue.team_id }) : null;
+          return issue && team ? `${team.key}-${issue.number}` : undefined;
+        }
+        return undefined;
       };
-      const resolve = (table: RefTable, value: string): string | undefined =>
-        (context.db.query(queries[table]).get(value) as { name: string } | null)?.name;
       return translateActivityRefs(
         activity.type,
         sanitizeActivityPayload(activity, context),
