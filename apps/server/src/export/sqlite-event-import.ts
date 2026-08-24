@@ -83,6 +83,9 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
         (row) => row.id,
       )
     : [];
+  if (workspaceTable && workspaceIds.length === 0) {
+    throw new Error("SQLite event import requires at least one Workspace");
+  }
   const multipleWorkspaces = workspaceIds.length > 1;
   if (multipleWorkspaces && requestedWorkspaceId === undefined) {
     throw new Error(

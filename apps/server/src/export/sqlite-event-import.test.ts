@@ -244,7 +244,10 @@ describe("SQLite history import", () => {
       addWorkspaceActivity(db, null, "legacy-event", "issue-1");
       expect(() =>
         importSqliteActivity({ db, rootDir: root, workspaceId: "missing-workspace" }),
-      ).toThrow("does not exist");
+      ).toThrow("requires at least one Workspace");
+      expect(() => importSqliteActivity({ db, rootDir: root, dryRun: true })).toThrow(
+        "requires at least one Workspace",
+      );
       expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
     } finally {
       db.close();
