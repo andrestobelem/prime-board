@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readEventLog } from "./event-log.ts";
 import { importSqliteActivity } from "./sqlite-event-import.ts";
+import { isSharedActivityType } from "./activity-stream.ts";
 
 function database(): Database {
   const db = new Database(":memory:");
@@ -77,6 +78,14 @@ describe("SQLite history import", () => {
     }
   });
 
+  it("normalizes and excludes every sensitive activity type", () => {
+    expect(isSharedActivityType("FaVoRiTe-SeNt")).toBe(false);
+    expect(isSharedActivityType("inbox_receipt_created")).toBe(false);
+    expect(isSharedActivityType("API key rotated")).toBe(false);
+    expect(isSharedActivityType("webhook_secret_changed")).toBe(false);
+    expect(isSharedActivityType("issue_updated")).toBe(true);
+  });
+
   it("reports orphans, malformed payloads and excluded projections without writing them", () => {
     const db = database();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));
@@ -86,12 +95,19 @@ describe("SQLite history import", () => {
       addActivity(db, "bad-1", "not-json");
       addActivity(db, "secret-1", JSON.stringify({ apiKeyHash: "never" }));
       addActivity(db, "favorite-1", "{}", "issue-1", "actor-1", "favorite_created");
+      addActivity(db, "favorite-sent-1", "{}", "issue-1", "actor-1", "FaVoRiTe-SeNt");
+      addActivity(db, "inbox-1", "{}", "issue-1", "actor-1", "inbox_receipt_created");
+      addActivity(db, "apikey-1", "{}", "issue-1", "actor-1", "API key rotated");
+      addActivity(db, "webhook-secret-1", "{}", "issue-1", "actor-1", "webhook_secret_changed");
       const result = importSqliteActivity({ db, rootDir: root });
-      expect(result.scanned).toBe(5);
+      expect(result.scanned).toBe(9);
       expect(result.emitted).toBe(1);
       expect(result.orphaned).toBe(1);
-      expect(result.rejected).toBe(3);
-      expect(readEventLog(root).map((event) => event.eventId)).toEqual(["valid-1"]);
+      expect(result.rejected).toBe(7);
+      const eventIds = readEventLog(root).map((event) => event.eventId);
+      expect(eventIds).toEqual(["valid-1"]);
+      for (const id of ["favorite-1", "favorite-sent-1", "inbox-1", "apikey-1", "webhook-secret-1"])
+        expect(eventIds).not.toContain(id);
       expect(readFileSync(join(root, ".prime-board/log/events.jsonl"), "utf8")).not.toContain(
         "never",
       );
