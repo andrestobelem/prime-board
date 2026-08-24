@@ -1755,7 +1755,13 @@ export const resolvers = {
             };
           }
           return {
-            success: deleteTeamMembership(context.db, viewer.id, args.id, isWorkspaceAdmin(viewer)),
+            success: deleteTeamMembership(
+              context.db,
+              viewer.id,
+              args.id,
+              isWorkspaceAdmin(viewer),
+              context.workspace.workspaceId,
+            ),
           };
         },
         actorCreate: async (

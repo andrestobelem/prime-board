@@ -13,6 +13,21 @@ export interface TeamMembershipRow {
   actor_id: string;
   role: TeamMembershipRole;
   created_at: string;
+  workspace_id?: string | null;
+}
+
+/** Las filas legacy con NULL solo son visibles con un único Workspace. */
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
+function resolveLegacyWorkspaceId(db: Database): string | null {
+  const workspace = db
+    .query(
+      "SELECT id FROM workspace WHERE (SELECT count(*) FROM workspace) = 1 ORDER BY created_at, id",
+    )
+    .get() as { id: string } | null;
+  return workspace?.id ?? null;
 }
 
 export function mapTeamMembership(row: TeamMembershipRow) {
@@ -25,10 +40,18 @@ export function mapTeamMembership(row: TeamMembershipRow) {
   };
 }
 
-export function getTeamMembership(db: Database, id: string): TeamMembershipRow | null {
-  return db
-    .query("SELECT * FROM team_memberships WHERE id = ?1")
-    .get(id) as TeamMembershipRow | null;
+export function getTeamMembership(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+): TeamMembershipRow | null {
+  const query = workspaceId
+    ? `SELECT * FROM team_memberships
+       WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT * FROM team_memberships WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as TeamMembershipRow | null;
 }
 
 export function listTeamMemberships(db: Database, teamId: string): TeamMembershipRow[] {
@@ -54,22 +77,35 @@ export function isTeamMember(db: Database, teamId: string, actorId: string): boo
   );
 }
 
-export function isTeamOwner(db: Database, teamId: string, actorId: string): boolean {
+export function isTeamOwner(
+  db: Database,
+  teamId: string,
+  actorId: string,
+  workspaceId?: string,
+): boolean {
+  const workspaceCondition = workspaceId
+    ? `AND ${workspaceClause("teams.workspace_id", "?3")}
+           AND ${workspaceClause("team_memberships.workspace_id", "?3")}`
+    : "";
+  const query = `
+    SELECT 1
+      FROM team_memberships
+      JOIN teams ON teams.id = team_memberships.team_id
+      JOIN workspace_memberships
+        ON workspace_memberships.workspace_id = COALESCE(
+             teams.workspace_id,
+             (SELECT id FROM workspace WHERE (SELECT count(*) FROM workspace) = 1)
+           )
+       AND workspace_memberships.actor_id = team_memberships.actor_id
+       AND workspace_memberships.status = 'active'
+     WHERE team_memberships.team_id = ?1
+       AND team_memberships.actor_id = ?2
+       AND team_memberships.role = 'owner'
+       ${workspaceCondition}`;
   return Boolean(
-    db
-      .query(
-        `SELECT 1
-         FROM team_memberships
-         JOIN teams ON teams.id = team_memberships.team_id
-         JOIN workspace_memberships
-           ON workspace_memberships.workspace_id = teams.workspace_id
-          AND workspace_memberships.actor_id = team_memberships.actor_id
-          AND workspace_memberships.status = 'active'
-         WHERE team_memberships.team_id = ?1
-           AND team_memberships.actor_id = ?2
-           AND team_memberships.role = 'owner'`,
-      )
-      .get(teamId, actorId),
+    workspaceId
+      ? db.query(query).get(teamId, actorId, workspaceId)
+      : db.query(query).get(teamId, actorId),
   );
 }
 
@@ -78,22 +114,26 @@ export function assertTeamMember(db: Database, teamId: string, actorId: string):
   if (!isTeamMember(db, teamId, actorId)) throw apiError("NOT_FOUND", "Team resource not found");
 }
 
-function isWorkspaceAdminForTeam(db: Database, teamId: string, actorId: string): boolean {
-  const team = db.query("SELECT workspace_id FROM teams WHERE id = ?1").get(teamId) as {
-    workspace_id: string | null;
-  } | null;
+function isWorkspaceAdminForTeam(
+  db: Database,
+  teamId: string,
+  actorId: string,
+  workspaceId?: string,
+): boolean {
+  const query = workspaceId
+    ? `SELECT workspace_id FROM teams
+       WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT workspace_id FROM teams WHERE id = ?1";
+  const team = (
+    workspaceId ? db.query(query).get(teamId, workspaceId) : db.query(query).get(teamId)
+  ) as { workspace_id: string | null } | null;
   if (!team) return false;
 
-  let workspaceId = team.workspace_id;
-  if (!workspaceId) {
-    const workspace = db
-      .query(
-        "SELECT id FROM workspace WHERE (SELECT count(*) FROM workspace) = 1 ORDER BY created_at, id",
-      )
-      .get() as { id: string } | null;
-    workspaceId = workspace?.id ?? null;
+  let teamWorkspaceId = team.workspace_id;
+  if (!teamWorkspaceId) {
+    teamWorkspaceId = workspaceId ?? resolveLegacyWorkspaceId(db);
   }
-  if (!workspaceId) return false;
+  if (!teamWorkspaceId) return false;
 
   return Boolean(
     db
@@ -105,13 +145,31 @@ function isWorkspaceAdminForTeam(db: Database, teamId: string, actorId: string):
            AND role = 'admin'
            AND status = 'active'`,
       )
-      .get(workspaceId, actorId),
+      .get(teamWorkspaceId, actorId),
   );
 }
 
-function assertTeamOwner(db: Database, teamId: string, actorId: string, allowAdmin = false): void {
-  if (allowAdmin && isWorkspaceAdminForTeam(db, teamId, actorId)) return;
-  if (!isTeamOwner(db, teamId, actorId)) {
+function assertTeamActiveInWorkspace(db: Database, teamId: string, workspaceId: string): void {
+  const team = db
+    .query(
+      `SELECT archived_at
+         FROM teams
+        WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+    )
+    .get(teamId, workspaceId) as { archived_at: string | null } | null;
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
+  if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
+}
+
+function assertTeamOwner(
+  db: Database,
+  teamId: string,
+  actorId: string,
+  allowAdmin = false,
+  workspaceId?: string,
+): void {
+  if (allowAdmin && isWorkspaceAdminForTeam(db, teamId, actorId, workspaceId)) return;
+  if (!isTeamOwner(db, teamId, actorId, workspaceId)) {
     throw apiError("NOT_FOUND", "Team resource not found");
   }
 }
@@ -154,17 +212,38 @@ export function deleteTeamMembership(
   viewerId: string,
   id: string,
   allowAdmin = false,
+  workspaceId?: string,
 ): boolean {
-  const membership = getTeamMembership(db, id);
-  if (!membership) throw apiError("NOT_FOUND", "Team membership not found");
-  assertTeamActive(db, membership.team_id);
-  assertTeamOwner(db, membership.team_id, viewerId, allowAdmin);
-  if (membership.role === "owner") {
-    const owners = db
-      .query("SELECT count(*) AS count FROM team_memberships WHERE team_id = ?1 AND role = 'owner'")
-      .get(membership.team_id) as { count: number };
-    if (owners.count <= 1) throw apiError("VALIDATION_FAILED", "A team must keep one owner");
+  const effectiveWorkspaceId = workspaceId ?? resolveLegacyWorkspaceId(db);
+  if (!effectiveWorkspaceId) {
+    throw apiError("NOT_FOUND", "Team membership requires a Workspace context");
   }
-  db.query("DELETE FROM team_memberships WHERE id = ?1").run(id);
-  return true;
+  return db.transaction(() => {
+    // Resuelve el objetivo dentro del Workspace efectivo antes de comprobar
+    // permisos. Un ID de otro Workspace debe parecer una membresía inexistente.
+    const membership = getTeamMembership(db, id, effectiveWorkspaceId);
+    if (!membership) throw apiError("NOT_FOUND", "Team membership not found");
+    assertTeamActiveInWorkspace(db, membership.team_id, effectiveWorkspaceId);
+    assertTeamOwner(db, membership.team_id, viewerId, allowAdmin, effectiveWorkspaceId);
+    if (membership.role === "owner") {
+      const owners = db
+        .query(
+          `SELECT count(*) AS count
+             FROM team_memberships
+            WHERE team_id = ?1
+              AND role = 'owner'
+              AND ${workspaceClause("workspace_id", "?2")}`,
+        )
+        .get(membership.team_id, effectiveWorkspaceId) as { count: number };
+      if (owners.count <= 1) throw apiError("VALIDATION_FAILED", "A team must keep one owner");
+    }
+    const deleted = db
+      .query(
+        `DELETE FROM team_memberships
+          WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+      )
+      .run(id, effectiveWorkspaceId);
+    if (deleted.changes !== 1) throw apiError("NOT_FOUND", "Team membership not found");
+    return true;
+  })();
 }
