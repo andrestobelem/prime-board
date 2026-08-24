@@ -1,12 +1,13 @@
 // Tests de AT-157: la DB se reconstruye desde el repo (round-trip fiel).
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrate } from "../db/database.ts";
 import { exportBoard } from "./exporter.ts";
 import { rebuildFromRepo } from "./importer.ts";
+import { appendEvent } from "./event-log.ts";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 
 let app: TestApp;
@@ -134,6 +135,101 @@ describe("rebuildFromRepo", () => {
     } finally {
       rmSync(other, { recursive: true, force: true });
       fresh.close();
+    }
+  });
+
+  it("rehidrata el stream canónico cuando falta el log por Issue", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-canonical-rebuild-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      for (const file of readdirSync(join(snapshot, ".prime-board", "log"))) {
+        if (file !== "events.jsonl") unlinkSync(join(snapshot, ".prime-board", "log", file));
+      }
+      const actor = app.db.query("SELECT name FROM actors WHERE name = 'worker'").get() as {
+        name: string;
+      };
+      const states = app.db
+        .query(
+          `SELECT workflow_states.id FROM workflow_states
+           JOIN teams ON teams.id = workflow_states.team_id
+           WHERE teams.key = 'PB' ORDER BY workflow_states.position LIMIT 2`,
+        )
+        .all() as Array<{ id: string }>;
+      appendEvent(
+        {
+          schemaVersion: 1,
+          eventId: "canonical-comment-1",
+          aggregate: "issue",
+          aggregateKey: "PB-1",
+          type: "commented",
+          actor: actor.name,
+          occurredAt: "2025-01-01T00:00:00.000Z",
+          payload: { body: "canonical comment" },
+        },
+        { rootDir: snapshot },
+      );
+      appendEvent(
+        {
+          schemaVersion: 1,
+          eventId: "canonical-state-1",
+          aggregate: "issue",
+          aggregateKey: "PB-1",
+          type: "state_changed",
+          actor: actor.name,
+          occurredAt: "2025-01-01T00:00:01.000Z",
+          payload: { from: states[0]!.id, to: states[1]!.id },
+        },
+        { rootDir: snapshot },
+      );
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      const result = rebuildFromRepo(fresh, snapshot);
+      expect(result.comments).toBe(1);
+      expect(result.events).toBe(2);
+      expect(fresh.query("SELECT body FROM comments").get()).toEqual({
+        body: "canonical comment",
+      });
+      const activity = fresh
+        .query("SELECT type, payload FROM activity ORDER BY created_at, id")
+        .all() as Array<{ type: string; payload: string }>;
+      expect(activity.at(-1)?.type).toBe("state_changed");
+      const payload = JSON.parse(activity.at(-1)!.payload) as { from: string; to: string };
+      // Canonical Activity payloads keep source IDs. The activity table is a
+      // history index, so rebuild must not reinterpret them as natural keys.
+      expect(payload).toEqual({ from: states[0]!.id, to: states[1]!.id });
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  it("no duplica el historial canónico cuando existe log por Issue", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-canonical-dedup-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      appendEvent(
+        {
+          schemaVersion: 1,
+          eventId: "canonical-duplicate-1",
+          aggregate: "issue",
+          aggregateKey: "PB-1",
+          type: "commented",
+          actor: "worker",
+          occurredAt: "2025-01-01T00:00:00.000Z",
+          payload: { body: "must not be duplicated" },
+        },
+        { rootDir: snapshot },
+      );
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      const result = rebuildFromRepo(fresh, snapshot);
+      expect(result.comments).toBe(1);
+      expect(fresh.query("SELECT body FROM comments").get()).toEqual({ body: "hola" });
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
     }
   });
 

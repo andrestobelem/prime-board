@@ -13,6 +13,7 @@ import { newId, now } from "../db/util.ts";
 import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
 import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
 import { readReplicaMetadata, type ReadReplicaMetadata } from "./replica-metadata.ts";
+import { readEventLog } from "./event-log.ts";
 
 export interface RebuildResult {
   issues: number;
@@ -1117,31 +1118,36 @@ export function rebuildFromRepo(
     };
     // activityIdsByIssue: índice estable para rehidratar inbox_receipts (PRB-224).
     const activityIdsByIssue = new Map<string, string[]>();
-
-    // 9. Historial desde el log.
-    for (const file of readdirSync(join(base, "log")).filter((f) => f.endsWith(".jsonl"))) {
-      const identifier = file.replace(/\.jsonl$/, "");
-      const issueId = issueIds.get(identifier);
-      if (!issueId) continue;
+    type RebuildEvent = {
+      actor: unknown;
+      type: string;
+      payload?: Record<string, unknown>;
+      ts: string;
+    };
+    const processHistory = (
+      identifier: string,
+      issueId: string,
+      events: RebuildEvent[],
+      useNaturalReferences: boolean,
+    ): void => {
       const activityIds: string[] = [];
-      const contents = readFileSync(join(base, "log", file), "utf8").trim();
-      if (!contents) continue;
-      for (const line of contents.split("\n")) {
-        const event = JSON.parse(line);
-        const actorId = actorIds.get(event.actor) ?? [...actorIds.values()][0]!;
+      for (const event of events) {
+        const actorName = typeof event.actor === "string" ? event.actor : null;
+        const actorId =
+          (actorName ? actorIds.get(actorName) : undefined) ?? [...actorIds.values()][0]!;
         // Los comentarios se reconstruyen desde el log: el evento `commented` ya
         // trae autor, fecha y body (AT-165), así que no se duplican en el snapshot.
         if (event.type === "commented" && event.payload?.body) {
           db.query(
             "INSERT INTO comments (id, issue_id, actor_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-          ).run(newId(), issueId, actorId, event.payload.body as string, event.ts as string);
+          ).run(newId(), issueId, actorId, event.payload.body as string, event.ts);
           result.comments += 1;
         }
         if (event.type === "subscribed") {
           db.query(
             `INSERT INTO issue_subscribers (issue_id, actor_id, created_at)
              VALUES (?1, ?2, ?3) ON CONFLICT(issue_id, actor_id) DO NOTHING`,
-          ).run(issueId, actorId, event.ts as string);
+          ).run(issueId, actorId, event.ts);
         } else if (event.type === "unsubscribed") {
           db.query("DELETE FROM issue_subscribers WHERE issue_id = ?1 AND actor_id = ?2").run(
             issueId,
@@ -1157,12 +1163,51 @@ export function rebuildFromRepo(
           issueId,
           actorId,
           event.type,
-          JSON.stringify(denormalize(event.type, event.payload ?? {})),
+          JSON.stringify(
+            useNaturalReferences
+              ? denormalize(event.type, event.payload ?? {})
+              : (event.payload ?? {}),
+          ),
           event.ts,
         );
         result.events += 1;
       }
       activityIdsByIssue.set(identifier, activityIds);
+    };
+
+    // 9. Historial desde los logs por Issue. El stream canónico se usa solo
+    // como fallback para un Issue que no tiene log histórico propio.
+    const logDir = join(base, "log");
+    const logFiles = readdirSync(logDir).filter((file) => file.endsWith(".jsonl"));
+    const issueLogFiles = new Set(logFiles.filter((file) => file !== "events.jsonl"));
+    for (const file of logFiles) {
+      if (file === "events.jsonl") continue;
+      const identifier = file.replace(/\.jsonl$/, "");
+      const issueId = issueIds.get(identifier);
+      if (!issueId) continue;
+      const contents = readFileSync(join(logDir, file), "utf8").trim();
+      if (!contents) continue;
+      const events = contents.split("\n").map((line) => JSON.parse(line) as RebuildEvent);
+      processHistory(identifier, issueId, events, true);
+    }
+
+    const canonicalEvents = readEventLog({ rootDir });
+    const canonicalByIssue = new Map<string, RebuildEvent[]>();
+    for (const event of canonicalEvents) {
+      if (event.aggregate !== "issue" || !issueIds.has(event.aggregateKey)) continue;
+      if (issueLogFiles.has(`${event.aggregateKey}.jsonl`)) continue;
+      const events = canonicalByIssue.get(event.aggregateKey) ?? [];
+      events.push({
+        actor: event.actor,
+        type: event.type,
+        payload: event.payload as Record<string, unknown>,
+        ts: event.occurredAt,
+      });
+      canonicalByIssue.set(event.aggregateKey, events);
+    }
+    for (const [identifier, events] of canonicalByIssue) {
+      const issueId = issueIds.get(identifier);
+      if (issueId) processHistory(identifier, issueId, events, false);
     }
 
     // 9b. Inbox receipts (PRB-224); ausente en exports viejos.
