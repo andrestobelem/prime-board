@@ -4,6 +4,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   renameSync,
@@ -11,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { UsageError } from "./errors.ts";
 
 /** Identidad que el servidor resolvió para una credencial, nunca un input del caller. */
@@ -60,12 +61,52 @@ export const CONFIG_DIR = join(homedir(), ".prime-board");
 export const CONFIG_PATH = join(CONFIG_DIR, "cli.json");
 export const DEFAULT_PROFILE = "default";
 
+function isMissingPath(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function assertNoSymlinkAncestors(path: string, basePath: string): void {
+  const absolutePath = resolve(path);
+  const absoluteBasePath = resolve(basePath);
+  if (absolutePath !== absoluteBasePath && !absolutePath.startsWith(`${absoluteBasePath}${sep}`)) {
+    throw new Error("CLI credential path must be below its home directory");
+  }
+
+  let currentPath = absoluteBasePath;
+  try {
+    if (lstatSync(currentPath).isSymbolicLink()) {
+      throw new Error(`CLI credential path cannot contain a symlink: ${currentPath}`);
+    }
+  } catch (error) {
+    if (!isMissingPath(error)) throw error;
+    return;
+  }
+
+  for (const component of absolutePath.slice(absoluteBasePath.length).split(sep)) {
+    if (!component) continue;
+    currentPath = join(currentPath, component);
+    try {
+      if (lstatSync(currentPath).isSymbolicLink()) {
+        throw new Error(`CLI credential path cannot contain a symlink: ${currentPath}`);
+      }
+    } catch (error) {
+      if (!isMissingPath(error)) throw error;
+      break;
+    }
+  }
+}
+
+function assertSafeConfigPath(path: string): void {
+  assertNoSymlinkAncestors(path, dirname(CONFIG_DIR));
+}
+
 function hardenPermissions(): void {
   chmodSync(CONFIG_DIR, 0o700);
   chmodSync(CONFIG_PATH, 0o600);
 }
 
 async function readStoredConfig(): Promise<StoredConfig> {
+  assertSafeConfigPath(CONFIG_PATH);
   const file = Bun.file(CONFIG_PATH);
   if (!(await file.exists())) return {};
   hardenPermissions();
@@ -161,7 +202,9 @@ export async function currentProfile(): Promise<string> {
 }
 
 export async function saveConfig(config: CliConfig, requestedProfile?: string): Promise<void> {
+  assertSafeConfigPath(CONFIG_DIR);
   mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  assertSafeConfigPath(CONFIG_PATH);
   chmodSync(CONFIG_DIR, 0o700);
 
   const profile = profileName(requestedProfile ?? config.profile ?? DEFAULT_PROFILE);

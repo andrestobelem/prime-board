@@ -1,5 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,6 +31,57 @@ describe("CLI credential configuration", () => {
       const configPath = result.stdout.toString().trim();
       expect(statSync(join(home, ".prime-board")).mode & 0o777).toBe(0o700);
       expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlinked config directory without writing into its target", () => {
+    const home = mkdtempSync(join(tmpdir(), "pb-cli-symlink-dir-"));
+    const projectRoot = join(home, "project");
+    const redirectedDirectory = join(projectRoot, ".prime-board");
+    mkdirSync(projectRoot, { recursive: true });
+    symlinkSync(redirectedDirectory, join(home, ".prime-board"));
+    try {
+      const script = `
+        import { saveConfig, loadConfig } from "./apps/cli/src/config.ts";
+        await saveConfig({ url: "http://example.invalid", apiKey: "pb_test_secret" });
+        await loadConfig();
+      `;
+      const result = Bun.spawnSync(["bun", "-e", script], {
+        cwd: ROOT,
+        env: { ...process.env, HOME: home },
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("symlink");
+      expect(existsSync(join(redirectedDirectory, "cli.json"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlinked config file when reading or replacing it", () => {
+    const home = mkdtempSync(join(tmpdir(), "pb-cli-symlink-file-"));
+    const projectRoot = join(home, "project");
+    const configDirectory = join(home, ".prime-board");
+    const redirectedFile = join(projectRoot, "redirected-cli.json");
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(configDirectory, { recursive: true });
+    writeFileSync(redirectedFile, '{"url":"http://example.invalid","apiKey":"redirected"}\n');
+    symlinkSync(redirectedFile, join(configDirectory, "cli.json"));
+    try {
+      const script = `
+        import { saveConfig, loadConfig } from "./apps/cli/src/config.ts";
+        await loadConfig();
+        await saveConfig({ url: "http://example.invalid", apiKey: "pb_test_secret" });
+      `;
+      const result = Bun.spawnSync(["bun", "-e", script], {
+        cwd: ROOT,
+        env: { ...process.env, HOME: home },
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("symlink");
+      expect(JSON.parse(readFileSync(redirectedFile, "utf8")).apiKey).toBe("redirected");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
