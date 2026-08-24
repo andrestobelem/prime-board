@@ -318,7 +318,7 @@ function targetTeamIds(context: Context, row: DocumentRow): string[] {
     return [...new Set([...direct, ...projects])];
   }
   if (row.cycle_id) {
-    const cycle = getCycle(context.db, row.cycle_id);
+    const cycle = getCycle(context.db, row.cycle_id, context.workspace.workspaceId);
     return cycle ? [cycle.team_id] : [];
   }
   return [];
@@ -359,7 +359,7 @@ function documentVisible(context: Context, row: DocumentRow): boolean {
     );
   }
   if (row.cycle_id) {
-    const cycle = getCycle(context.db, row.cycle_id);
+    const cycle = getCycle(context.db, row.cycle_id, context.workspace.workspaceId);
     return Boolean(
       cycle &&
       canAccessTeam(context.db, requireViewer(context), cycle.team_id) &&
@@ -409,7 +409,7 @@ function assertTargetWriteAccess(
     return { ...input, initiativeId: initiative.id };
   }
   if (input.cycleId) {
-    const cycle = getCycle(context.db, input.cycleId);
+    const cycle = getCycle(context.db, input.cycleId, context.workspace.workspaceId);
     if (!cycle) throw apiError("NOT_FOUND", "Cycle not found");
     assertCanManageIssue(context.db, viewer, cycle.team_id);
     return { ...input, cycleId: cycle.id };
@@ -548,7 +548,7 @@ export const documentResolvers = {
           ? mapPostgresCycle(cycle as unknown as Record<string, unknown>)
           : null;
       }
-      const cycle = getCycle(context.db, document._row.cycle_id);
+      const cycle = getCycle(context.db, document._row.cycle_id, context.workspace.workspaceId);
       return cycle && documentVisible(context, document._row as DocumentRow)
         ? mapCycle(cycle)
         : null;

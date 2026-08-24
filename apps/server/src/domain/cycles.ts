@@ -7,6 +7,10 @@ import { recordActivity } from "./activity.ts";
 
 export type CycleState = "upcoming" | "active" | "completed";
 
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
 export interface CycleRow {
   id: string;
   team_id: string;
@@ -18,6 +22,7 @@ export interface CycleRow {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  workspace_id?: string | null;
 }
 
 export function mapCycle(row: CycleRow) {
@@ -35,34 +40,49 @@ export function mapCycle(row: CycleRow) {
   };
 }
 
-export function getCycle(db: Database, id: string): CycleRow | null {
-  return db.query("SELECT * FROM cycles WHERE id = ?1").get(id) as CycleRow | null;
+export function getCycle(db: Database, id: string, workspaceId?: string): CycleRow | null {
+  const query = workspaceId
+    ? `SELECT * FROM cycles WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT * FROM cycles WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as CycleRow | null;
 }
 
-export function listCycles(db: Database, teamId: string, includeArchived = false): CycleRow[] {
-  if (includeArchived) {
-    return db
-      .query("SELECT * FROM cycles WHERE team_id = ?1 ORDER BY number")
-      .all(teamId) as CycleRow[];
-  }
-  return db
-    .query("SELECT * FROM cycles WHERE team_id = ?1 AND archived_at IS NULL ORDER BY number")
-    .all(teamId) as CycleRow[];
+export function listCycles(
+  db: Database,
+  teamId: string,
+  includeArchived = false,
+  workspaceId?: string,
+): CycleRow[] {
+  const workspace = workspaceId ? ` AND ${workspaceClause("workspace_id", "?2")}` : "";
+  const archived = includeArchived ? "" : " AND archived_at IS NULL";
+  const query = `SELECT * FROM cycles WHERE team_id = ?1${workspace}${archived} ORDER BY number`;
+  return (
+    workspaceId ? db.query(query).all(teamId, workspaceId) : db.query(query).all(teamId)
+  ) as CycleRow[];
 }
 
-function nextNumber(db: Database, teamId: string): number {
+function nextNumber(db: Database, teamId: string, workspaceId?: string): number {
   const team = db.query("SELECT key FROM teams WHERE id = ?1").get(teamId) as { key: string };
+  const cycleWhere = workspaceId
+    ? `team_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "team_id = ?1";
   const row = db
-    .query("SELECT COALESCE(MAX(number), 0) AS n FROM cycles WHERE team_id = ?1")
-    .get(teamId) as { n: number };
+    .query(`SELECT COALESCE(MAX(number), 0) AS n FROM cycles WHERE ${cycleWhere}`)
+    .get(...(workspaceId ? [teamId, workspaceId] : [teamId])) as { n: number };
   let highest = row.n;
   // Deleted cycles leave qualified tombstone references in Activity. Include
   // those numbers in the sequence so a recreated cycle can never silently
   // acquire the identity of an old historical cycle.
   const prefix = `${team.key}/`;
   const events = db
-    .query("SELECT payload FROM activity WHERE type = 'cycle_changed'")
-    .all() as Array<{ payload: string }>;
+    .query(
+      workspaceId
+        ? `SELECT payload FROM activity WHERE type = 'cycle_changed' AND ${workspaceClause("workspace_id", "?1")}`
+        : "SELECT payload FROM activity WHERE type = 'cycle_changed'",
+    )
+    .all(...(workspaceId ? [workspaceId] : [])) as Array<{ payload: string }>;
   for (const event of events) {
     const payload = JSON.parse(event.payload) as Record<string, unknown>;
     for (const value of [payload.from, payload.to]) {
@@ -91,12 +111,16 @@ export function createCycle(
     endsAt: string;
     state?: string | null;
   },
+  workspaceId?: string,
 ): CycleRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
-  if (!db.query("SELECT id FROM teams WHERE id = ?1").get(input.teamId)) {
-    throw apiError("NOT_FOUND", "Team not found");
-  }
+  const team = workspaceId
+    ? db
+        .query(`SELECT id FROM teams WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`)
+        .get(input.teamId, workspaceId)
+    : db.query("SELECT id FROM teams WHERE id = ?1").get(input.teamId);
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
   const startsAt = parseDateTime(input.startsAt, "Cycle startsAt");
   const endsAt = parseDateTime(input.endsAt, "Cycle endsAt");
   if (startsAt > endsAt) {
@@ -105,13 +129,23 @@ export function createCycle(
   const state = input.state ? resolveState(input.state) : "upcoming";
   const id = newId();
   const timestamp = now();
-  const number = nextNumber(db, input.teamId);
+  const number = nextNumber(db, input.teamId, workspaceId);
   db.query(
     `INSERT INTO cycles
-      (id, team_id, number, name, starts_at, ends_at, state, created_at, updated_at, archived_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, NULL)`,
-  ).run(id, input.teamId, number, name, input.startsAt, input.endsAt, state, timestamp);
-  return getCycle(db, id)!;
+      (id, team_id, number, name, starts_at, ends_at, state, created_at, updated_at, archived_at, workspace_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, NULL, ?9)`,
+  ).run(
+    id,
+    input.teamId,
+    number,
+    name,
+    input.startsAt,
+    input.endsAt,
+    state,
+    timestamp,
+    workspaceId ?? null,
+  );
+  return getCycle(db, id, workspaceId)!;
 }
 
 export function updateCycle(
@@ -124,8 +158,9 @@ export function updateCycle(
     state?: string | null;
     archived?: boolean | null;
   },
+  workspaceId?: string,
 ): CycleRow {
-  const existing = getCycle(db, id);
+  const existing = getCycle(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
 
   const sets: string[] = [];
@@ -154,11 +189,15 @@ export function updateCycle(
   if (sets.length > 0) {
     push("updated_at", now());
     params.push(id);
-    db.query(`UPDATE cycles SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
-      ...(params as never[]),
-    );
+    const workspaceFilter = workspaceId
+      ? ` AND ${workspaceClause("workspace_id", `?${params.length + 1}`)}`
+      : "";
+    if (workspaceId) params.push(workspaceId);
+    db.query(
+      `UPDATE cycles SET ${sets.join(", ")} WHERE id = ?${params.length - (workspaceId ? 1 : 0)}${workspaceFilter}`,
+    ).run(...(params as never[]));
   }
-  return getCycle(db, id)!;
+  return getCycle(db, id, workspaceId)!;
 }
 
 function cycleReference(db: Database, cycle: CycleRow): string {
@@ -168,10 +207,19 @@ function cycleReference(db: Database, cycle: CycleRow): string {
   return `${team.key}/${cycle.number}`;
 }
 
-function preserveCycleActivityReferences(db: Database, cycleId: string, reference: string): void {
-  const activities = db
-    .query("SELECT id, payload FROM activity WHERE type = 'cycle_changed'")
-    .all() as Array<{ id: string; payload: string }>;
+function preserveCycleActivityReferences(
+  db: Database,
+  cycleId: string,
+  reference: string,
+  workspaceId?: string,
+): void {
+  const query = workspaceId
+    ? `SELECT id, payload FROM activity WHERE type = 'cycle_changed' AND ${workspaceClause("workspace_id", "?1")}`
+    : "SELECT id, payload FROM activity WHERE type = 'cycle_changed'";
+  const activities = db.query(query).all(...(workspaceId ? [workspaceId] : [])) as Array<{
+    id: string;
+    payload: string;
+  }>;
   for (const activity of activities) {
     const payload = JSON.parse(activity.payload) as Record<string, unknown>;
     let changed = false;
@@ -182,20 +230,32 @@ function preserveCycleActivityReferences(db: Database, cycleId: string, referenc
       }
     }
     if (changed) {
-      db.query("UPDATE activity SET payload = ?1 WHERE id = ?2").run(
-        JSON.stringify(payload),
-        activity.id,
-      );
+      if (workspaceId) {
+        db.query(
+          `UPDATE activity SET payload = ?1 WHERE id = ?2 AND ${workspaceClause("workspace_id", "?3")}`,
+        ).run(JSON.stringify(payload), activity.id, workspaceId);
+      } else {
+        db.query("UPDATE activity SET payload = ?1 WHERE id = ?2").run(
+          JSON.stringify(payload),
+          activity.id,
+        );
+      }
     }
   }
 }
 
-export function deleteCycle(db: Database, actorId: string, id: string): boolean {
-  const existing = getCycle(db, id);
+export function deleteCycle(
+  db: Database,
+  actorId: string,
+  id: string,
+  workspaceId?: string,
+): boolean {
+  const existing = getCycle(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
-  const affected = db
-    .query("SELECT id, workspace_id FROM issues WHERE cycle_id = ?1")
-    .all(id) as Array<{
+  const query = workspaceId
+    ? `SELECT id, workspace_id FROM issues WHERE cycle_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT id, workspace_id FROM issues WHERE cycle_id = ?1";
+  const affected = db.query(query).all(...(workspaceId ? [id, workspaceId] : [id])) as Array<{
     id: string;
     workspace_id?: string | null;
   }>;
@@ -203,12 +263,18 @@ export function deleteCycle(db: Database, actorId: string, id: string): boolean 
   db.transaction(() => {
     // También canoniza eventos anteriores: una vez borrado el cycle, su UUID
     // ya no puede resolverse durante el export.
-    preserveCycleActivityReferences(db, id, reference);
+    preserveCycleActivityReferences(db, id, reference, workspaceId);
     const timestamp = now();
-    db.query("UPDATE issues SET cycle_id = NULL, updated_at = ?1 WHERE cycle_id = ?2").run(
-      timestamp,
-      id,
-    );
+    if (workspaceId) {
+      db.query(
+        `UPDATE issues SET cycle_id = NULL, updated_at = ?1 WHERE cycle_id = ?2 AND ${workspaceClause("workspace_id", "?3")}`,
+      ).run(timestamp, id, workspaceId);
+    } else {
+      db.query("UPDATE issues SET cycle_id = NULL, updated_at = ?1 WHERE cycle_id = ?2").run(
+        timestamp,
+        id,
+      );
+    }
     for (const issue of affected) {
       // El cycle se elimina en esta misma transacción; conservar la clave estable
       // evita que el exportador dependa de una fila que ya no existirá.
@@ -222,7 +288,14 @@ export function deleteCycle(db: Database, actorId: string, id: string): boolean 
         issue.workspace_id ?? undefined,
       );
     }
-    db.query("DELETE FROM cycles WHERE id = ?1").run(id);
+    if (workspaceId) {
+      db.query(`DELETE FROM cycles WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`).run(
+        id,
+        workspaceId,
+      );
+    } else {
+      db.query("DELETE FROM cycles WHERE id = ?1").run(id);
+    }
   })();
   return true;
 }
@@ -230,6 +303,7 @@ export function deleteCycle(db: Database, actorId: string, id: string): boolean 
 export function cycleProgress(
   db: Database,
   cycleId: string,
+  workspaceId?: string,
 ): { totalIssues: number; completedIssues: number; progress: number } {
   const row = db
     .query(
@@ -237,9 +311,13 @@ export function cycleProgress(
               sum(CASE WHEN workflow_states.type IN ('completed', 'canceled') THEN 1 ELSE 0 END) AS done
        FROM issues
        JOIN workflow_states ON workflow_states.id = issues.state_id
-       WHERE issues.cycle_id = ?1 AND issues.archived_at IS NULL`,
+       WHERE issues.cycle_id = ?1 AND issues.archived_at IS NULL
+         ${workspaceId ? `AND ${workspaceClause("issues.workspace_id", "?2")}` : ""}`,
     )
-    .get(cycleId) as { total: number; done: number | null };
+    .get(...(workspaceId ? [cycleId, workspaceId] : [cycleId])) as {
+    total: number;
+    done: number | null;
+  };
   const totalIssues = row.total;
   const completedIssues = row.done ?? 0;
   return {
@@ -255,9 +333,10 @@ export function carryOverCycle(
   actorId: string,
   fromCycleId: string,
   toCycleId: string,
+  workspaceId?: string,
 ): number {
-  const from = getCycle(db, fromCycleId);
-  const to = getCycle(db, toCycleId);
+  const from = getCycle(db, fromCycleId, workspaceId);
+  const to = getCycle(db, toCycleId, workspaceId);
   if (!from || !to) throw apiError("NOT_FOUND", "Cycle not found");
   if (from.team_id !== to.team_id) {
     throw apiError("VALIDATION_FAILED", "Carry-over requires cycles of the same team");
@@ -266,22 +345,31 @@ export function carryOverCycle(
     .query(
       `SELECT id, workspace_id FROM issues
        WHERE cycle_id = ?1
+         ${workspaceId ? `AND ${workspaceClause("workspace_id", "?2")}` : ""}
          AND archived_at IS NULL
          AND state_id IN (
            SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled')
          )`,
     )
-    .all(fromCycleId) as Array<{ id: string; workspace_id?: string | null }>;
+    .all(...(workspaceId ? [fromCycleId, workspaceId] : [fromCycleId])) as Array<{
+    id: string;
+    workspace_id?: string | null;
+  }>;
   const timestamp = now();
   db.transaction(() => {
     db.query(
       `UPDATE issues SET cycle_id = ?2, updated_at = ?3
        WHERE cycle_id = ?1
+         ${workspaceId ? `AND ${workspaceClause("workspace_id", "?4")}` : ""}
          AND archived_at IS NULL
          AND state_id IN (
            SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled')
          )`,
-    ).run(fromCycleId, toCycleId, timestamp);
+    ).run(
+      ...(workspaceId
+        ? [fromCycleId, toCycleId, timestamp, workspaceId]
+        : [fromCycleId, toCycleId, timestamp]),
+    );
     for (const issue of affected) {
       recordActivity(
         db,
@@ -305,7 +393,7 @@ export function validateCycleForTeam(
 ): void {
   const cycle = workspaceId
     ? (db
-        .query("SELECT * FROM cycles WHERE id = ?1 AND workspace_id = ?2")
+        .query(`SELECT * FROM cycles WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`)
         .get(cycleId, workspaceId) as CycleRow | null)
     : getCycle(db, cycleId);
   if (!cycle) throw apiError("NOT_FOUND", "Cycle not found");

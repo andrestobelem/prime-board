@@ -6,6 +6,10 @@ import { getIssueByRef } from "./issues.ts";
 
 export type ReviewStatus = "requested" | "in_progress" | "approved" | "rejected";
 
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
 export interface ReviewRow {
   id: string;
   issue_id: string;
@@ -14,6 +18,7 @@ export interface ReviewRow {
   status: ReviewStatus;
   created_at: string;
   updated_at: string;
+  workspace_id?: string | null;
 }
 
 export function mapReview(row: ReviewRow) {
@@ -28,8 +33,13 @@ export function mapReview(row: ReviewRow) {
   };
 }
 
-export function getReview(db: Database, id: string): ReviewRow | null {
-  return db.query("SELECT * FROM reviews WHERE id = ?1").get(id) as ReviewRow | null;
+export function getReview(db: Database, id: string, workspaceId?: string): ReviewRow | null {
+  const query = workspaceId
+    ? `SELECT * FROM reviews WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT * FROM reviews WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as ReviewRow | null;
 }
 
 /**
@@ -120,7 +130,10 @@ function buildReviewClauses(
   if (options.reviewerId) clauses.push(`r.reviewer_id = ${add(options.reviewerId)}`);
   if (options.teamId) clauses.push(`i.team_id = ${add(options.teamId)}`);
   if (options.projectId) clauses.push(`i.project_id = ${add(options.projectId)}`);
-  if (options.workspaceId) clauses.push(`r.workspace_id = ${add(options.workspaceId)}`);
+  if (options.workspaceId) {
+    const workspaceParameter = add(options.workspaceId);
+    clauses.push(workspaceClause("r.workspace_id", workspaceParameter));
+  }
   if (options.teamIds) {
     if (options.teamIds.length === 0) {
       clauses.push("1 = 0");
@@ -215,20 +228,34 @@ export function createReview(
   db: Database,
   requesterId: string,
   input: { issueId: string; reviewerId: string },
+  workspaceId?: string,
 ): ReviewRow {
-  const issue = getIssueByRef(db, input.issueId);
+  const issue =
+    getIssueByRef(db, input.issueId, workspaceId) ??
+    (workspaceId &&
+    (db.query("SELECT count(*) AS count FROM workspace").get() as { count: number }).count === 1
+      ? getIssueByRef(db, input.issueId)
+      : null);
   if (!issue) throw apiError("NOT_FOUND", "Issue not found");
-  if (!db.query("SELECT id FROM actors WHERE id = ?1").get(input.reviewerId)) {
-    throw apiError("NOT_FOUND", "Reviewer not found");
-  }
+  const reviewer = workspaceId
+    ? db
+        .query(
+          `SELECT actors.id FROM actors
+           JOIN workspace_memberships ON workspace_memberships.actor_id = actors.id
+            AND workspace_memberships.workspace_id = ?2
+           WHERE actors.id = ?1`,
+        )
+        .get(input.reviewerId, workspaceId)
+    : db.query("SELECT id FROM actors WHERE id = ?1").get(input.reviewerId);
+  if (!reviewer) throw apiError("NOT_FOUND", "Reviewer not found");
   const id = newId();
   const timestamp = now();
   db.query(
     `INSERT INTO reviews
-      (id, issue_id, requester_id, reviewer_id, status, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, 'requested', ?5, ?5)`,
-  ).run(id, issue.id, requesterId, input.reviewerId, timestamp);
-  return getReview(db, id)!;
+      (id, issue_id, requester_id, reviewer_id, status, created_at, updated_at, workspace_id)
+     VALUES (?1, ?2, ?3, ?4, 'requested', ?5, ?5, ?6)`,
+  ).run(id, issue.id, requesterId, input.reviewerId, timestamp, workspaceId ?? null);
+  return getReview(db, id, workspaceId)!;
 }
 
 export function updateReview(
@@ -237,8 +264,9 @@ export function updateReview(
   viewerId: string,
   input: { status?: string | null; reviewerId?: string | null },
   allowAdmin = false,
+  workspaceId?: string,
 ): ReviewRow {
-  const existing = getReview(db, id);
+  const existing = getReview(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Review not found");
   if (!allowAdmin && existing.reviewer_id !== viewerId && existing.requester_id !== viewerId) {
     throw apiError("NOT_FOUND", "Review not found");
@@ -253,7 +281,17 @@ export function updateReview(
 
   if (input.status != null) push("status", resolveStatus(input.status));
   if (input.reviewerId !== undefined && input.reviewerId !== null) {
-    if (!db.query("SELECT id FROM actors WHERE id = ?1").get(input.reviewerId)) {
+    const reviewer = workspaceId
+      ? db
+          .query(
+            `SELECT actors.id FROM actors
+             JOIN workspace_memberships ON workspace_memberships.actor_id = actors.id
+              AND workspace_memberships.workspace_id = ?2
+             WHERE actors.id = ?1`,
+          )
+          .get(input.reviewerId, workspaceId)
+      : db.query("SELECT id FROM actors WHERE id = ?1").get(input.reviewerId);
+    if (!reviewer) {
       throw apiError("NOT_FOUND", "Reviewer not found");
     }
     push("reviewer_id", input.reviewerId);
@@ -262,11 +300,15 @@ export function updateReview(
   if (sets.length > 0) {
     push("updated_at", now());
     params.push(id);
-    db.query(`UPDATE reviews SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
-      ...(params as never[]),
-    );
+    const workspaceFilter = workspaceId
+      ? ` AND ${workspaceClause("workspace_id", `?${params.length + 1}`)}`
+      : "";
+    if (workspaceId) params.push(workspaceId);
+    db.query(
+      `UPDATE reviews SET ${sets.join(", ")} WHERE id = ?${params.length - (workspaceId ? 1 : 0)}${workspaceFilter}`,
+    ).run(...(params as never[]));
   }
-  return getReview(db, id)!;
+  return getReview(db, id, workspaceId)!;
 }
 
 export function deleteReview(
@@ -274,12 +316,20 @@ export function deleteReview(
   id: string,
   viewerId: string,
   allowAdmin = false,
+  workspaceId?: string,
 ): boolean {
-  const existing = getReview(db, id);
+  const existing = getReview(db, id, workspaceId);
   if (!existing) throw apiError("NOT_FOUND", "Review not found");
   if (!allowAdmin && existing.requester_id !== viewerId && existing.reviewer_id !== viewerId) {
     throw apiError("NOT_FOUND", "Review not found");
   }
-  db.query("DELETE FROM reviews WHERE id = ?1").run(id);
+  if (workspaceId) {
+    db.query(`DELETE FROM reviews WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`).run(
+      id,
+      workspaceId,
+    );
+  } else {
+    db.query("DELETE FROM reviews WHERE id = ?1").run(id);
+  }
   return true;
 }

@@ -541,7 +541,7 @@ export const issueResolvers = {
           ? mapPostgresCycle(cycle)
           : null;
       }
-      const cycle = getCycle(context.db, issue._row.cycle_id);
+      const cycle = getCycle(context.db, issue._row.cycle_id, context.workspace.workspaceId);
       return cycle &&
         canAccessTeam(context.db, requireViewer(context), cycle.team_id) &&
         apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, cycle.team_id])

@@ -590,7 +590,7 @@ export const resolvers = {
           : [];
       }
       return canAccessTeam(context.db, viewer, team.id)
-        ? listCycles(context.db, team.id).map(mapCycle)
+        ? listCycles(context.db, team.id, false, context.workspace.workspaceId).map(mapCycle)
         : [];
     },
     memberships: async (team: { id: string }, _args: unknown, context: Context) => {
@@ -746,15 +746,15 @@ export const resolvers = {
     progress: async (cycle: { id: string }, _args: unknown, context: Context) =>
       context.persistence
         ? (await postgresCycleProgress(context.persistence, cycle.id)).progress
-        : cycleProgress(context.db, cycle.id).progress,
+        : cycleProgress(context.db, cycle.id, context.workspace.workspaceId).progress,
     completedIssues: async (cycle: { id: string }, _args: unknown, context: Context) =>
       context.persistence
         ? (await postgresCycleProgress(context.persistence, cycle.id)).completedIssues
-        : cycleProgress(context.db, cycle.id).completedIssues,
+        : cycleProgress(context.db, cycle.id, context.workspace.workspaceId).completedIssues,
     totalIssues: async (cycle: { id: string }, _args: unknown, context: Context) =>
       context.persistence
         ? (await postgresCycleProgress(context.persistence, cycle.id)).totalIssues
-        : cycleProgress(context.db, cycle.id).totalIssues,
+        : cycleProgress(context.db, cycle.id, context.workspace.workspaceId).totalIssues,
     documents: (cycle: { id: string }, args: { includeArchived?: boolean }, context: Context) =>
       documentResolvers.Query.documents(
         null,
@@ -1331,7 +1331,12 @@ export const resolvers = {
         if (team.archived_at && !args.includeArchived) return [];
         return scopeWorkspaceRows(
           context,
-          listCycles(context.db, args.teamId, Boolean(args.includeArchived)),
+          listCycles(
+            context.db,
+            args.teamId,
+            Boolean(args.includeArchived),
+            context.workspace.workspaceId,
+          ),
         ).map(mapCycle);
       },
       cycle: async (_parent: unknown, args: { id: string }, context: Context) => {
@@ -1346,10 +1351,8 @@ export const resolvers = {
             ? mapPostgresCycle(row)
             : null;
         }
-        const row = getCycle(context.db, args.id);
-        return row && canAccessTeam(context.db, viewer, row.team_id)
-          ? mapCycle(scopeWorkspaceRow(context, row))
-          : null;
+        const row = getCycle(context.db, args.id, context.workspace.workspaceId);
+        return row && canAccessTeam(context.db, viewer, row.team_id) ? mapCycle(row) : null;
       },
       reviews: async (
         _parent: unknown,
@@ -1410,7 +1413,9 @@ export const resolvers = {
         // paginar evita páginas cortas o cursores que salten recursos ocultos.
         const writableTeamIds = (
           context.db
-            .query("SELECT id FROM teams WHERE workspace_id = ?1 ORDER BY id")
+            .query(
+              "SELECT id FROM teams WHERE workspace_id = ?1 OR (workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1) ORDER BY id",
+            )
             .all(context.workspace.workspaceId) as Array<{ id: string }>
         )
           .map((row) => row.id)
@@ -1446,9 +1451,8 @@ export const resolvers = {
           }
           return mapPostgresReview(row);
         }
-        const row = getReview(context.db, args.id);
+        const row = getReview(context.db, args.id, context.workspace.workspaceId);
         if (!row) return null;
-        scopeWorkspaceRow(context, row);
         const issue = lookupIssueById(context, row.issue_id);
         if (
           !issue ||
@@ -2640,7 +2644,10 @@ export const resolvers = {
             };
           }
           assertCanManageTeam(context.db, viewer, args.input.teamId);
-          return { success: true, cycle: mapCycle(createCycle(context.db, args.input)) };
+          return {
+            success: true,
+            cycle: mapCycle(createCycle(context.db, args.input, context.workspace.workspaceId)),
+          };
         },
         cycleUpdate: async (
           _parent: unknown,
@@ -2669,9 +2676,14 @@ export const resolvers = {
               ),
             };
           }
-          const existing = getCycle(context.db, args.id);
+          const existing = getCycle(context.db, args.id, context.workspace.workspaceId);
           if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
-          return { success: true, cycle: mapCycle(updateCycle(context.db, args.id, args.input)) };
+          return {
+            success: true,
+            cycle: mapCycle(
+              updateCycle(context.db, args.id, args.input, context.workspace.workspaceId),
+            ),
+          };
         },
         cycleDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
@@ -2682,13 +2694,18 @@ export const resolvers = {
             }
             return { success: await deletePostgresCycle(context.persistence, viewer, args.id) };
           }
-          const existing = getCycle(context.db, args.id);
+          const existing = getCycle(context.db, args.id, context.workspace.workspaceId);
           if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
           const affected = context.db
-            .query("SELECT id FROM issues WHERE cycle_id = ?1")
-            .all(args.id)
+            .query("SELECT id FROM issues WHERE cycle_id = ?1 AND workspace_id = ?2")
+            .all(args.id, context.workspace.workspaceId)
             .map((row) => (row as { id: string }).id);
-          const success = deleteCycle(context.db, viewer.id, args.id);
+          const success = deleteCycle(
+            context.db,
+            viewer.id,
+            args.id,
+            context.workspace.workspaceId,
+          );
           emitBulkIssueUpdates(context, viewer, affected, {
             cycle: { from: args.id, to: null },
           });
@@ -2717,13 +2734,14 @@ export const resolvers = {
             );
             return { success: true, movedIssues };
           }
-          const fromCycle = getCycle(context.db, args.fromCycleId);
+          const fromCycle = getCycle(context.db, args.fromCycleId, context.workspace.workspaceId);
           if (fromCycle) assertCanManageTeam(context.db, viewer, fromCycle.team_id);
           const movedIssues = carryOverCycle(
             context.db,
             viewer.id,
             args.fromCycleId,
             args.toCycleId,
+            context.workspace.workspaceId,
           );
           return { success: true, movedIssues };
         },
@@ -2751,7 +2769,9 @@ export const resolvers = {
           }
           return {
             success: true,
-            review: mapReview(createReview(context.db, viewer.id, args.input)),
+            review: mapReview(
+              createReview(context.db, viewer.id, args.input, context.workspace.workspaceId),
+            ),
           };
         },
         reviewUpdate: async (
@@ -2784,7 +2804,7 @@ export const resolvers = {
               ),
             };
           }
-          const existing = getReview(context.db, args.id);
+          const existing = getReview(context.db, args.id, context.workspace.workspaceId);
           if (existing) {
             const issue = lookupIssueById(context, existing.issue_id);
             assertCanManageIssue(context.db, viewer, issue?.team_id);
@@ -2792,7 +2812,14 @@ export const resolvers = {
           return {
             success: true,
             review: mapReview(
-              updateReview(context.db, args.id, viewer.id, args.input, isWorkspaceAdmin(viewer)),
+              updateReview(
+                context.db,
+                args.id,
+                viewer.id,
+                args.input,
+                isWorkspaceAdmin(viewer),
+                context.workspace.workspaceId,
+              ),
             ),
           };
         },
@@ -2810,13 +2837,19 @@ export const resolvers = {
               ),
             };
           }
-          const existing = getReview(context.db, args.id);
+          const existing = getReview(context.db, args.id, context.workspace.workspaceId);
           if (existing) {
             const issue = lookupIssueById(context, existing.issue_id);
             assertCanManageIssue(context.db, viewer, issue?.team_id);
           }
           return {
-            success: deleteReview(context.db, args.id, viewer.id, isWorkspaceAdmin(viewer)),
+            success: deleteReview(
+              context.db,
+              args.id,
+              viewer.id,
+              isWorkspaceAdmin(viewer),
+              context.workspace.workspaceId,
+            ),
           };
         },
         initiativeCreate: async (
