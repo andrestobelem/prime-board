@@ -137,6 +137,31 @@ describe("SQLite issue event pipeline", () => {
     expect(writerEvents(fixtureData.eventLog)).toHaveLength(1);
   });
 
+  it("projects only issue aggregates from the shared canonical log", () => {
+    const fixtureData = fixture();
+    const applied: string[] = [];
+    const metadataEvent: DomainEvent = {
+      ...event("team-event"),
+      aggregate: "team",
+      aggregateKey: "PB",
+      type: "updated",
+      payload: { name: "Agents" },
+    };
+    const pipeline = new IssueEventPipeline({
+      rootDir: fixtureData.rootDir,
+      eventLog: fixtureData.eventLog,
+      projector: { apply: (current) => applied.push(current.eventId) },
+      checkpointStore: fixtureData.store,
+    });
+
+    pipeline.append([event(), metadataEvent]);
+    pipeline.commit();
+
+    expect(pipeline.project()).toMatchObject({ applied: 1, skipped: 0 });
+    expect(applied).toEqual(["event-1"]);
+    expect(pipeline.getCheckpoint()).toMatchObject({ stream: "issues", eventId: "event-1" });
+  });
+
   it("does not advance the checkpoint when projector or checkpoint fails", () => {
     const fixtureData = fixture();
     let failProjector = true;

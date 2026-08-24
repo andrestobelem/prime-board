@@ -1,8 +1,11 @@
 // Sincronización con el repo en cada escritura (AT-158, Fase 3).
 //
-// Cada mutación deja el evento en el repo en el momento en que ocurre, no
-// cuando alguien se acuerda de exportar: el repo es la copia durable y
-// `rebuild` puede reconstruir la DB desde ahí en cualquier momento.
+// Cada mutación pasa por el bridge de Activity y deja el evento en el repo en
+// el momento en que ocurre. En esta slice SQLite sigue siendo la autoridad
+// operativa; el log canónico es una réplica durable que `rebuild` puede leer.
+// El proyector y el checkpoint productivos se inyectan por RepoSyncOptions.
+// Por defecto son noop y memoria: este módulo no implementa PostgreSQL ni
+// convierte el bridge en una topología event-first.
 //
 // Los logs son append-only y `.gitattributes` los marca `merge=union`, así
 // dos agentes que escriben en branches distintas mergean sin conflicto
@@ -36,7 +39,11 @@ export interface RepoSyncOptions extends IssueEventPipelineOptions {
 }
 
 export interface RepoSync {
-  /** Regenera el repo completo (cambios de metadata, borrados). */
+  /**
+   * Regenera el repo completo (cambios de metadata, borrados).
+   * Los fallos se registran y se pueden reintentar en la siguiente escritura;
+   * la interfaz histórica no expone todavía un estado de error al caller.
+   */
   sync(): void;
   /** Camino caliente: reescribe solo el issue afectado (AT-166). */
   syncIssue(issueId: string): void;

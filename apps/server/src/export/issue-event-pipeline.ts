@@ -28,7 +28,11 @@ export interface IssueEventProjector {
   apply(event: DomainEvent): void;
 }
 
-/** Checkpoint sync para el runtime SQLite. PostgreSQL usa su adapter async. */
+/**
+ * Checkpoint sync para el runtime SQLite. PostgreSQL usa su adapter async.
+ * El pipeline usa memoria por defecto; el runtime productivo debe inyectar un
+ * store durable antes de tratar el checkpoint como estado operativo.
+ */
 export interface IssueEventCheckpointStore {
   load(stream: string): ProjectorCheckpoint | undefined;
   save(checkpoint: ProjectorCheckpoint): void;
@@ -104,8 +108,9 @@ const NOOP_COMMITTER: GitCommitter = () => undefined;
 
 /**
  * Pipeline de una mutación SQLite: append durable, commit Git, projector y
- * checkpoint. El caller decide cuándo regenerar snapshots; esa operación debe
- * ocurrir antes del commit si sus archivos también forman parte del commit.
+ * checkpoint. El caller decide cuándo regenerar snapshots. Este es un seam de
+ * runtime: por defecto usa un projector noop y un checkpoint en memoria; no
+ * convierte al Repository Source en autoridad ni implementa el proyector PG.
  */
 export class IssueEventPipeline {
   readonly eventLog: CanonicalEventLog;
@@ -146,7 +151,9 @@ export class IssueEventPipeline {
    * checkpoint anterior intacto para que el mismo evento se pueda reintentar.
    */
   project(): IssueEventProjectionResult {
-    const events = this.eventLog.read();
+    // El log canónico también contiene eventos de metadata. Este pipeline
+    // solo es dueño del stream de Issues y nunca debe aplicar otros agregados.
+    const events = this.eventLog.read().filter((event) => event.aggregate === "issue");
     let checkpoint = this.checkpoint;
     if (!this.checkpointLoaded) {
       const loaded = this.checkpointStore.load(this.stream);
