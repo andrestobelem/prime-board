@@ -11,6 +11,9 @@ import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { exportBoard, exportIssue } from "./exporter.ts";
+import { appendActivityEvents } from "./activity-stream.ts";
+
+export { appendActivityEvents, activityToDomainEvent } from "./activity-stream.ts";
 
 export interface RepoSync {
   /** Regenera el repo completo (cambios de metadata, borrados). */
@@ -32,6 +35,7 @@ export function createRepoSync(db: Database, root: string | null): RepoSync | nu
     sync() {
       try {
         exportBoard(db, root);
+        appendActivityEvents(db, root);
       } catch (error) {
         // Nunca romper una mutación por un problema de escritura en el repo.
         console.error(`repo sync failed: ${error}`);
@@ -44,6 +48,7 @@ export function createRepoSync(db: Database, root: string | null): RepoSync | nu
         // identidad y el alcance del Workspace.
         const metadata = join(root, ".prime-board", "meta", "export.json");
         if (!existsSync(metadata) || !exportIssue(db, root, issueId)) exportBoard(db, root);
+        appendActivityEvents(db, root);
       } catch (error) {
         console.error(`repo sync failed: ${error}`);
       }

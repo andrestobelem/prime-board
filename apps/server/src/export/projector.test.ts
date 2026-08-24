@@ -92,3 +92,87 @@ describe("event projector", () => {
     expect(applied).toEqual(["one", "two"]);
   });
 });
+
+describe("async projector checkpoints", () => {
+  it("loads and saves a durable checkpoint only after apply succeeds", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-projector-"));
+    const writer = new EventLogWriter({ rootDir });
+    writer.append(event("one", "2025-01-01T00:00:00.000Z"));
+    writer.append(event("two", "2025-01-02T00:00:00.000Z"));
+    const calls: string[] = [];
+    const store = {
+      async load(stream: string) {
+        calls.push(`load:${stream}`);
+        return {
+          stream,
+          eventId: "one",
+          occurredAt: "2025-01-01T00:00:00.000Z",
+        };
+      },
+      async save(checkpoint: { eventId: string }) {
+        calls.push(`save:${checkpoint.eventId}`);
+      },
+    };
+    const projector = new EventProjector(
+      async (current) => {
+        calls.push(`apply:${current.eventId}`);
+      },
+      { rootDir, stream: "issues", checkpointStore: store },
+    );
+
+    const result = await projector.replayAsync();
+    expect(result).toMatchObject({
+      status: "completed",
+      kind: "completed",
+      applied: 1,
+      skipped: 1,
+      failed: false,
+      lag: 0,
+      retry: false,
+    });
+    expect(calls).toEqual(["load:issues", "apply:two", "save:two"]);
+  });
+
+  it("returns a discriminated retry result and leaves the failed event pending", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-projector-"));
+    const writer = new EventLogWriter({ rootDir });
+    writer.append(event("one", "2025-01-01T00:00:00.000Z"));
+    writer.append(event("two", "2025-01-02T00:00:00.000Z"));
+    let shouldFail = true;
+    const saves: string[] = [];
+    const projector = new EventProjector(
+      async (current) => {
+        if (shouldFail && current.eventId === "two") throw new Error("temporary failure");
+      },
+      {
+        rootDir,
+        stream: "issues",
+        checkpointStore: {
+          async load() {
+            return undefined;
+          },
+          async save(checkpoint) {
+            saves.push(checkpoint.eventId);
+          },
+        },
+      },
+    );
+
+    const failed = await projector.replayAsync();
+    expect(failed).toMatchObject({
+      status: "failed",
+      kind: "failed",
+      applied: 1,
+      failed: true,
+      lag: 1,
+      lagging: true,
+      retry: true,
+      retryable: true,
+    });
+    expect(saves).toEqual(["one"]);
+    shouldFail = false;
+    const retried = await projector.replayAsync();
+    expect(retried).toMatchObject({ status: "completed", applied: 1, failed: false });
+    expect(saves).toEqual(["one", "two"]);
+  });
+});

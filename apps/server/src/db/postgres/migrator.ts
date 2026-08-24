@@ -8,6 +8,7 @@ import issueSubscribers from "./0006_issue_subscribers.sql" with { type: "text" 
 import workspaceAuth from "./0007_workspace_auth.sql" with { type: "text" };
 import apiKeyTeamLimitsWorkspace from "./0008_api_key_team_limits_workspace.sql" with { type: "text" };
 import apiKeyWorkspaceGrantScope from "./0009_api_key_workspace_grant_scope.sql" with { type: "text" };
+import projectorCheckpoints from "./0010_projector_checkpoints.sql" with { type: "text" };
 
 export interface PostgresMigration {
   readonly version: number;
@@ -25,6 +26,7 @@ export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
   { version: 7, name: "workspace_auth", sql: workspaceAuth },
   { version: 8, name: "api_key_team_limits_workspace", sql: apiKeyTeamLimitsWorkspace },
   { version: 9, name: "api_key_workspace_grant_scope", sql: apiKeyWorkspaceGrantScope },
+  { version: 10, name: "projector_checkpoints", sql: projectorCheckpoints },
 ];
 
 interface AppliedMigration {

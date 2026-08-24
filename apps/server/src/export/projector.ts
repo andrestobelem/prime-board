@@ -1,3 +1,4 @@
+import type { Persistence } from "../db/persistence.ts";
 import type { DomainEvent, EventLogOptions } from "./event-log.ts";
 import { EventLogReader } from "./event-log.ts";
 
@@ -7,17 +8,35 @@ export interface ProjectorCheckpoint {
   readonly occurredAt: string;
 }
 
+/** Durable checkpoint boundary. Implementations must not write domain state. */
+export interface ProjectorCheckpointStore {
+  load(stream: string): Promise<ProjectorCheckpoint | undefined>;
+  save(checkpoint: ProjectorCheckpoint): Promise<void>;
+}
+
+/** Short aliases for callers that use generic async names. */
+export type CheckpointStore = ProjectorCheckpointStore;
+export type AsyncCheckpointStore = ProjectorCheckpointStore;
+
 export interface ProjectorApplyContext {
   /** Last committed event. The current event is not committed yet. */
   readonly checkpoint: ProjectorCheckpoint | undefined;
 }
 
 export type ApplyEvent = (event: DomainEvent, context: ProjectorApplyContext) => void;
+export type AsyncApplyEvent = (
+  event: DomainEvent,
+  context: ProjectorApplyContext,
+) => void | PromiseLike<void>;
 
 export interface ReplayOptions extends EventLogOptions {
   readonly stream: string;
   readonly checkpoint?: ProjectorCheckpoint;
+  /** Optional durable store used by replayAsync(). */
+  readonly checkpointStore?: ProjectorCheckpointStore;
 }
+
+export type AsyncReplayOptions = ReplayOptions;
 
 export interface ReplayResult {
   readonly applied: number;
@@ -27,6 +46,38 @@ export interface ReplayResult {
   readonly failed: boolean;
   readonly error?: unknown;
 }
+
+export interface ReplayCompletedResult {
+  readonly status: "completed";
+  readonly kind: "completed";
+  readonly applied: number;
+  readonly skipped: number;
+  readonly checkpoint: ProjectorCheckpoint | undefined;
+  readonly failed: false;
+  readonly lag: 0;
+  readonly lagging: false;
+  readonly retry: false;
+  readonly retryable: false;
+  readonly error?: undefined;
+}
+
+export interface ReplayFailedResult {
+  readonly status: "failed";
+  readonly kind: "failed";
+  readonly applied: number;
+  readonly skipped: number;
+  readonly checkpoint: ProjectorCheckpoint | undefined;
+  readonly failed: true;
+  /** Number of events still waiting after the last committed checkpoint. */
+  readonly lag: number;
+  readonly lagging: boolean;
+  /** The same event can be retried without constructing a new projector. */
+  readonly retry: true;
+  readonly retryable: true;
+  readonly error: unknown;
+}
+
+export type AsyncReplayResult = ReplayCompletedResult | ReplayFailedResult;
 
 function checkpointFor(stream: string, event: DomainEvent): ProjectorCheckpoint {
   return {
@@ -59,10 +110,14 @@ function validateCheckpoint(checkpoint: ProjectorCheckpoint): void {
   }
 }
 
-function validateOptions(options: ReplayOptions): void {
-  if (options.stream.trim().length === 0 || /[\r\n]/u.test(options.stream)) {
+function validateStream(stream: string): void {
+  if (stream.trim().length === 0 || /[\r\n]/u.test(stream)) {
     throw new Error("Projector stream must be a non-empty safe string");
   }
+}
+
+function validateOptions(options: ReplayOptions): void {
+  validateStream(options.stream);
   if (options.checkpoint) {
     validateCheckpoint(options.checkpoint);
     if (options.checkpoint.stream !== options.stream) {
@@ -71,25 +126,160 @@ function validateOptions(options: ReplayOptions): void {
   }
 }
 
+function assertCheckpointStream(checkpoint: ProjectorCheckpoint, stream: string): void {
+  validateCheckpoint(checkpoint);
+  if (checkpoint.stream !== stream) {
+    throw new Error("Projector checkpoint stream does not match the projector stream");
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<void> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "then" in value &&
+    typeof value.then === "function"
+  );
+}
+
+function legacyCompleted(
+  applied: number,
+  skipped: number,
+  checkpoint: ProjectorCheckpoint | undefined,
+): ReplayResult {
+  return { applied, skipped, checkpoint, failed: false };
+}
+
+function legacyFailed(
+  applied: number,
+  skipped: number,
+  checkpoint: ProjectorCheckpoint | undefined,
+  error: unknown,
+): ReplayResult {
+  return { applied, skipped, checkpoint, failed: true, error };
+}
+
+function completed(
+  applied: number,
+  skipped: number,
+  checkpoint: ProjectorCheckpoint | undefined,
+): ReplayCompletedResult {
+  return {
+    status: "completed",
+    kind: "completed",
+    applied,
+    skipped,
+    checkpoint,
+    failed: false,
+    lag: 0,
+    lagging: false,
+    retry: false,
+    retryable: false,
+  };
+}
+
+function failed(
+  applied: number,
+  skipped: number,
+  checkpoint: ProjectorCheckpoint | undefined,
+  error: unknown,
+  lag: number,
+): ReplayFailedResult {
+  return {
+    status: "failed",
+    kind: "failed",
+    applied,
+    skipped,
+    checkpoint,
+    failed: true,
+    lag,
+    lagging: lag > 0,
+    retry: true,
+    retryable: true,
+    error,
+  };
+}
+
+interface CheckpointRow {
+  readonly stream: string;
+  readonly event_id: string;
+  readonly occurred_at: string;
+  readonly processed: boolean;
+}
+
 /**
- * Small replay seam for projections. The callback runs before the checkpoint
- * advances. A callback failure is returned to the caller, and the last
- * successful checkpoint remains in memory for a later retry.
+ * PostgreSQL-backed checkpoint store. It only writes projector metadata.
+ * Domain rows must be changed by the projector callback, never by this class.
+ */
+export class PostgresCheckpointStore implements ProjectorCheckpointStore {
+  constructor(private readonly persistence: Persistence) {}
+
+  async load(stream: string): Promise<ProjectorCheckpoint | undefined> {
+    validateStream(stream);
+    const row = await this.persistence.one<CheckpointRow>(
+      `SELECT stream, event_id, occurred_at, processed
+       FROM projector_checkpoints
+       WHERE stream = $1`,
+      [stream],
+    );
+    if (!row || !row.processed) return undefined;
+    const checkpoint: ProjectorCheckpoint = {
+      stream: row.stream,
+      eventId: row.event_id,
+      occurredAt: row.occurred_at,
+    };
+    assertCheckpointStream(checkpoint, stream);
+    return checkpoint;
+  }
+
+  async save(checkpoint: ProjectorCheckpoint): Promise<void> {
+    validateCheckpoint(checkpoint);
+    await this.persistence.execute(
+      `INSERT INTO projector_checkpoints
+         (stream, event_id, occurred_at, processed, updated_at)
+       VALUES ($1, $2, $3, TRUE, now())
+       ON CONFLICT (stream) DO UPDATE SET
+         event_id = EXCLUDED.event_id,
+         occurred_at = EXCLUDED.occurred_at,
+         processed = TRUE,
+         updated_at = now()`,
+      [checkpoint.stream, checkpoint.eventId, checkpoint.occurredAt],
+    );
+  }
+
+  /** Compatibility names for generic key/value checkpoint adapters. */
+  get(stream: string): Promise<ProjectorCheckpoint | undefined> {
+    return this.load(stream);
+  }
+
+  set(checkpoint: ProjectorCheckpoint): Promise<void> {
+    return this.save(checkpoint);
+  }
+}
+
+/**
+ * Replay seam for projections. The callback runs before the checkpoint
+ * advances. A callback or checkpoint-store failure is returned to the caller,
+ * and the last successful checkpoint remains visible for retry.
  *
- * Checkpoint persistence is intentionally outside this slice. In particular,
- * this module does not write PostgreSQL and does not import historical SQLite.
+ * The original synchronous replay API remains available. Use replayAsync()
+ * when the callback or checkpoint store performs asynchronous I/O.
  */
 export class EventProjector {
   private checkpoint: ProjectorCheckpoint | undefined;
   private readonly reader: EventLogReader;
 
+  private readonly options: ReplayOptions;
+
   constructor(
-    private readonly applyEvent: ApplyEvent,
-    private readonly options: ReplayOptions,
+    private readonly applyEvent: ApplyEvent | AsyncApplyEvent,
+    options: ReplayOptions,
+    checkpointStore?: ProjectorCheckpointStore,
   ) {
-    validateOptions(options);
-    this.reader = new EventLogReader(options);
-    this.checkpoint = options.checkpoint;
+    this.options = checkpointStore ? { ...options, checkpointStore } : options;
+    validateOptions(this.options);
+    this.reader = new EventLogReader(this.options);
+    this.checkpoint = this.options.checkpoint;
   }
 
   getCheckpoint(): ProjectorCheckpoint | undefined {
@@ -98,10 +288,7 @@ export class EventProjector {
 
   replay(checkpoint?: ProjectorCheckpoint): ReplayResult {
     if (checkpoint) {
-      validateCheckpoint(checkpoint);
-      if (checkpoint.stream !== this.options.stream) {
-        throw new Error("Projector checkpoint stream does not match the projector stream");
-      }
+      assertCheckpointStream(checkpoint, this.options.stream);
       this.checkpoint = checkpoint;
     }
     const events = this.reader.read();
@@ -109,24 +296,23 @@ export class EventProjector {
     let skipped = 0;
     let lastCheckpoint = this.checkpoint;
 
-    for (const event of events) {
+    for (let index = 0; index < events.length; index += 1) {
+      const event = events[index];
+      if (!event) continue;
       if (lastCheckpoint && !isAfterCheckpoint(event, lastCheckpoint)) {
         skipped += 1;
         continue;
       }
       try {
-        this.applyEvent(event, { checkpoint: lastCheckpoint });
+        const result = this.applyEvent(event, { checkpoint: lastCheckpoint });
+        if (isPromiseLike(result)) {
+          throw new Error("Async projector callback requires replayAsync()");
+        }
       } catch (error) {
         // Do not advance on failure. The failed event remains the next event
         // after lastCheckpoint, so replay() exposes it for retry.
         this.checkpoint = lastCheckpoint;
-        return {
-          applied,
-          skipped,
-          checkpoint: lastCheckpoint,
-          failed: true,
-          error,
-        };
+        return legacyFailed(applied, skipped, lastCheckpoint, error);
       }
       lastCheckpoint = checkpointFor(this.options.stream, event);
       this.checkpoint = lastCheckpoint;
@@ -134,12 +320,7 @@ export class EventProjector {
     }
 
     this.checkpoint = lastCheckpoint;
-    return {
-      applied,
-      skipped,
-      checkpoint: lastCheckpoint,
-      failed: false,
-    };
+    return legacyCompleted(applied, skipped, lastCheckpoint);
   }
 
   resume(checkpoint?: ProjectorCheckpoint): ReplayResult {
@@ -150,8 +331,95 @@ export class EventProjector {
     this.checkpoint = undefined;
     return this.replay();
   }
+
+  async replayAsync(checkpoint?: ProjectorCheckpoint): Promise<AsyncReplayResult> {
+    return this.runAsync({ checkpoint, loadStore: checkpoint === undefined });
+  }
+
+  async resumeAsync(checkpoint?: ProjectorCheckpoint): Promise<AsyncReplayResult> {
+    return this.replayAsync(checkpoint);
+  }
+
+  async replayFromBeginningAsync(): Promise<AsyncReplayResult> {
+    this.checkpoint = undefined;
+    return this.runAsync({ loadStore: false });
+  }
+
+  private async runAsync(options: {
+    readonly checkpoint?: ProjectorCheckpoint;
+    readonly loadStore: boolean;
+  }): Promise<AsyncReplayResult> {
+    const events = this.reader.read();
+    let applied = 0;
+    let skipped = 0;
+    let lastCheckpoint = this.checkpoint;
+
+    if (options.checkpoint) {
+      try {
+        assertCheckpointStream(options.checkpoint, this.options.stream);
+      } catch (error) {
+        return failed(applied, skipped, lastCheckpoint, error, events.length);
+      }
+      lastCheckpoint = options.checkpoint;
+      this.checkpoint = lastCheckpoint;
+    } else if (options.loadStore && this.options.checkpointStore) {
+      try {
+        const loaded = await this.options.checkpointStore.load(this.options.stream);
+        if (loaded) {
+          assertCheckpointStream(loaded, this.options.stream);
+          lastCheckpoint = loaded;
+          this.checkpoint = loaded;
+        }
+      } catch (error) {
+        this.checkpoint = lastCheckpoint;
+        return failed(applied, skipped, lastCheckpoint, error, events.length);
+      }
+    }
+
+    for (let index = 0; index < events.length; index += 1) {
+      const event = events[index];
+      if (!event) continue;
+      if (lastCheckpoint && !isAfterCheckpoint(event, lastCheckpoint)) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        await this.applyEvent(event, { checkpoint: lastCheckpoint });
+      } catch (error) {
+        // The event was not checkpointed. A later replay retries this event.
+        this.checkpoint = lastCheckpoint;
+        return failed(applied, skipped, lastCheckpoint, error, events.length - index);
+      }
+
+      const nextCheckpoint = checkpointFor(this.options.stream, event);
+      if (this.options.checkpointStore) {
+        try {
+          await this.options.checkpointStore.save(nextCheckpoint);
+        } catch (error) {
+          // Applying succeeded, but the durable cursor did not. Keep the old
+          // cursor so a retry can safely re-apply an idempotent projection.
+          this.checkpoint = lastCheckpoint;
+          return failed(applied, skipped, lastCheckpoint, error, events.length - index);
+        }
+      }
+      lastCheckpoint = nextCheckpoint;
+      this.checkpoint = lastCheckpoint;
+      applied += 1;
+    }
+
+    this.checkpoint = lastCheckpoint;
+    return completed(applied, skipped, lastCheckpoint);
+  }
 }
 
 export function replayEvents(applyEvent: ApplyEvent, options: ReplayOptions): ReplayResult {
   return new EventProjector(applyEvent, options).replay();
+}
+
+export async function replayEventsAsync(
+  applyEvent: AsyncApplyEvent,
+  options: ReplayOptions,
+  checkpointStore?: ProjectorCheckpointStore,
+): Promise<AsyncReplayResult> {
+  return new EventProjector(applyEvent, options, checkpointStore).replayAsync();
 }

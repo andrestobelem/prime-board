@@ -25,8 +25,8 @@ El SDL es común, pero la capacidad operativa depende del backend configurado:
 - **SQLite** es el backend predeterminado. Usa `bun:sqlite`, migraciones `0001`–`0028` y
   expone Documents Markdown.
 - **PostgreSQL** es opcional. Se activa con `PRIME_BOARD_PERSISTENCE=postgres`, requiere
-  `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0009` y conserva una
-  única Workspace. La migración es incremental: los dominios sin path PG usan un SQLite efímero
+  `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0010` y conserva una
+  única Workspace. `0010` agrega la tabla `projector_checkpoints` para checkpoints durables del projector. La migración es incremental: los dominios sin path PG usan un SQLite efímero
   o devuelven un error explícito. `0005` agrega Documents, `0006` suscriptores, `0007` Memberships
   y grants de Workspace, `0008` el alcance de Workspace de los límites de Team de API keys y `0009`
   el grant explícito del Workspace efectivo. Los paths directos incluyen Issues, Teams, Projects,

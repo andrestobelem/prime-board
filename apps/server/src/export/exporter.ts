@@ -1037,8 +1037,13 @@ export function exportBoard(
     if (!existsSync(dir)) continue;
     for (const file of readdirSync(dir)) {
       // La trazabilidad de una migración es metadata de origen, no una proyección
-      // de SQLite: el export normal no debe borrarla (AT-187).
-      if (folder === "meta" && ["source-map.json", "migration-report.json"].includes(file))
+      // de SQLite: el export normal no debe borrarla (AT-187). El stream
+      // canónico también es append-only y lo escribe RepoSync después del
+      // snapshot; nunca debe borrarlo durante un export.
+      if (
+        (folder === "meta" && ["source-map.json", "migration-report.json"].includes(file)) ||
+        (folder === "log" && file === "events.jsonl")
+      )
         continue;
       const path = join(dir, file);
       if (!written.has(path)) unlinkSync(path);
