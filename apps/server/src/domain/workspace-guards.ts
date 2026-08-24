@@ -40,12 +40,38 @@ export function assertActiveWorkspace(context: WorkspaceLookupContext): void {
  * exponga. En el modelo actual todas las filas de la DB operativa pertenecen al
  * único Workspace, por lo que se valida únicamente el contexto activo.
  */
+function hasWorkspaceColumn(row: object): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(row, "workspace_id") ||
+    Object.prototype.hasOwnProperty.call(row, "workspaceId")
+  );
+}
+
+function workspaceCount(db: Database): number {
+  return (db.query("SELECT count(*) AS count FROM workspace").get() as { count: number }).count;
+}
+
+function isVisibleWorkspaceRow(
+  context: WorkspaceLookupContext,
+  row: object,
+  allowLegacyNull: boolean,
+): boolean {
+  if (!hasWorkspaceColumn(row)) return true;
+  const candidate = row as { workspace_id?: unknown; workspaceId?: unknown };
+  const rowWorkspaceId = candidate.workspace_id ?? candidate.workspaceId;
+  return (
+    rowWorkspaceId === context.workspace.workspaceId || (rowWorkspaceId == null && allowLegacyNull)
+  );
+}
+
+/**
+ * Scope a row without treating an explicit NULL workspace as globally visible.
+ * NULL remains compatible only for the original single-Workspace topology.
+ */
 export function scopeWorkspaceRow<T extends object>(context: WorkspaceLookupContext, row: T): T {
   assertActiveWorkspace(context);
-  const candidate = row as T & { workspace_id?: unknown; workspaceId?: unknown };
-  const rowWorkspaceId = candidate.workspace_id ?? candidate.workspaceId;
-  if (typeof rowWorkspaceId === "string") {
-    assertWorkspaceId(context.workspace, rowWorkspaceId);
+  if (!isVisibleWorkspaceRow(context, row, workspaceCount(context.db) === 1)) {
+    throw apiError("NOT_FOUND", "Resource not found in the active Workspace");
   }
   return row;
 }
@@ -55,11 +81,8 @@ export function scopeWorkspaceRows<T extends object>(
   rows: T[],
 ): T[] {
   assertActiveWorkspace(context);
-  return rows.filter((row) => {
-    const candidate = row as T & { workspace_id?: unknown; workspaceId?: unknown };
-    const rowWorkspaceId = candidate.workspace_id ?? candidate.workspaceId;
-    return typeof rowWorkspaceId !== "string" || rowWorkspaceId === context.workspace.workspaceId;
-  });
+  const allowLegacyNull = workspaceCount(context.db) === 1;
+  return rows.filter((row) => isVisibleWorkspaceRow(context, row, allowLegacyNull));
 }
 
 export function lookupIssue(context: WorkspaceLookupContext, ref: string): IssueRow | null {
