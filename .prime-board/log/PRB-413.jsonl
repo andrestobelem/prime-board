@@ -14,3 +14,5 @@
 {"actor":"admin","issue":"PRB-413","payload":{"from":"Needs Triage","to":"PRB/Backlog"},"ts":"2026-08-21T18:37:02.317Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-413","payload":{"type":"blocked_by","issue":"PRB-474"},"ts":"2026-08-21T18:37:20.442Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-413","payload":{"type":"blocked_by","issue":"PRB-475"},"ts":"2026-08-21T18:37:20.494Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-413","payload":{"from":"PRB/Backlog","to":"PRB/Done"},"ts":"2026-08-24T03:32:03.315Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-413","payload":{"body":"Cierro el parent PRB-413 porque sus hitos están completos: PRB-474 y PRB-475 están Done con revisiones PASS; PRB-552 añadió el aislamiento PostgreSQL de API keys, grants, Membership efectiva y límites por Workspace. Evidencia registrada en esos tickets: auth SQLite focal 444/444, lifecycle 36 pass y matrices de aislamiento. PRB-476/477 quedan como workstreams posteriores de repositorios, nested resolvers, relaciones y FTS."},"ts":"2026-08-24T03:32:03.537Z","type":"commented"}
