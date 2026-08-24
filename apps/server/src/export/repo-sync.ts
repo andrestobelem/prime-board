@@ -70,7 +70,9 @@ export function createRepoSync(
     });
   const sync = (exporter: () => void): void => {
     // El evento queda durable antes de tocar cualquier proyección.
-    appendActivityEvents(db, root, eventPipeline.eventLog);
+    appendActivityEvents(db, root, eventPipeline.eventLog, (eventIds) =>
+      eventPipeline.recordPendingEventIds(eventIds),
+    );
     eventPipeline.commit();
     eventPipeline.project();
     exporter();
@@ -78,25 +80,16 @@ export function createRepoSync(
   return {
     root,
     sync() {
-      try {
-        sync(() => exportBoard(db, root));
-      } catch (error) {
-        // Nunca romper una mutación por un problema de escritura en el repo.
-        console.error(`repo sync failed: ${error}`);
-      }
+      sync(() => exportBoard(db, root));
     },
     syncIssue(issueId: string) {
-      try {
-        // Un repo vacío o histórico sin metadata todavía no es una réplica
-        // reconstruible: inicializarlo con el export completo deja también la
-        // identidad y el alcance del Workspace.
-        sync(() => {
-          const metadata = join(root, ".prime-board", "meta", "export.json");
-          if (!existsSync(metadata) || !exportIssue(db, root, issueId)) exportBoard(db, root);
-        });
-      } catch (error) {
-        console.error(`repo sync failed: ${error}`);
-      }
+      // Un repo vacío o histórico sin metadata todavía no es una réplica
+      // reconstruible: inicializarlo con el export completo deja también la
+      // identidad y el alcance del Workspace.
+      sync(() => {
+        const metadata = join(root, ".prime-board", "meta", "export.json");
+        if (!existsSync(metadata) || !exportIssue(db, root, issueId)) exportBoard(db, root);
+      });
     },
   };
 }

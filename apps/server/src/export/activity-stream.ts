@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import {
   CURRENT_EVENT_SCHEMA_VERSION,
   EventLogWriter,
+  type AppendResult,
   type DomainEvent,
   validateDomainEvent,
 } from "./event-log.ts";
@@ -70,7 +71,10 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
 export function appendActivityEvents(
   db: Database,
   root: string,
-  eventLog: Pick<CanonicalEventLog, "appendMany"> = new EventLogWriter({ rootDir: root }),
+  eventLog: Pick<CanonicalEventLog, "appendMany" | "read"> = new EventLogWriter({
+    rootDir: root,
+  }),
+  onEventIds?: (eventIds: readonly string[]) => void,
 ): number {
   const rows = db
     .query(
@@ -92,6 +96,20 @@ export function appendActivityEvents(
     return event ? [event] : [];
   });
   if (events.length === 0) return 0;
-  eventLog.appendMany(events);
+  const before = new Set(eventLog.read().map((event) => event.eventId));
+  try {
+    const results: AppendResult[] = eventLog.appendMany(events);
+    onEventIds?.(results.filter((result) => result.appended).map((result) => result.eventId));
+  } catch (error) {
+    // appendMany writes one event at a time. Preserve only IDs that appeared
+    // during this attempt so a later retry can commit the partial delta.
+    const after = new Set(eventLog.read().map((event) => event.eventId));
+    onEventIds?.(
+      events
+        .filter((event) => !before.has(event.eventId) && after.has(event.eventId))
+        .map((event) => event.eventId),
+    );
+    throw error;
+  }
   return events.length;
 }

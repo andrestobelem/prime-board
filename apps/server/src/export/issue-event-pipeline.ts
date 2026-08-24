@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  EVENT_LOG_RELATIVE_PATH,
   EventLogWriter,
   type AppendResult,
   type DomainEvent,
   type EventLogOptions,
+  validateDomainEvent,
 } from "./event-log.ts";
 import type { ProjectorCheckpoint } from "./projector.ts";
 
@@ -120,6 +122,7 @@ export class IssueEventPipeline {
   private readonly commitGit: GitCommitter;
   private readonly projector: IssueEventProjector;
   private readonly checkpointStore: IssueEventCheckpointStore;
+  private readonly pendingEventIds = new Set<string>();
   private checkpoint: ProjectorCheckpoint | undefined;
   private checkpointLoaded = false;
 
@@ -137,13 +140,41 @@ export class IssueEventPipeline {
 
   /** Agrega eventos validados e idempotentes al log canónico. */
   append(events: readonly DomainEvent[]): readonly AppendResult[] {
-    return this.eventLog.appendMany(events);
+    const before = new Set(this.eventLog.read().map((event) => event.eventId));
+    try {
+      const results = this.eventLog.appendMany(events);
+      for (const result of results) {
+        if (result.appended) this.pendingEventIds.add(result.eventId);
+      }
+      return results;
+    } catch (error) {
+      const after = new Set(this.eventLog.read().map((event) => event.eventId));
+      for (const event of events) {
+        if (!before.has(event.eventId) && after.has(event.eventId)) {
+          this.pendingEventIds.add(event.eventId);
+        }
+      }
+      throw error;
+    }
   }
 
-  /** Hace commit solo después de que el append terminó sin errores. */
-  commit(): void {
-    const eventIds = this.eventLog.read().map((event) => event.eventId);
-    this.commitGit({ rootDir: this.rootDir, eventIds });
+  /** Registra candidatos del bridge Activity antes de un append que puede fallar. */
+  recordPendingEventIds(eventIds: readonly string[]): void {
+    for (const eventId of eventIds) {
+      if (eventId.trim()) this.pendingEventIds.add(eventId);
+    }
+  }
+
+  /** Hace commit solo de eventos nuevos después de que el append terminó. */
+  commit(eventIds: readonly string[] = [...this.pendingEventIds]): void {
+    this.recordPendingEventIds(eventIds);
+    const pending = [...this.pendingEventIds];
+    if (pending.length === 0) return;
+    this.commitGit({ rootDir: this.rootDir, eventIds: pending });
+    const present = new Set(this.eventLog.read().map((event) => event.eventId));
+    for (const eventId of pending) {
+      if (present.has(eventId)) this.pendingEventIds.delete(eventId);
+    }
   }
 
   /**
@@ -193,13 +224,13 @@ export class IssueEventPipeline {
 export function createGitCommitter(rootDir: string): GitCommitter {
   return ({ eventIds }) => {
     if (eventIds.length === 0 || !existsSync(join(rootDir, ".git"))) return;
-    runGit(rootDir, ["add", "--", ".prime-board/log/events.jsonl"]);
+    const changedEventIds = validateEventLogDelta(rootDir, eventIds);
+    if (changedEventIds.size === 0) return;
+    runGit(rootDir, ["add", "--", EVENT_LOG_RELATIVE_PATH]);
     const status = spawnSync(
       "git",
-      ["-C", rootDir, "diff", "--cached", "--quiet", "--", ".prime-board/log/events.jsonl"],
-      {
-        encoding: "utf8",
-      },
+      ["-C", rootDir, "diff", "--cached", "--quiet", "--", EVENT_LOG_RELATIVE_PATH],
+      { encoding: "utf8" },
     );
     if (status.error) throw status.error;
     if (status.status === 0) return;
@@ -212,9 +243,57 @@ export function createGitCommitter(rootDir: string): GitCommitter {
       "-m",
       "chore(events): append canonical issue events",
       "--",
-      ".prime-board/log/events.jsonl",
+      EVENT_LOG_RELATIVE_PATH,
     ]);
   };
+}
+
+/**
+ * Verify that the working-tree change is an append of only expected events.
+ * This check runs before `git add`, so a concurrent or pre-existing change is
+ * rejected and remains available for its owner to retry.
+ */
+function validateEventLogDelta(rootDir: string, expectedEventIds: readonly string[]): Set<string> {
+  const path = join(rootDir, EVENT_LOG_RELATIVE_PATH);
+  if (!existsSync(path)) throw new Error("Canonical event log is missing");
+  const current = readFileSync(path, "utf8");
+  const base = readHeadEventLog(rootDir);
+  if (base && !current.startsWith(base)) {
+    throw new Error("Canonical event log changed outside an append-only delta");
+  }
+  if (base && !base.endsWith("\n") && current.length > base.length) {
+    throw new Error("Canonical event log base is not newline-terminated");
+  }
+  const delta = base ? current.slice(base.length) : current;
+  if (delta.length === 0) return new Set();
+  const expected = new Set(expectedEventIds);
+  const changed = new Set<string>();
+  const lines = delta.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  for (const line of lines) {
+    if (!line) throw new Error("Canonical event log contains an empty appended line");
+    let event: DomainEvent;
+    try {
+      event = validateDomainEvent(JSON.parse(line) as unknown);
+    } catch (error) {
+      throw new Error(`Canonical event log contains an invalid appended line: ${String(error)}`);
+    }
+    if (!expected.has(event.eventId)) {
+      throw new Error(`Canonical event log contains an unexpected event: ${event.eventId}`);
+    }
+    changed.add(event.eventId);
+  }
+  return changed;
+}
+
+function readHeadEventLog(rootDir: string): string {
+  const result = spawnSync("git", ["-C", rootDir, "show", `HEAD:${EVENT_LOG_RELATIVE_PATH}`], {
+    encoding: "utf8",
+  });
+  if (result.error) throw result.error;
+  if (result.status === 0) return result.stdout;
+  if (result.status === 128) return "";
+  throw new Error(result.stderr.trim() || "Cannot read HEAD event log");
 }
 
 function runGit(rootDir: string, args: readonly string[]): void {

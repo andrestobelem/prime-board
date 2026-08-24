@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLogWriter, type DomainEvent } from "./event-log.ts";
 import {
+  createGitCommitter,
   IssueEventPipeline,
   type CanonicalEventLog,
   type IssueEventCheckpointStore,
@@ -160,6 +162,39 @@ describe("SQLite issue event pipeline", () => {
     expect(pipeline.project()).toMatchObject({ applied: 1, skipped: 0 });
     expect(applied).toEqual(["event-1"]);
     expect(pipeline.getCheckpoint()).toMatchObject({ stream: "issues", eventId: "event-1" });
+  });
+
+  it("rejects unrelated event-log changes before Git add and keeps them for retry", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-committer-"));
+    const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
+    const line = (eventId: string) => `${JSON.stringify(event(eventId))}\n`;
+    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    try {
+      mkdirSync(join(rootDir, ".prime-board", "log"), { recursive: true });
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      writeFileSync(logPath, line("base"));
+      git("add", "--", ".prime-board/log/events.jsonl");
+      git("commit", "-qm", "base");
+
+      writeFileSync(logPath, `${line("base")}${line("preexisting")}${line("generated")}`);
+      const committer = createGitCommitter(rootDir);
+      expect(() => committer({ rootDir, eventIds: ["generated"] })).toThrow(
+        "unexpected event: preexisting",
+      );
+      expect(readFileSync(logPath, "utf8")).toContain('"eventId":"preexisting"');
+      expect(git("status", "--porcelain").toString()).toContain("events.jsonl");
+
+      writeFileSync(logPath, `${line("base")}${line("generated")}`);
+      committer({ rootDir, eventIds: ["generated"] });
+      expect(git("log", "-1", "--format=%s").toString().trim()).toBe(
+        "chore(events): append canonical issue events",
+      );
+      expect(git("status", "--porcelain").toString()).toBe("");
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("does not advance the checkpoint when projector or checkpoint fails", () => {

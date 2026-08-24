@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync, rmSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
+import { createRepoSync } from "./repo-sync.ts";
 import { readEventLog } from "./event-log.ts";
 
 let app: TestApp;
@@ -130,6 +131,21 @@ describe("repo sync en cada escritura", () => {
       expect(current.eventId).toBeTruthy();
       expect(current.actor).toBe("admin");
       expect(current.payload).toBeTruthy();
+    }
+  });
+
+  it("propaga un fallo del pipeline en vez de reportar éxito", () => {
+    const failingRoot = mkdtempSync(join(tmpdir(), "pb-reposync-failure-"));
+    try {
+      const repo = createRepoSync(app.db, failingRoot, {
+        commitGit: () => {
+          throw new Error("git unavailable");
+        },
+      });
+      expect(repo).not.toBeNull();
+      expect(() => repo!.sync()).toThrow("git unavailable");
+    } finally {
+      rmSync(failingRoot, { recursive: true, force: true });
     }
   });
 
