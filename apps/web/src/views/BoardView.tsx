@@ -1,6 +1,6 @@
 // Board por estado con drag & drop nativo y update optimista (AT-146).
 // Sirve tanto para un team (#/board/KEY) como para un proyecto (#/project-board/ID, AT-182).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { gql, mutate, useQuery } from "../api.ts";
 import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.tsx";
 import { Avatar, LabelChip, PriorityIcon, StateIcon } from "../components/bits.tsx";
@@ -21,7 +21,6 @@ import {
 import { getVisibleBoardMetadata } from "../board-columns.ts";
 import { navigate } from "../router.tsx";
 import {
-  BulkIssueActions,
   IssueActionMenu,
   type IssueActionInput,
   type IssueActionOptions,
@@ -30,6 +29,13 @@ import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-
 import { isIssueShortcutTarget } from "../issue-selection.ts";
 import { getAssignableActors, type AssigneeActor } from "../assignee-actors.ts";
 import { ArchiveConfirmModal } from "../components/ArchiveConfirmModal.tsx";
+import { IssueFilterToolbar } from "../components/IssueFilterToolbar.tsx";
+import {
+  buildIssueFilter,
+  loadIssueFilter,
+  saveIssueFilter,
+  type IssueFilterDraft,
+} from "../issue-filter.ts";
 import type { IssueColumn, IssueOrder } from "../components/DisplayOptions.tsx";
 
 const TEAM_BOARD_QUERY = `query($key: String, $filter: IssueFilter, $orderBy: IssueOrder, $after: String) {
@@ -107,11 +113,17 @@ export function BoardView({
   visibleColumns?: IssueColumn[];
 }) {
   const isProject = scope.kind === "project";
+  const filterKey = isProject ? `project-${scope.projectId}` : scope.teamKey;
+  const [draft, setDraft] = useState<IssueFilterDraft>(() => loadIssueFilter(filterKey));
+  useEffect(() => setDraft(loadIssueFilter(filterKey)), [filterKey]);
+  useEffect(() => saveIssueFilter(filterKey, draft), [draft, filterKey]);
+  const filter = useMemo(() => {
+    const scoped = buildIssueFilter(isProject ? null : scope.teamId, draft);
+    return isProject ? { ...scoped, project: { eq: scope.projectId } } : scoped;
+  }, [draft, isProject, scope]);
   const result = useQuery<any>(
     isProject ? PROJECT_BOARD_QUERY : TEAM_BOARD_QUERY,
-    isProject
-      ? { id: scope.projectId, filter: { project: { eq: scope.projectId } }, orderBy }
-      : { key: scope.teamKey, filter: scope.teamId ? { team: { eq: scope.teamId } } : {}, orderBy },
+    isProject ? { id: scope.projectId, filter, orderBy } : { key: scope.teamKey, filter, orderBy },
   );
   // Copia local para el update optimista del drag & drop.
   const [local, setLocal] = useState<BoardCard[] | null>(null);
@@ -134,7 +146,7 @@ export function BoardView({
     endCursor: null as string | null,
   });
   const pageGate = useRef(createRequestGate());
-  const pageKey = JSON.stringify({ scope, orderBy });
+  const pageKey = JSON.stringify({ scope, filter, orderBy });
 
   useEffect(() => setLocal(null), [result.data]);
   useEffect(() => {
@@ -237,13 +249,13 @@ export function BoardView({
       const variables = isProject
         ? {
             id: scope.projectId,
-            filter: { project: { eq: scope.projectId } },
+            filter,
             orderBy,
             after: pageInfo.endCursor,
           }
         : {
             key: scope.teamKey,
-            filter: scope.teamId ? { team: { eq: scope.teamId } } : {},
+            filter,
             orderBy,
             after: pageInfo.endCursor,
           };
@@ -476,13 +488,33 @@ export function BoardView({
 
   return (
     <>
-      <BulkIssueActions
+      <IssueFilterToolbar
+        draft={draft}
+        states={isProject ? container.teams.flatMap((team: any) => team.states) : container.states}
+        actors={actors}
+        labels={isProject ? container.teams.flatMap((team: any) => team.labels) : container.labels}
+        projects={isProject ? [] : container.projects}
+        milestones={milestones}
+        cycles={isProject ? container.teams.flatMap((team: any) => team.cycles) : container.cycles}
+        parents={issues.flatMap((issue) =>
+          issue.parent
+            ? [{ id: issue.parent.id, name: `${issue.parent.identifier} ${issue.parent.title}` }]
+            : [],
+        )}
+        visibleCount={issues.length}
         selectedCount={selectedIds.size}
-        options={bulkOptions}
-        onAction={bulkAction}
-        onArchive={requestBulkArchive}
-        onClear={() => setSelectedIds(new Set())}
-        loading={actionLoading}
+        onChange={setDraft}
+        onSelectAll={() =>
+          setSelectedIds((current) =>
+            current.size === issues.length ? new Set() : new Set(issues.map((issue) => issue.id)),
+          )
+        }
+        onClearSelection={() => setSelectedIds(new Set())}
+        onBulkState={(stateId) => bulkAction({ stateId })}
+        actionOptions={bulkOptions}
+        onBulkAction={bulkAction}
+        onBulkArchive={requestBulkArchive}
+        bulkLoading={actionLoading}
       />
       {archiveSelection && (
         <ArchiveConfirmModal

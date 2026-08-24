@@ -1,5 +1,5 @@
 // Vista de proyecto (AT-149): header con estado/lead/fecha y la lista de issues.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { gql, mutate, useQuery } from "../api.ts";
 import { EmptyState, ErrorState, LoadingState } from "../components/AsyncState.tsx";
 import { Link, navigate } from "../router.tsx";
@@ -9,9 +9,20 @@ import { ConfirmModal, EntityModal } from "../components/EntityModal.tsx";
 import { ArchiveConfirmModal } from "../components/ArchiveConfirmModal.tsx";
 import { IssueList, IssueListLimitNotice, type IssueListItem } from "../components/IssueList.tsx";
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
+import { archiveMutation, issueUpdateMutation, runIssueActions } from "../issue-actions.ts";
+import type { IssueActionInput, IssueActionOptions } from "../components/IssueActions.tsx";
 import { appendUniqueById } from "../pagination.ts";
 import { createRequestGate } from "../request-generation.ts";
 import { canManageProject } from "../permissions.ts";
+import { IssueFilterToolbar } from "../components/IssueFilterToolbar.tsx";
+import {
+  buildIssueFilter,
+  loadIssueFilter,
+  saveIssueFilter,
+  activeIssueFilterCount,
+  EMPTY_ISSUE_FILTER,
+  type IssueFilterDraft,
+} from "../issue-filter.ts";
 import { changedTeamIds, parseTeamIds, serializeTeamIds } from "../project-teams.ts";
 
 const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter, $after: String) {
@@ -19,7 +30,7 @@ const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter, $after: String) {
   project(id: $id) {
     id name description state targetDate
     lead { id name type }
-    teams { id name memberships { actorId role } }
+    teams { id name memberships { actorId role } states { id name type color position } labels { id name color } cycles { id name number } }
     milestones { id name description targetDate progress position }
     updates { id health body risks createdAt author { id name type } }
     documents { id title updatedAt archivedAt }
@@ -64,6 +75,18 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const [documentTitle, setDocumentTitle] = useState("");
   const [documentContent, setDocumentContent] = useState("");
   const [documentSaving, setDocumentSaving] = useState(false);
+  const filterKey = `project-${projectId}`;
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [archiveSelection, setArchiveSelection] = useState<string[] | null>(null);
+  const [draft, setDraft] = useState<IssueFilterDraft>(() => loadIssueFilter(filterKey));
+  useEffect(() => setDraft(loadIssueFilter(filterKey)), [filterKey]);
+  useEffect(() => saveIssueFilter(filterKey, draft), [draft, filterKey]);
+  const filter = useMemo(
+    () => ({ ...buildIssueFilter(null, draft), project: { eq: projectId } }),
+    [draft, projectId],
+  );
   const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -72,7 +95,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
     endCursor: null as string | null,
   });
   const pageGate = useRef(createRequestGate());
-  const pageKey = JSON.stringify({ projectId });
+  const pageKey = JSON.stringify({ projectId, filter });
 
   const result = useQuery<{
     viewer: { id: string; workspaceRole: string };
@@ -87,6 +110,9 @@ export function ProjectView({ projectId }: { projectId: string }) {
         id: string;
         name: string;
         memberships: Array<{ actorId: string; role: string }>;
+        states: Array<{ id: string; name: string; type: string; color: string; position: number }>;
+        labels: Array<{ id: string; name: string; color: string }>;
+        cycles: Array<{ id: string; name: string; number: number }>;
       }>;
       milestones: Array<{
         id: string;
@@ -112,7 +138,14 @@ export function ProjectView({ projectId }: { projectId: string }) {
       nodes: IssueListItem[];
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
     };
-  }>(PROJECT_QUERY, { id: projectId, filter: { project: { eq: projectId } } });
+  }>(PROJECT_QUERY, { id: projectId, filter });
+
+  useEffect(() => {
+    const visible = new Set(
+      [...(result.data?.issues.nodes ?? []), ...extraIssues].map((issue) => issue.id),
+    );
+    setSelectedIds((current) => new Set([...current].filter((id) => visible.has(id))));
+  }, [extraIssues, result.data]);
 
   useEffect(() => {
     pageGate.current.next();
@@ -129,7 +162,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
     try {
       const next = await gql<any>(PROJECT_QUERY, {
         id: projectId,
-        filter: { project: { eq: projectId } },
+        filter,
         after: pageInfo.endCursor,
       });
       if (!pageGate.current.isCurrent(generation)) return;
@@ -252,6 +285,72 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const canManage = Boolean(
     result.data?.viewer && canManageProject(result.data.viewer, project.teams),
   );
+  const issues = [...result.data!.issues.nodes, ...extraIssues];
+  const actors = result.data?.actors ?? [];
+  const actionOptions: IssueActionOptions = {
+    states: project.teams.flatMap((team) => team.states),
+    actors,
+    labels: project.teams.flatMap((team) => team.labels),
+    projects: [],
+    cycles: project.teams.flatMap((team) => team.cycles),
+  };
+  async function bulkAction(input: IssueActionInput): Promise<void> {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setBulkLoading(true);
+    setBulkError(null);
+    try {
+      await runIssueActions(
+        ids,
+        async (id) =>
+          (
+            await mutate<{ issueUpdate: { success: boolean } }>(issueUpdateMutation(), {
+              id,
+              input,
+            })
+          ).issueUpdate,
+      );
+      setSelectedIds(new Set());
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : "Could not update selected issues.");
+    } finally {
+      setBulkLoading(false);
+    }
+  }
+  async function requestBulkArchive(): Promise<void> {
+    if (selectedIds.size) setArchiveSelection([...selectedIds]);
+  }
+  async function confirmBulkArchive(): Promise<void> {
+    const ids = archiveSelection;
+    if (!ids?.length) return;
+    setBulkLoading(true);
+    try {
+      await runIssueActions(
+        ids,
+        async (id) =>
+          (await mutate<{ issueArchive: { success: boolean } }>(archiveMutation(), { id }))
+            .issueArchive,
+      );
+      setSelectedIds(new Set());
+      setArchiveSelection(null);
+    } finally {
+      setBulkLoading(false);
+    }
+  }
+
+  async function updateIssue(id: string, input: IssueActionInput): Promise<void> {
+    const response = await mutate<{ issueUpdate: { success: boolean } }>(issueUpdateMutation(), {
+      id,
+      input,
+    });
+    if (!response.issueUpdate.success) throw new Error(`Could not update issue ${id}.`);
+  }
+  async function archiveIssue(id: string): Promise<void> {
+    const response = await mutate<{ issueArchive: { success: boolean } }>(archiveMutation(), {
+      id,
+    });
+    if (!response.issueArchive.success) throw new Error(`Could not archive issue ${id}.`);
+  }
 
   async function archiveProject(): Promise<void> {
     if (!canManage) throw new Error("Project team membership is required.");
@@ -293,7 +392,6 @@ export function ProjectView({ projectId }: { projectId: string }) {
     }
   }
 
-  const issues = [...result.data!.issues.nodes, ...extraIssues];
   const projectTargetDate = formatProjectDate(project.targetDate);
 
   return (
@@ -438,6 +536,46 @@ export function ProjectView({ projectId }: { projectId: string }) {
           ))}
         </div>
       )}
+      <IssueFilterToolbar
+        draft={draft}
+        states={project.teams.flatMap((team) => team.states)}
+        actors={actors}
+        labels={project.teams.flatMap((team) => team.labels)}
+        projects={[]}
+        milestones={project.milestones}
+        cycles={project.teams.flatMap((team) => team.cycles)}
+        parents={issues.flatMap((issue) =>
+          issue.parent
+            ? [{ id: issue.parent.id, name: `${issue.parent.identifier} ${issue.parent.title}` }]
+            : [],
+        )}
+        visibleCount={issues.length}
+        selectedCount={selectedIds.size}
+        onChange={setDraft}
+        onSelectAll={() =>
+          setSelectedIds((current) =>
+            current.size === issues.length ? new Set() : new Set(issues.map((issue) => issue.id)),
+          )
+        }
+        onClearSelection={() => setSelectedIds(new Set())}
+        onBulkState={(stateId) => bulkAction({ stateId })}
+        actionOptions={actionOptions}
+        onBulkAction={bulkAction}
+        onBulkArchive={requestBulkArchive}
+        bulkLoading={bulkLoading}
+      />
+      {archiveSelection && (
+        <ArchiveConfirmModal
+          target={{ kind: "issues", count: archiveSelection.length }}
+          onClose={() => setArchiveSelection(null)}
+          onConfirm={confirmBulkArchive}
+        />
+      )}
+      {bulkError && (
+        <div className="error-banner" role="alert">
+          {bulkError}
+        </div>
+      )}
       {pageError && (
         <div className="error-banner" role="alert">
           {pageError}{" "}
@@ -452,7 +590,29 @@ export function ProjectView({ projectId }: { projectId: string }) {
         onLoadMore={() => void loadMore()}
       />
       {project.milestones.length === 0 ? (
-        <IssueList issues={issues} />
+        <IssueList
+          issues={issues}
+          selection={{
+            selectedIds,
+            onToggle: (id) =>
+              setSelectedIds((current) => {
+                const next = new Set(current);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              }),
+            onSelectAll: () => setSelectedIds(new Set(issues.map((issue) => issue.id))),
+            onClear: () => setSelectedIds(new Set()),
+          }}
+          actionOptions={actionOptions}
+          onIssueAction={updateIssue}
+          onArchiveIssue={archiveIssue}
+          onArchiveSelection={requestBulkArchive}
+          emptyTitle={
+            activeIssueFilterCount(draft) ? "No issues match these filters" : "No issues yet"
+          }
+          onClearEmpty={() => setDraft(EMPTY_ISSUE_FILTER)}
+        />
       ) : (
         (() => {
           const { groups, orphans } = milestoneSections(project, issues);
@@ -504,7 +664,24 @@ export function ProjectView({ projectId }: { projectId: string }) {
                       </span>
                     )}
                   </div>
-                  <IssueList issues={items} />
+                  <IssueList
+                    issues={items}
+                    selection={{
+                      selectedIds,
+                      onToggle: (id) =>
+                        setSelectedIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(id)) next.delete(id);
+                          else next.add(id);
+                          return next;
+                        }),
+                      onSelectAll: () => setSelectedIds(new Set(issues.map((issue) => issue.id))),
+                      onClear: () => setSelectedIds(new Set()),
+                    }}
+                    actionOptions={actionOptions}
+                    onIssueAction={updateIssue}
+                    onArchiveIssue={archiveIssue}
+                  />
                 </div>
               ))}
               {orphans.length > 0 && (
@@ -512,7 +689,24 @@ export function ProjectView({ projectId }: { projectId: string }) {
                   <div className="state-group-header" style={{ background: "var(--bg-sidebar)" }}>
                     No milestone <span className="count">{orphans.length}</span>
                   </div>
-                  <IssueList issues={orphans} />
+                  <IssueList
+                    issues={orphans}
+                    selection={{
+                      selectedIds,
+                      onToggle: (id) =>
+                        setSelectedIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(id)) next.delete(id);
+                          else next.add(id);
+                          return next;
+                        }),
+                      onSelectAll: () => setSelectedIds(new Set(issues.map((issue) => issue.id))),
+                      onClear: () => setSelectedIds(new Set()),
+                    }}
+                    actionOptions={actionOptions}
+                    onIssueAction={updateIssue}
+                    onArchiveIssue={archiveIssue}
+                  />
                 </div>
               )}
             </>
