@@ -1,4 +1,4 @@
-import type { Persistence } from "../db/persistence.ts";
+import type { Persistence, PersistenceTransaction } from "../db/persistence.ts";
 import type { DomainEvent, EventLogOptions } from "./event-log.ts";
 import { EventLogReader } from "./event-log.ts";
 
@@ -211,6 +211,24 @@ interface CheckpointRow {
  * PostgreSQL-backed checkpoint store. It only writes projector metadata.
  * Domain rows must be changed by the projector callback, never by this class.
  */
+export async function saveProjectorCheckpoint(
+  tx: PersistenceTransaction,
+  checkpoint: ProjectorCheckpoint,
+): Promise<void> {
+  validateCheckpoint(checkpoint);
+  await tx.execute(
+    `INSERT INTO projector_checkpoints
+       (stream, event_id, occurred_at, processed, updated_at)
+     VALUES ($1, $2, $3, TRUE, now())
+     ON CONFLICT (stream) DO UPDATE SET
+       event_id = EXCLUDED.event_id,
+       occurred_at = EXCLUDED.occurred_at,
+       processed = TRUE,
+       updated_at = now()`,
+    [checkpoint.stream, checkpoint.eventId, checkpoint.occurredAt],
+  );
+}
+
 export class PostgresCheckpointStore implements ProjectorCheckpointStore {
   constructor(private readonly persistence: Persistence) {}
 
@@ -233,18 +251,7 @@ export class PostgresCheckpointStore implements ProjectorCheckpointStore {
   }
 
   async save(checkpoint: ProjectorCheckpoint): Promise<void> {
-    validateCheckpoint(checkpoint);
-    await this.persistence.execute(
-      `INSERT INTO projector_checkpoints
-         (stream, event_id, occurred_at, processed, updated_at)
-       VALUES ($1, $2, $3, TRUE, now())
-       ON CONFLICT (stream) DO UPDATE SET
-         event_id = EXCLUDED.event_id,
-         occurred_at = EXCLUDED.occurred_at,
-         processed = TRUE,
-         updated_at = now()`,
-      [checkpoint.stream, checkpoint.eventId, checkpoint.occurredAt],
-    );
+    await this.persistence.transaction((tx) => saveProjectorCheckpoint(tx, checkpoint));
   }
 
   /** Compatibility names for generic key/value checkpoint adapters. */
@@ -410,6 +417,69 @@ export class EventProjector {
     this.checkpoint = lastCheckpoint;
     return completed(applied, skipped, lastCheckpoint);
   }
+}
+
+export type PostgresApplyEvent = (
+  tx: PersistenceTransaction,
+  event: DomainEvent,
+  context: ProjectorApplyContext,
+) => void | PromiseLike<void>;
+
+export interface PostgresReplayOptions extends ReplayOptions {
+  readonly persistence: Persistence;
+  readonly checkpointStore?: PostgresCheckpointStore;
+}
+
+/**
+ * Replay through PostgreSQL with domain apply and checkpoint in one transaction.
+ * The callback must use the supplied transaction for all domain writes.
+ */
+export async function replayPostgresEvents(
+  applyEvent: PostgresApplyEvent,
+  options: PostgresReplayOptions,
+): Promise<AsyncReplayResult> {
+  validateOptions(options);
+  const events = new EventLogReader(options).read();
+  const store = options.checkpointStore ?? new PostgresCheckpointStore(options.persistence);
+  let applied = 0;
+  let skipped = 0;
+  let lastCheckpoint = options.checkpoint;
+
+  if (!lastCheckpoint) {
+    try {
+      lastCheckpoint = await store.load(options.stream);
+    } catch (error) {
+      return failed(applied, skipped, lastCheckpoint, error, events.length);
+    }
+  }
+  if (lastCheckpoint) {
+    try {
+      assertCheckpointStream(lastCheckpoint, options.stream);
+    } catch (error) {
+      return failed(applied, skipped, undefined, error, events.length);
+    }
+  }
+
+  for (let index = 0; index < events.length; index += 1) {
+    const current = events[index];
+    if (!current) continue;
+    if (lastCheckpoint && !isAfterCheckpoint(current, lastCheckpoint)) {
+      skipped += 1;
+      continue;
+    }
+    const nextCheckpoint = checkpointFor(options.stream, current);
+    try {
+      await options.persistence.transaction(async (tx) => {
+        await applyEvent(tx, current, { checkpoint: lastCheckpoint });
+        await saveProjectorCheckpoint(tx, nextCheckpoint);
+      });
+    } catch (error) {
+      return failed(applied, skipped, lastCheckpoint, error, events.length - index);
+    }
+    lastCheckpoint = nextCheckpoint;
+    applied += 1;
+  }
+  return completed(applied, skipped, lastCheckpoint);
 }
 
 export function replayEvents(applyEvent: ApplyEvent, options: ReplayOptions): ReplayResult {

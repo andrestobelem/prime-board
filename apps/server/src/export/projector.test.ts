@@ -3,7 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type DomainEvent, EventLogWriter } from "./event-log.ts";
-import { EventProjector } from "./projector.ts";
+import type { Persistence, PersistenceTransaction } from "../db/persistence.ts";
+import { EventProjector, replayPostgresEvents } from "./projector.ts";
 
 const event = (eventId: string, occurredAt: string): DomainEvent => ({
   schemaVersion: 1,
@@ -174,5 +175,74 @@ describe("async projector checkpoints", () => {
     const retried = await projector.replayAsync();
     expect(retried).toMatchObject({ status: "completed", applied: 1, failed: false });
     expect(saves).toEqual(["one", "two"]);
+  });
+});
+
+describe("atomic PostgreSQL projector", () => {
+  function persistence() {
+    const committed: string[] = [];
+    const store = {
+      one: async () => null,
+      many: async () => [],
+      execute: async () => ({ rows: [], rowCount: 0 }),
+      close: async () => undefined,
+      transaction: async <Result>(callback: (tx: PersistenceTransaction) => Promise<Result>) => {
+        const pending: string[] = [];
+        const tx: PersistenceTransaction = {
+          one: async () => null,
+          many: async () => [],
+          execute: async (sql: string) => {
+            pending.push(sql.includes("projector_checkpoints") ? "checkpoint" : "domain");
+            return { rows: [], rowCount: 1 };
+          },
+        };
+        const result = await callback(tx);
+        committed.push(...pending);
+        return result;
+      },
+    } satisfies Persistence;
+    return { persistence: store, committed };
+  }
+
+  it("commits domain apply and checkpoint together", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-projector-pg-"));
+    const writer = new EventLogWriter({ rootDir });
+    writer.append(event("one", "2025-01-01T00:00:00.000Z"));
+    const fake = persistence();
+    const result = await replayPostgresEvents(
+      async (tx, current) => {
+        await tx.execute("INSERT INTO projected_events (event_id) VALUES ($1)", [current.eventId]);
+      },
+      { rootDir, stream: "issues", persistence: fake.persistence },
+    );
+    expect(result).toMatchObject({ status: "completed", applied: 1, lag: 0 });
+    expect(fake.committed).toEqual(["domain", "checkpoint"]);
+  });
+
+  it("rolls back both writes and retries the failed event", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-projector-pg-"));
+    const writer = new EventLogWriter({ rootDir });
+    writer.append(event("one", "2025-01-01T00:00:00.000Z"));
+    writer.append(event("two", "2025-01-02T00:00:00.000Z"));
+    const fake = persistence();
+    let fail = true;
+    const first = await replayPostgresEvents(
+      async (tx, current) => {
+        await tx.execute("INSERT INTO projected_events (event_id) VALUES ($1)", [current.eventId]);
+        if (fail && current.eventId === "two") throw new Error("domain failure");
+      },
+      { rootDir, stream: "issues", persistence: fake.persistence },
+    );
+    expect(first).toMatchObject({ status: "failed", applied: 1, failed: true, lag: 1 });
+    expect(fake.committed).toEqual(["domain", "checkpoint"]);
+    fail = false;
+    const second = await replayPostgresEvents(
+      async (tx, current) => {
+        await tx.execute("INSERT INTO projected_events (event_id) VALUES ($1)", [current.eventId]);
+      },
+      { rootDir, stream: "issues", persistence: fake.persistence, checkpoint: first.checkpoint },
+    );
+    expect(second).toMatchObject({ status: "completed", applied: 1, skipped: 1 });
+    expect(fake.committed).toEqual(["domain", "checkpoint", "domain", "checkpoint"]);
   });
 });
