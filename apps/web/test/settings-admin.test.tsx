@@ -95,6 +95,11 @@ describe("workspace Team administration", () => {
     const rows = document.querySelectorAll(".workspace-team-row");
 
     expect(rows).toHaveLength(2);
+    expect(document.querySelector(".workspace-name-panel")).not.toBeNull();
+    expect(
+      document.querySelector(".workspace-identity-form label input")?.getAttribute("aria-label"),
+    ).toBe("Workspace name");
+    expect(document.querySelector(".workspace-url-key")?.textContent).toBe("URL key: workspace");
     expect(rows[0]?.querySelector(".workspace-team-heading strong")?.textContent).toBe(
       "prime-board dev",
     );

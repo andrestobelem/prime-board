@@ -271,7 +271,7 @@ export function SettingsView({ localAuth = false }: { localAuth?: boolean }) {
           )}
           {adminData && isAdmin && (
             <>
-              <div className="settings-panel">
+              <div className="settings-panel workspace-name-panel">
                 <div className="settings-panel-header">
                   <div>
                     <h3>Workspace name</h3>
@@ -289,7 +289,7 @@ export function SettingsView({ localAuth = false }: { localAuth?: boolean }) {
                     Rename workspace
                   </button>
                 </div>
-                <div className="team-setting-identity">
+                <div className="workspace-identity-form">
                   <label>
                     Workspace name
                     <input
@@ -304,7 +304,7 @@ export function SettingsView({ localAuth = false }: { localAuth?: boolean }) {
                       </span>
                     )}
                   </label>
-                  <span>URL key: {adminData.workspace.urlKey}</span>
+                  <span className="workspace-url-key">URL key: {adminData.workspace.urlKey}</span>
                 </div>
               </div>
               <div className="settings-panel" aria-labelledby="team-lifecycle-title">
