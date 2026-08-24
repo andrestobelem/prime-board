@@ -1,0 +1,24 @@
+[
+  {
+    "archived": false,
+    "archivedAt": null,
+    "content": "cc",
+    "createdAt": "2026-08-24T05:18:14.654Z",
+    "creator": "admin",
+    "target": null,
+    "title": "cc",
+    "updatedAt": "2026-08-24T05:18:14.654Z"
+  },
+  {
+    "archived": false,
+    "archivedAt": null,
+    "content": "kk",
+    "createdAt": "2026-08-24T05:40:42.534Z",
+    "creator": "admin",
+    "target": {
+      "issue": "PRB-485"
+    },
+    "title": "jjj",
+    "updatedAt": "2026-08-24T05:40:42.534Z"
+  }
+]
