@@ -2391,6 +2391,9 @@ export const resolvers = {
             ) {
               throw apiError("NOT_FOUND", "Label resource not found");
             }
+            if (existing.team_id && nextTeamId === null) {
+              assertUnrestrictedApiKey(context);
+            }
             const label = await updatePostgresLabel(
               context.persistence,
               viewer,
@@ -2403,6 +2406,9 @@ export const resolvers = {
           if (!existing) throw apiError("NOT_FOUND", "Label not found");
           const nextTeamId =
             args.input.teamId !== undefined ? (args.input.teamId ?? null) : existing.team_id;
+          if (existing.team_id && nextTeamId === null) {
+            assertUnrestrictedApiKey(context);
+          }
           if (existing.team_id == null || nextTeamId == null) assertWorkspaceAdmin(viewer);
           if (existing.team_id != null) assertCanManageTeam(context.db, viewer, existing.team_id);
           if (nextTeamId != null) assertCanManageTeam(context.db, viewer, nextTeamId);

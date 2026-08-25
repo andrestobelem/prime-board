@@ -388,5 +388,158 @@ describe("labels", () => {
         target: "PRB merge target",
       },
     });
+    const unarchived = await gql(
+      app,
+      `mutation($id: ID!) { labelUnarchive(id: $id) { success } }`,
+      { id: source.data!.labelCreate.label.id },
+    );
+    expect(unarchived.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+    const reassigned = await gql(
+      app,
+      `mutation($id: ID!, $label: ID!) {
+        issueUpdate(id: $id, input: { addLabelIds: [$label] }) { success }
+      }`,
+      { id: issue.data!.issueCreate.issue.id, label: source.data!.labelCreate.label.id },
+    );
+    expect(reassigned.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("rechaza mover una label a un grupo cuando sus issues ya tienen otra hija", async () => {
+    const group = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        labelCreate(input: { name: "PRB move group", teamId: $teamId, isGroup: true }) {
+          label { id }
+        }
+      }`,
+      { teamId },
+    );
+    const existing = await gql(
+      app,
+      `mutation($teamId: ID!, $groupId: ID!) {
+        labelCreate(input: { name: "PRB existing child", teamId: $teamId, groupId: $groupId }) {
+          label { id }
+        }
+      }`,
+      { teamId, groupId: group.data!.labelCreate.label.id },
+    );
+    const candidate = await gql(
+      app,
+      `mutation($teamId: ID!) { labelCreate(input: { name: "PRB candidate", teamId: $teamId }) { label { id groupId } } }`,
+      { teamId },
+    );
+    const existingIssue = await gql(
+      app,
+      `mutation($existing: ID!, $candidate: ID!) {
+        issueCreate(input: {
+          teamKey: "PB"
+          title: "Existing group child"
+          labelIds: [$existing, $candidate]
+        }) { issue { id } }
+      }`,
+      {
+        existing: existing.data!.labelCreate.label.id,
+        candidate: candidate.data!.labelCreate.label.id,
+      },
+    );
+    const moved = await gql(
+      app,
+      `mutation($id: ID!, $groupId: ID!) {
+        labelUpdate(id: $id, input: { groupId: $groupId }) { success label { groupId } }
+      }`,
+      { id: candidate.data!.labelCreate.label.id, groupId: group.data!.labelCreate.label.id },
+    );
+    expect(moved.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+    const unchanged = await gql(app, `query { labels(includeArchived: true) { id groupId } }`);
+    expect(
+      unchanged.data!.labels.find(
+        (label: { id: string }) => label.id === candidate.data!.labelCreate.label.id,
+      ).groupId,
+    ).toBeNull();
+  });
+
+  it("rechaza mergear una label si el issue ya tiene otra hija del grupo destino", async () => {
+    const group = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        labelCreate(input: { name: "PRB merge group", teamId: $teamId, isGroup: true }) {
+          label { id }
+        }
+      }`,
+      { teamId },
+    );
+    const existing = await gql(
+      app,
+      `mutation($teamId: ID!, $groupId: ID!) {
+        labelCreate(input: { name: "PRB merge existing", teamId: $teamId, groupId: $groupId }) {
+          label { id }
+        }
+      }`,
+      { teamId, groupId: group.data!.labelCreate.label.id },
+    );
+    const target = await gql(
+      app,
+      `mutation($teamId: ID!, $groupId: ID!) {
+        labelCreate(input: { name: "PRB merge target child", teamId: $teamId, groupId: $groupId }) {
+          label { id }
+        }
+      }`,
+      { teamId, groupId: group.data!.labelCreate.label.id },
+    );
+    const source = await gql(
+      app,
+      `mutation($teamId: ID!) { labelCreate(input: { name: "PRB merge conflict source", teamId: $teamId }) { label { id } } }`,
+      { teamId },
+    );
+    const issue = await gql(
+      app,
+      `mutation($existing: ID!, $source: ID!) {
+        issueCreate(input: { teamKey: "PB", title: "Merge group conflict", labelIds: [$existing, $source] }) {
+          issue { id labels { id } }
+        }
+      }`,
+      { existing: existing.data!.labelCreate.label.id, source: source.data!.labelCreate.label.id },
+    );
+    expect(issue.errors).toBeUndefined();
+    const merged = await gql(
+      app,
+      `mutation($source: ID!, $target: ID!) {
+        labelMerge(sourceId: $source, targetId: $target) { success }
+      }`,
+      { source: source.data!.labelCreate.label.id, target: target.data!.labelCreate.label.id },
+    );
+    expect(merged.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+    const unchanged = await gql(app, `query($id: ID!) { issue(id: $id) { labels { id } } }`, {
+      id: issue.data!.issueCreate.issue.id,
+    });
+    expect(unchanged.data!.issue.labels.map((label: { id: string }) => label.id).sort()).toEqual(
+      [existing.data!.labelCreate.label.id, source.data!.labelCreate.label.id].sort(),
+    );
+  });
+
+  it("no permite que una API key limitada convierta una label de Team en global", async () => {
+    const adminId = (
+      app.db.query("SELECT id FROM actors WHERE name = 'admin'").get() as { id: string }
+    ).id;
+    const keyResult = await gql(
+      app,
+      `mutation($actorId: ID!, $teamId: ID!) {
+        apiKeyCreate(input: { actorId: $actorId, name: "limited label admin", scopes: [ADMIN], teamIds: [$teamId] }) { key }
+      }`,
+      { actorId: adminId, teamId },
+    );
+    expect(keyResult.errors).toBeUndefined();
+    const label = await gql(
+      app,
+      `mutation($teamId: ID!) { labelCreate(input: { name: "PRB limited team label", teamId: $teamId }) { label { id } } }`,
+      { teamId },
+    );
+    const update = await gql(
+      app,
+      `mutation($id: ID!) { labelUpdate(id: $id, input: { teamId: null }) { success } }`,
+      { id: label.data!.labelCreate.label.id },
+      keyResult.data!.apiKeyCreate.key,
+    );
+    expect(update.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
   });
 });

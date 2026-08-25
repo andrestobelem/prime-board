@@ -163,6 +163,37 @@ async function validateGroupCapacity(
   }
 }
 
+async function assertNoIssueGroupConflict(
+  persistence: Persistence | PersistenceTransaction,
+  labelId: string,
+  groupId: string,
+  excludedLabelIds: readonly string[] = [labelId],
+): Promise<void> {
+  const exclusions = excludedLabelIds.map((_, index) => `$${index + 2}`).join(", ");
+  const groupParam = excludedLabelIds.length + 2;
+  const params: SqlValue[] = [labelId, ...excludedLabelIds, groupId];
+  const conflict = await persistence.one(
+    `
+      SELECT 1
+        FROM issue_labels AS linked
+        JOIN issue_labels AS other
+          ON other.issue_id = linked.issue_id
+        JOIN labels AS other_label
+          ON other_label.id = other.label_id
+       WHERE linked.label_id = $1
+         AND other.label_id NOT IN (${exclusions})
+         AND other_label.group_id = $${groupParam}
+       LIMIT 1`,
+    params,
+  );
+  if (conflict) {
+    throw apiError(
+      "VALIDATION_FAILED",
+      "A label group cannot be shared by multiple labels on the same issue",
+    );
+  }
+}
+
 export async function createPostgresLabel(
   persistence: Persistence,
   viewer: ActorRow,
@@ -226,7 +257,10 @@ export async function updatePostgresLabel(
     }
     if (!label.is_group && groupId != null) {
       await requireGroup(tx, groupId, teamId);
-      if (groupId !== label.group_id) await validateGroupCapacity(tx, groupId);
+      if (groupId !== label.group_id) {
+        await validateGroupCapacity(tx, groupId);
+        await assertNoIssueGroupConflict(tx, id, groupId);
+      }
     }
     if (await duplicateLabel(tx, teamId, name, id)) {
       throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
@@ -276,6 +310,9 @@ export async function archivePostgresLabel(
   return persistence.transaction(async (tx) => {
     const label = await getPostgresLabel(tx, id);
     if (!label) throw apiError("NOT_FOUND", "Label not found");
+    if (!archived && label.merged_into_id) {
+      throw apiError("VALIDATION_FAILED", "Merged labels are terminal and cannot be unarchived");
+    }
     await assertLabelManageAccess(tx, viewer, label.team_id);
     await tx.execute("UPDATE labels SET archived_at = $1 WHERE id = $2", [
       archived ? now() : null,
@@ -311,6 +348,9 @@ export async function mergePostgresLabels(
     }
     if (target.archived_at) throw apiError("VALIDATION_FAILED", "Target label is archived");
     if (source.merged_into_id) throw apiError("VALIDATION_FAILED", "Label was already merged");
+    if (target.group_id) {
+      await assertNoIssueGroupConflict(tx, source.id, target.group_id, [source.id, target.id]);
+    }
     await assertLabelManageAccess(tx, viewer, source.team_id);
 
     const issues = await tx.many<{ issue_id: string }>(
@@ -447,6 +487,9 @@ async function applicableLabel(
   const label = await getPostgresLabel(persistence, labelId);
   if (!label) throw apiError("NOT_FOUND", `Label not found: ${labelId}`);
   if (label.archived_at) throw apiError("VALIDATION_FAILED", `Label ${label.name} is archived`);
+  if (label.merged_into_id) {
+    throw apiError("VALIDATION_FAILED", `Label ${label.name} was merged into another label`);
+  }
   if (label.is_group) throw apiError("VALIDATION_FAILED", `Label ${label.name} is a group`);
   if (label.group_id) {
     const group = await getPostgresLabel(persistence, label.group_id);

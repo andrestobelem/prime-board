@@ -144,6 +144,43 @@ function validateGroupCapacity(
   }
 }
 
+function assertNoIssueGroupConflict(
+  db: Database,
+  labelId: string,
+  groupId: string,
+  workspaceId?: string,
+  excludedLabelIds: readonly string[] = [labelId],
+): void {
+  const exclusions = excludedLabelIds.map((_, index) => `?${index + 2}`).join(", ");
+  const groupParam = excludedLabelIds.length + 2;
+  const params: unknown[] = [labelId, ...excludedLabelIds, groupId];
+  let sql = `
+    SELECT 1
+      FROM issue_labels AS linked
+      JOIN issue_labels AS other
+        ON other.issue_id = linked.issue_id
+      JOIN labels AS other_label
+        ON other_label.id = other.label_id
+     WHERE linked.label_id = ?1
+       AND other.label_id NOT IN (${exclusions})
+       AND other_label.group_id = ?${groupParam}`;
+  if (workspaceId) {
+    const workspaceParam = groupParam + 1;
+    params.push(workspaceId);
+    sql += `
+       AND linked.workspace_id = ?${workspaceParam}
+       AND other.workspace_id = ?${workspaceParam}
+       AND other_label.workspace_id = ?${workspaceParam}`;
+  }
+  sql += " LIMIT 1";
+  if (db.query(sql).get(...(params as never[]))) {
+    throw apiError(
+      "VALIDATION_FAILED",
+      "A label group cannot be shared by multiple labels on the same issue",
+    );
+  }
+}
+
 export function createLabel(db: Database, input: LabelInput, workspaceId?: string): LabelRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
@@ -203,7 +240,10 @@ export function updateLabel(
   }
   if (!label.is_group && groupId != null) {
     requireGroup(db, groupId, teamId, workspaceId);
-    if (groupId !== label.group_id) validateGroupCapacity(db, groupId, workspaceId);
+    if (groupId !== label.group_id) {
+      validateGroupCapacity(db, groupId, workspaceId);
+      assertNoIssueGroupConflict(db, id, groupId, workspaceId);
+    }
   }
   if (labelDuplicate(db, teamId, name, id, workspaceId)) {
     throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
@@ -274,6 +314,9 @@ export function archiveLabel(
 ): LabelRow {
   const label = getLabel(db, id, workspaceId);
   if (!label) throw apiError("NOT_FOUND", "Label not found");
+  if (!archived && label.merged_into_id) {
+    throw apiError("VALIDATION_FAILED", "Merged labels are terminal and cannot be unarchived");
+  }
   const archivedAt = archived ? now() : null;
   if (workspaceId) {
     db.query("UPDATE labels SET archived_at = ?1 WHERE id = ?2 AND workspace_id = ?3").run(
@@ -315,6 +358,12 @@ export function mergeLabels(
     }
     if (target.archived_at) throw apiError("VALIDATION_FAILED", "Target label is archived");
     if (source.merged_into_id) throw apiError("VALIDATION_FAILED", "Label was already merged");
+    if (target.group_id) {
+      assertNoIssueGroupConflict(db, source.id, target.group_id, workspaceId, [
+        source.id,
+        target.id,
+      ]);
+    }
 
     const issueRows = workspaceId
       ? (db
@@ -514,6 +563,9 @@ function assertApplicable(db: Database, issue: IssueRow, labelId: string): Label
   const label = getLabel(db, labelId, workspaceId);
   if (!label) throw apiError("NOT_FOUND", `Label not found: ${labelId}`);
   if (label.archived_at) throw apiError("VALIDATION_FAILED", `Label ${label.name} is archived`);
+  if (label.merged_into_id) {
+    throw apiError("VALIDATION_FAILED", `Label ${label.name} was merged into another label`);
+  }
   if (label.is_group) throw apiError("VALIDATION_FAILED", `Label ${label.name} is a group`);
   if (label.group_id) {
     const group = getLabel(db, label.group_id, workspaceId);
