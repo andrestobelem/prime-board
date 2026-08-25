@@ -246,6 +246,76 @@ describe("SQLite issue event pipeline", () => {
     }
   });
 
+  it("serializes contenders while recovering an orphaned event-log lock", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-stale-lock-race-"));
+    const barrierDir = join(rootDir, "barrier");
+    const workerPath = join(rootDir, "stale-lock-worker.ts");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
+    const workerSource = [
+      `import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";`,
+      `import { join } from "node:path";`,
+      `import { withCanonicalEventLogLock } from ${JSON.stringify(join(import.meta.dir, "issue-event-pipeline.ts"))};`,
+      "const [rootDir, barrierDir, eventId] = process.argv.slice(2);",
+      "writeFileSync(join(barrierDir, eventId + '.ready'), 'ready');",
+      "while (!existsSync(join(barrierDir, 'start'))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);",
+      "try {",
+      "  withCanonicalEventLogLock(rootDir, () => {",
+      "    const criticalPath = join(rootDir, 'critical');",
+      "    try { mkdirSync(criticalPath); } catch { writeFileSync(join(rootDir, 'overlap'), eventId); }",
+      "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);",
+      "    rmSync(criticalPath, { recursive: true, force: true });",
+      "  });",
+      "  console.log('ok');",
+      "} catch (error) {",
+      "  console.error(error instanceof Error ? error.message : String(error));",
+      "  process.exitCode = 1;",
+      "}",
+    ].join("\n");
+    const runWorker = (eventId: string) =>
+      new Promise<{ code: number | null; output: string }>((resolveWorker) => {
+        const child = spawn(process.execPath, [workerPath, rootDir, barrierDir, eventId], {
+          cwd: rootDir,
+          env: isolatedGitEnvironment(),
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let output = "";
+        child.stdout.on("data", (chunk) => (output += String(chunk)));
+        child.stderr.on("data", (chunk) => (output += String(chunk)));
+        child.on("close", (code) => resolveWorker({ code, output }));
+      });
+
+    try {
+      git("init", "-q");
+      mkdirSync(barrierDir, { recursive: true });
+      writeFileSync(workerPath, workerSource);
+      const indexPath = resolve(rootDir, git("rev-parse", "--git-path", "index").toString().trim());
+      const lockPath = `${indexPath}.prime-board-event-log.lock`;
+      writeFileSync(lockPath, "pid=999999999\n");
+
+      const workers = [runWorker("stale-a"), runWorker("stale-b")];
+      let ready = false;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        ready = ["stale-a", "stale-b"].every((eventId) =>
+          existsSync(join(barrierDir, eventId + ".ready")),
+        );
+        if (ready) break;
+        await new Promise((resolveReady) => setTimeout(resolveReady, 5));
+      }
+      expect(ready).toBe(true);
+      writeFileSync(join(barrierDir, "start"), "go");
+      const results = await Promise.all(workers);
+      expect(results).toEqual([
+        { code: 0, output: "ok\n" },
+        { code: 0, output: "ok\n" },
+      ]);
+      expect(existsSync(join(rootDir, "overlap"))).toBe(false);
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("commits uncommitted idempotent events after pipeline recreation", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "prb-git-retry-"));
     const writer = new EventLogWriter({ rootDir });

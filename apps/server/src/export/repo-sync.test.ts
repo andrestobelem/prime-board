@@ -1,6 +1,16 @@
 // Tests de AT-158: cada escritura queda replicada en el repo al instante.
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync, rmSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
@@ -25,6 +35,83 @@ afterAll(() => {
 });
 
 describe("repo sync en cada escritura", () => {
+  it("serializa mutaciones GraphQL concurrentes a través de RepoSync", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pb-reposync-concurrent-"));
+    const barrierDir = join(rootDir, "barrier");
+    const workerPath = join(rootDir, "graphql-worker.ts");
+    const cleanGitEnvironment = () => {
+      const environment = { ...process.env };
+      for (const key of [
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_WORK_TREE",
+      ]) {
+        delete environment[key];
+      }
+      return environment;
+    };
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: cleanGitEnvironment() });
+    const workerSource = `import { createTestApp, gql } from ${JSON.stringify(join(import.meta.dir, "../test-helpers.ts"))};
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const [rootDir, barrierDir, eventId] = process.argv.slice(2);
+const app = createTestApp(rootDir);
+const query = 'mutation($title: String!) { issueCreate(input: { teamKey: "PB", title: $title }) { success } }';
+writeFileSync(join(barrierDir, eventId + ".ready"), "ready");
+while (!existsSync(join(barrierDir, "start"))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+try {
+  const result = await gql(app, query, { title: eventId });
+  if (result.errors?.length) throw new Error(JSON.stringify(result.errors));
+  console.log("ok");
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+} finally {
+  app.stop();
+}`;
+    const runWorker = (eventId: string) =>
+      new Promise<{ code: number | null; output: string }>((resolveWorker) => {
+        const child = spawn(process.execPath, [workerPath, rootDir, barrierDir, eventId], {
+          cwd: rootDir,
+          env: cleanGitEnvironment(),
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let output = "";
+        child.stdout.on("data", (chunk) => (output += String(chunk)));
+        child.stderr.on("data", (chunk) => (output += String(chunk)));
+        child.on("close", (code) => resolveWorker({ code, output }));
+      });
+
+    try {
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      mkdirSync(barrierDir, { recursive: true });
+      writeFileSync(workerPath, workerSource);
+
+      const eventIds = Array.from({ length: 8 }, (_, index) => `graphql-${index}`);
+      const workers = eventIds.map(runWorker);
+      let ready = false;
+      for (let attempt = 0; attempt < 2_000; attempt += 1) {
+        ready = eventIds.every((eventId) => existsSync(join(barrierDir, eventId + ".ready")));
+        if (ready) break;
+        await new Promise((resolveReady) => setTimeout(resolveReady, 5));
+      }
+      expect(ready).toBe(true);
+      writeFileSync(join(barrierDir, "start"), "go");
+      const results = await Promise.all(workers);
+      expect(results).toEqual(eventIds.map(() => ({ code: 0, output: "ok\n" })));
+      const events = readEventLog({ rootDir });
+      expect(events).toHaveLength(eventIds.length);
+      expect(events.every((event) => event.type === "created")).toBe(true);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("configura el merge driver union para los logs", () => {
     const attributes = readFileSync(join(repoDir, ".gitattributes"), "utf8");
     expect(attributes).toContain(".prime-board/log/*.jsonl merge=union");

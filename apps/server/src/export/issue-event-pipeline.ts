@@ -5,12 +5,14 @@ import {
   copyFileSync,
   existsSync,
   linkSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
   renameSync,
   rmSync,
   unlinkSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -328,28 +330,24 @@ export function withCanonicalEventLogLock<T>(rootDir: string, operation: () => T
   } finally {
     heldEventLogLocks.delete(lockPath);
     closeSync(lockFd);
-    try {
-      unlinkSync(lockPath);
-    } catch (error) {
-      if (!(
-        error !== null &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === "ENOENT"
-      )) {
-        throw error;
-      }
-    }
+    unlinkIfPresent(lockPath);
   }
 }
 
 const CANONICAL_LOCK_WAIT_MS = 30_000;
 const CANONICAL_LOCK_POLL_MS = 10;
+const CANONICAL_LOCK_RECOVERY_SUFFIX = ".recovery";
 
 /** Adquiere el lock con una creación atómica que también escribe el PID dueño. */
 function acquireCanonicalEventLogLock(lockPath: string): number {
   const deadline = Date.now() + CANONICAL_LOCK_WAIT_MS;
+  const recoveryPath = `${lockPath}${CANONICAL_LOCK_RECOVERY_SUFFIX}`;
   while (true) {
+    if (waitForCanonicalLockRecovery(recoveryPath)) {
+      waitForCanonicalLock();
+      continue;
+    }
+
     const temporaryPath = `${lockPath}.${process.pid}.${Date.now()}.${Math.random()
       .toString(36)
       .slice(2)}`;
@@ -385,15 +383,99 @@ function acquireCanonicalEventLogLock(lockPath: string): number {
       // The owner can release the lock between link(2) and this read.
       continue;
     }
-    if (!isProcessAlive(owner)) {
-      unlinkIfPresent(lockPath);
+    if (!isProcessAlive(owner) && tryReclaimCanonicalEventLogLock(lockPath, owner)) {
       continue;
     }
     if (Date.now() >= deadline) {
       throw new Error(`Cannot lock canonical event log: writer ${owner} did not release the lock`);
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, CANONICAL_LOCK_POLL_MS);
+    waitForCanonicalLock();
   }
+}
+
+/**
+ * Reclaims a stale lock without letting two reapers delete different
+ * generations of the same path. The recovery marker is an atomic, exclusive
+ * claim. It also blocks later reapers until the first one finishes.
+ */
+function tryReclaimCanonicalEventLogLock(lockPath: string, expectedOwner: number): boolean {
+  const recoveryPath = `${lockPath}${CANONICAL_LOCK_RECOVERY_SUFFIX}`;
+  if (!tryCreateCanonicalRecoveryMarker(recoveryPath)) return false;
+
+  try {
+    const currentOwner = readCanonicalLockOwner(lockPath);
+    if (currentOwner === undefined) return true;
+    if (currentOwner !== expectedOwner || isProcessAlive(currentOwner)) return false;
+
+    const stalePath = `${lockPath}.stale.${process.pid}.${Date.now()}.${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    try {
+      // The recovery marker prevents another reaper from changing the path
+      // between this identity check and the atomic rename.
+      renameSync(lockPath, stalePath);
+    } catch (error) {
+      if (isFileMissingError(error)) return true;
+      throw error;
+    }
+    rmSync(stalePath, { force: true });
+    return true;
+  } finally {
+    rmSync(recoveryPath, { recursive: true, force: true });
+  }
+}
+
+function tryCreateCanonicalRecoveryMarker(recoveryPath: string): boolean {
+  try {
+    mkdirSync(recoveryPath, 0o700);
+    writeFileSync(join(recoveryPath, "owner"), `pid=${process.pid}\n`, {
+      mode: 0o600,
+    });
+    return true;
+  } catch (error) {
+    if (isFileExistsError(error)) return false;
+    rmSync(recoveryPath, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** Waits for a live recovery claim or atomically removes a stale one. */
+function waitForCanonicalLockRecovery(recoveryPath: string): boolean {
+  if (!existsSync(recoveryPath)) return false;
+
+  const owner = readCanonicalRecoveryOwner(recoveryPath);
+  if (owner !== undefined && isProcessAlive(owner)) return true;
+
+  const stalePath = `${recoveryPath}.stale.${process.pid}.${Date.now()}.${Math.random()
+    .toString(36)
+    .slice(2)}`;
+  try {
+    // Only one waiter can rename this generation. A later generation has a
+    // different path and is never removed by this cleanup.
+    renameSync(recoveryPath, stalePath);
+  } catch (error) {
+    if (!isFileMissingError(error)) throw error;
+    return true;
+  }
+  rmSync(stalePath, { recursive: true, force: true });
+  return true;
+}
+
+function readCanonicalRecoveryOwner(recoveryPath: string): number | undefined {
+  let content: string;
+  try {
+    content = readFileSync(join(recoveryPath, "owner"), "utf8").trim();
+  } catch (error) {
+    if (isFileMissingError(error)) {
+      throw new Error("Cannot recover canonical event log lock: owner metadata is missing");
+    }
+    throw error;
+  }
+  const match = /^pid=(\d+)$/u.exec(content);
+  if (!match) {
+    throw new Error("Cannot recover canonical event log lock: owner metadata is invalid");
+  }
+  return Number(match[1]);
 }
 
 function readCanonicalLockOwner(lockPath: string): number | undefined {
@@ -438,6 +520,10 @@ function unlinkIfPresent(path: string): void {
   } catch (error) {
     if (!isFileMissingError(error)) throw error;
   }
+}
+
+function waitForCanonicalLock(): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, CANONICAL_LOCK_POLL_MS);
 }
 
 function resolveGitIndexPath(rootDir: string): string {
