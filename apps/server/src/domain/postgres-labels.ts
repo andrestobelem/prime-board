@@ -249,6 +249,9 @@ export async function updatePostgresLabel(
   return persistence.transaction(async (tx) => {
     const label = await getPostgresLabel(tx, id);
     if (!label) throw apiError("NOT_FOUND", "Label not found");
+    if (label.merged_into_id) {
+      throw apiError("VALIDATION_FAILED", "Merged labels are terminal and cannot be updated");
+    }
     const teamId = input.teamId !== undefined ? (input.teamId ?? null) : label.team_id;
     const groupId = input.groupId !== undefined ? (input.groupId ?? null) : label.group_id;
     const name = input.name != null ? input.name.trim() : label.name;
@@ -437,11 +440,16 @@ async function recordPostgresLabelActivity(
   );
 }
 
+export interface PostgresLabelDeleteResult {
+  affectedIssues: number;
+  affectedIssueIds: string[];
+}
+
 export async function deletePostgresLabel(
   persistence: Persistence,
   viewer: ActorRow,
   id: string,
-): Promise<number> {
+): Promise<PostgresLabelDeleteResult> {
   return persistence.transaction(async (tx) => {
     const label = await getPostgresLabel(tx, id);
     if (!label) throw apiError("NOT_FOUND", "Label not found");
@@ -482,7 +490,10 @@ export async function deletePostgresLabel(
     }
     await tx.execute("DELETE FROM issue_labels WHERE label_id = $1", [id]);
     await tx.execute("DELETE FROM labels WHERE id = $1", [id]);
-    return issues.length;
+    return {
+      affectedIssues: issues.length,
+      affectedIssueIds: issues.map(({ issue_id }) => issue_id),
+    };
   });
 }
 

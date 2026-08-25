@@ -402,6 +402,12 @@ describe("labels", () => {
       { id: issue.data!.issueCreate.issue.id, label: source.data!.labelCreate.label.id },
     );
     expect(reassigned.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+    const updated = await gql(
+      app,
+      `mutation($id: ID!) { labelUpdate(id: $id, input: { name: "Renamed merged source" }) { success } }`,
+      { id: source.data!.labelCreate.label.id },
+    );
+    expect(updated.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
   });
 
   it("rechaza mover una label a un grupo cuando sus issues ya tienen otra hija", async () => {
@@ -541,5 +547,22 @@ describe("labels", () => {
       keyResult.data!.apiKeyCreate.key,
     );
     expect(update.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+    const source = await gql(
+      app,
+      `mutation { labelCreate(input: { name: "PRB limited workspace source" }) { label { id } } }`,
+    );
+    const target = await gql(
+      app,
+      `mutation { labelCreate(input: { name: "PRB limited workspace target" }) { label { id } } }`,
+    );
+    const merge = await gql(
+      app,
+      `mutation($source: ID!, $target: ID!) {
+        labelMerge(sourceId: $source, targetId: $target) { success }
+      }`,
+      { source: source.data!.labelCreate.label.id, target: target.data!.labelCreate.label.id },
+      keyResult.data!.apiKeyCreate.key,
+    );
+    expect(merge.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
   });
 });

@@ -234,6 +234,9 @@ export function updateLabel(
   db.transaction(() => {
     const label = getLabel(db, id, workspaceId);
     if (!label) throw apiError("NOT_FOUND", "Label not found");
+    if (label.merged_into_id) {
+      throw apiError("VALIDATION_FAILED", "Merged labels are terminal and cannot be updated");
+    }
     const teamId = input.teamId !== undefined ? (input.teamId ?? null) : label.team_id;
     const groupId = input.groupId !== undefined ? (input.groupId ?? null) : label.group_id;
     const name = input.name != null ? input.name.trim() : label.name;

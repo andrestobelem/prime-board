@@ -481,14 +481,14 @@ async function operationTeamIds(
           [scalar(args.sourceId), scalar(args.targetId)],
         );
         return rows.some((row) => row.team_id == null)
-          ? rows.filter((row) => row.team_id != null).map((row) => row.team_id!)
+          ? ["__workspace__"]
           : rows.map((row) => row.team_id!);
       }
       const rows = context.db
         .query("SELECT team_id FROM labels WHERE id IN (?1, ?2)")
         .all(scalar(args.sourceId), scalar(args.targetId)) as Array<{ team_id: string | null }>;
       return rows.some((row) => row.team_id == null)
-        ? rows.filter((row) => row.team_id != null).map((row) => row.team_id!)
+        ? ["__workspace__"]
         : rows.map((row) => row.team_id!);
     }
     case "issueCreate": {

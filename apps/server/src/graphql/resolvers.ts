@@ -2518,6 +2518,9 @@ export const resolvers = {
             const source = await getPostgresLabel(context.persistence, args.sourceId);
             const target = await getPostgresLabel(context.persistence, args.targetId);
             if (!source || !target) throw apiError("NOT_FOUND", "Label not found");
+            if (source.team_id == null || target.team_id == null) {
+              assertUnrestrictedApiKey(context);
+            }
             if (
               (source.team_id && !apiKeyTeamsWithinLimit(context.auth, [source.team_id])) ||
               (target.team_id && !apiKeyTeamsWithinLimit(context.auth, [target.team_id]))
@@ -2543,6 +2546,9 @@ export const resolvers = {
           const source = getLabel(context.db, args.sourceId, context.workspace.workspaceId);
           const target = getLabel(context.db, args.targetId, context.workspace.workspaceId);
           if (!source || !target) throw apiError("NOT_FOUND", "Label not found");
+          if (source.team_id == null || target.team_id == null) {
+            assertUnrestrictedApiKey(context);
+          }
           if (source.team_id == null) assertWorkspaceAdmin(viewer);
           else assertCanManageTeam(context.db, viewer, source.team_id);
           if (target.team_id == null) assertWorkspaceAdmin(viewer);
@@ -2572,7 +2578,10 @@ export const resolvers = {
               throw apiError("NOT_FOUND", "Label resource not found");
             }
             const affected = await deletePostgresLabel(context.persistence, viewer, args.id);
-            return { success: true, affectedIssues: affected };
+            await emitPostgresBulkIssueUpdates(context, viewer, affected.affectedIssueIds, {
+              labels: { from: args.id, to: null },
+            });
+            return { success: true, affectedIssues: affected.affectedIssues };
           }
           const existing = getLabel(context.db, args.id, context.workspace.workspaceId);
           if (existing) {
