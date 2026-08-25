@@ -6,7 +6,15 @@ import {
   runPreflight,
   type WorktreeEntry,
 } from "./prime-board-preflight-lib.ts";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deriveProjectIdentity } from "./prime-board-project-lib.ts";
@@ -54,6 +62,82 @@ function createGitFixture(): { root: string; home: string; db: string; cleanup: 
   Bun.spawnSync(["git", "-C", root, "checkout", "-qb", "ghostty-scout/prb-543"]);
   return { root, home, db, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+interface GitCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+function gitAt(root: string, args: string[]): GitCommandResult {
+  const result = Bun.spawnSync(["git", "-C", root, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  };
+}
+
+describe("PRB-567 hook Git isolation", () => {
+  test("el hook conserva HEAD, índice y archivos del repositorio llamador", () => {
+    const caller = createGitFixture();
+    const resetGitContext = hook.split(/\r?\n/u).find((line) => line.startsWith("unset GIT_DIR "));
+    const before = {
+      head: gitAt(caller.root, ["rev-parse", "HEAD"]).stdout,
+      index: gitAt(caller.root, ["write-tree"]).stdout,
+      status: gitAt(caller.root, ["status", "--porcelain=v2", "--untracked-files=all"]).stdout,
+      bare: gitAt(caller.root, ["config", "--local", "--bool", "--get", "core.bare"]).stdout,
+    };
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "prime-board-preflight-child-"));
+    const environment = {
+      ...process.env,
+      GIT_DIR: join(caller.root, ".git"),
+      GIT_WORK_TREE: caller.root,
+      GIT_INDEX_FILE: join(caller.root, ".git", "index"),
+      GIT_COMMON_DIR: join(caller.root, ".git"),
+    };
+    const script = `${resetGitContext ?? ""}
+set -eu
+fixture="$1"
+mkdir -p "$fixture/apps/cli/test"
+printf 'export {}\n' > "$fixture/apps/cli/test/sentinel.test.ts"
+git init -q -b main "$fixture"
+git -C "$fixture" config user.email preflight@example.test
+git -C "$fixture" config user.name "Preflight Test"
+git -C "$fixture" add .
+git -C "$fixture" commit -qm fixture
+`;
+    try {
+      expect(resetGitContext).toBe(
+        "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX",
+      );
+      const result = Bun.spawnSync(["sh", "-eu", "-c", script, "preflight-fixture", fixtureRoot], {
+        env: environment,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.toString()).toBe("");
+      expect(gitAt(caller.root, ["rev-parse", "HEAD"]).stdout).toBe(before.head);
+      expect(gitAt(caller.root, ["write-tree"]).stdout).toBe(before.index);
+      expect(gitAt(caller.root, ["status", "--porcelain=v2", "--untracked-files=all"]).stdout).toBe(
+        before.status,
+      );
+      expect(gitAt(caller.root, ["config", "--local", "--bool", "--get", "core.bare"]).stdout).toBe(
+        before.bare,
+      );
+      expect(gitAt(fixtureRoot, ["rev-parse", "--show-toplevel"]).stdout.trim()).toBe(
+        realpathSync(fixtureRoot),
+      );
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+      caller.cleanup();
+    }
+  });
+});
 
 describe("PRB-543 test plan", () => {
   test("PRB-506: rejects discovery without explicit paths or with scratchpad", () => {
