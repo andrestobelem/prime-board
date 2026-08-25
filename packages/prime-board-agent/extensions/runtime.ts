@@ -73,6 +73,17 @@ const DEFAULT_START_TIMEOUT_MS = 10_000;
 const DEFAULT_POLL_MS = 100;
 const STATUS_SCRIPT = "scripts/prime-board-project.ts";
 
+/** El launcher no debe interpretar el checkout desde un Git externo heredado. */
+export function clearGitEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const clean = { ...environment };
+  for (const key of Object.keys(clean)) {
+    if (key.startsWith("GIT_")) delete clean[key];
+  }
+  return clean;
+}
+
 function projectHash(projectRoot: string): string {
   return createHash("sha256").update(projectRoot).digest("hex").slice(0, 16);
 }
@@ -202,9 +213,10 @@ function appendLog(path: string, chunk: Buffer | string): void {
 
 function defaultRunStatus(args: string[], cwd: string, env: NodeJS.ProcessEnv): CommandResult {
   try {
-    const result = spawnSync(env.PRIME_BOARD_BUN ?? "bun", args, {
+    const cleanEnv = clearGitEnvironment(env);
+    const result = spawnSync(cleanEnv.PRIME_BOARD_BUN ?? "bun", args, {
       cwd,
-      env,
+      env: cleanEnv,
       encoding: "utf8",
       timeout: 5_000,
     });
@@ -230,9 +242,10 @@ function defaultLaunch(
   env: NodeJS.ProcessEnv,
   logPath: string,
 ): ChildProcessLike {
-  const child = spawn(env.PRIME_BOARD_BUN ?? "bun", args, {
+  const cleanEnv = clearGitEnvironment(env);
+  const child = spawn(cleanEnv.PRIME_BOARD_BUN ?? "bun", args, {
     cwd,
-    env,
+    env: cleanEnv,
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -314,7 +327,7 @@ function runtimeArgs(projectRoot: string, action: "status" | "start"): string[] 
 
 async function health(url: string, fetchImpl: FetchLike): Promise<boolean> {
   try {
-    const response = await fetchImpl(`${url}/health`, {
+    const response = await fetchImpl(`${url.replace(/\/$/, "")}/health`, {
       signal: AbortSignal.timeout(DEFAULT_HEALTH_TIMEOUT_MS),
     });
     return response.ok;
@@ -338,6 +351,7 @@ export function createRuntimeController(
   const sleep = dependencies.sleep ?? sleepDefault;
   const kill = dependencies.kill ?? ((pid, signal) => process.kill(pid, signal));
   const now = dependencies.now ?? Date.now;
+  const runtimeEnvironment = clearGitEnvironment(env);
   const pending = new Map<string, Promise<RuntimeStatus>>();
   const processes = new Map<string, ChildProcessLike>();
 
@@ -354,7 +368,7 @@ export function createRuntimeController(
   }
 
   function rootOrUnavailable(projectRoot: string): string | RuntimeStatus {
-    const root = runtimeRootFor(projectRoot, env);
+    const root = runtimeRootFor(projectRoot, runtimeEnvironment);
     if (!root) {
       return unavailable(
         projectRoot,
@@ -371,7 +385,7 @@ export function createRuntimeController(
     const root = rootOrUnavailable(projectRoot);
     if (typeof root !== "string") return root;
     const { logPath, credentialPath } = paths(projectRoot);
-    const result = runStatus(runtimeArgs(projectRoot, "status"), root, env);
+    const result = runStatus(runtimeArgs(projectRoot, "status"), root, runtimeEnvironment);
     if (result.error && !result.stdout && !result.stderr) {
       return unavailable(
         projectRoot,
@@ -415,10 +429,22 @@ export function createRuntimeController(
       if (current.state === "running" && current.url && (await health(current.url, fetchImpl))) {
         return current;
       }
+      if (current.state === "unavailable" && current.detail.startsWith("Cannot run Bun runtime.")) {
+        return current;
+      }
       const root = rootOrUnavailable(projectRoot);
       if (typeof root !== "string") return root;
       const { logPath } = paths(projectRoot);
-      const child = launch(runtimeArgs(projectRoot, "start"), root, env, logPath);
+      let child: ChildProcessLike;
+      try {
+        child = launch(runtimeArgs(projectRoot, "start"), root, runtimeEnvironment, logPath);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return unavailable(
+          projectRoot,
+          `Cannot start the prime-board runtime: ${detail}. Install Bun or set PRIME_BOARD_BUN, then retry. Check ${logPath} for redacted runtime logs.`,
+        );
+      }
       processes.set(projectRoot, child);
       return waitForRuntime(projectRoot, timeoutMs);
     })();
@@ -436,7 +462,16 @@ export function createRuntimeController(
   ): Promise<RuntimeStatus> {
     const current = status(projectRoot);
     if (current.state !== "running" || !current.pid) return current;
-    kill(current.pid, "SIGTERM");
+    try {
+      kill(current.pid, "SIGTERM");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        ...current,
+        state: "error",
+        detail: `Cannot stop the runtime process ${current.pid}: ${detail}`,
+      };
+    }
     const startedAt = now();
     let last = current;
     while (now() - startedAt <= timeoutMs) {
@@ -465,6 +500,12 @@ export function createRuntimeController(
     }
   }
 
+  function release(projectRoot: string): void {
+    // La instancia puede ser compartida por otras sesiones. Solo se libera la
+    // referencia local; el lock del launcher conserva la propiedad del proceso.
+    processes.delete(projectRoot);
+  }
+
   function open(projectRoot: string): RuntimeStatus {
     const current = status(projectRoot);
     if (!current.url)
@@ -483,10 +524,10 @@ export function createRuntimeController(
     return { ...current, detail: `Opened ${current.url}` };
   }
 
-  return { status, ensure, stop, logs, open, paths };
+  return { status, ensure, stop, logs, open, release, paths };
 }
 
 export function releaseRuntime(_projectRoot: string): void {
-  // El launcher posee el lock del proceso. El cierre de una sesión solo libera
-  // su referencia en memoria y no detiene un runtime compartido.
+  // Compatibilidad para callers antiguos. El controller libera su referencia
+  // local; el launcher posee el lock y no se detiene desde session_shutdown.
 }

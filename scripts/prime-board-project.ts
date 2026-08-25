@@ -275,7 +275,7 @@ if (process.env.PRIME_BOARD_AUTH_MODE === "local") {
 }
 
 const environment = {
-  ...process.env,
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
   PRIME_BOARD_REPO: projectRoot,
   PRIME_BOARD_DB: identity.databasePath,
   PRIME_BOARD_PORT: String(port),

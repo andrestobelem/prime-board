@@ -30,8 +30,17 @@ interface GitCommandResult {
   stderr: string;
 }
 
+function clearGitEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const clean = { ...environment };
+  for (const key of Object.keys(clean)) {
+    if (key.startsWith("GIT_")) delete clean[key];
+  }
+  return clean;
+}
+
 function runGit(projectPath: string, args: string[]): GitCommandResult {
   const result = Bun.spawnSync(["git", "-C", projectPath, ...args], {
+    env: clearGitEnvironment(),
     stdout: "pipe",
     stderr: "pipe",
   });

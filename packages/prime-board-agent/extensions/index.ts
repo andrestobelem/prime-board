@@ -8,6 +8,7 @@ import type {
   FetchLike,
 } from "./runtime.ts";
 import {
+  clearGitEnvironment,
   createRuntimeController,
   projectCredentialPath,
   readProjectCredential,
@@ -71,9 +72,13 @@ const DEFAULT_URL = "http://localhost:3333";
 const HEALTH_TIMEOUT_MS = 1_000;
 
 /** Descubre el proyecto Git que contiene el directorio de trabajo. */
-export function discoverPrimeBoardProject(cwd: string): string | null {
+export function discoverPrimeBoardProject(
+  cwd: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string | null {
   const result = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
     encoding: "utf8",
+    env: clearGitEnvironment(environment),
   });
   if (result.status !== 0 || result.error) return null;
   const root = result.stdout.trim();
@@ -345,9 +350,10 @@ export function createPrimeBoardExtension(options: PrimeBoardExtensionOptions = 
     options.home,
   );
   let current: RuntimeStatus | null = null;
+  const sessionReferences = new Map<string, number>();
   const credentialPending = new Map<string, Promise<ProjectCredential | null>>();
   const fetchImpl = options.runtimeDependencies?.fetch ?? globalThis.fetch;
-  const environment = options.env ?? process.env;
+  const environment = clearGitEnvironment(options.env ?? process.env);
 
   const authenticate = (projectRoot: string, url: string): Promise<ProjectCredential | null> => {
     const pending = credentialPending.get(projectRoot);
@@ -362,9 +368,23 @@ export function createPrimeBoardExtension(options: PrimeBoardExtensionOptions = 
     return operation.finally(() => credentialPending.delete(projectRoot));
   };
 
+  const retainSession = (projectRoot: string): void => {
+    sessionReferences.set(projectRoot, (sessionReferences.get(projectRoot) ?? 0) + 1);
+  };
+
+  const releaseSession = (projectRoot: string): void => {
+    const references = sessionReferences.get(projectRoot) ?? 0;
+    if (references <= 1) {
+      sessionReferences.delete(projectRoot);
+      runtime.release(projectRoot);
+      return;
+    }
+    sessionReferences.set(projectRoot, references - 1);
+  };
+
   return (pi: ExtensionAPI): void => {
     const start = async (ctx: ExtensionContext): Promise<RuntimeStatus> => {
-      const projectRoot = discoverPrimeBoardProject(ctx.cwd);
+      const projectRoot = discoverPrimeBoardProject(ctx.cwd, environment);
       if (!projectRoot) {
         const status: RuntimeStatus = {
           projectRoot: ctx.cwd,
@@ -383,7 +403,7 @@ export function createPrimeBoardExtension(options: PrimeBoardExtensionOptions = 
     };
 
     const readStatus = (ctx: ExtensionContext): RuntimeStatus => {
-      const projectRoot = discoverPrimeBoardProject(ctx.cwd);
+      const projectRoot = discoverPrimeBoardProject(ctx.cwd, environment);
       if (!projectRoot) {
         return {
           projectRoot: ctx.cwd,
@@ -411,7 +431,7 @@ export function createPrimeBoardExtension(options: PrimeBoardExtensionOptions = 
             notifyRuntime(ctx, readStatus(ctx));
             return;
           }
-          const projectRoot = discoverPrimeBoardProject(ctx.cwd);
+          const projectRoot = discoverPrimeBoardProject(ctx.cwd, environment);
           if (!projectRoot) {
             ctx.ui.notify("The current directory is not inside a Git project.", "error");
             return;
@@ -484,18 +504,20 @@ export function createPrimeBoardExtension(options: PrimeBoardExtensionOptions = 
       pi.on("session_start", async (_event, ctx) => {
         try {
           const status = await start(ctx);
+          if (status.state !== "error") retainSession(status.projectRoot);
           notifyRuntime(ctx, status);
         } catch (error) {
           ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
         }
       });
       pi.on("session_shutdown", async (_event, ctx) => {
-        const projectRoot = discoverPrimeBoardProject(ctx.cwd);
-        if (projectRoot) {
+        const projectRoot = discoverPrimeBoardProject(ctx.cwd, environment);
+        if (!projectRoot) return;
+        releaseSession(projectRoot);
+        if (current?.projectRoot === projectRoot && !sessionReferences.has(projectRoot)) {
           current = null;
-          // No detener el proceso: otra sesión de Prime Agent puede usarlo.
-          void ctx;
         }
+        // No detener el proceso: otra sesión de Prime Agent puede usarlo.
       });
     }
   };

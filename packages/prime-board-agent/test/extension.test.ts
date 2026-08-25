@@ -17,6 +17,7 @@ import {
   getPrimeBoardStatus,
 } from "../extensions/index.ts";
 import {
+  clearGitEnvironment,
   createRuntimeController,
   type FetchLike,
   projectCredentialPath,
@@ -38,11 +39,99 @@ function gitProject(): { home: string; root: string; runtimeRoot: string } {
   const root = realpathSync(rootPath);
   mkdirSync(join(runtimeRoot, "scripts"), { recursive: true });
   writeFileSync(join(runtimeRoot, "scripts", "prime-board-project.ts"), "// test runtime\n");
-  expect(spawnSync("git", ["-C", root, "init", "-q"]).status).toBe(0);
+  expect(spawnSync("git", ["-C", root, "init", "-q"], { env: clearGitEnvironment() }).status).toBe(
+    0,
+  );
   return { home, root, runtimeRoot };
 }
 
 describe("Prime Board extension lifecycle", () => {
+  it("resolves the project with process Git variables cleared", () => {
+    const project = gitProject();
+    const previousGitDir = process.env.GIT_DIR;
+    const previousGitIndex = process.env.GIT_INDEX_FILE;
+    try {
+      process.env.GIT_DIR = join(project.home, "foreign.git");
+      process.env.GIT_INDEX_FILE = join(project.home, "foreign.index");
+      expect(discoverPrimeBoardProject(join(project.root, "missing"))).toBeNull();
+      expect(discoverPrimeBoardProject(project.root)).toBe(project.root);
+    } finally {
+      if (previousGitDir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = previousGitDir;
+      if (previousGitIndex === undefined) delete process.env.GIT_INDEX_FILE;
+      else process.env.GIT_INDEX_FILE = previousGitIndex;
+      rmSync(project.home, { recursive: true, force: true });
+    }
+  });
+
+  it("passes a Git-clean environment to status and launcher processes", async () => {
+    const project = gitProject();
+    const seen: NodeJS.ProcessEnv[] = [];
+    try {
+      let running = false;
+      const runtime = createRuntimeController(
+        {
+          runStatus: (_args, _cwd, environment) => {
+            seen.push(environment);
+            return {
+              status: running ? 0 : 1,
+              stdout: running
+                ? `running project=${project.root} port=3404 pid=3404 db=/tmp/d.db`
+                : `not-running project=${project.root} db=/tmp/d.db`,
+              stderr: "",
+            };
+          },
+          launch: (_args, _cwd, environment) => {
+            seen.push(environment);
+            running = true;
+            return { pid: 3404, unref() {} };
+          },
+          fetch: async () => new Response("ok"),
+          sleep: async () => undefined,
+        },
+        {
+          PRIME_BOARD_ROOT: project.runtimeRoot,
+          GIT_DIR: join(project.home, "foreign.git"),
+          GIT_INDEX_FILE: join(project.home, "foreign.index"),
+        },
+        project.home,
+      );
+      expect((await runtime.ensure(project.root)).state).toBe("running");
+      expect(seen.length).toBeGreaterThan(0);
+      for (const environment of seen) {
+        expect(Object.keys(environment).some((key) => key.startsWith("GIT_"))).toBe(false);
+      }
+    } finally {
+      rmSync(project.home, { recursive: true, force: true });
+    }
+  });
+
+  it("returns an actionable error when the runtime process cannot start", async () => {
+    const project = gitProject();
+    try {
+      const runtime = createRuntimeController(
+        {
+          runStatus: () => ({
+            status: 1,
+            stdout: `not-running project=${project.root} db=/tmp/e.db`,
+            stderr: "",
+          }),
+          launch: () => {
+            throw new Error("ENOENT: bun");
+          },
+        },
+        { PRIME_BOARD_ROOT: project.runtimeRoot },
+        project.home,
+      );
+      const status = await runtime.ensure(project.root);
+      expect(status.state).toBe("unavailable");
+      expect(status.detail).toContain("Install Bun or set PRIME_BOARD_BUN");
+      expect(status.detail).toContain(status.logPath);
+    } finally {
+      rmSync(project.home, { recursive: true, force: true });
+    }
+  });
+
   it("resolves Git projects with spaces and starts one shared runtime for concurrent sessions", async () => {
     const project = gitProject();
     try {
@@ -377,7 +466,7 @@ describe("Prime Board extension lifecycle", () => {
     const path = join(tmpdir(), `not-a-git-${crypto.randomUUID()}`);
     mkdirSync(path, { recursive: true });
     try {
-      const status = await getPrimeBoardStatus(path, "http://127.0.0.1:3333");
+      const status = await getPrimeBoardStatus(path, "http://127.0.0.1:3999");
       expect(status).toMatchObject({ projectRoot: null, state: "unavailable" });
     } finally {
       rmSync(path, { recursive: true, force: true });
