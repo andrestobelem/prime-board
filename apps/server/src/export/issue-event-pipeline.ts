@@ -4,12 +4,14 @@ import {
   constants,
   copyFileSync,
   existsSync,
+  linkSync,
   mkdtempSync,
   openSync,
   readFileSync,
   renameSync,
   rmSync,
   unlinkSync,
+  writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -121,6 +123,11 @@ const NOOP_PROJECTOR: IssueEventProjector = {
 };
 
 const NOOP_COMMITTER: GitCommitter = () => undefined;
+
+// A RepoSync call can hold this lock while the committer acquires it again.
+// Keep that nested call in-process reentrant while the file lock coordinates
+// writers from separate server processes.
+const heldEventLogLocks = new Set<string>();
 
 /**
  * Pipeline de una mutación SQLite: append durable, commit Git, projector y
@@ -240,10 +247,12 @@ export class IssueEventPipeline {
 export function createGitCommitter(rootDir: string): GitCommitter {
   return ({ eventIds }) => {
     if (eventIds.length === 0 || !existsSync(join(rootDir, ".git"))) return;
-    assertEventLogIndexIsClean(rootDir);
-    const delta = validateEventLogDelta(rootDir, eventIds);
-    if (delta.eventIds.size === 0) return;
-    commitEventLogSnapshot(rootDir, delta.content);
+    withCanonicalEventLogLock(rootDir, () => {
+      assertEventLogIndexIsClean(rootDir);
+      const delta = validateEventLogDelta(rootDir, eventIds);
+      if (delta.eventIds.size === 0) return;
+      commitEventLogSnapshot(rootDir, delta.content);
+    });
   };
 }
 
@@ -295,6 +304,139 @@ function commitEventLogSnapshot(rootDir: string, content: string): void {
     });
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Serializa el append y el commit del Log entre writers del mismo repo.
+ *
+ * El lock vive junto al índice del worktree, no en el checkout, para que dos
+ * worktrees del mismo repositorio no compartan accidentalmente el estado de
+ * coordinación. Es reentrante dentro de un proceso porque `RepoSync` lo toma
+ * alrededor de append+commit y el committer lo toma como defensa adicional.
+ */
+export function withCanonicalEventLogLock<T>(rootDir: string, operation: () => T): T {
+  if (!existsSync(join(rootDir, ".git"))) return operation();
+
+  const lockPath = `${resolveGitIndexPath(rootDir)}.prime-board-event-log.lock`;
+  if (heldEventLogLocks.has(lockPath)) return operation();
+
+  const lockFd = acquireCanonicalEventLogLock(lockPath);
+  heldEventLogLocks.add(lockPath);
+  try {
+    return operation();
+  } finally {
+    heldEventLogLocks.delete(lockPath);
+    closeSync(lockFd);
+    try {
+      unlinkSync(lockPath);
+    } catch (error) {
+      if (!(
+        error !== null &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "ENOENT"
+      )) {
+        throw error;
+      }
+    }
+  }
+}
+
+const CANONICAL_LOCK_WAIT_MS = 30_000;
+const CANONICAL_LOCK_POLL_MS = 10;
+
+/** Adquiere el lock con una creación atómica que también escribe el PID dueño. */
+function acquireCanonicalEventLogLock(lockPath: string): number {
+  const deadline = Date.now() + CANONICAL_LOCK_WAIT_MS;
+  while (true) {
+    const temporaryPath = `${lockPath}.${process.pid}.${Date.now()}.${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    let temporaryFd: number | undefined;
+    try {
+      temporaryFd = openSync(
+        temporaryPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+        0o600,
+      );
+      writeSync(temporaryFd, `pid=${process.pid}\n`, undefined, "utf8");
+      closeSync(temporaryFd);
+      temporaryFd = undefined;
+      let created = false;
+      try {
+        // link(2) fails atomically when another writer owns the lock; rename
+        // would replace that writer's lock on POSIX.
+        linkSync(temporaryPath, lockPath);
+        created = true;
+      } catch (error) {
+        if (!isFileExistsError(error)) throw error;
+      } finally {
+        unlinkIfPresent(temporaryPath);
+      }
+      if (created) return openSync(lockPath, constants.O_RDONLY);
+    } finally {
+      if (temporaryFd !== undefined) closeSync(temporaryFd);
+      unlinkIfPresent(temporaryPath);
+    }
+
+    const owner = readCanonicalLockOwner(lockPath);
+    if (owner === undefined) {
+      // The owner can release the lock between link(2) and this read.
+      continue;
+    }
+    if (!isProcessAlive(owner)) {
+      unlinkIfPresent(lockPath);
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Cannot lock canonical event log: writer ${owner} did not release the lock`);
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, CANONICAL_LOCK_POLL_MS);
+  }
+}
+
+function readCanonicalLockOwner(lockPath: string): number | undefined {
+  let content: string;
+  try {
+    content = readFileSync(lockPath, "utf8").trim();
+  } catch (error) {
+    if (isFileMissingError(error)) return undefined;
+    throw error;
+  }
+  const match = /^pid=(\d+)$/u.exec(content);
+  if (!match) {
+    throw new Error("Cannot lock canonical event log: lock owner metadata is invalid");
+  }
+  return Number(match[1]);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !isNodeFsError(error, "ESRCH");
+  }
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return isNodeFsError(error, "EEXIST");
+}
+
+function isFileMissingError(error: unknown): boolean {
+  return isNodeFsError(error, "ENOENT");
+}
+
+function isNodeFsError(error: unknown, code: string): boolean {
+  return error !== null && typeof error === "object" && "code" in error && error.code === code;
+}
+
+function unlinkIfPresent(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (!isFileMissingError(error)) throw error;
   }
 }
 

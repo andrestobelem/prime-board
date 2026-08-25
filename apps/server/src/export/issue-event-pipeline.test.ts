@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   appendFileSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -14,10 +15,25 @@ import { EventLogWriter, type DomainEvent } from "./event-log.ts";
 import {
   createGitCommitter,
   IssueEventPipeline,
+  withCanonicalEventLogLock,
   type CanonicalEventLog,
   type IssueEventCheckpointStore,
 } from "./issue-event-pipeline.ts";
 import type { ProjectorCheckpoint } from "./projector.ts";
+
+function isolatedGitEnvironment(): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  for (const key of [
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_WORK_TREE",
+  ]) {
+    delete environment[key];
+  }
+  return environment;
+}
 
 const event = (eventId = "event-1"): DomainEvent => ({
   schemaVersion: 1,
@@ -109,10 +125,132 @@ describe("SQLite issue event pipeline", () => {
     }
   });
 
+  it("commits prior valid appends before the next mutation", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-prior-append-"));
+    const writer = new EventLogWriter({ rootDir });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
+    try {
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      writer.append(event("base"));
+      git("add", "--", ".prime-board/log/events.jsonl");
+      git("commit", "-qm", "base");
+
+      const firstMutation = new IssueEventPipeline({
+        rootDir,
+        eventLog: writer,
+        commitGit: createGitCommitter(rootDir),
+      });
+      firstMutation.append([event("prior")]);
+
+      const nextMutation = new IssueEventPipeline({
+        rootDir,
+        eventLog: writer,
+        commitGit: createGitCommitter(rootDir),
+      });
+      nextMutation.append([event("next")]);
+      nextMutation.recordPendingEventIds(["prior"]);
+      expect(() => nextMutation.commit()).not.toThrow();
+      expect(git("show", "HEAD:.prime-board/log/events.jsonl").toString()).toContain(
+        '"eventId":"prior"',
+      );
+      expect(git("show", "HEAD:.prime-board/log/events.jsonl").toString()).toContain(
+        '"eventId":"next"',
+      );
+      expect(git("status", "--porcelain").toString()).toBe("");
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes concurrent append and commit operations across processes", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-concurrent-writers-"));
+    const barrierDir = join(rootDir, "barrier");
+    const workerPath = join(rootDir, "writer.ts");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
+    const workerSource = [
+      `import { EventLogWriter } from ${JSON.stringify(join(import.meta.dir, "event-log.ts"))};`,
+      `import { IssueEventPipeline, createGitCommitter, withCanonicalEventLogLock } from ${JSON.stringify(join(import.meta.dir, "issue-event-pipeline.ts"))};`,
+      `import { existsSync, writeFileSync } from "node:fs";`,
+      `import { join } from "node:path";`,
+      "const [rootDir, eventId, barrierDir] = process.argv.slice(2);",
+      "const event = { schemaVersion: 1, eventId, aggregate: 'issue', aggregateKey: 'PB-1', type: 'created', actor: 'admin', occurredAt: new Date().toISOString(), payload: { title: eventId } };",
+      "writeFileSync(join(barrierDir, eventId + '.ready'), 'ready');",
+      "while (!existsSync(join(barrierDir, 'start'))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);",
+      "try {",
+      "  withCanonicalEventLogLock(rootDir, () => {",
+      "    const writer = new EventLogWriter({ rootDir });",
+      "    const pipeline = new IssueEventPipeline({ rootDir, eventLog: writer, commitGit: createGitCommitter(rootDir) });",
+      "    pipeline.append([event]);",
+      "    pipeline.commit();",
+      "  });",
+      "  console.log('ok');",
+      "} catch (error) {",
+      "  console.error(error instanceof Error ? error.message : String(error));",
+      "  process.exitCode = 1;",
+      "}",
+    ].join("\n");
+    const runWorker = (eventId: string) =>
+      new Promise<{ code: number | null; output: string }>((resolveWorker) => {
+        const child = spawn(process.execPath, [workerPath, rootDir, eventId, barrierDir], {
+          cwd: rootDir,
+          env: isolatedGitEnvironment(),
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let output = "";
+        child.stdout.on("data", (chunk) => (output += String(chunk)));
+        child.stderr.on("data", (chunk) => (output += String(chunk)));
+        child.on("close", (code) => resolveWorker({ code, output }));
+      });
+
+    try {
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      new EventLogWriter({ rootDir }).append(event("base"));
+      git("add", "--", ".prime-board/log/events.jsonl");
+      git("commit", "-qm", "base");
+      mkdirSync(barrierDir, { recursive: true });
+      writeFileSync(workerPath, workerSource);
+
+      const workers = [runWorker("concurrent-a"), runWorker("concurrent-b")];
+      let ready = false;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        ready = ["concurrent-a", "concurrent-b"].every((eventId) =>
+          existsSync(join(barrierDir, eventId + ".ready")),
+        );
+        if (ready) break;
+        await new Promise((resolveReady) => setTimeout(resolveReady, 5));
+      }
+      expect(ready).toBe(true);
+      writeFileSync(join(barrierDir, "start"), "go");
+      const results = await Promise.all(workers);
+      expect(results).toEqual([
+        { code: 0, output: "ok\n" },
+        { code: 0, output: "ok\n" },
+      ]);
+      rmSync(barrierDir, { recursive: true, force: true });
+      rmSync(workerPath, { force: true });
+      expect(git("status", "--porcelain").toString()).toBe("");
+      expect(git("show", "HEAD:.prime-board/log/events.jsonl").toString()).toContain(
+        '"eventId":"concurrent-a"',
+      );
+      expect(git("show", "HEAD:.prime-board/log/events.jsonl").toString()).toContain(
+        '"eventId":"concurrent-b"',
+      );
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("commits uncommitted idempotent events after pipeline recreation", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "prb-git-retry-"));
     const writer = new EventLogWriter({ rootDir });
-    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
     try {
       git("init", "-q");
       git("config", "user.email", "test@example.test");
@@ -147,7 +285,8 @@ describe("SQLite issue event pipeline", () => {
   it("commits an event log whose base exceeds the child-process buffer", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "prb-git-large-event-log-"));
     const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
-    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
     const base = `${Array.from({ length: 5_400 }, (_, index) =>
       JSON.stringify(event(`base-${index}`)),
     ).join("\n")}\n`;
@@ -252,7 +391,8 @@ describe("SQLite issue event pipeline", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "prb-git-committer-lock-"));
     const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
     const line = (eventId: string) => `${JSON.stringify(event(eventId))}\n`;
-    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
     try {
       mkdirSync(join(rootDir, ".prime-board", "log"), { recursive: true });
       git("init", "-q");
@@ -273,9 +413,47 @@ describe("SQLite issue event pipeline", () => {
         expect(git("log", "-1", "--format=%s").toString().trim()).toBe("base");
         expect(git("show", ":.prime-board/log/events.jsonl").toString()).toBe(line("base"));
         expect(readFileSync(logPath, "utf8")).toBe(`${line("base")}${line("generated")}`);
+        expect(existsSync(`${indexPath}.prime-board-event-log.lock`)).toBe(false);
       } finally {
         rmSync(lockPath, { force: true });
       }
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails deterministically while another event-log writer commits", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-committer-event-lock-"));
+    const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
+    const line = (eventId: string) => `${JSON.stringify(event(eventId))}\n`;
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
+    try {
+      mkdirSync(join(rootDir, ".prime-board", "log"), { recursive: true });
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      writeFileSync(logPath, line("base"));
+      git("add", "--", ".prime-board/log/events.jsonl");
+      git("commit", "-qm", "base");
+      writeFileSync(logPath, `${line("base")}${line("generated")}`);
+
+      const indexPath = resolve(rootDir, git("rev-parse", "--git-path", "index").toString().trim());
+      const lockPath = `${indexPath}.prime-board-event-log.lock`;
+      writeFileSync(lockPath, "");
+      try {
+        expect(() => createGitCommitter(rootDir)({ rootDir, eventIds: ["generated"] })).toThrow(
+          "Cannot lock canonical event log",
+        );
+        expect(git("log", "-1", "--format=%s").toString().trim()).toBe("base");
+        expect(readFileSync(logPath, "utf8")).toBe(`${line("base")}${line("generated")}`);
+      } finally {
+        rmSync(lockPath, { force: true });
+      }
+
+      createGitCommitter(rootDir)({ rootDir, eventIds: ["generated"] });
+      expect(git("status", "--porcelain").toString()).toBe("");
+      expect(existsSync(lockPath)).toBe(false);
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }
@@ -285,7 +463,8 @@ describe("SQLite issue event pipeline", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "prb-git-committer-staged-"));
     const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
     const line = (eventId: string) => `${JSON.stringify(event(eventId))}\n`;
-    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
     try {
       mkdirSync(join(rootDir, ".prime-board", "log"), { recursive: true });
       git("init", "-q");
@@ -312,11 +491,45 @@ describe("SQLite issue event pipeline", () => {
     }
   });
 
+  it("preserves unrelated staged files while committing the event log", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-committer-unrelated-staged-"));
+    const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
+    const line = (eventId: string) => `${JSON.stringify(event(eventId))}\n`;
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
+    try {
+      mkdirSync(join(rootDir, ".prime-board", "log"), { recursive: true });
+      git("init", "-q");
+      git("config", "user.email", "test@example.test");
+      git("config", "user.name", "PRB test");
+      writeFileSync(logPath, line("base"));
+      git("add", "--", ".prime-board/log/events.jsonl");
+      git("commit", "-qm", "base");
+
+      writeFileSync(join(rootDir, "unrelated.txt"), "keep staged\n");
+      git("add", "--", "unrelated.txt");
+      writeFileSync(logPath, `${line("base")}${line("generated")}`);
+
+      createGitCommitter(rootDir)({ rootDir, eventIds: ["generated"] });
+
+      expect(git("ls-tree", "-r", "--name-only", "HEAD").toString()).not.toContain("unrelated.txt");
+      expect(git("show", ":unrelated.txt").toString()).toBe("keep staged\n");
+      expect(git("diff", "--cached", "--name-only").toString()).toBe("unrelated.txt\n");
+      expect(git("status", "--porcelain").toString()).toBe("A  unrelated.txt\n");
+      expect(existsSync(`${resolve(rootDir, ".git/index")}.prime-board-event-log.lock`)).toBe(
+        false,
+      );
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects unrelated event-log changes before Git add and keeps them for retry", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "prb-git-committer-"));
     const logPath = join(rootDir, ".prime-board", "log", "events.jsonl");
     const line = (eventId: string) => `${JSON.stringify(event(eventId))}\n`;
-    const git = (...args: string[]) => execFileSync("git", ["-C", rootDir, ...args]);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
     try {
       mkdirSync(join(rootDir, ".prime-board", "log"), { recursive: true });
       git("init", "-q");
