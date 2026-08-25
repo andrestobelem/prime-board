@@ -108,7 +108,7 @@ export function appendActivityEvents(
     // against HEAD and ignores IDs that are already committed.
     onEventIds?.(results.map((result) => result.eventId));
   } catch (error) {
-    // appendMany writes one event at a time. Preserve only IDs that appeared
+    // A batch write may leave a partial append. Preserve only IDs that appeared
     // during this attempt so a later retry can commit the partial delta.
     const after = new Set(eventLog.read().map((event) => event.eventId));
     onEventIds?.(

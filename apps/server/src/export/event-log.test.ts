@@ -24,6 +24,15 @@ const event = (overrides: Partial<DomainEvent> = {}): DomainEvent => ({
 
 const logOptions = () => ({ rootDir: mkdtempSync(join(tmpdir(), "prb-event-log-")) });
 
+class CountingEventLogWriter extends EventLogWriter {
+  readCalls = 0;
+
+  override read(): DomainEvent[] {
+    this.readCalls += 1;
+    return super.read();
+  }
+}
+
 describe("event log", () => {
   it("orders events by occurredAt and eventId", () => {
     const options = logOptions();
@@ -43,6 +52,19 @@ describe("event log", () => {
       EventLogConflictError,
     );
     expect(writer.read()).toHaveLength(1);
+  });
+
+  it("lee el log una sola vez por lote idempotente", () => {
+    const writer = new CountingEventLogWriter(logOptions());
+    const events = Array.from({ length: 3 }, (_, index) =>
+      event({ eventId: `batch-${index}`, aggregateKey: `issue-${index}` }),
+    );
+
+    expect(writer.appendMany(events).every((result) => result.appended)).toBe(true);
+    expect(writer.readCalls).toBe(1);
+
+    expect(writer.appendMany(events).every((result) => !result.appended)).toBe(true);
+    expect(writer.readCalls).toBe(2);
   });
 
   it("fails closed for malformed and non-JSON input", () => {

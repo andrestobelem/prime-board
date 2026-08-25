@@ -436,36 +436,13 @@ export class EventLogWriter {
   }
 
   append(eventInput: unknown): AppendResult {
-    const event = validateDomainEvent(eventInput);
-    ensureDirectory(this.filePath);
-    // A torn final write is the only recoverable corruption. Complete lines
-    // remain immutable and malformed complete lines still fail closed in read().
-    this.recover();
-    const existing = this.read().find((candidate) => candidate.eventId === event.eventId);
-    if (existing) {
-      if (eventFingerprint(existing) !== eventFingerprint(event)) {
-        throw new EventLogConflictError(event.eventId);
-      }
-      return { eventId: event.eventId, appended: false };
-    }
-
-    const line = serializeDomainEvent(event);
-    const fd = openSync(
-      this.filePath,
-      constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY,
-      0o600,
-    );
-    try {
-      writeSync(fd, line, undefined, "utf8");
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    return { eventId: event.eventId, appended: true };
+    return this.appendMany([eventInput])[0]!;
   }
 
   appendMany(eventInputs: readonly unknown[]): AppendResult[] {
     const events = eventInputs.map(validateDomainEvent);
+    if (events.length === 0) return [];
+
     const fingerprints = new Map<string, string>();
     for (const event of events) {
       const fingerprint = eventFingerprint(event);
@@ -475,7 +452,43 @@ export class EventLogWriter {
       }
       fingerprints.set(event.eventId, fingerprint);
     }
-    return events.map((event) => this.append(event));
+
+    ensureDirectory(this.filePath);
+    // A torn final write is the only recoverable corruption. Complete lines
+    // remain immutable and malformed complete lines still fail closed in read().
+    this.recover();
+    const existingEvents = new Map(this.read().map((event) => [event.eventId, event]));
+    const results: AppendResult[] = [];
+    const lines: string[] = [];
+
+    for (const event of events) {
+      const existing = existingEvents.get(event.eventId);
+      if (existing) {
+        if (eventFingerprint(existing) !== eventFingerprint(event)) {
+          throw new EventLogConflictError(event.eventId);
+        }
+        results.push({ eventId: event.eventId, appended: false });
+        continue;
+      }
+
+      lines.push(serializeDomainEvent(event));
+      existingEvents.set(event.eventId, event);
+      results.push({ eventId: event.eventId, appended: true });
+    }
+
+    if (lines.length === 0) return results;
+    const fd = openSync(
+      this.filePath,
+      constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY,
+      0o600,
+    );
+    try {
+      for (const line of lines) writeSync(fd, line, undefined, "utf8");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    return results;
   }
 }
 
