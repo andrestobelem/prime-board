@@ -10,7 +10,7 @@ const TEAM_FIELDS = `id key name description visibility accessPolicy createdAt a
 const MEMBERSHIP_FIELDS = `id teamId actorId role createdAt
   team { id key name } actor { id name email type workspaceRole }`;
 const STATE_FIELDS = `id name type color position`;
-const LABEL_FIELDS = `id name color teamId`;
+const LABEL_FIELDS = `id name color description isGroup teamId groupId archivedAt mergedIntoId`;
 const USAGE = `Usage:
   pb team list [--include-archived] [--json]
   pb team create --name TEXT --key KEY [--description TEXT] [--visibility public|private] [--access-policy workspace-members|team-members] [--json]
@@ -24,8 +24,12 @@ const USAGE = `Usage:
   pb team workflow-state-create --team <KEY|ID> --name TEXT --type TYPE [--color COLOR] [--position N] [--json]
   pb team workflow-state-update <ID> [--name TEXT] [--type TYPE] [--color COLOR] [--position N] [--json]
   pb team workflow-state-delete <ID> [--move-to ID] [--json]
-  pb team label-create --name TEXT [--team <KEY|ID>] [--color COLOR] [--json]
-  pb team label-update <ID> [--name TEXT] [--color COLOR] [--json]
+  pb team label-create --name TEXT [--team <KEY|ID>] [--color COLOR] [--description TEXT] [--group ID] [--is-group] [--json]
+  pb team label-update <ID> [--name TEXT] [--color COLOR] [--description TEXT] [--team <KEY|ID|workspace>] [--group ID|none] [--json]
+  pb team label-archive <ID> [--json]
+  pb team label-unarchive <ID> [--json]
+  pb team label-restore <ID> [--json]
+  pb team label-merge <SOURCE_ID> <TARGET_ID> [--json]
   pb team label-delete <ID> [--json]`;
 
 function position(value: string): number {
@@ -334,6 +338,9 @@ export async function teamCommand(argv: string[]): Promise<void> {
         name: { type: "string" },
         team: { type: "string" },
         color: { type: "string" },
+        description: { type: "string" },
+        group: { type: "string" },
+        "is-group": { type: "boolean" },
         json: { type: "boolean" },
       },
     });
@@ -341,6 +348,9 @@ export async function teamCommand(argv: string[]): Promise<void> {
     const input: Record<string, unknown> = { name: values.name };
     if (values.team !== undefined) input.teamId = (await resolveTeam(config, values.team)).id;
     if (values.color !== undefined) input.color = values.color;
+    if (values.description !== undefined) input.description = values.description;
+    if (values.group !== undefined) input.groupId = values.group;
+    if (values["is-group"]) input.isGroup = true;
     const data = await gqlRequest(
       config,
       `mutation($input: LabelCreateInput!) {
@@ -358,11 +368,24 @@ export async function teamCommand(argv: string[]): Promise<void> {
     if (!id) throw new UsageError(USAGE);
     const { values } = parseArgs({
       args: argv.slice(2),
-      options: { name: { type: "string" }, color: { type: "string" }, json: { type: "boolean" } },
+      options: {
+        name: { type: "string" },
+        color: { type: "string" },
+        description: { type: "string" },
+        team: { type: "string" },
+        group: { type: "string" },
+        json: { type: "boolean" },
+      },
     });
     const input: Record<string, unknown> = {};
     if (values.name !== undefined) input.name = values.name;
     if (values.color !== undefined) input.color = values.color;
+    if (values.description !== undefined) input.description = values.description;
+    if (values.team !== undefined) {
+      input.teamId =
+        values.team === "workspace" ? null : (await resolveTeam(config, values.team)).id;
+    }
+    if (values.group !== undefined) input.groupId = values.group === "none" ? null : values.group;
     if (!Object.keys(input).length) throw new UsageError(USAGE);
     const data = await gqlRequest(
       config,
@@ -373,6 +396,45 @@ export async function teamCommand(argv: string[]): Promise<void> {
     );
     if (values.json) return printJson(data.labelUpdate.label);
     console.log(`Updated label ${id}`);
+    return;
+  }
+
+  if (action === "label-archive" || action === "label-unarchive" || action === "label-restore") {
+    const id = argv[1];
+    if (!id) throw new UsageError(USAGE);
+    const { values } = parseArgs({ args: argv.slice(2), options: { json: { type: "boolean" } } });
+    const mutation =
+      action === "label-archive"
+        ? "labelArchive"
+        : action === "label-unarchive"
+          ? "labelUnarchive"
+          : "labelRestore";
+    const data = await gqlRequest(
+      config,
+      `mutation($id: ID!) { ${mutation}(id: $id) { label { ${LABEL_FIELDS} } } }`,
+      { id },
+    );
+    if (values.json) return printJson(data[mutation].label);
+    console.log(`${action === "label-archive" ? "Archived" : "Restored"} label ${id}`);
+    return;
+  }
+
+  if (action === "label-merge") {
+    const sourceId = argv[1];
+    const targetId = argv[2];
+    if (!sourceId || !targetId) throw new UsageError(USAGE);
+    const { values } = parseArgs({ args: argv.slice(3), options: { json: { type: "boolean" } } });
+    const data = await gqlRequest(
+      config,
+      `mutation($sourceId: ID!, $targetId: ID!) {
+        labelMerge(sourceId: $sourceId, targetId: $targetId) {
+          success affectedIssues source { ${LABEL_FIELDS} } target { ${LABEL_FIELDS} }
+        }
+      }`,
+      { sourceId, targetId },
+    );
+    if (values.json) return printJson(data.labelMerge);
+    console.log(`Merged label ${sourceId} into ${targetId}`);
     return;
   }
 

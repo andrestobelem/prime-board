@@ -118,10 +118,18 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     name: String!
     color: String!
+    description: String
+    isGroup: Boolean!
     """
     NULL for Workspace labels.
     """
     teamId: ID
+    groupId: ID
+    group: Label
+    children: [Label!]!
+    archivedAt: DateTime
+    mergedIntoId: ID
+    mergedInto: Label
   }
 
   enum TeamMembershipRole {
@@ -720,6 +728,9 @@ export const typeDefs = /* GraphQL */ `
   input LabelCreateInput {
     name: String!
     color: String
+    description: String
+    isGroup: Boolean
+    groupId: ID
     """
     Omit to create a Workspace label.
     """
@@ -729,6 +740,13 @@ export const typeDefs = /* GraphQL */ `
   type LabelPayload {
     success: Boolean!
     label: Label!
+  }
+
+  type LabelMergePayload {
+    success: Boolean!
+    source: Label!
+    target: Label!
+    affectedIssues: Int!
   }
 
   input WorkflowStateUpdateInput {
@@ -741,6 +759,12 @@ export const typeDefs = /* GraphQL */ `
   input LabelUpdateInput {
     name: String
     color: String
+    description: String
+    """
+    Move the label to a Team. Set null to move it to the Workspace scope.
+    """
+    teamId: ID
+    groupId: ID
   }
 
   type LabelDeletePayload {
@@ -1103,7 +1127,7 @@ export const typeDefs = /* GraphQL */ `
     """
     Labels visible to a Team (Workspace + Team labels); without a Team, all labels.
     """
-    labels(team: ID): [Label!]!
+    labels(team: ID, includeArchived: Boolean = false): [Label!]!
     projects(state: ProjectState, team: ID, includeArchived: Boolean = false): [Project!]!
     project(id: ID!): Project
     webhooks: [Webhook!]!
@@ -1192,6 +1216,10 @@ export const typeDefs = /* GraphQL */ `
     issueUnsubscribe(id: ID!): IssuePayload!
     labelCreate(input: LabelCreateInput!): LabelPayload!
     labelUpdate(id: ID!, input: LabelUpdateInput!): LabelPayload!
+    labelArchive(id: ID!): LabelPayload!
+    labelUnarchive(id: ID!): LabelPayload!
+    labelRestore(id: ID!): LabelPayload!
+    labelMerge(sourceId: ID!, targetId: ID!): LabelMergePayload!
     labelDelete(id: ID!): LabelDeletePayload!
     commentCreate(input: CommentCreateInput!): CommentPayload!
     issueRelationCreate(input: IssueRelationCreateInput!): IssueRelationPayload!

@@ -595,6 +595,24 @@ export function exportBoard(
     access_policy: "workspace_members" | "team_members";
     archived_at: string | null;
   }>;
+  const exportLabel = (row: {
+    name: string;
+    color: string;
+    description?: string | null;
+    archived_at?: string | null;
+    is_group?: number | boolean;
+    group_name?: string | null;
+    merged_into_name?: string | null;
+  }) => ({
+    name: row.name,
+    color: row.color,
+    ...(row.description != null ? { description: row.description } : {}),
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+    ...(row.is_group ? { isGroup: true } : {}),
+    ...(row.group_name ? { group: row.group_name } : {}),
+    ...(row.merged_into_name ? { mergedInto: row.merged_into_name } : {}),
+  });
+
   write(
     join(base, "meta", "teams.json"),
     stableStringify(
@@ -613,9 +631,27 @@ export function exportBoard(
             "SELECT name, type, color, position FROM workflow_states WHERE team_id = ?1 ORDER BY position, name",
           )
           .all(team.id),
-        labels: db
-          .query("SELECT name, color FROM labels WHERE team_id = ?1 ORDER BY name")
-          .all(team.id),
+        labels: (
+          db
+            .query(
+              `SELECT labels.name, labels.color, labels.description, labels.archived_at,
+                      labels.is_group, groups.name AS group_name, merged.name AS merged_into_name
+               FROM labels
+               LEFT JOIN labels groups ON groups.id = labels.group_id
+               LEFT JOIN labels merged ON merged.id = labels.merged_into_id
+               WHERE labels.team_id = ?1
+               ORDER BY labels.name`,
+            )
+            .all(team.id) as Array<{
+            name: string;
+            color: string;
+            description: string | null;
+            archived_at: string | null;
+            is_group: number;
+            group_name: string | null;
+            merged_into_name: string | null;
+          }>
+        ).map(exportLabel),
         members: db
           .query(
             `SELECT actors.name AS actor, team_memberships.role
@@ -632,7 +668,27 @@ export function exportBoard(
   write(
     join(base, "meta", "workspace-labels.json"),
     stableStringify(
-      db.query("SELECT name, color FROM labels WHERE team_id IS NULL ORDER BY name").all(),
+      (
+        db
+          .query(
+            `SELECT labels.name, labels.color, labels.description, labels.archived_at,
+                    labels.is_group, groups.name AS group_name, merged.name AS merged_into_name
+             FROM labels
+             LEFT JOIN labels groups ON groups.id = labels.group_id
+             LEFT JOIN labels merged ON merged.id = labels.merged_into_id
+             WHERE labels.team_id IS NULL
+             ORDER BY labels.name`,
+          )
+          .all() as Array<{
+          name: string;
+          color: string;
+          description: string | null;
+          archived_at: string | null;
+          is_group: number;
+          group_name: string | null;
+          merged_into_name: string | null;
+        }>
+      ).map(exportLabel),
     ),
   );
 

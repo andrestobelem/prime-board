@@ -138,12 +138,16 @@ import { issueEventData, issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
 import { documentResolvers } from "./document-resolvers.ts";
 import {
+  archiveLabel,
   createLabel,
   deleteLabel,
   getLabel,
   listLabels,
   mapLabel,
+  mergeLabels,
   updateLabel,
+  type LabelInput,
+  type LabelUpdateInput,
 } from "../domain/labels.ts";
 import { createWebhook, deleteWebhook, mapWebhook } from "../domain/webhooks.ts";
 import {
@@ -289,12 +293,16 @@ import {
   reorderPostgresFavorite,
 } from "../domain/postgres-favorites.ts";
 import {
+  archivePostgresLabel,
   createPostgresLabel,
   deletePostgresLabel,
   getPostgresLabel,
   listPostgresLabels,
   mapPostgresLabel,
+  mergePostgresLabels,
   updatePostgresLabel,
+  type PostgresLabelInput,
+  type PostgresLabelUpdateInput,
 } from "../domain/postgres-labels.ts";
 
 // Scalars passthrough: los timestamps viajan como strings ISO-8601 UTC.
@@ -509,6 +517,41 @@ export const resolvers = {
     MEMBER: "member",
   },
 
+  Label: {
+    group: async (label: { groupId?: string | null }, _args: unknown, context: Context) => {
+      if (!label.groupId) return null;
+      if (context.persistence) {
+        const group = await getPostgresLabel(context.persistence, label.groupId);
+        return group ? mapPostgresLabel(group) : null;
+      }
+      const group = getLabel(context.db, label.groupId, context.workspace.workspaceId);
+      return group ? mapLabel(group) : null;
+    },
+    children: async (label: { id: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        return (await listPostgresLabels(context.persistence, null, true))
+          .filter((child) => child.group_id === label.id)
+          .map(mapPostgresLabel);
+      }
+      return listLabels(context.db, null, true, context.workspace.workspaceId)
+        .filter((child) => child.group_id === label.id)
+        .map(mapLabel);
+    },
+    mergedInto: async (
+      label: { mergedIntoId?: string | null },
+      _args: unknown,
+      context: Context,
+    ) => {
+      if (!label.mergedIntoId) return null;
+      if (context.persistence) {
+        const target = await getPostgresLabel(context.persistence, label.mergedIntoId);
+        return target ? mapPostgresLabel(target) : null;
+      }
+      const target = getLabel(context.db, label.mergedIntoId, context.workspace.workspaceId);
+      return target ? mapLabel(target) : null;
+    },
+  },
+
   Team: {
     states: async (team: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
@@ -551,7 +594,10 @@ export const resolvers = {
           : [];
       }
       return canAccessTeam(context.db, viewer, team.id)
-        ? scopeWorkspaceRows(context, listLabels(context.db, team.id)).map(mapLabel)
+        ? scopeWorkspaceRows(
+            context,
+            listLabels(context.db, team.id, false, context.workspace.workspaceId),
+          ).map(mapLabel)
         : [];
     },
     projects: async (team: { id: string }, _args: unknown, context: Context) => {
@@ -1097,7 +1143,11 @@ export const resolvers = {
           mapTeamMembership,
         );
       },
-      labels: async (_parent: unknown, args: { team?: string }, context: Context) => {
+      labels: async (
+        _parent: unknown,
+        args: { team?: string; includeArchived?: boolean | null },
+        context: Context,
+      ) => {
         const viewer = requireViewer(context);
         if (context.persistence) {
           const team = args.team
@@ -1112,11 +1162,17 @@ export const resolvers = {
             return [];
           }
           if (team?.archived_at) {
-            return (await listPostgresLabels(context.persistence))
+            return (
+              await listPostgresLabels(context.persistence, null, Boolean(args.includeArchived))
+            )
               .filter((label) => label.team_id == null)
               .map(mapPostgresLabel);
           }
-          const labels = await listPostgresLabels(context.persistence, team?.id ?? null);
+          const labels = await listPostgresLabels(
+            context.persistence,
+            team?.id ?? null,
+            Boolean(args.includeArchived),
+          );
           const visible = [];
           for (const label of labels) {
             if (!label.team_id) {
@@ -1139,7 +1195,12 @@ export const resolvers = {
         // Selectors omit inaccessible and archived Team labels while preserving workspace labels.
         return scopeWorkspaceRows(
           context,
-          listLabels(context.db, team?.archived_at ? null : args.team),
+          listLabels(
+            context.db,
+            team?.archived_at ? null : args.team,
+            Boolean(args.includeArchived),
+            context.workspace.workspaceId,
+          ),
         )
           .filter(
             (label) => label.team_id == null || canAccessTeam(context.db, viewer, label.team_id),
@@ -2222,7 +2283,7 @@ export const resolvers = {
         },
         labelCreate: async (
           _parent: unknown,
-          args: { input: { name: string; color?: string | null; teamId?: string | null } },
+          args: { input: PostgresLabelInput },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
@@ -2315,13 +2376,19 @@ export const resolvers = {
         },
         labelUpdate: async (
           _parent: unknown,
-          args: { id: string; input: { name?: string | null; color?: string | null } },
+          args: { id: string; input: PostgresLabelUpdateInput },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
           if (context.persistence) {
             const existing = await getPostgresLabel(context.persistence, args.id);
-            if (existing?.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+            if (!existing) throw apiError("NOT_FOUND", "Label not found");
+            const nextTeamId =
+              args.input.teamId !== undefined ? (args.input.teamId ?? null) : existing.team_id;
+            if (
+              (existing.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) ||
+              (nextTeamId && !apiKeyTeamsWithinLimit(context.auth, [nextTeamId]))
+            ) {
               throw apiError("NOT_FOUND", "Label resource not found");
             }
             const label = await updatePostgresLabel(
@@ -2332,13 +2399,143 @@ export const resolvers = {
             );
             return { success: true, label: mapPostgresLabel(label) };
           }
-          const existing = getLabel(context.db, args.id);
-          if (existing) {
-            if (existing.team_id == null) assertWorkspaceAdmin(viewer);
-            else assertCanManageTeam(context.db, viewer, existing.team_id);
-          }
-          const label = mapLabel(updateLabel(context.db, args.id, args.input));
+          const existing = getLabel(context.db, args.id, context.workspace.workspaceId);
+          if (!existing) throw apiError("NOT_FOUND", "Label not found");
+          const nextTeamId =
+            args.input.teamId !== undefined ? (args.input.teamId ?? null) : existing.team_id;
+          if (existing.team_id == null || nextTeamId == null) assertWorkspaceAdmin(viewer);
+          if (existing.team_id != null) assertCanManageTeam(context.db, viewer, existing.team_id);
+          if (nextTeamId != null) assertCanManageTeam(context.db, viewer, nextTeamId);
+          const label = mapLabel(
+            updateLabel(context.db, args.id, args.input, context.workspace.workspaceId),
+          );
           return { success: true, label };
+        },
+        labelArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
+          const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresLabel(context.persistence, args.id);
+            if (!existing) throw apiError("NOT_FOUND", "Label not found");
+            if (existing.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("NOT_FOUND", "Label resource not found");
+            }
+            return {
+              success: true,
+              label: mapPostgresLabel(
+                await archivePostgresLabel(context.persistence, viewer, args.id, true),
+              ),
+            };
+          }
+          const existing = getLabel(context.db, args.id, context.workspace.workspaceId);
+          if (!existing) throw apiError("NOT_FOUND", "Label not found");
+          if (existing.team_id == null) assertWorkspaceAdmin(viewer);
+          else assertCanManageTeam(context.db, viewer, existing.team_id);
+          return {
+            success: true,
+            label: mapLabel(archiveLabel(context.db, args.id, true, context.workspace.workspaceId)),
+          };
+        },
+        labelUnarchive: async (_parent: unknown, args: { id: string }, context: Context) => {
+          const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresLabel(context.persistence, args.id);
+            if (!existing) throw apiError("NOT_FOUND", "Label not found");
+            if (existing.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("NOT_FOUND", "Label resource not found");
+            }
+            return {
+              success: true,
+              label: mapPostgresLabel(
+                await archivePostgresLabel(context.persistence, viewer, args.id, false),
+              ),
+            };
+          }
+          const existing = getLabel(context.db, args.id, context.workspace.workspaceId);
+          if (!existing) throw apiError("NOT_FOUND", "Label not found");
+          if (existing.team_id == null) assertWorkspaceAdmin(viewer);
+          else assertCanManageTeam(context.db, viewer, existing.team_id);
+          return {
+            success: true,
+            label: mapLabel(
+              archiveLabel(context.db, args.id, false, context.workspace.workspaceId),
+            ),
+          };
+        },
+        labelRestore: async (_parent: unknown, args: { id: string }, context: Context) => {
+          const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresLabel(context.persistence, args.id);
+            if (!existing) throw apiError("NOT_FOUND", "Label not found");
+            if (existing.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("NOT_FOUND", "Label resource not found");
+            }
+            return {
+              success: true,
+              label: mapPostgresLabel(
+                await archivePostgresLabel(context.persistence, viewer, args.id, false),
+              ),
+            };
+          }
+          const existing = getLabel(context.db, args.id, context.workspace.workspaceId);
+          if (!existing) throw apiError("NOT_FOUND", "Label not found");
+          if (existing.team_id == null) assertWorkspaceAdmin(viewer);
+          else assertCanManageTeam(context.db, viewer, existing.team_id);
+          return {
+            success: true,
+            label: mapLabel(
+              archiveLabel(context.db, args.id, false, context.workspace.workspaceId),
+            ),
+          };
+        },
+        labelMerge: async (
+          _parent: unknown,
+          args: { sourceId: string; targetId: string },
+          context: Context,
+        ) => {
+          const viewer = requireViewer(context);
+          if (context.persistence) {
+            const source = await getPostgresLabel(context.persistence, args.sourceId);
+            const target = await getPostgresLabel(context.persistence, args.targetId);
+            if (!source || !target) throw apiError("NOT_FOUND", "Label not found");
+            if (
+              (source.team_id && !apiKeyTeamsWithinLimit(context.auth, [source.team_id])) ||
+              (target.team_id && !apiKeyTeamsWithinLimit(context.auth, [target.team_id]))
+            ) {
+              throw apiError("NOT_FOUND", "Label resource not found");
+            }
+            const result = await mergePostgresLabels(
+              context.persistence,
+              viewer,
+              args.sourceId,
+              args.targetId,
+            );
+            return {
+              success: true,
+              source: mapPostgresLabel(result.source),
+              target: mapPostgresLabel(result.target),
+              affectedIssues: result.affectedIssues,
+            };
+          }
+          const source = getLabel(context.db, args.sourceId, context.workspace.workspaceId);
+          const target = getLabel(context.db, args.targetId, context.workspace.workspaceId);
+          if (!source || !target) throw apiError("NOT_FOUND", "Label not found");
+          if (source.team_id == null) assertWorkspaceAdmin(viewer);
+          else assertCanManageTeam(context.db, viewer, source.team_id);
+          if (target.team_id == null) assertWorkspaceAdmin(viewer);
+          else assertCanManageTeam(context.db, viewer, target.team_id);
+          const result = mergeLabels(
+            context.db,
+            viewer.id,
+            args.sourceId,
+            args.targetId,
+            context.workspace.workspaceId,
+          );
+          return {
+            success: true,
+            source: mapLabel(result.source),
+            target: mapLabel(result.target),
+            affectedIssues: result.affectedIssues,
+          };
         },
         labelDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
@@ -2350,7 +2547,7 @@ export const resolvers = {
             const affected = await deletePostgresLabel(context.persistence, viewer, args.id);
             return { success: true, affectedIssues: affected };
           }
-          const existing = getLabel(context.db, args.id);
+          const existing = getLabel(context.db, args.id, context.workspace.workspaceId);
           if (existing) {
             if (existing.team_id == null) assertWorkspaceAdmin(viewer);
             else assertCanManageTeam(context.db, viewer, existing.team_id);

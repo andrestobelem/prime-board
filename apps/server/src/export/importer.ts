@@ -475,6 +475,44 @@ export function rebuildFromRepo(
       entries.push({ id, team });
       legacyLabelIds.set(name, entries);
     };
+    const pendingMergedLabels: Array<{ id: string; scope: string; target: string }> = [];
+    const insertLabels = (
+      snapshots: Array<Record<string, any>>,
+      teamId: string | null,
+      scope: string,
+    ): void => {
+      const groups = snapshots.filter((label) => Boolean(label.isGroup));
+      const leaves = snapshots.filter((label) => !label.isGroup);
+      for (const label of [...groups, ...leaves]) {
+        const labelId = newId();
+        const name = String(label.name);
+        const groupName = label.group == null ? null : String(label.group);
+        const groupId = groupName ? (labelIds.get(`${scope}/${groupName}`) ?? null) : null;
+        if (groupName && !groupId) {
+          throw new Error(`Label ${name} references unknown group ${scope}/${groupName}`);
+        }
+        labelIds.set(`${scope}/${name}`, labelId);
+        addLegacyLabel(name, labelId, teamId ? scope : null);
+        db.query(
+          `INSERT INTO labels
+           (id, name, color, description, team_id, created_at, archived_at, is_group, group_id, merged_into_id)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)`,
+        ).run(
+          labelId,
+          name,
+          label.color ?? "#95a2b3",
+          label.description ?? null,
+          teamId,
+          timestamp,
+          label.archivedAt ?? null,
+          label.isGroup ? 1 : 0,
+          groupId,
+        );
+        if (label.mergedInto != null) {
+          pendingMergedLabels.push({ id: labelId, scope, target: String(label.mergedInto) });
+        }
+      }
+    };
     for (const team of readJson(join(base, "meta", "teams.json")) as Array<Record<string, any>>) {
       const teamId = newId();
       teamIds.set(team.key, teamId);
@@ -504,14 +542,7 @@ export function rebuildFromRepo(
           "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
         ).run(stateId, teamId, state.name, state.type, state.color, state.position, timestamp);
       }
-      for (const label of team.labels ?? []) {
-        const labelId = newId();
-        labelIds.set(`${team.key}/${label.name}`, labelId);
-        addLegacyLabel(label.name, labelId, team.key);
-        db.query(
-          "INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        ).run(labelId, label.name, label.color, teamId, timestamp);
-      }
+      insertLabels(team.labels ?? [], teamId, String(team.key));
       // Estado default explícito (AT-180); exports viejos sin el campo caen al
       // primero por posición (los estados vienen ordenados así en el export).
       const defaultState = team.defaultState
@@ -537,15 +568,17 @@ export function rebuildFromRepo(
         ).run(newId(), teamId, actorId, member.role ?? "member", timestamp);
       }
     }
-    for (const label of readJson(join(base, "meta", "workspace-labels.json")) as Array<
-      Record<string, string>
-    >) {
-      const labelId = newId();
-      labelIds.set(`workspace/${label.name}`, labelId);
-      addLegacyLabel(label.name!, labelId, null);
-      db.query(
-        "INSERT INTO labels (id, name, color, team_id, created_at) VALUES (?1, ?2, ?3, NULL, ?4)",
-      ).run(labelId, label.name as string, label.color as string, timestamp);
+    insertLabels(
+      readJson(join(base, "meta", "workspace-labels.json")) as Array<Record<string, any>>,
+      null,
+      "workspace",
+    );
+    for (const merged of pendingMergedLabels) {
+      const targetId = labelIds.get(`${merged.scope}/${merged.target}`);
+      if (!targetId) {
+        throw new Error(`Label ${merged.scope}/${merged.target} is missing merge target`);
+      }
+      db.query("UPDATE labels SET merged_into_id = ?1 WHERE id = ?2").run(targetId, merged.id);
     }
 
     // 5. Proyectos y milestones.

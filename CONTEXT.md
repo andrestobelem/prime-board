@@ -105,7 +105,7 @@ Categoría semántica de un Workflow State: `triage`, `backlog`, `unstarted`, `s
 _Avoid_: Status category, lifecycle type
 
 **Label**:
-Etiqueta opcional y acumulable de una Issue (`web`, `graphql`, `epic:repo-truth`). Puede ser workspace-scoped o pertenecer a un Team. Una Issue puede tener muchas Labels o ninguna.
+Etiqueta opcional de una Issue (`web`, `graphql`, `epic:repo-truth`). Puede ser de Workspace o pertenecer a un Team, tiene descripción y puede archivarse sin quitarse de Issues existentes. Una Label puede ser un grupo de un nivel con hasta 250 hijas; una Issue solo puede tener una hija de cada grupo.
 _Avoid_: Tag, category
 
 **Priority**:

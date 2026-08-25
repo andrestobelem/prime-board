@@ -644,15 +644,23 @@ export function createServer(config: McpConfig | McpSession): McpServer {
     "list_issue_labels",
     {
       description: "List labels available in the workspace or a team.",
-      inputSchema: { team: z.string().optional().describe("Team key or ID") },
+      inputSchema: {
+        team: z.string().optional().describe("Team key or ID"),
+        includeArchived: z.boolean().optional(),
+      },
     },
-    async ({ team }) => {
+    async ({ team, includeArchived }) => {
       const teamId = team ? (await resolveTeam(sessionConfig, team)).id : null;
       const data = await gqlRequest(
         sessionConfig,
-        `query($team: ID) { labels(team: $team) { id name color teamId } }`,
+        `query($team: ID, $includeArchived: Boolean) {
+          labels(team: $team, includeArchived: $includeArchived) {
+            id name color description isGroup teamId groupId archivedAt mergedIntoId
+          }
+        }`,
         {
           team: teamId,
+          includeArchived: Boolean(includeArchived),
         },
       );
       return json(data.labels);
@@ -667,6 +675,9 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         id: z.string().optional(),
         name: z.string().optional(),
         color: z.string().optional(),
+        description: z.string().optional(),
+        isGroup: z.boolean().optional(),
+        group: z.string().optional().describe("Group ID"),
         team: z.string().optional().describe("Team key or ID (create only)"),
       },
     },
@@ -675,12 +686,14 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         const input: Record<string, unknown> = {};
         if (args.name !== undefined) input.name = args.name;
         if (args.color !== undefined) input.color = args.color;
+        if (args.description !== undefined) input.description = args.description;
+        if (args.group !== undefined) input.groupId = args.group;
         if (!Object.keys(input).length)
           throw new Error("VALIDATION_FAILED: provide at least one field to update");
         const data = await gqlRequest(
           sessionConfig,
           `mutation($id: ID!, $input: LabelUpdateInput!) { labelUpdate(id: $id, input: $input) {
-        label { id name color teamId }
+        label { id name color description isGroup teamId groupId archivedAt mergedIntoId }
       } }`,
           { id: args.id, input },
         );
@@ -689,10 +702,17 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       if (!args.name) throw new Error("VALIDATION_FAILED: `name` is required to create a label");
       const input: Record<string, unknown> = { name: args.name };
       if (args.color !== undefined) input.color = args.color;
+      if (args.description !== undefined) input.description = args.description;
+      if (args.isGroup !== undefined) input.isGroup = args.isGroup;
+      if (args.group !== undefined) input.groupId = args.group;
       if (args.team !== undefined) input.teamId = (await resolveTeam(sessionConfig, args.team)).id;
       const data = await gqlRequest(
         sessionConfig,
-        `mutation($input: LabelCreateInput!) { labelCreate(input: $input) { label { id name color teamId } } }`,
+        `mutation($input: LabelCreateInput!) {
+          labelCreate(input: $input) {
+            label { id name color description isGroup teamId groupId archivedAt mergedIntoId }
+          }
+        }`,
         { input },
       );
       return json(data.labelCreate.label);
@@ -709,6 +729,58 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         { id },
       );
       return json(data.labelDelete);
+    },
+  );
+
+  server.registerTool(
+    "archive_issue_label",
+    {
+      description: "Archive a label without removing it from existing issues.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($id: ID!) { labelArchive(id: $id) { label { id archivedAt } } }`,
+        { id },
+      );
+      return json(data.labelArchive.label);
+    },
+  );
+
+  server.registerTool(
+    "unarchive_issue_label",
+    {
+      description: "Restore an archived label for new issue assignments.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($id: ID!) { labelUnarchive(id: $id) { label { id archivedAt } } }`,
+        { id },
+      );
+      return json(data.labelUnarchive.label);
+    },
+  );
+
+  server.registerTool(
+    "merge_issue_labels",
+    {
+      description: "Merge a source label into a target label and preserve issue activity.",
+      inputSchema: { sourceId: z.string(), targetId: z.string() },
+    },
+    async ({ sourceId, targetId }) => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($sourceId: ID!, $targetId: ID!) {
+          labelMerge(sourceId: $sourceId, targetId: $targetId) {
+            success affectedIssues source { id mergedIntoId } target { id }
+          }
+        }`,
+        { sourceId, targetId },
+      );
+      return json(data.labelMerge);
     },
   );
 
@@ -1035,7 +1107,6 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       },
     );
   }
-
 
   server.registerTool(
     "list_cycles",

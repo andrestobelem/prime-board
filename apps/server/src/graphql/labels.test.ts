@@ -207,4 +207,186 @@ describe("labels", () => {
       payload: { label: "deleted-label", reason: "label_deleted" },
     });
   });
+
+  it("conserva descripción, grupos y exclusividad de labels", async () => {
+    const groupResult = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        labelCreate(input: {
+          name: "PRB group"
+          description: "Mutually exclusive labels"
+          teamId: $teamId
+          isGroup: true
+        }) {
+          label { id name description isGroup teamId children { id } }
+        }
+      }`,
+      { teamId },
+    );
+    expect(groupResult.errors).toBeUndefined();
+    const group = groupResult.data!.labelCreate.label;
+    expect(group).toMatchObject({
+      name: "PRB group",
+      description: "Mutually exclusive labels",
+      isGroup: true,
+      teamId,
+      children: [],
+    });
+
+    const childAResult = await gql(
+      app,
+      `mutation($teamId: ID!, $groupId: ID!) {
+        labelCreate(input: { name: "PRB one", teamId: $teamId, groupId: $groupId }) {
+          label { id groupId group { name } }
+        }
+      }`,
+      { teamId, groupId: group.id },
+    );
+    const childBResult = await gql(
+      app,
+      `mutation($teamId: ID!, $groupId: ID!) {
+        labelCreate(input: { name: "PRB two", teamId: $teamId, groupId: $groupId }) {
+          label { id }
+        }
+      }`,
+      { teamId, groupId: group.id },
+    );
+    expect(childAResult.errors).toBeUndefined();
+    expect(childBResult.errors).toBeUndefined();
+    const childA = childAResult.data!.labelCreate.label;
+    const childB = childBResult.data!.labelCreate.label;
+    const groupWithChildren = await gql(
+      app,
+      `query { labels(includeArchived: true) { id children { id } } }`,
+    );
+    expect(groupWithChildren.errors).toBeUndefined();
+    expect(
+      groupWithChildren.data!.labels.find((label: any) => label.id === group.id).children,
+    ).toEqual(expect.arrayContaining([{ id: childA.id }, { id: childB.id }]));
+
+    const issue = await gql(
+      app,
+      `mutation($label: ID!) {
+        issueCreate(input: { teamKey: "PB", title: "Exclusive group issue", labelIds: [$label] }) {
+          issue { id labels { id } }
+        }
+      }`,
+      { label: childA.id },
+    );
+    expect(issue.errors).toBeUndefined();
+    const conflict = await gql(
+      app,
+      `mutation($id: ID!, $label: ID!) {
+        issueUpdate(id: $id, input: { addLabelIds: [$label] }) { success }
+      }`,
+      { id: issue.data!.issueCreate.issue.id, label: childB.id },
+    );
+    expect(conflict.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("archiva sin quitar labels existentes y permite unarchive", async () => {
+    const labelResult = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        labelCreate(input: { name: "PRB archived", teamId: $teamId }) { label { id } }
+      }`,
+      { teamId },
+    );
+    const labelId = labelResult.data!.labelCreate.label.id;
+    const issue = await gql(
+      app,
+      `mutation($label: ID!) {
+        issueCreate(input: { teamKey: "PB", title: "Archived label issue", labelIds: [$label] }) {
+          issue { id labels { id } }
+        }
+      }`,
+      { label: labelId },
+    );
+    const issueId = issue.data!.issueCreate.issue.id;
+    const archived = await gql(
+      app,
+      `mutation($id: ID!) { labelArchive(id: $id) { label { id archivedAt } } }`,
+      { id: labelId },
+    );
+    expect(archived.errors).toBeUndefined();
+    expect(archived.data!.labelArchive.label.archivedAt).toBeTruthy();
+    const hidden = await gql(app, `query { labels { id } }`);
+    expect(hidden.data!.labels.map((label: any) => label.id)).not.toContain(labelId);
+    const existing = await gql(app, `query($id: ID!) { issue(id: $id) { labels { id } } }`, {
+      id: issueId,
+    });
+    expect(existing.data!.issue.labels).toEqual([{ id: labelId }]);
+    const rejected = await gql(
+      app,
+      `mutation($label: ID!) {
+        issueCreate(input: { teamKey: "PB", title: "Cannot use archived", labelIds: [$label] }) { success }
+      }`,
+      { label: labelId },
+    );
+    expect(rejected.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+    const restored = await gql(
+      app,
+      `mutation($id: ID!) { labelUnarchive(id: $id) { label { archivedAt } } }`,
+      { id: labelId },
+    );
+    expect(restored.errors).toBeUndefined();
+    expect(restored.data!.labelUnarchive.label.archivedAt).toBeNull();
+  });
+
+  it("merge reemplaza referencias y conserva la actividad histórica", async () => {
+    const source = await gql(
+      app,
+      `mutation($teamId: ID!) { labelCreate(input: { name: "PRB merge source", teamId: $teamId }) { label { id } } }`,
+      { teamId },
+    );
+    const target = await gql(
+      app,
+      `mutation($teamId: ID!) { labelCreate(input: { name: "PRB merge target", teamId: $teamId }) { label { id } } }`,
+      { teamId },
+    );
+    const issue = await gql(
+      app,
+      `mutation($label: ID!) {
+        issueCreate(input: { teamKey: "PB", title: "Merge source issue", labelIds: [$label] }) {
+          issue { id }
+        }
+      }`,
+      { label: source.data!.labelCreate.label.id },
+    );
+    const merged = await gql(
+      app,
+      `mutation($source: ID!, $target: ID!) {
+        labelMerge(sourceId: $source, targetId: $target) {
+          source { id archivedAt mergedIntoId }
+          target { id }
+          affectedIssues
+        }
+      }`,
+      { source: source.data!.labelCreate.label.id, target: target.data!.labelCreate.label.id },
+    );
+    expect(merged.errors).toBeUndefined();
+    expect(merged.data!.labelMerge).toMatchObject({
+      affectedIssues: 1,
+      source: {
+        id: source.data!.labelCreate.label.id,
+        mergedIntoId: target.data!.labelCreate.label.id,
+      },
+      target: { id: target.data!.labelCreate.label.id },
+    });
+    const after = await gql(
+      app,
+      `query($id: ID!) { issue(id: $id) { labels { id } activity { type actor { name } payload } } }`,
+      { id: issue.data!.issueCreate.issue.id },
+    );
+    expect(after.data!.issue.labels).toEqual([{ id: target.data!.labelCreate.label.id }]);
+    expect(after.data!.issue.activity).toContainEqual({
+      type: "unlabeled",
+      actor: { name: "admin" },
+      payload: {
+        label: "PRB merge source",
+        reason: "label_merged",
+        target: "PRB merge target",
+      },
+    });
+  });
 });

@@ -105,6 +105,10 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:issueUnsubscribe",
   "mutation:labelCreate",
   "mutation:labelUpdate",
+  "mutation:labelArchive",
+  "mutation:labelUnarchive",
+  "mutation:labelRestore",
+  "mutation:labelMerge",
   "mutation:labelDelete",
   "mutation:documentCreate",
   "mutation:documentUpdate",
@@ -454,6 +458,9 @@ async function operationTeamIds(
     case "labelCreate":
       return input.teamId ? [scalar(input.teamId) ?? "__missing__"] : null;
     case "labelUpdate":
+    case "labelArchive":
+    case "labelUnarchive":
+    case "labelRestore":
     case "labelDelete": {
       if (context.persistence) {
         const row = await context.persistence.one<{ team_id: string | null }>(
@@ -466,6 +473,23 @@ async function operationTeamIds(
         .query("SELECT team_id FROM labels WHERE id = ?1")
         .get(scalar(args.id)) as { team_id: string | null } | null;
       return row?.team_id ? [row.team_id] : null;
+    }
+    case "labelMerge": {
+      if (context.persistence) {
+        const rows = await context.persistence.many<{ team_id: string | null }>(
+          "SELECT team_id FROM labels WHERE id IN ($1, $2)",
+          [scalar(args.sourceId), scalar(args.targetId)],
+        );
+        return rows.some((row) => row.team_id == null)
+          ? rows.filter((row) => row.team_id != null).map((row) => row.team_id!)
+          : rows.map((row) => row.team_id!);
+      }
+      const rows = context.db
+        .query("SELECT team_id FROM labels WHERE id IN (?1, ?2)")
+        .all(scalar(args.sourceId), scalar(args.targetId)) as Array<{ team_id: string | null }>;
+      return rows.some((row) => row.team_id == null)
+        ? rows.filter((row) => row.team_id != null).map((row) => row.team_id!)
+        : rows.map((row) => row.team_id!);
     }
     case "issueCreate": {
       if (context.persistence) return [];

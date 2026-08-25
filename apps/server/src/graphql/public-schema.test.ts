@@ -41,6 +41,7 @@ const EXPECTED_PUBLIC_DESCRIPTIONS = [
   "Must be a state in the Team.",
   "Plaintext key. Returned once; only its hash is stored.",
   "Omit to create a Workspace label.",
+  "Move the label to a Team. Set null to move it to the Workspace scope.",
   "Number of issues from which the label was removed.",
   "Issues moved to the destination state.",
   "true: the field is NULL; false: the field is not NULL.",
