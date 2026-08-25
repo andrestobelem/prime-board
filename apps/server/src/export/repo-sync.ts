@@ -18,6 +18,7 @@ import { appendActivityEvents } from "./activity-stream.ts";
 import {
   createGitCommitter,
   IssueEventPipeline,
+  withCanonicalEventLogLock,
   type IssueEventPipelineOptions,
 } from "./issue-event-pipeline.ts";
 
@@ -69,11 +70,16 @@ export function createRepoSync(
       commitGit: options.commitGit ?? createGitCommitter(root),
     });
   const sync = (exporter: () => void): void => {
+    // Append y commit forman una sola sección crítica. Si dos procesos
+    // anexan antes de tomar el lock, uno puede confundir el evento válido del
+    // otro con una mutación inesperada.
+    withCanonicalEventLogLock(root, () => {
+      appendActivityEvents(db, root, eventPipeline.eventLog, (eventIds) =>
+        eventPipeline.recordPendingEventIds(eventIds),
+      );
+      eventPipeline.commit();
+    });
     // El evento queda durable antes de tocar cualquier proyección.
-    appendActivityEvents(db, root, eventPipeline.eventLog, (eventIds) =>
-      eventPipeline.recordPendingEventIds(eventIds),
-    );
-    eventPipeline.commit();
     eventPipeline.project();
     exporter();
   };
