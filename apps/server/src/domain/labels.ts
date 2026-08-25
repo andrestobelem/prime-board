@@ -184,42 +184,44 @@ function assertNoIssueGroupConflict(
 export function createLabel(db: Database, input: LabelInput, workspaceId?: string): LabelRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
-  const teamId = input.teamId ?? null;
-  if (teamId && !getTeamId(db, teamId, workspaceId)) throw apiError("NOT_FOUND", "Team not found");
-  const isGroup = Boolean(input.isGroup);
-  if (isGroup && input.groupId != null) {
-    throw apiError("VALIDATION_FAILED", "A label group cannot belong to another group");
-  }
-  if (!isGroup && input.groupId != null) {
-    requireGroup(db, input.groupId, teamId, workspaceId);
-    validateGroupCapacity(db, input.groupId, workspaceId);
-  }
-  if (labelDuplicate(db, teamId, name, null, workspaceId)) {
-    throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
-  }
+  let created: LabelRow | null = null;
+  db.transaction(() => {
+    const teamId = input.teamId ?? null;
+    if (teamId && !getTeamId(db, teamId, workspaceId)) {
+      throw apiError("NOT_FOUND", "Team not found");
+    }
+    const isGroup = Boolean(input.isGroup);
+    if (isGroup && input.groupId != null) {
+      throw apiError("VALIDATION_FAILED", "A label group cannot belong to another group");
+    }
+    if (!isGroup && input.groupId != null) {
+      requireGroup(db, input.groupId, teamId, workspaceId);
+      validateGroupCapacity(db, input.groupId, workspaceId);
+    }
+    if (labelDuplicate(db, teamId, name, null, workspaceId)) {
+      throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
+    }
 
-  const id = newId();
-  db.query(
-    `INSERT INTO labels
-      (id, name, color, description, team_id, created_at, workspace_id, archived_at, is_group, group_id, merged_into_id)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, NULL)`,
-  ).run(
-    id,
-    name,
-    input.color ?? "#95a2b3",
-    input.description ?? null,
-    teamId,
-    now(),
-    workspaceId ?? null,
-    isGroup ? 1 : 0,
-    isGroup ? null : (input.groupId ?? null),
-  );
-  return (
-    getLabel(db, id, workspaceId) ??
-    (() => {
-      throw apiError("NOT_FOUND", "Label was not created");
-    })()
-  );
+    const id = newId();
+    db.query(
+      `INSERT INTO labels
+        (id, name, color, description, team_id, created_at, workspace_id, archived_at, is_group, group_id, merged_into_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, NULL)`,
+    ).run(
+      id,
+      name,
+      input.color ?? "#95a2b3",
+      input.description ?? null,
+      teamId,
+      now(),
+      workspaceId ?? null,
+      isGroup ? 1 : 0,
+      isGroup ? null : (input.groupId ?? null),
+    );
+    created = getLabel(db, id, workspaceId);
+  })();
+  if (!created) throw apiError("NOT_FOUND", "Label was not created");
+  return created;
 }
 
 export function updateLabel(
@@ -228,82 +230,84 @@ export function updateLabel(
   input: LabelUpdateInput,
   workspaceId?: string,
 ): LabelRow {
-  const label = getLabel(db, id, workspaceId);
-  if (!label) throw apiError("NOT_FOUND", "Label not found");
-  const teamId = input.teamId !== undefined ? (input.teamId ?? null) : label.team_id;
-  const groupId = input.groupId !== undefined ? (input.groupId ?? null) : label.group_id;
-  const name = input.name != null ? input.name.trim() : label.name;
-  if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
-  if (teamId && !getTeamId(db, teamId, workspaceId)) throw apiError("NOT_FOUND", "Team not found");
-  if (label.is_group && groupId != null) {
-    throw apiError("VALIDATION_FAILED", "A label group cannot belong to another group");
-  }
-  if (!label.is_group && groupId != null) {
-    requireGroup(db, groupId, teamId, workspaceId);
-    if (groupId !== label.group_id) {
-      validateGroupCapacity(db, groupId, workspaceId);
-      assertNoIssueGroupConflict(db, id, groupId, workspaceId);
+  let updated: LabelRow | null = null;
+  db.transaction(() => {
+    const label = getLabel(db, id, workspaceId);
+    if (!label) throw apiError("NOT_FOUND", "Label not found");
+    const teamId = input.teamId !== undefined ? (input.teamId ?? null) : label.team_id;
+    const groupId = input.groupId !== undefined ? (input.groupId ?? null) : label.group_id;
+    const name = input.name != null ? input.name.trim() : label.name;
+    if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
+    if (teamId && !getTeamId(db, teamId, workspaceId)) {
+      throw apiError("NOT_FOUND", "Team not found");
     }
-  }
-  if (labelDuplicate(db, teamId, name, id, workspaceId)) {
-    throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
-  }
-  if (label.is_group && input.teamId !== undefined && label.team_id !== teamId) {
-    const children = workspaceId
-      ? (db
-          .query("SELECT id, name FROM labels WHERE group_id = ?1 AND workspace_id = ?2")
-          .all(label.id, workspaceId) as Array<{ id: string; name: string }>)
-      : (db.query("SELECT id, name FROM labels WHERE group_id = ?1").all(label.id) as Array<{
-          id: string;
-          name: string;
-        }>);
-    for (const child of children) {
-      if (labelDuplicate(db, teamId, child.name, child.id, workspaceId)) {
-        throw apiError("VALIDATION_FAILED", `Label ${child.name} already exists in this scope`);
+    if (label.is_group && groupId != null) {
+      throw apiError("VALIDATION_FAILED", "A label group cannot belong to another group");
+    }
+    if (!label.is_group && groupId != null) {
+      requireGroup(db, groupId, teamId, workspaceId);
+      if (groupId !== label.group_id) {
+        validateGroupCapacity(db, groupId, workspaceId);
+        assertNoIssueGroupConflict(db, id, groupId, workspaceId);
       }
     }
-  }
-
-  const sets: string[] = [];
-  const params: unknown[] = [];
-  const push = (column: string, value: unknown) => {
-    params.push(value);
-    sets.push(`${column} = ?${params.length}`);
-  };
-  if (input.name != null) push("name", name);
-  if (input.color != null) push("color", input.color);
-  if (input.description !== undefined) push("description", input.description ?? null);
-  if (input.teamId !== undefined) push("team_id", teamId);
-  if (input.groupId !== undefined) push("group_id", groupId);
-  if (sets.length > 0) {
-    params.push(id);
-    let sql = `UPDATE labels SET ${sets.join(", ")} WHERE id = ?${params.length}`;
-    if (workspaceId) {
-      params.push(workspaceId);
-      sql += ` AND workspace_id = ?${params.length}`;
+    if (labelDuplicate(db, teamId, name, id, workspaceId)) {
+      throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
     }
-    db.query(sql).run(...(params as never[]));
-  }
-
-  // A group move carries its children with it. This keeps scope checks and
-  // future assignments coherent while preserving existing issue references.
-  if (label.is_group && input.teamId !== undefined && label.team_id !== teamId) {
-    if (workspaceId) {
-      db.query("UPDATE labels SET team_id = ?1 WHERE group_id = ?2 AND workspace_id = ?3").run(
-        teamId,
-        label.id,
-        workspaceId,
-      );
-    } else {
-      db.query("UPDATE labels SET team_id = ?1 WHERE group_id = ?2").run(teamId, label.id);
+    if (label.is_group && input.teamId !== undefined && label.team_id !== teamId) {
+      const children = workspaceId
+        ? (db
+            .query("SELECT id, name FROM labels WHERE group_id = ?1 AND workspace_id = ?2")
+            .all(label.id, workspaceId) as Array<{ id: string; name: string }>)
+        : (db.query("SELECT id, name FROM labels WHERE group_id = ?1").all(label.id) as Array<{
+            id: string;
+            name: string;
+          }>);
+      for (const child of children) {
+        if (labelDuplicate(db, teamId, child.name, child.id, workspaceId)) {
+          throw apiError("VALIDATION_FAILED", `Label ${child.name} already exists in this scope`);
+        }
+      }
     }
-  }
-  return (
-    getLabel(db, id, workspaceId) ??
-    (() => {
-      throw apiError("NOT_FOUND", "Label not found");
-    })()
-  );
+
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    const push = (column: string, value: unknown) => {
+      params.push(value);
+      sets.push(`${column} = ?${params.length}`);
+    };
+    if (input.name != null) push("name", name);
+    if (input.color != null) push("color", input.color);
+    if (input.description !== undefined) push("description", input.description ?? null);
+    if (input.teamId !== undefined) push("team_id", teamId);
+    if (input.groupId !== undefined) push("group_id", groupId);
+    if (sets.length > 0) {
+      params.push(id);
+      let sql = `UPDATE labels SET ${sets.join(", ")} WHERE id = ?${params.length}`;
+      if (workspaceId) {
+        params.push(workspaceId);
+        sql += ` AND workspace_id = ?${params.length}`;
+      }
+      db.query(sql).run(...(params as never[]));
+    }
+
+    // A group move carries its children with it. This keeps scope checks and
+    // future assignments coherent while preserving existing issue references.
+    if (label.is_group && input.teamId !== undefined && label.team_id !== teamId) {
+      if (workspaceId) {
+        db.query("UPDATE labels SET team_id = ?1 WHERE group_id = ?2 AND workspace_id = ?3").run(
+          teamId,
+          label.id,
+          workspaceId,
+        );
+      } else {
+        db.query("UPDATE labels SET team_id = ?1 WHERE group_id = ?2").run(teamId, label.id);
+      }
+    }
+    updated = getLabel(db, id, workspaceId);
+  })();
+  if (!updated) throw apiError("NOT_FOUND", "Label not found");
+  return updated;
 }
 
 export function archiveLabel(
@@ -334,6 +338,7 @@ export interface LabelMergeResult {
   source: LabelRow;
   target: LabelRow;
   affectedIssues: number;
+  affectedIssueIds: string[];
 }
 
 export function mergeLabels(
@@ -440,6 +445,7 @@ export function mergeLabels(
       source: getLabel(db, source.id, workspaceId)!,
       target: getLabel(db, target.id, workspaceId)!,
       affectedIssues: issueRows.length,
+      affectedIssueIds: issueRows.map(({ issue_id }) => issue_id),
     };
   })();
   return result;

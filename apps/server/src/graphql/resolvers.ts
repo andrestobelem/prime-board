@@ -191,7 +191,7 @@ import {
   reorderFavorite,
 } from "../domain/favorites.ts";
 import { mapActivity } from "../domain/activity.ts";
-import { mapIssue } from "../domain/issues.ts";
+import { mapIssue, type IssueRow } from "../domain/issues.ts";
 import {
   carryOverCycle,
   createCycle,
@@ -352,6 +352,21 @@ function emitBulkIssueUpdates(
 ): void {
   for (const issueId of issueIds) {
     const issue = lookupIssueById(context, issueId);
+    if (issue) context.events.emit("issue.updated", viewer, issueEventData(issue), changes);
+  }
+}
+
+async function emitPostgresBulkIssueUpdates(
+  context: Context,
+  viewer: ReturnType<typeof requireViewer>,
+  issueIds: string[],
+  changes: Record<string, { from: unknown; to: unknown }>,
+): Promise<void> {
+  if (!context.persistence) return;
+  for (const issueId of issueIds) {
+    const issue = await context.persistence.one<IssueRow>("SELECT * FROM issues WHERE id = $1", [
+      issueId,
+    ]);
     if (issue) context.events.emit("issue.updated", viewer, issueEventData(issue), changes);
   }
 }
@@ -2515,6 +2530,9 @@ export const resolvers = {
               args.sourceId,
               args.targetId,
             );
+            await emitPostgresBulkIssueUpdates(context, viewer, result.affectedIssueIds, {
+              labels: { from: args.sourceId, to: args.targetId },
+            });
             return {
               success: true,
               source: mapPostgresLabel(result.source),
@@ -2536,6 +2554,9 @@ export const resolvers = {
             args.targetId,
             context.workspace.workspaceId,
           );
+          emitBulkIssueUpdates(context, viewer, result.affectedIssueIds, {
+            labels: { from: args.sourceId, to: args.targetId },
+          });
           return {
             success: true,
             source: mapLabel(result.source),

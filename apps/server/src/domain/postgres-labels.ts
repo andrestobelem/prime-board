@@ -154,6 +154,9 @@ async function validateGroupCapacity(
     params.push(excludingId);
     sql += " AND id <> $2";
   }
+  // Lock the group row so the capacity check and the following insert share
+  // one serialized transaction.
+  await persistence.one("SELECT id FROM labels WHERE id = $1 FOR UPDATE", [groupId]);
   const row = await persistence.one<{ count: number }>(sql, params);
   if ((row?.count ?? 0) >= MAX_LABELS_PER_GROUP) {
     throw apiError(
@@ -201,38 +204,40 @@ export async function createPostgresLabel(
 ): Promise<PostgresLabelRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
-  const teamId = input.teamId ?? null;
-  const isGroup = Boolean(input.isGroup);
-  if (isGroup && input.groupId != null) {
-    throw apiError("VALIDATION_FAILED", "A label group cannot belong to another group");
-  }
-  await assertLabelManageAccess(persistence, viewer, teamId);
-  if (!isGroup && input.groupId != null) {
-    await requireGroup(persistence, input.groupId, teamId);
-    await validateGroupCapacity(persistence, input.groupId);
-  }
-  if (await duplicateLabel(persistence, teamId, name)) {
-    throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
-  }
-  const id = newId();
-  await persistence.execute(
-    `INSERT INTO labels
-      (id, name, color, description, team_id, created_at, archived_at, is_group, group_id, merged_into_id)
-     VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL)`,
-    [
-      id,
-      name,
-      input.color ?? "#95a2b3",
-      input.description ?? null,
-      teamId,
-      now(),
-      isGroup,
-      isGroup ? null : (input.groupId ?? null),
-    ],
-  );
-  const label = await getPostgresLabel(persistence, id);
-  if (!label) throw apiError("NOT_FOUND", "Label was not created");
-  return label;
+  return persistence.transaction(async (tx) => {
+    const teamId = input.teamId ?? null;
+    const isGroup = Boolean(input.isGroup);
+    if (isGroup && input.groupId != null) {
+      throw apiError("VALIDATION_FAILED", "A label group cannot belong to another group");
+    }
+    await assertLabelManageAccess(tx, viewer, teamId);
+    if (!isGroup && input.groupId != null) {
+      await requireGroup(tx, input.groupId, teamId);
+      await validateGroupCapacity(tx, input.groupId);
+    }
+    if (await duplicateLabel(tx, teamId, name)) {
+      throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
+    }
+    const id = newId();
+    await tx.execute(
+      `INSERT INTO labels
+        (id, name, color, description, team_id, created_at, archived_at, is_group, group_id, merged_into_id)
+       VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, NULL)`,
+      [
+        id,
+        name,
+        input.color ?? "#95a2b3",
+        input.description ?? null,
+        teamId,
+        now(),
+        isGroup,
+        isGroup ? null : (input.groupId ?? null),
+      ],
+    );
+    const label = await getPostgresLabel(tx, id);
+    if (!label) throw apiError("NOT_FOUND", "Label was not created");
+    return label;
+  });
 }
 
 export async function updatePostgresLabel(
@@ -326,6 +331,7 @@ export interface PostgresLabelMergeResult {
   source: PostgresLabelRow;
   target: PostgresLabelRow;
   affectedIssues: number;
+  affectedIssueIds: string[];
 }
 
 export async function mergePostgresLabels(
@@ -411,6 +417,7 @@ export async function mergePostgresLabels(
       source: (await getPostgresLabel(tx, source.id))!,
       target: (await getPostgresLabel(tx, target.id))!,
       affectedIssues: issues.length,
+      affectedIssueIds: issues.map(({ issue_id }) => issue_id),
     };
   });
 }
