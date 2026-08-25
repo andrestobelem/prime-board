@@ -1,8 +1,15 @@
 #!/usr/bin/env bun
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  createSqliteBackup,
+  createSqliteBackupIfPresent,
+  restoreSqliteBackup,
+  type BackupResult,
+} from "./backup.ts";
 import { parseRuntimeArgs, type RuntimeOptions } from "./options.ts";
 import {
   assertNonBareGitWorktree,
@@ -34,6 +41,9 @@ Options:
   --port PORT      HTTP port (default: 3333; moves to the next free port when implicit)
   --host HOST      HTTP bind host (default: 127.0.0.1)
   --web-dist PATH  Static UI directory (default: packaged UI)
+  --backup PATH    Create a verified SQLite backup and exit (metadata is PATH.json)
+  --restore PATH   Restore a verified backup and exit; the instance must be stopped
+  --update         Start after the pre-migration backup; refuses a live instance
   --status         Show the instance state without starting a server
   --print-env      Print shell exports without starting the server
   --help           Show this help
@@ -151,6 +161,53 @@ async function waitForHealth(
   throw new Error(`Timed out waiting for ${healthUrl(host, port)}`);
 }
 
+async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return await new Promise<boolean>((resolveExit) => {
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
+      resolveExit(false);
+    }, timeoutMs);
+    child.once("exit", () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      resolveExit(true);
+    });
+  });
+}
+
+async function stopServer(child: ChildProcess): Promise<boolean> {
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+  if (await waitForExit(child, 5_000)) return true;
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  return await waitForExit(child, 5_000);
+}
+
+function removeNewDatabase(databasePath: string): void {
+  for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    if (existsSync(path)) rmSync(path, { force: true });
+  }
+}
+
+function reserveDatabaseForAction(
+  identity: ProjectInstanceIdentity,
+  projectRoot: string,
+): () => void {
+  return acquireDatabaseReservation(identity, {
+    version: 1,
+    projectRoot,
+    databasePath: identity.databasePath,
+    pid: process.pid,
+    launcherPid: process.pid,
+    reservedAt: new Date().toISOString(),
+  });
+}
+
+function reportBackup(result: BackupResult): void {
+  console.log(`prime-board backup: ${result.backupPath}`);
+  console.log(`prime-board backup metadata: ${result.metadataPath}`);
+}
+
 function resolveProject(options: RuntimeOptions): string {
   const requested = options.projectRoot ?? options.repoRoot ?? process.cwd();
   return gitProjectRoot(resolve(requested));
@@ -200,7 +257,41 @@ const webDist = parsed.webDist ?? process.env.PRIME_BOARD_WEB_DIST ?? join(impor
 const status = await resolveInstanceStatus(identity);
 assertDatabaseCompatibility(identity, status);
 
+if (parsed.update && status.state === "running") {
+  throw new Error(
+    "Cannot update a running instance. Stop the instance first, then run prime-board --update.",
+  );
+}
 if (parsed.status) await classifyAndDescribe(identity);
+if (parsed.backupPath || parsed.restorePath) {
+  if (status.state === "running" && parsed.restorePath) {
+    throw new Error("Cannot restore while the project instance is running");
+  }
+  if (status.state === "stale") retireInstanceLock(identity);
+  const releaseActionReservation =
+    status.state === "running" ? null : reserveDatabaseForAction(identity, projectRoot);
+  try {
+    if (parsed.backupPath) {
+      const result = createSqliteBackup({
+        databasePath: identity.databasePath,
+        projectRoot,
+        destination: parsed.backupPath,
+      });
+      reportBackup(result);
+    } else if (parsed.restorePath) {
+      const result = restoreSqliteBackup({
+        backupPath: parsed.restorePath,
+        databasePath: identity.databasePath,
+        projectRoot,
+        expectedDatabasePath: identity.databasePath,
+      });
+      console.log(`prime-board restored: ${result.databasePath}`);
+    }
+  } finally {
+    releaseActionReservation?.();
+  }
+  process.exit(0);
+}
 if (parsed.printEnv) {
   if (status.state === "running" && status.record) {
     printEnvironment(
@@ -241,6 +332,7 @@ process.once("SIGINT", onSigint);
 process.once("SIGTERM", onSigterm);
 
 const portReservation = await reserveAvailablePort(requestedPort, portIsExplicit, home);
+let releasePortReservation: (() => void) | null = portReservation.release;
 const instanceId = randomUUID();
 const instanceRecord: InstanceRecord = {
   version: 1,
@@ -255,6 +347,8 @@ const instanceRecord: InstanceRecord = {
 };
 let releaseDatabaseReservation: (() => void) | null = null;
 let releaseLock: (() => void) | null = null;
+let preUpdateBackup: BackupResult | null = null;
+const databaseExistedBeforeStart = existsSync(identity.databasePath);
 try {
   releaseDatabaseReservation = acquireDatabaseReservation(identity, {
     version: 1,
@@ -266,9 +360,27 @@ try {
     reservedAt: instanceRecord.startedAt,
   });
   releaseLock = acquireInstanceLock(identity, instanceRecord);
+  try {
+    preUpdateBackup = createSqliteBackupIfPresent({
+      databasePath: identity.databasePath,
+      projectRoot,
+    });
+    if (preUpdateBackup) reportBackup(preUpdateBackup);
+  } catch (error) {
+    releaseLock?.();
+    releaseDatabaseReservation?.();
+    portReservation.release();
+    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGTERM", onSigterm);
+    throw error;
+  }
   if (receivedSignal) {
-    process.exitCode = receivedSignal === "SIGINT" ? 130 : 143;
-    process.exit();
+    releaseLock?.();
+    releaseDatabaseReservation?.();
+    releasePortReservation?.();
+    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGTERM", onSigterm);
+    process.exit(receivedSignal === "SIGINT" ? 130 : 143);
   }
 
   const environment = {
@@ -304,12 +416,40 @@ try {
   console.log(`prime-board ready: http://${hostForUrl(host)}:${portReservation.port}`);
   process.exitCode = await serverExit;
 } catch (error) {
-  if (server && !server.killed) server.kill("SIGTERM");
+  let serverStopped = true;
+  if (server) serverStopped = await stopServer(server);
+  if (serverStopped && preUpdateBackup) {
+    try {
+      const restored = restoreSqliteBackup({
+        backupPath: preUpdateBackup.backupPath,
+        databasePath: identity.databasePath,
+        projectRoot,
+        expectedDatabasePath: identity.databasePath,
+      });
+      console.error(`prime-board restored after startup failure: ${restored.databasePath}`);
+    } catch (restoreError) {
+      const cause = restoreError instanceof Error ? restoreError.message : String(restoreError);
+      throw new Error(`Runtime startup failed and database restore failed: ${cause}`, {
+        cause: restoreError,
+      });
+    }
+  } else if (!serverStopped) {
+    // Keep every reservation while the child may still write to SQLite.
+    releaseLock = null;
+    releaseDatabaseReservation = null;
+    releasePortReservation = null;
+    throw new Error(
+      `Runtime startup failed while the server was still running; backup kept at ${preUpdateBackup?.backupPath ?? "none"}`,
+      { cause: error },
+    );
+  } else if (!databaseExistedBeforeStart) {
+    removeNewDatabase(identity.databasePath);
+  }
   throw error;
 } finally {
   process.removeListener("SIGINT", onSigint);
   process.removeListener("SIGTERM", onSigterm);
   releaseLock?.();
   releaseDatabaseReservation?.();
-  portReservation.release();
+  releasePortReservation?.();
 }

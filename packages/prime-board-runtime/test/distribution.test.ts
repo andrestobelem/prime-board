@@ -138,6 +138,7 @@ function assertFreshArtifact(): void {
     JSON.parse(readFileSync(join(builtDist, "manifest.json"), "utf8")) as unknown,
     "manifest",
   );
+  expect(stringValue(manifest.runtimeVersion, "manifest.runtimeVersion")).toBe("0.1.0");
   const entries = arrayValue(manifest.files, "manifest.files");
   const manifestPaths = new Set<string>();
   for (const entryValue of entries) {

@@ -79,12 +79,16 @@ function releaseFiles(root: string, current = root): ReleaseFile[] {
   return result.sort((left, right) => left.path.localeCompare(right.path));
 }
 
+const runtimePackage = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
+  version?: string;
+};
 const files = releaseFiles(dist);
 writeFileSync(
   join(dist, "manifest.json"),
   `${JSON.stringify(
     {
       format: 1,
+      runtimeVersion: runtimePackage.version ?? "unknown",
       bun: ">=1.3.14",
       backend: "sqlite",
       platform: "bun-runtime",

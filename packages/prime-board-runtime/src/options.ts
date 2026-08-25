@@ -9,6 +9,9 @@ export interface RuntimeOptions {
   port?: number;
   host?: string;
   webDist?: string;
+  backupPath?: string;
+  restorePath?: string;
+  update?: boolean;
   status?: boolean;
   printEnv?: boolean;
   help: boolean;
@@ -52,6 +55,11 @@ export function parseRuntimeArgs(args: string[]): RuntimeOptions {
       options.printEnv = true;
       continue;
     }
+    if (name === "update") {
+      if (inlineValue !== undefined) throw new Error("--update does not accept a value");
+      options.update = true;
+      continue;
+    }
     const value = inlineValue ?? args[++index];
     if (!value || value.startsWith("--")) throw new Error(`Missing value for --${name}`);
     switch (name) {
@@ -81,11 +89,25 @@ export function parseRuntimeArgs(args: string[]): RuntimeOptions {
       case "web-dist":
         options.webDist = pathValue(value);
         break;
+      case "backup":
+        options.backupPath = pathValue(value);
+        break;
+      case "restore":
+        options.restorePath = pathValue(value);
+        break;
       default:
         throw new Error(`Unknown argument: --${name}`);
     }
   }
   if (options.printEnv && options.status)
     throw new Error("Use only one of --status and --print-env");
+  if (options.backupPath && options.restorePath)
+    throw new Error("Use only one of --backup and --restore");
+  if (
+    options.update &&
+    (options.backupPath || options.restorePath || options.status || options.printEnv)
+  ) {
+    throw new Error("Use --update only when starting the runtime");
+  }
   return options;
 }

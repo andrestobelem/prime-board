@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Inicia una instancia aislada de prime-board para otro repositorio.
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -9,6 +9,11 @@ import {
   resolveBootstrapIdentity,
   type BootstrapIdentity,
 } from "../apps/server/src/db/bootstrap-config.ts";
+import {
+  createSqliteBackupIfPresent,
+  restoreSqliteBackup,
+  type BackupResult,
+} from "../packages/prime-board-runtime/src/backup.ts";
 import { assertNonBareGitWorktree } from "../packages/prime-board-runtime/src/project.ts";
 import {
   acquireDatabaseReservation,
@@ -43,6 +48,7 @@ Options:
   --workspace-url-key KEY     Initial Workspace URL key (lowercase slug)
   --team-name NAME            Initial Team display name
   --team-key KEY              Initial Team key (1-8 alphanumeric characters)
+  --update        Start only after a pre-migration backup; refuses a live instance
   --status        Show the instance state without starting a server
   --print-env     Print shell exports without starting the server
   --help          Show this help
@@ -143,6 +149,7 @@ const { values } = parseArgs({
     "workspace-url-key": { type: "string" },
     "team-name": { type: "string" },
     "team-key": { type: "string" },
+    update: { type: "boolean" },
     status: { type: "boolean" },
     "print-env": { type: "boolean" },
     help: { type: "boolean" },
@@ -173,6 +180,12 @@ const requestedPort = parsePort(values.port ?? inheritedPort ?? "3333");
 const portIsExplicit = values.port !== undefined || inheritedPort !== undefined;
 const status = await resolveInstanceStatus(identity);
 assertDatabaseCompatibility(identity, status);
+
+if (values.update && status.state === "running") {
+  throw new Error(
+    "Cannot update a running instance. Stop the instance first, then run prime-board --update.",
+  );
+}
 
 if (values.status) {
   describeStatus(identity, status);
@@ -214,6 +227,7 @@ process.once("SIGINT", onSignal);
 process.once("SIGTERM", onSignal);
 
 const portReservation = await reserveAvailablePort(requestedPort, portIsExplicit, homedir());
+let releasePortReservation: (() => void) | null = portReservation.release;
 const port = portReservation.port;
 const instanceId = randomUUID();
 const instanceRecord: InstanceRecord = {
@@ -229,6 +243,8 @@ const instanceRecord: InstanceRecord = {
 };
 let releaseDatabaseReservation: (() => void) | null = null;
 let releaseLock: (() => void) | null = null;
+let preUpdateBackup: BackupResult | null = null;
+const databaseExistedBeforeStart = existsSync(identity.databasePath);
 try {
   releaseDatabaseReservation = acquireDatabaseReservation(identity, {
     version: 1,
@@ -250,6 +266,24 @@ try {
     );
     process.exit(0);
   }
+  throw error;
+}
+
+try {
+  preUpdateBackup = createSqliteBackupIfPresent({
+    databasePath: identity.databasePath,
+    projectRoot,
+  });
+  if (preUpdateBackup) {
+    console.error(`prime-board backup: ${preUpdateBackup.backupPath}`);
+    console.error(`prime-board backup metadata: ${preUpdateBackup.metadataPath}`);
+  }
+} catch (error) {
+  releaseLock?.();
+  releaseDatabaseReservation?.();
+  portReservation.release();
+  process.removeListener("SIGINT", onSignal);
+  process.removeListener("SIGTERM", onSignal);
   throw error;
 }
 
@@ -313,12 +347,53 @@ try {
   console.error(`prime-board ready: http://${hostForUrl(host)}:${port}`);
   exitCode = await server.exited;
 } catch (error) {
+  let serverStopped = true;
   if (server) {
-    server.kill("SIGTERM");
-    await Promise.race([
-      server.exited,
-      new Promise<number>((resolveExit) => setTimeout(() => resolveExit(1), 1_000)),
+    if (server.exitCode === null) server.kill("SIGTERM");
+    serverStopped = await Promise.race([
+      server.exited.then(() => true),
+      new Promise<boolean>((resolveExit) => setTimeout(() => resolveExit(false), 5_000)),
     ]);
+    if (!serverStopped && server.exitCode === null) {
+      server.kill("SIGKILL");
+      serverStopped = await Promise.race([
+        server.exited.then(() => true),
+        new Promise<boolean>((resolveExit) => setTimeout(() => resolveExit(false), 5_000)),
+      ]);
+    }
+  }
+  if (serverStopped && preUpdateBackup) {
+    try {
+      restoreSqliteBackup({
+        backupPath: preUpdateBackup.backupPath,
+        databasePath: identity.databasePath,
+        projectRoot,
+        expectedDatabasePath: identity.databasePath,
+      });
+      console.error(`prime-board restored after startup failure: ${identity.databasePath}`);
+    } catch (restoreError) {
+      const cause = restoreError instanceof Error ? restoreError.message : String(restoreError);
+      throw new Error(`Runtime startup failed and database restore failed: ${cause}`, {
+        cause: restoreError,
+      });
+    }
+  } else if (!serverStopped) {
+    // Keep every reservation while the child may still write to SQLite.
+    releaseLock = null;
+    releaseDatabaseReservation = null;
+    releasePortReservation = null;
+    throw new Error(
+      `Runtime startup failed while the server was still running; backup kept at ${preUpdateBackup?.backupPath ?? "none"}`,
+      { cause: error },
+    );
+  } else if (!databaseExistedBeforeStart) {
+    for (const path of [
+      identity.databasePath,
+      `${identity.databasePath}-wal`,
+      `${identity.databasePath}-shm`,
+    ]) {
+      if (existsSync(path)) rmSync(path, { force: true });
+    }
   }
   throw error;
 } finally {
@@ -326,7 +401,7 @@ try {
   process.removeListener("SIGTERM", onSignal);
   releaseLock?.();
   releaseDatabaseReservation?.();
-  portReservation.release();
+  releasePortReservation?.();
 }
 process.exit(exitCode);
 

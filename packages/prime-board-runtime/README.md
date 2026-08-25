@@ -46,6 +46,9 @@ Opciones principales:
 --port PORT      Puerto; el valor implícito busca el siguiente puerto libre
 --host HOST      Bind explícito; por defecto 127.0.0.1
 --web-dist PATH  UI alternativa
+--backup PATH    Crear un backup verificado y salir
+--restore PATH   Restaurar un backup verificado con la instancia detenida
+--update         Iniciar una versión nueva después del backup
 --status         Estado sin iniciar
 --print-env      Variables para un cliente local sin iniciar
 ```
@@ -73,16 +76,58 @@ log del agente. Guarda la key en un almacén externo con modo `0600`. Para una i
 
 ## Actualizaciones y rollback
 
-Las migraciones SQLite son versionadas y se ejecutan dentro de transacciones. El runtime activa
-`PRAGMA journal_mode = WAL` y `PRAGMA foreign_keys = ON` antes de migrar. El runner no tiene
-migraciones destructivas automáticas hacia atrás. Antes de actualizar:
+El launcher no actualiza una instancia viva. `prime-board` sin acción explícita reutiliza una
+instancia saludable y no inicia un segundo escritor. Para aplicar una versión nueva, detén la
+instancia y ejecuta `prime-board --update`. Si la instancia sigue viva, el comando falla antes de
+abrir la DB.
 
-1. Detén el runtime y copia `<db>`, `<db>-wal` y `<db>-shm` o ejecuta un backup SQLite consistente.
-2. Guarda la versión del package y verifica `dist/checksums.txt`.
-3. Instala el nuevo package y arráncalo para aplicar migraciones.
-4. Si el arranque o el health-check falla, detén el proceso, reinstala la versión anterior y
-   restaura la copia de seguridad de los tres archivos SQLite. No borres la réplica Git.
+Antes de iniciar el servidor con una DB existente, el launcher reserva la DB y crea un artefacto
+fuera del package:
 
-El archivo `dist/manifest.json` registra la versión del formato, el backend y los checksums del
-artefacto. PostgreSQL no forma parte de este runtime instalable; su migración sigue siendo
-opcional y separada.
+```text
+~/.prime-board/backups/<project>-<hash>/<timestamp>-<id>.sqlite
+~/.prime-board/backups/<project>-<hash>/<timestamp>-<id>.sqlite.json
+```
+
+El backup usa `VACUUM INTO` de SQLite desde una conexión de solo lectura. No copia `<db>-wal` ni
+`<db>-shm`. SQLite crea una imagen autocontenida con las transacciones confirmadas. El launcher
+abre esa imagen, ejecuta `integrity_check` y `foreign_key_check`, calcula SHA-256 y escribe el
+archivo y sus metadatos con reemplazo atómico. La DB y los metadatos tienen modo `0600`. El
+metadato registra la versión del runtime, la versión de Bun, la plataforma, la arquitectura, la
+versión de migración, la ruta de la DB y la identidad del proyecto.
+
+Puedes crear un backup manual sin iniciar el servidor:
+
+```bash
+prime-board --project /ruta/al/proyecto \
+  --db /ruta/segura/board.sqlite \
+  --backup /ruta/segura/board-before-update.sqlite
+```
+
+El comando escribe `board-before-update.sqlite.json`. La ruta de destino no puede ser la DB, un
+sidecar WAL ni `.prime-board/`. Para restaurar, la instancia debe estar detenida:
+
+```bash
+prime-board --project /ruta/al/proyecto \
+  --db /ruta/segura/board.sqlite \
+  --restore /ruta/segura/board-before-update.sqlite
+```
+
+El restore comprueba el checksum, la integridad SQLite y la identidad del proyecto y de la DB.
+Primero mueve la DB actual a un nombre temporal, instala la imagen verificada con `rename` y la
+vuelve a validar. Si la sustitución o la validación falla, devuelve la DB original. Las reservas
+de la DB impiden que dos proyectos escriban la misma ruta.
+
+Si la migración o el health-check inicial fallan, el launcher detiene el server y restaura el
+backup que acaba de crear. Si no puede confirmar que el server terminó, no toca la DB y conserva
+el backup para una restauración manual. Un arranque de una DB nueva no crea backup; si falla antes
+del health-check, elimina solo esa DB nueva y sus sidecars. La réplica `.prime-board/` del proyecto
+no es parte del update y nunca se borra ni se sobrescribe.
+
+El flujo necesita una ruta de backup escribible. No protege cambios sin commit de otra conexión y
+no sustituye una copia externa de largo plazo. Conserva los artefactos hasta verificar el arranque
+con la nueva versión. PostgreSQL no usa este flujo; PRB-458 solo cubre el runtime SQLite.
+
+El archivo `dist/manifest.json` registra la versión del package, el backend SQLite, Bun mínimo y
+los SHA-256 de cada archivo. `dist/checksums.txt` contiene la misma lista para validar el artefacto
+antes de instalarlo.

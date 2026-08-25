@@ -112,6 +112,13 @@ Para obtener solo las variables:
 eval "$(bun scripts/prime-board-project.ts --project /ruta/a/mi-proyecto --print-env)"
 ```
 
+Para actualizar una instalación con SQLite, detén la instancia y usa `prime-board --update`.
+El launcher crea un backup verificado con `VACUUM INTO` antes de iniciar migraciones. No copies
+`<db>-wal` ni `<db>-shm` a mano. Si el health-check inicial falla, el launcher restaura la DB y
+conserva la réplica `.prime-board/`. El procedimiento completo, los comandos `--backup` y
+`--restore`, la política de instancia viva y las limitaciones están en
+[`packages/prime-board-runtime/README.md`](packages/prime-board-runtime/README.md).
+
 La skill instalable para el agente está en
 [`.agents/skills/prime-board-workflow`](.agents/skills/prime-board-workflow). Cópiala al
 `.agents/skills/` del proyecto consumidor junto con su configuración MCP. La skill define

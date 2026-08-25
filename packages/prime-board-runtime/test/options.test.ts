@@ -40,10 +40,28 @@ describe("prime-board runtime CLI", () => {
     });
   });
 
-  test("rejects invalid ports, hosts, and unknown options", () => {
+  test("parses backup and update actions", () => {
+    expect(parseRuntimeArgs(["--backup", "/tmp/backup.sqlite"])).toEqual({
+      backupPath: "/tmp/backup.sqlite",
+      help: false,
+    });
+    expect(parseRuntimeArgs(["--update"])).toEqual({ update: true, help: false });
+    expect(parseRuntimeArgs(["--restore=/tmp/backup.sqlite"])).toEqual({
+      restorePath: "/tmp/backup.sqlite",
+      help: false,
+    });
+  });
+
+  test("rejects invalid ports, hosts, and conflicting actions", () => {
     expect(() => parseRuntimeArgs(["--port", "0"])).toThrow("Invalid port");
     expect(() => parseRuntimeArgs(["--host", "bad host"])).toThrow("Invalid host");
     expect(() => parseRuntimeArgs(["--unknown", "x"])).toThrow("Unknown argument");
     expect(() => parseRuntimeArgs(["--status=true"])).toThrow("does not accept a value");
+    expect(() => parseRuntimeArgs(["--backup", "/tmp/a", "--restore", "/tmp/b"])).toThrow(
+      "only one of --backup and --restore",
+    );
+    expect(() => parseRuntimeArgs(["--update", "--status"])).toThrow(
+      "only when starting the runtime",
+    );
   });
 });
