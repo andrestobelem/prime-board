@@ -44,6 +44,7 @@ el MVP o decisiones anteriores indican su carácter histórico.
 
 - [ADRs](adr/): decisiones con impacto en el diseño y la operación.
 - [Multi-Workspace compartido](adr/0017-multi-workspace-compartido.md): decisión vigente para Workspaces aislados en una DB y proceso.
+- [Billing, planes y uso de AI](adr/0020-billing-planes-y-uso-de-ai-fuera-del-modelo-local.md): fuera del modelo local hasta una decisión de servicio hospedado.
 - [Repositorio como fuente de verdad](adr/0004-repo-como-fuente-de-verdad.md): estado actual de la DB y de `.prime-board/`.
 
 ### Auditorías
