@@ -16,12 +16,17 @@
 // despacho no hace nada más.
 import type { RepoSync } from "../export/repo-sync.ts";
 
-/** Mutations que a propósito nunca tocan el repo — son secretos (ADR-0004). */
+/**
+ * Mutations que a propósito nunca tocan el repo: secretos o estado personal
+ * excluido de la réplica (ADR-0004).
+ */
 export const SYNC_EXCLUDED_MUTATIONS: ReadonlySet<string> = new Set([
   "apiKeyCreate",
   "apiKeyDelete",
   "webhookCreate",
   "webhookDelete",
+  "inboxMarkRead",
+  "inboxArchive",
 ]);
 
 export interface TrackedRepoSync extends RepoSync {

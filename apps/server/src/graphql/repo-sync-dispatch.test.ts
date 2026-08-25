@@ -73,24 +73,35 @@ describe("withRepoSyncDispatch", () => {
     expect(repo.syncCalls).toBe(0); // sin sync de respaldo — ya se sincronizó
   });
 
-  it("las mutations excluidas (secretos) nunca disparan sync, aunque el resolver no sincronice", () => {
+  it("las mutations excluidas nunca disparan sync, aunque el resolver no sincronice", () => {
     const repo = fakeRepo();
     const tracker = trackedRepoSync(repo);
     const wrapped = withRepoSyncDispatch({
       apiKeyCreate: (..._args: unknown[]) => ({ success: true }),
       webhookDelete: (..._args: unknown[]) => ({ success: true }),
+      inboxMarkRead: (..._args: unknown[]) => ({ success: true }),
+      inboxArchive: (..._args: unknown[]) => ({ success: true }),
     });
 
     wrapped.apiKeyCreate(null, {}, { repo: tracker });
     wrapped.webhookDelete(null, {}, { repo: tracker });
+    wrapped.inboxMarkRead(null, {}, { repo: tracker });
+    wrapped.inboxArchive(null, {}, { repo: tracker });
 
     expect(repo.syncCalls).toBe(0);
     expect(repo.syncIssueCalls).toEqual([]);
   });
 
-  it("SYNC_EXCLUDED_MUTATIONS son exactamente las 4 de secretos, declaradas por nombre", () => {
+  it("SYNC_EXCLUDED_MUTATIONS declara secretos y estado personal excluido", () => {
     expect([...SYNC_EXCLUDED_MUTATIONS].sort()).toEqual(
-      ["apiKeyCreate", "apiKeyDelete", "webhookCreate", "webhookDelete"].sort(),
+      [
+        "apiKeyCreate",
+        "apiKeyDelete",
+        "inboxArchive",
+        "inboxMarkRead",
+        "webhookCreate",
+        "webhookDelete",
+      ].sort(),
     );
   });
 
