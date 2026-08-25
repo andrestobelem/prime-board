@@ -1,0 +1,141 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap">
+  <style>
+    body { margin: 0; background: #1e1e2e; color: #cdd6f4; font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased; }
+    a { color: #cba6f7; text-decoration: none; }
+    a:hover { color: #b4befe; }
+  </style>
+</helmet>
+<div style="display: flex; flex-direction: column; gap: 24px; padding: 40px; background: #1e1e2e;">
+
+  <div style="display: flex; flex-direction: column; gap: 4px; padding-bottom: 20px; border-bottom: 1px solid #45475a;">
+    <span style="color: #cba6f7; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;">Prime Board · Design System</span>
+    <h1 style="margin: 0; font-size: 22px; letter-spacing: -0.2px; color: #cdd6f4;">Temas</h1>
+    <p style="margin: 0; color: #bac2de; font-size: 13px;">Seis temas resueltos en <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #313244; padding: 1px 5px; border-radius: 4px;">html[data-theme]</span>; los mismos tokens semánticos cambian de valor.</p>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 150px repeat(11, minmax(0, 1fr)); gap: 10px 6px; align-items: center;">
+    <span style="font-size: 10px; color: #a6adc8;">Tema</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">bg</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">sidebar</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">surface</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">hover</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">border</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">text</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">muted</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">accent</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">danger</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">started</span>
+    <span style="font-size: 9px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">done</span>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <span style="font-size: 13px; font-weight: 500; color: #cdd6f4;">Mocha</span>
+      <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">catppuccin-mocha</span>
+    </div>
+    <div title="#1e1e2e" style="height: 36px; border-radius: 4px; background: #1e1e2e; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#181825" style="height: 36px; border-radius: 4px; background: #181825; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#313244" style="height: 36px; border-radius: 4px; background: #313244; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#45475a" style="height: 36px; border-radius: 4px; background: #45475a; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#585b70" style="height: 36px; border-radius: 4px; background: #585b70; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#cdd6f4" style="height: 36px; border-radius: 4px; background: #cdd6f4; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#bac2de" style="height: 36px; border-radius: 4px; background: #bac2de; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#cba6f7" style="height: 36px; border-radius: 4px; background: #cba6f7; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#f38ba8" style="height: 36px; border-radius: 4px; background: #f38ba8; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#f9e2af" style="height: 36px; border-radius: 4px; background: #f9e2af; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#a6e3a1" style="height: 36px; border-radius: 4px; background: #a6e3a1; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <span style="font-size: 13px; font-weight: 500; color: #cdd6f4;">Macchiato</span>
+      <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">catppuccin-macchiato</span>
+    </div>
+    <div title="#24273a" style="height: 36px; border-radius: 4px; background: #24273a; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#1e2030" style="height: 36px; border-radius: 4px; background: #1e2030; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#363a4f" style="height: 36px; border-radius: 4px; background: #363a4f; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#494d64" style="height: 36px; border-radius: 4px; background: #494d64; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#5b6078" style="height: 36px; border-radius: 4px; background: #5b6078; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#cad3f5" style="height: 36px; border-radius: 4px; background: #cad3f5; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#b8c0e0" style="height: 36px; border-radius: 4px; background: #b8c0e0; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#c6a0f6" style="height: 36px; border-radius: 4px; background: #c6a0f6; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#ed8796" style="height: 36px; border-radius: 4px; background: #ed8796; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#eed49f" style="height: 36px; border-radius: 4px; background: #eed49f; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#a6da95" style="height: 36px; border-radius: 4px; background: #a6da95; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <span style="font-size: 13px; font-weight: 500; color: #cdd6f4;">Frappé</span>
+      <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">catppuccin-frappe</span>
+    </div>
+    <div title="#303446" style="height: 36px; border-radius: 4px; background: #303446; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#292c3c" style="height: 36px; border-radius: 4px; background: #292c3c; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#414559" style="height: 36px; border-radius: 4px; background: #414559; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#51576d" style="height: 36px; border-radius: 4px; background: #51576d; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#626880" style="height: 36px; border-radius: 4px; background: #626880; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#c6d0f5" style="height: 36px; border-radius: 4px; background: #c6d0f5; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#b5bfe2" style="height: 36px; border-radius: 4px; background: #b5bfe2; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#ca9ee6" style="height: 36px; border-radius: 4px; background: #ca9ee6; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#e78284" style="height: 36px; border-radius: 4px; background: #e78284; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#e5c890" style="height: 36px; border-radius: 4px; background: #e5c890; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#a6d189" style="height: 36px; border-radius: 4px; background: #a6d189; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <span style="font-size: 13px; font-weight: 500; color: #cdd6f4;">Latte</span>
+      <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">catppuccin-latte</span>
+    </div>
+    <div title="#eff1f5" style="height: 36px; border-radius: 4px; background: #eff1f5; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#e6e9ef" style="height: 36px; border-radius: 4px; background: #e6e9ef; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#ccd0da" style="height: 36px; border-radius: 4px; background: #ccd0da; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#bcc0cc" style="height: 36px; border-radius: 4px; background: #bcc0cc; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#acb0be" style="height: 36px; border-radius: 4px; background: #acb0be; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#4c4f69" style="height: 36px; border-radius: 4px; background: #4c4f69; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#5c5f77" style="height: 36px; border-radius: 4px; background: #5c5f77; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#8839ef" style="height: 36px; border-radius: 4px; background: #8839ef; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#d20f39" style="height: 36px; border-radius: 4px; background: #d20f39; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#df8e1d" style="height: 36px; border-radius: 4px; background: #df8e1d; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#40a02b" style="height: 36px; border-radius: 4px; background: #40a02b; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <span style="font-size: 13px; font-weight: 500; color: #cdd6f4;">Dark</span>
+      <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">dark (legacy)</span>
+    </div>
+    <div title="#0f1011" style="height: 36px; border-radius: 4px; background: #0f1011; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#131416" style="height: 36px; border-radius: 4px; background: #131416; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#17181b" style="height: 36px; border-radius: 4px; background: #17181b; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#1d1e22" style="height: 36px; border-radius: 4px; background: #1d1e22; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#26282d" style="height: 36px; border-radius: 4px; background: #26282d; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#e2e3e5" style="height: 36px; border-radius: 4px; background: #e2e3e5; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#8a8f98" style="height: 36px; border-radius: 4px; background: #8a8f98; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#5e6ad2" style="height: 36px; border-radius: 4px; background: #5e6ad2; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#eb5757" style="height: 36px; border-radius: 4px; background: #eb5757; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#f2c94c" style="height: 36px; border-radius: 4px; background: #f2c94c; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#5e6ad2" style="height: 36px; border-radius: 4px; background: #5e6ad2; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <span style="font-size: 13px; font-weight: 500; color: #cdd6f4;">Light</span>
+      <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">light (legacy)</span>
+    </div>
+    <div title="#ffffff" style="height: 36px; border-radius: 4px; background: #ffffff; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#f7f8f8" style="height: 36px; border-radius: 4px; background: #f7f8f8; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#f1f2f4" style="height: 36px; border-radius: 4px; background: #f1f2f4; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#e8eaec" style="height: 36px; border-radius: 4px; background: #e8eaec; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#d9dbdf" style="height: 36px; border-radius: 4px; background: #d9dbdf; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#282a30" style="height: 36px; border-radius: 4px; background: #282a30; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#6b6f76" style="height: 36px; border-radius: 4px; background: #6b6f76; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#5e6ad2" style="height: 36px; border-radius: 4px; background: #5e6ad2; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#d94b4b" style="height: 36px; border-radius: 4px; background: #d94b4b; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#f2c94c" style="height: 36px; border-radius: 4px; background: #f2c94c; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+    <div title="#5e6ad2" style="height: 36px; border-radius: 4px; background: #5e6ad2; border: 1px solid rgba(205, 214, 244, 0.12);"></div>
+  </div>
+
+  <span style="font-size: 11px; color: #a6adc8; line-height: 1.5;">La preferencia "system" resuelve a Mocha (oscuro) o Latte (claro) según prefers-color-scheme. Dark y Light (estética Linear) se conservan solo para preferencias ya guardadas.</span>
+
+</div>
+</x-dc>
+</body>
+</html>

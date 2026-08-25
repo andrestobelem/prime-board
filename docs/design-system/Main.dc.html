@@ -1,0 +1,225 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap">
+  <style>
+    body { margin: 0; background: #1e1e2e; color: #cdd6f4; font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased; }
+    a { color: #cba6f7; text-decoration: none; }
+    a:hover { color: #b4befe; }
+    svg.icon { flex-shrink: 0; display: block; }
+  </style>
+</helmet>
+<div style="display: flex; flex-direction: column; gap: 28px; padding: 40px; background: #1e1e2e;">
+
+  <div style="display: flex; flex-direction: column; gap: 4px; padding-bottom: 20px; border-bottom: 1px solid #45475a;">
+    <span style="color: #cba6f7; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;">Prime Board · Design System</span>
+    <h1 style="margin: 0; font-size: 22px; letter-spacing: -0.2px; color: #cdd6f4;">Fundamentos</h1>
+    <p style="margin: 0; color: #bac2de; font-size: 13px;">Tokens semánticos de <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #313244; padding: 1px 5px; border-radius: 4px;">apps/web/src/styles.css</span>, resueltos en Catppuccin Mocha (tema oscuro por defecto).</p>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 12px;">
+    <span style="font-size: 12px; font-weight: 600; color: #bac2de;">Color — tokens semánticos</span>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px;">
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #1e1e2e; border: 1px solid #45475a;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--bg</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#1e1e2e</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #181825; border: 1px solid #45475a;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--bg-sidebar</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#181825</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #313244; border: 1px solid #45475a;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--surface</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#313244</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #45475a;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--surface-hover</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#45475a</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #585b70;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--border</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#585b70</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #45475a;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--border-subtle</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#45475a</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #cdd6f4;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--text</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#cdd6f4</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #bac2de;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--text-muted</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#bac2de</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #a6adc8;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--text-faint</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#a6adc8</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #cba6f7;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--accent</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#cba6f7</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #b4befe;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--accent-hover</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#b4befe</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 52px; border-radius: 6px; background: #f38ba8;"></div>
+        <span style="font-size: 12px; color: #cdd6f4;">--danger</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#f38ba8</span>
+      </div>
+    </div>
+    <span style="font-size: 11px; color: #a6adc8;">--accent-contrast: #1e1e2e (texto sobre accent) · --selection: color-mix(#9399b2 25%, transparent) · --danger-bg / --danger-border: color-mix(danger 12% / 40%, transparent) · --radius: 6px</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 12px;">
+    <span style="font-size: 12px; font-weight: 600; color: #bac2de;">Color — estados del workflow</span>
+    <div style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px;">
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 36px; border-radius: 6px; background: #fab387;"></div>
+        <span style="font-size: 11px; color: #cdd6f4;">--status-triage</span>
+        <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#fab387</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 36px; border-radius: 6px; background: #6c7086;"></div>
+        <span style="font-size: 11px; color: #cdd6f4;">--status-backlog</span>
+        <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#6c7086</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 36px; border-radius: 6px; background: #bac2de;"></div>
+        <span style="font-size: 11px; color: #cdd6f4;">--status-unstarted</span>
+        <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#bac2de</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 36px; border-radius: 6px; background: #f9e2af;"></div>
+        <span style="font-size: 11px; color: #cdd6f4;">--status-started</span>
+        <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#f9e2af</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 36px; border-radius: 6px; background: #a6e3a1;"></div>
+        <span style="font-size: 11px; color: #cdd6f4;">--status-completed</span>
+        <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#a6e3a1</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="height: 36px; border-radius: 6px; background: #6c7086;"></div>
+        <span style="font-size: 11px; color: #cdd6f4;">--status-canceled</span>
+        <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#6c7086</span>
+      </div>
+    </div>
+    <span style="font-size: 11px; color: #a6adc8;">--priority-urgent comparte el valor de --status-triage (#fab387). El único nivel de prioridad con color propio es Urgent.</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 12px;">
+    <span style="font-size: 12px; font-weight: 600; color: #bac2de;">Tipografía — Inter, base 16px / 1.4 (escala PRB-557)</span>
+    <div style="display: flex; flex-direction: column; gap: 0px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #313244;">
+        <span style="font-size: 28px; font-weight: 700; color: #cdd6f4;">Título de documento</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">28px · 700 — .document-page h1</span>
+      </div>
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #313244;">
+        <span style="font-size: 22px; font-weight: 700; letter-spacing: -0.2px; color: #cdd6f4;">Encabezado de settings</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">22px · 700 · ls -0.2px — .settings-page-header h1</span>
+      </div>
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #313244;">
+        <span style="font-size: 20px; font-weight: 600; color: #cdd6f4;">Título de issue</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">20px · 600 — .issue-title-input</span>
+      </div>
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #313244;">
+        <span style="font-size: 16px; font-weight: 700; color: #cdd6f4;">Título de modal</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">16px · 700 — .modal-header h2, .settings-panel-header h2</span>
+      </div>
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #313244;">
+        <span style="font-size: 16px; color: #cdd6f4;">Cuerpo base: filas de issues, navegación, formularios.</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">16px · 400 · lh 1.4 — body, .sidebar</span>
+      </div>
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #313244;">
+        <span style="font-size: 15px; color: #bac2de;">Controles: botones, tabs, menús, toolbars.</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">15px · 400–500 — .btn, .tabs, menús</span>
+      </div>
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #313244;">
+        <span style="font-size: 14px; color: #a6adc8;">Metadatos: identifiers, meta de comentarios, actividad.</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">14px — .identifier, .comment .meta, .state-group-header</span>
+      </div>
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #313244;">
+        <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.4px; text-transform: uppercase; color: #a6adc8;">Etiqueta de sección</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">11px · 500 · uppercase · ls 0.4px — .sidebar .section</span>
+      </div>
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0;">
+        <span style="font-size: 10px; font-weight: 600; letter-spacing: 0.4px; color: #bac2de; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">PRB</span>
+        <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">10px · 600 · mono — kbd, .workspace-team-key</span>
+      </div>
+    </div>
+    <span style="font-size: 11px; color: #a6adc8;">PRB-557 subió la escala visible: base y navegación 16px, controles 15px, metadatos 14px, .btn.compact 13px. No cambian: labels compactos y secciones (11px), kbd y team keys (10px), ni los tamaños del board card (13/12/11px).</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 12px;">
+    <span style="font-size: 12px; font-weight: 600; color: #bac2de;">Forma, profundidad y medidas</span>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px;">
+      <div style="display: flex; flex-direction: column; gap: 12px; padding: 14px; background: #181825; border: 1px solid #45475a; border-radius: 8px;">
+        <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.4px; text-transform: uppercase; color: #a6adc8;">Radios</span>
+        <div style="display: flex; align-items: flex-end; gap: 12px;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+            <div style="width: 40px; height: 40px; background: #313244; border: 1px solid #585b70; border-radius: 4px;"></div>
+            <span style="font-size: 10px; color: #a6adc8;">4 · kbd</span>
+          </div>
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+            <div style="width: 40px; height: 40px; background: #313244; border: 1px solid #585b70; border-radius: 6px;"></div>
+            <span style="font-size: 10px; color: #a6adc8;">6 · base</span>
+          </div>
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+            <div style="width: 40px; height: 40px; background: #313244; border: 1px solid #585b70; border-radius: 8px;"></div>
+            <span style="font-size: 10px; color: #a6adc8;">8 · menú</span>
+          </div>
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+            <div style="width: 40px; height: 40px; background: #313244; border: 1px solid #585b70; border-radius: 10px;"></div>
+            <span style="font-size: 10px; color: #a6adc8;">10 · modal</span>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 12px; padding: 14px; background: #181825; border: 1px solid #45475a; border-radius: 8px;">
+        <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.4px; text-transform: uppercase; color: #a6adc8;">Sombras</span>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="height: 30px; border-radius: 6px; background: #313244; box-shadow: 0 8px 24px rgb(0 0 0 / 30%); display: flex; align-items: center; padding: 0 10px;">
+            <span style="font-size: 10px; color: #a6adc8;">popup · 0 8 24 / 30%</span>
+          </div>
+          <div style="height: 30px; border-radius: 6px; background: #313244; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35); display: flex; align-items: center; padding: 0 10px;">
+            <span style="font-size: 10px; color: #a6adc8;">popover · 0 16 40 / 35%</span>
+          </div>
+          <div style="height: 30px; border-radius: 6px; background: #313244; box-shadow: 0 16px 60px rgba(0, 0, 0, 0.5); display: flex; align-items: center; padding: 0 10px;">
+            <span style="font-size: 10px; color: #a6adc8;">modal · 0 16 60 / 50%</span>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 12px; padding: 14px; background: #181825; border: 1px solid #45475a; border-radius: 8px;">
+        <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.4px; text-transform: uppercase; color: #a6adc8;">Focus y medidas</span>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <button style="align-self: flex-start; background: #313244; color: #cdd6f4; border: 1px solid #585b70; border-radius: 6px; padding: 5px 12px; font-family: inherit; font-size: 12px; font-weight: 500; outline: 2px solid #cba6f7; outline-offset: 2px; cursor: pointer;">:focus-visible</button>
+          <span style="font-size: 11px; color: #bac2de;">Sidebar 220px · Panel de props 260px · Columna de board 280px</span>
+          <span style="font-size: 11px; color: #a6adc8;">Anillo de foco: outline 2px --accent, offset 2px.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

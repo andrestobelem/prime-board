@@ -33,6 +33,8 @@ el MVP o decisiones anteriores indican su carácter histórico.
 - [Especificación técnica del MVP](specs/mvp.md): especificación histórica; no es el contrato actual.
 - [Contrato de migración Linear → prime-board](specs/migracion-linear.md): entradas y salidas de la migración.
 - [Relevamiento de Linear](relevamiento-linear.md): inventario usado como referencia histórica.
+- [Design system de la UI web](design-system.md): tokens, temas, tipografía, componentes,
+  iconografía y patrones de `apps/web`; incluye el [canvas visual](design-system/prime-board-design-system.html).
 
 ### Contratos para agentes
 
