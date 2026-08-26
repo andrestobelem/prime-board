@@ -377,6 +377,7 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     type: String!
     actor: Actor!
+    workspaceId: ID!
     payload: JSON!
     createdAt: DateTime!
   }
@@ -621,6 +622,7 @@ export const typeDefs = /* GraphQL */ `
     url: String!
     events: [String!]!
     enabled: Boolean!
+    workspaceId: ID!
     teamId: ID
     createdAt: DateTime!
   }

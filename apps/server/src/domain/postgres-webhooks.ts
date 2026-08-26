@@ -52,12 +52,13 @@ function validateInput(input: { url: string; secret?: string | null; events?: st
   return { url: input.url, secret, events };
 }
 
-export function mapPostgresWebhook(row: PostgresWebhookRow) {
+export function mapPostgresWebhook(row: PostgresWebhookRow, effectiveWorkspaceId?: string) {
   return {
     id: row.id,
     url: row.url,
     events: parseEvents(row.events),
     enabled: row.enabled === true || row.enabled === 1,
+    workspaceId: row.workspace_id ?? effectiveWorkspaceId ?? null,
     teamId: row.team_id,
     createdAt: row.created_at,
   };

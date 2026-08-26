@@ -29,6 +29,8 @@ export interface DomainEvent {
   readonly aggregateKey: string;
   readonly type: string;
   readonly actor: EventActor;
+  /** Effective Workspace for scoped events. Legacy events may omit it. */
+  readonly workspaceId?: string;
   readonly occurredAt: string;
   readonly causationId?: string;
   readonly correlationId?: string;
@@ -92,6 +94,7 @@ const ENVELOPE_KEYS = new Set([
   "aggregateKey",
   "type",
   "actor",
+  "workspaceId",
   "occurredAt",
   "causationId",
   "correlationId",
@@ -263,6 +266,7 @@ export function validateDomainEvent(input: unknown): DomainEvent {
   assertString(input.aggregate, "aggregate");
   assertString(input.aggregateKey, "aggregateKey");
   assertString(input.type, "type");
+  if (hasOwn(input, "workspaceId")) assertString(input.workspaceId, "workspaceId");
   assertIsoDate(input.occurredAt);
   if (isExcludedEvent(input.aggregate, input.type)) {
     throw new EventLogValidationError("Favorites and Inbox receipts are not event-log data");

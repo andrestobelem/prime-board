@@ -114,6 +114,21 @@ describe("canonical Activity stream bridge", () => {
     }
   });
 
+  it("includes the effective Workspace in canonical Activity events", () => {
+    const event = activityToDomainEvent({
+      id: "activity-workspace-a",
+      issue_identifier: "PB-1",
+      actor_id: "actor-1",
+      actor: "agent",
+      type: "updated",
+      payload: JSON.stringify({ title: "Scoped issue" }),
+      workspace_id: "workspace-a",
+      occurred_at: "2025-01-01T00:00:00.000Z",
+    });
+    expect(event?.workspaceId).toBe("workspace-a");
+    expect(event?.payload).toEqual({ title: "Scoped issue" });
+  });
+
   it("uses the immutable Actor ID when a display name changes", () => {
     const current = activityToDomainEvent({
       id: "activity-1",

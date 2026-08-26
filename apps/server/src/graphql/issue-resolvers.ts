@@ -621,9 +621,13 @@ export const issueResolvers = {
           !apiKeyTeamsWithinLimit(context.auth, [team.id])
         )
           return [];
-        return (await listPostgresActivity(context.persistence, issue.id)).map(mapActivity);
+        return (await listPostgresActivity(context.persistence, issue.id)).map((activity) =>
+          mapActivity(activity, context.workspace.workspaceId),
+        );
       }
-      return listActivity(context.db, issue.id, context.workspace.workspaceId).map(mapActivity);
+      return listActivity(context.db, issue.id, context.workspace.workspaceId).map((activity) =>
+        mapActivity(activity, context.workspace.workspaceId),
+      );
     },
     url: (issue: MappedIssue, _args: unknown, context: Context) =>
       `http://localhost:${context.config.port}/issue/${issue.identifier}`,

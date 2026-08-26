@@ -18,12 +18,13 @@ function viewerId(viewer: ViewerRef): string {
   return typeof viewer === "string" ? viewer : viewer.id;
 }
 
-export function mapWebhook(row: WebhookRow) {
+export function mapWebhook(row: WebhookRow, effectiveWorkspaceId?: string) {
   return {
     id: row.id,
     url: row.url,
     events: typeof row.events === "string" ? (JSON.parse(row.events) as string[]) : [...row.events],
     enabled: row.enabled === 1 || row.enabled === true,
+    workspaceId: row.workspace_id ?? effectiveWorkspaceId ?? null,
     teamId: row.team_id,
     createdAt: row.created_at,
   };

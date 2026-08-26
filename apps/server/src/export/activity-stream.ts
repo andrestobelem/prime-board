@@ -16,11 +16,18 @@ export interface ActivityEventRow {
   readonly actor: string;
   readonly type: string;
   readonly payload: string;
+  /** Effective Workspace. Legacy fixtures may omit it. */
+  readonly workspace_id?: string | null;
   readonly occurred_at: string;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasActivityWorkspaceColumn(db: Database): boolean {
+  const columns = db.query("PRAGMA table_info(activity)").all() as Array<{ name: string }>;
+  return columns.some((column) => column.name === "workspace_id");
 }
 
 export function isSharedActivityType(type: string): boolean {
@@ -47,7 +54,7 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
   }
   if (!isPlainObject(payload)) return undefined;
   try {
-    return validateDomainEvent({
+    const event: Record<string, unknown> = {
       schemaVersion: CURRENT_EVENT_SCHEMA_VERSION,
       // Activity IDs and Actor IDs are immutable. Do not use the mutable
       // display name as the canonical event author.
@@ -58,7 +65,9 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
       actor: row.actor_id ?? row.actor,
       occurredAt: row.occurred_at,
       payload,
-    });
+    };
+    if (typeof row.workspace_id === "string") event.workspaceId = row.workspace_id;
+    return validateDomainEvent(event);
   } catch {
     // Never copy malformed or sensitive Activity payloads into the canonical
     // stream. The regular snapshot export remains the caller's boundary.
@@ -78,6 +87,7 @@ export function appendActivityEvents(
   }),
   onEventIds?: (eventIds: readonly string[]) => void,
 ): number {
+  const workspaceColumn = hasActivityWorkspaceColumn(db) ? "activity.workspace_id" : "NULL";
   const rows = db
     .query(
       `SELECT activity.id,
@@ -86,6 +96,7 @@ export function appendActivityEvents(
               actors.name AS actor,
               activity.type,
               activity.payload,
+              ${workspaceColumn} AS workspace_id,
               activity.created_at AS occurred_at
        FROM activity
        JOIN issues ON issues.id = activity.issue_id
