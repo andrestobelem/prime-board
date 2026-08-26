@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { EventLogWriter, serializeDomainEvent, type DomainEvent } from "./event-log.ts";
+import { areDomainEventsEquivalent, EventLogWriter, type DomainEvent } from "./event-log.ts";
 import { activityToDomainEvent, type ActivityEventRow } from "./activity-stream.ts";
 
 export interface SQLiteEventImportOptions {
@@ -210,6 +210,7 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
       actor,
       type: row.type,
       payload: row.payload,
+      workspace_id: rowWorkspaceId,
       occurred_at: row.occurred_at,
     } satisfies ActivityEventRow);
     if (!event) {
@@ -219,7 +220,7 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
     }
     const previous = seen.get(event.eventId) ?? existing.get(event.eventId);
     if (previous) {
-      if (serializeDomainEvent(previous) !== serializeDomainEvent(event)) {
+      if (!areDomainEventsEquivalent(previous, event)) {
         ambiguous += 1;
         warning(warnings, "ambiguous", event.eventId);
       } else {

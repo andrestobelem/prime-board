@@ -312,8 +312,28 @@ export function serializeDomainEvent(event: DomainEvent): string {
   return `${canonicalJson(validated as unknown as JsonValue)}\n`;
 }
 
-function eventFingerprint(event: DomainEvent): string {
-  return canonicalJson(event as unknown as JsonValue);
+/**
+ * Compare event data across the Workspace-scope migration.
+ *
+ * A missing workspaceId is the explicit legacy representation. It is
+ * compatible with a scoped copy when all other event data is equal. Two
+ * scoped copies still need the same workspaceId, so a real scope or payload
+ * change remains a conflict.
+ */
+export function areDomainEventsEquivalent(left: DomainEvent, right: DomainEvent): boolean {
+  const { workspaceId: _leftWorkspaceId, ...leftWithoutWorkspace } = left;
+  const { workspaceId: _rightWorkspaceId, ...rightWithoutWorkspace } = right;
+  if (
+    canonicalJson(leftWithoutWorkspace as unknown as JsonValue) !==
+    canonicalJson(rightWithoutWorkspace as unknown as JsonValue)
+  ) {
+    return false;
+  }
+  return (
+    left.workspaceId === undefined ||
+    right.workspaceId === undefined ||
+    left.workspaceId === right.workspaceId
+  );
 }
 
 function compareEvents(left: DomainEvent, right: DomainEvent): number {
@@ -408,7 +428,7 @@ function parseLog(filePath: string): DomainEvent[] {
     }
     const existing = byId.get(event.eventId);
     if (existing) {
-      if (eventFingerprint(existing) !== eventFingerprint(event)) {
+      if (!areDomainEventsEquivalent(existing, event)) {
         throw new EventLogConflictError(event.eventId);
       }
       return;
@@ -447,14 +467,13 @@ export class EventLogWriter {
     const events = eventInputs.map(validateDomainEvent);
     if (events.length === 0) return [];
 
-    const fingerprints = new Map<string, string>();
+    const eventsById = new Map<string, DomainEvent>();
     for (const event of events) {
-      const fingerprint = eventFingerprint(event);
-      const existing = fingerprints.get(event.eventId);
-      if (existing && existing !== fingerprint) {
+      const existing = eventsById.get(event.eventId);
+      if (existing && !areDomainEventsEquivalent(existing, event)) {
         throw new EventLogConflictError(event.eventId);
       }
-      fingerprints.set(event.eventId, fingerprint);
+      eventsById.set(event.eventId, event);
     }
 
     ensureDirectory(this.filePath);
@@ -468,7 +487,7 @@ export class EventLogWriter {
     for (const event of events) {
       const existing = existingEvents.get(event.eventId);
       if (existing) {
-        if (eventFingerprint(existing) !== eventFingerprint(event)) {
+        if (!areDomainEventsEquivalent(existing, event)) {
           throw new EventLogConflictError(event.eventId);
         }
         results.push({ eventId: event.eventId, appended: false });
@@ -536,7 +555,7 @@ export function mergeEventStreams(...inputs: readonly unknown[]): DomainEvent[] 
       const event = validateDomainEvent(input);
       const existing = byId.get(event.eventId);
       if (existing) {
-        if (eventFingerprint(existing) !== eventFingerprint(event)) {
+        if (!areDomainEventsEquivalent(existing, event)) {
           throw new EventLogConflictError(event.eventId);
         }
         continue;

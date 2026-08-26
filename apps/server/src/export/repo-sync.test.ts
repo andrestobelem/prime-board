@@ -298,6 +298,44 @@ try {
     }
   });
 
+  it("mantiene operativas las mutaciones tras leer un evento histórico sin scope", async () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-legacy-scope-"));
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const created = await gql(
+        isolated,
+        `mutation { issueCreate(input: { teamKey: "PB", title: "Legacy scope" }) { success } }`,
+      );
+      expect(created.errors).toBeUndefined();
+
+      const logPath = join(isolatedRoot, ".prime-board", "log", "events.jsonl");
+      const legacyLines = readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const event = JSON.parse(line) as Record<string, unknown>;
+          delete event.workspaceId;
+          return JSON.stringify(event);
+        });
+      writeFileSync(logPath, `${legacyLines.join("\n")}\n`);
+
+      const comment = await gql(
+        isolated,
+        `mutation { commentCreate(input: { issueId: "PB-1", body: "scope migration works" }) { success } }`,
+      );
+      expect(comment.errors).toBeUndefined();
+      const events = readEventLog({ rootDir: isolatedRoot });
+      expect(events).toHaveLength(2);
+      expect(events[0]?.workspaceId).toBeUndefined();
+      expect(events[1]?.workspaceId).toBe(
+        (isolated.db.query("SELECT id FROM workspace LIMIT 1").get() as { id: string }).id,
+      );
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("los cambios de metadata también se replican", async () => {
     await gql(app, `mutation { teamCreate(input: { name: "Otro", key: "OT" }) { success } }`);
     const teams = JSON.parse(

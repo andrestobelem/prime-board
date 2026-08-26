@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readEventLog } from "./event-log.ts";
+import { EventLogWriter, readEventLog } from "./event-log.ts";
 import { importSqliteActivity } from "./sqlite-event-import.ts";
 import { isSharedActivityType } from "./activity-stream.ts";
 
@@ -211,9 +211,36 @@ describe("SQLite history import", () => {
       const imported = importSqliteActivity({ db, rootDir: root, workspaceId: "workspace-1" });
       expect(imported.emitted).toBe(1);
       expect(readEventLog(root).map((event) => event.eventId)).toEqual(["workspace-1-event"]);
+      expect(readEventLog(root)[0]?.workspaceId).toBe("workspace-1");
       expect(() =>
         importSqliteActivity({ db, rootDir: root, workspaceId: "missing-workspace" }),
       ).toThrow("does not exist");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("acepta un evento legacy cuando la importación aporta el scope", () => {
+    const db = workspaceDatabase(1);
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-legacy-scope-"));
+    try {
+      addWorkspaceActivity(db, "workspace-1", "legacy-event", "issue-1");
+      const writer = new EventLogWriter({ rootDir: root });
+      writer.append({
+        schemaVersion: 1,
+        eventId: "legacy-event",
+        aggregate: "issue",
+        aggregateKey: "PB-7",
+        type: "created",
+        actor: "actor-1",
+        occurredAt: "2025-01-01T00:00:00.000Z",
+        payload: { title: "legacy-event" },
+      });
+
+      const result = importSqliteActivity({ db, rootDir: root });
+      expect(result).toMatchObject({ emitted: 0, duplicates: 1, ambiguous: 0 });
+      expect(readEventLog(root)[0]?.workspaceId).toBeUndefined();
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
