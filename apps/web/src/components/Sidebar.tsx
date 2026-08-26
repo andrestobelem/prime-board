@@ -353,8 +353,7 @@ export function Sidebar({
           <span style={{ flex: 1 }}>Initiatives</span>
           {onCreateInitiative && (
             <button
-              className="nav"
-              style={{ padding: 0, margin: 0, width: "auto" }}
+              className="icon-button"
               title="New initiative"
               onClick={() => void onCreateInitiative()}
             >
@@ -374,12 +373,7 @@ export function Sidebar({
         <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ flex: 1 }}>Views</span>
           {onCreateView && (
-            <button
-              className="nav"
-              style={{ padding: 0, margin: 0, width: "auto" }}
-              title="New view"
-              onClick={() => void onCreateView()}
-            >
+            <button className="icon-button" title="New view" onClick={() => void onCreateView()}>
               <Icon name="plus" size={12} />
             </button>
           )}
@@ -432,8 +426,7 @@ export function Sidebar({
               <span style={{ flex: 1 }}>Views</span>
               {onCreateView && (
                 <button
-                  className="nav"
-                  style={{ padding: 0, margin: 0, width: "auto" }}
+                  className="icon-button"
                   title={`New ${team.name} view`}
                   onClick={() => void onCreateView(team.id)}
                 >
@@ -446,8 +439,7 @@ export function Sidebar({
               <span style={{ flex: 1 }}>Cycles</span>
               {onCreateCycle && (
                 <button
-                  className="nav"
-                  style={{ padding: 0, margin: 0, width: "auto" }}
+                  className="icon-button"
                   title="New cycle"
                   onClick={() => void onCreateCycle(team.id)}
                 >

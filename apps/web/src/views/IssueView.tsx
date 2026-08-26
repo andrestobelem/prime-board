@@ -674,10 +674,10 @@ export function IssueView({ issueRef }: { issueRef: string }) {
                 {relation.relatedIssue.title}
               </Link>
               <button
-                className="btn"
+                className="icon-button"
                 title="Remove relation"
                 aria-label="Remove relation"
-                style={{ marginLeft: "auto", padding: "0 6px" }}
+                style={{ marginLeft: "auto" }}
                 onClick={() => removeRelation(relation.id)}
               >
                 <Icon name="x" size={12} />

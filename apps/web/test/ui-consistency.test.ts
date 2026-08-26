@@ -63,6 +63,26 @@ describe("icon buttons and keyboard focus", () => {
     expect(styles).toContain("button:focus-visible {");
     expect(styles).not.toContain("outline: none");
   });
+
+  test("uses the shared class for sidebar icon-only create controls", () => {
+    const sidebar = componentSources[1] ?? "";
+    const createActionButtons =
+      sidebar.match(/<button[\s\S]*?<Icon name="plus" size=\{12\} \/>[\s\S]*?<\/button>/g) ?? [];
+
+    expect(createActionButtons).toHaveLength(4);
+    expect(createActionButtons.every((button) => button.includes('className="icon-button"'))).toBe(
+      true,
+    );
+  });
+
+  test("uses the shared class for icon-only relation actions", () => {
+    const issueView = componentSources[3] ?? "";
+    const removeRelationButtons =
+      issueView.match(/<button[\s\S]*?aria-label="Remove relation"[\s\S]*?<\/button>/g) ?? [];
+
+    expect(removeRelationButtons).toHaveLength(1);
+    expect(removeRelationButtons[0]).toContain('className="icon-button"');
+  });
 });
 
 describe("design-system documentation", () => {
