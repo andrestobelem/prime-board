@@ -7,6 +7,7 @@ import { recordActivity } from "./activity.ts";
 
 export interface TeamRow {
   id: string;
+  workspace_id: string | null;
   name: string;
   key: string;
   description: string | null;
@@ -21,6 +22,7 @@ export interface TeamRow {
 
 export interface WorkflowStateRow {
   id: string;
+  workspace_id: string | null;
   team_id: string;
   name: string;
   type: "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled";
@@ -52,32 +54,51 @@ export function mapWorkflowState(row: WorkflowStateRow) {
   };
 }
 
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
 export function getTeam(
   db: Database,
   ref: { id?: string | null; key?: string | null },
+  workspaceId?: string,
 ): TeamRow | null {
+  const where = workspaceId ? ` AND ${workspaceClause("workspace_id", "?2")}` : "";
   if (ref.id) {
-    return db.query("SELECT * FROM teams WHERE id = ?1").get(ref.id) as TeamRow | null;
+    return (
+      workspaceId
+        ? db.query(`SELECT * FROM teams WHERE id = ?1${where}`).get(ref.id, workspaceId)
+        : db.query("SELECT * FROM teams WHERE id = ?1").get(ref.id)
+    ) as TeamRow | null;
   }
   if (ref.key) {
-    return db
-      .query("SELECT * FROM teams WHERE key = ?1")
-      .get(ref.key.toUpperCase()) as TeamRow | null;
+    return (
+      workspaceId
+        ? db
+            .query(`SELECT * FROM teams WHERE key = ?1${where}`)
+            .get(ref.key.toUpperCase(), workspaceId)
+        : db.query("SELECT * FROM teams WHERE key = ?1").get(ref.key.toUpperCase())
+    ) as TeamRow | null;
   }
   return null;
 }
 
 /** Rechaza mutaciones operativas sobre un Team archivado. */
-export function assertTeamActive(db: Database, teamId: string): TeamRow {
-  const team = getTeam(db, { id: teamId });
+export function assertTeamActive(db: Database, teamId: string, workspaceId?: string): TeamRow {
+  const team = getTeam(db, { id: teamId }, workspaceId);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
   return team;
 }
 
 /** Archiva o restaura un Team sin modificar sus recursos ni identificadores. */
-export function archiveTeam(db: Database, id: string, archived: boolean): TeamRow {
-  const team = getTeam(db, { id });
+export function archiveTeam(
+  db: Database,
+  id: string,
+  archived: boolean,
+  workspaceId?: string,
+): TeamRow {
+  const team = getTeam(db, { id }, workspaceId);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   if (archived && team.archived_at) return team;
   db.query("UPDATE teams SET archived_at = ?1, updated_at = ?2 WHERE id = ?3").run(
@@ -85,7 +106,7 @@ export function archiveTeam(db: Database, id: string, archived: boolean): TeamRo
     now(),
     id,
   );
-  return getTeam(db, { id })!;
+  return getTeam(db, { id }, workspaceId)!;
 }
 
 /**
@@ -93,15 +114,20 @@ export function archiveTeam(db: Database, id: string, archived: boolean): TeamRo
  * dependencias internas y se eliminan dentro de la misma transacción; todo
  * recurso que conserva trabajo o referencias externas bloquea la operación.
  */
-export function deleteTeam(db: Database, id: string, confirmation: string): TeamRow {
-  const initial = getTeam(db, { id });
+export function deleteTeam(
+  db: Database,
+  id: string,
+  confirmation: string,
+  workspaceId?: string,
+): TeamRow {
+  const initial = getTeam(db, { id }, workspaceId);
   if (!initial) throw apiError("NOT_FOUND", "Team not found");
   if (confirmation !== initial.key) {
     throw apiError("VALIDATION_FAILED", `Confirmation must exactly match team key ${initial.key}`);
   }
 
   db.transaction(() => {
-    const team = getTeam(db, { id });
+    const team = getTeam(db, { id }, workspaceId);
     if (!team) throw apiError("NOT_FOUND", "Team not found");
     if (confirmation !== team.key) {
       throw apiError("VALIDATION_FAILED", `Confirmation must exactly match team key ${team.key}`);
@@ -143,14 +169,30 @@ export function deleteTeam(db: Database, id: string, confirmation: string): Team
   return initial;
 }
 
-export function getWorkflowState(db: Database, id: string): WorkflowStateRow | null {
-  return db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow | null;
+export function getWorkflowState(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+): WorkflowStateRow | null {
+  const query = workspaceId
+    ? `SELECT * FROM workflow_states WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT * FROM workflow_states WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as WorkflowStateRow | null;
 }
 
-export function listTeamStates(db: Database, teamId: string): WorkflowStateRow[] {
-  return db
-    .query("SELECT * FROM workflow_states WHERE team_id = ?1 ORDER BY position")
-    .all(teamId) as WorkflowStateRow[];
+export function listTeamStates(
+  db: Database,
+  teamId: string,
+  workspaceId?: string,
+): WorkflowStateRow[] {
+  const query = workspaceId
+    ? `SELECT * FROM workflow_states WHERE team_id = ?1 AND ${workspaceClause("workspace_id", "?2")} ORDER BY position`
+    : "SELECT * FROM workflow_states WHERE team_id = ?1 ORDER BY position";
+  return (
+    workspaceId ? db.query(query).all(teamId, workspaceId) : db.query(query).all(teamId)
+  ) as WorkflowStateRow[];
 }
 
 export function createTeam(
@@ -223,15 +265,15 @@ export function createTeam(
  * a la migración 0005), cae al de menor posición, que era la regla implícita.
  */
 export function getDefaultState(db: Database, team: TeamRow): WorkflowStateRow {
+  const workspaceId = team.workspace_id ?? undefined;
   if (team.default_state_id) {
-    const state = db
-      .query("SELECT * FROM workflow_states WHERE id = ?1 AND team_id = ?2")
-      .get(team.default_state_id, team.id) as WorkflowStateRow | null;
-    if (state) return state;
+    const state = getWorkflowState(db, team.default_state_id, workspaceId);
+    if (state && state.team_id === team.id) return state;
   }
-  return db
-    .query("SELECT * FROM workflow_states WHERE team_id = ?1 ORDER BY position LIMIT 1")
-    .get(team.id) as WorkflowStateRow;
+  const states = listTeamStates(db, team.id, workspaceId);
+  const state = states[0];
+  if (!state) throw apiError("NOT_FOUND", "Team has no workflow states");
+  return state;
 }
 
 export interface TeamUpdateInput {
@@ -242,8 +284,13 @@ export interface TeamUpdateInput {
   accessPolicy?: "workspace_members" | "team_members" | null;
 }
 
-export function updateTeam(db: Database, id: string, input: TeamUpdateInput): TeamRow {
-  const team = getTeam(db, { id });
+export function updateTeam(
+  db: Database,
+  id: string,
+  input: TeamUpdateInput,
+  workspaceId?: string,
+): TeamRow {
+  const team = getTeam(db, { id }, workspaceId);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
 
   const sets: string[] = [];
@@ -285,7 +332,7 @@ export function updateTeam(db: Database, id: string, input: TeamUpdateInput): Te
       ...(params as never[]),
     );
   }
-  return getTeam(db, { id })!;
+  return getTeam(db, { id }, workspaceId)!;
 }
 
 const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"];
@@ -323,10 +370,9 @@ export function deleteWorkflowState(
   actorId: string,
   id: string,
   moveToStateId?: string | null,
+  workspaceId?: string,
 ): number {
-  const state = db
-    .query("SELECT * FROM workflow_states WHERE id = ?1")
-    .get(id) as WorkflowStateRow | null;
+  const state = getWorkflowState(db, id, workspaceId);
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
 
   const siblings = db
@@ -415,10 +461,9 @@ export function updateWorkflowState(
     color?: string | null;
     position?: number | null;
   },
+  workspaceId?: string,
 ): WorkflowStateRow {
-  const state = db
-    .query("SELECT * FROM workflow_states WHERE id = ?1")
-    .get(id) as WorkflowStateRow | null;
+  const state = getWorkflowState(db, id, workspaceId);
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
   if (input.type != null && !STATE_TYPES.includes(input.type)) {
     throw apiError("VALIDATION_FAILED", `Invalid state type: ${input.type}`);
@@ -459,7 +504,9 @@ export function updateWorkflowState(
       ...(params as never[]),
     );
   }
-  return db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow;
+  const updated = getWorkflowState(db, id, workspaceId);
+  if (!updated) throw apiError("NOT_FOUND", "Workflow state not found");
+  return updated;
 }
 
 export function createWorkflowState(
@@ -471,8 +518,9 @@ export function createWorkflowState(
     color?: string | null;
     position?: number | null;
   },
+  workspaceId?: string,
 ): WorkflowStateRow {
-  const team = getTeam(db, { id: input.teamId });
+  const team = getTeam(db, { id: input.teamId }, workspaceId);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   if (!input.name.trim()) throw apiError("VALIDATION_FAILED", "State name cannot be empty");
   if (!STATE_TYPES.includes(input.type)) {
@@ -489,7 +537,7 @@ export function createWorkflowState(
   const id = newId();
   const timestamp = now();
   db.query(
-    "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
   ).run(
     id,
     team.id,
@@ -499,6 +547,9 @@ export function createWorkflowState(
     input.position ?? maxPosition.max + 1,
     timestamp,
     timestamp,
+    workspaceId ?? team.workspace_id,
   );
-  return db.query("SELECT * FROM workflow_states WHERE id = ?1").get(id) as WorkflowStateRow;
+  const created = getWorkflowState(db, id, workspaceId);
+  if (!created) throw apiError("NOT_FOUND", "Workflow state not found");
+  return created;
 }

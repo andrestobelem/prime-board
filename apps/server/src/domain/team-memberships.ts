@@ -54,10 +54,19 @@ export function getTeamMembership(
   ) as TeamMembershipRow | null;
 }
 
-export function listTeamMemberships(db: Database, teamId: string): TeamMembershipRow[] {
-  return db
-    .query("SELECT * FROM team_memberships WHERE team_id = ?1 ORDER BY created_at, id")
-    .all(teamId) as TeamMembershipRow[];
+export function listTeamMemberships(
+  db: Database,
+  teamId: string,
+  workspaceId?: string,
+): TeamMembershipRow[] {
+  const query = workspaceId
+    ? `SELECT * FROM team_memberships
+       WHERE team_id = ?1 AND ${workspaceClause("workspace_id", "?2")}
+       ORDER BY created_at, id`
+    : "SELECT * FROM team_memberships WHERE team_id = ?1 ORDER BY created_at, id";
+  return (
+    workspaceId ? db.query(query).all(teamId, workspaceId) : db.query(query).all(teamId)
+  ) as TeamMembershipRow[];
 }
 
 export function isTeamMember(db: Database, teamId: string, actorId: string): boolean {

@@ -48,7 +48,7 @@ import {
   type RelationType,
   type StoredRelationType,
 } from "../domain/relations.ts";
-import { listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
+import { getWorkflowState, listTeamStates, mapTeam, mapWorkflowState } from "../domain/teams.ts";
 import {
   assertCanManageIssue,
   assertCanUseImportFields,
@@ -163,9 +163,7 @@ function activityReferenceTeams(context: Context, table: RefTable, value: string
     return team ? [team.id] : null;
   }
   if (table === "states") {
-    const state = context.db
-      .query("SELECT team_id FROM workflow_states WHERE id = ?1")
-      .get(value) as { team_id: string } | null;
+    const state = getWorkflowState(context.db, value, context.workspace.workspaceId);
     const team = state ? lookupTeam(context, { id: state.team_id }) : null;
     return team ? [team.id] : null;
   }
@@ -357,8 +355,12 @@ export const issueResolvers = {
         const state = await getPostgresWorkflowState(context.persistence, issue._row.state_id);
         return state ? mapPostgresWorkflowState(state) : null;
       }
-      const states = listTeamStates(context.db, issue._row.team_id);
-      return mapWorkflowState(states.find((state) => state.id === issue._row.state_id)!);
+      const state = getWorkflowState(
+        context.db,
+        issue._row.state_id,
+        context.workspace.workspaceId,
+      );
+      return state ? mapWorkflowState(state) : null;
     },
     assignee: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.assignee_id) return null;
@@ -719,9 +721,7 @@ export const issueResolvers = {
           return (lookupTeam(context, { id: value }) ?? lookupTeam(context, { key: value }))?.key;
         }
         if (table === "states") {
-          const state = context.db
-            .query("SELECT name, team_id FROM workflow_states WHERE id = ?1")
-            .get(value) as { name: string; team_id: string } | null;
+          const state = getWorkflowState(context.db, value, context.workspace.workspaceId);
           return state && lookupTeam(context, { id: state.team_id }) ? state.name : undefined;
         }
         if (table === "cycles") {

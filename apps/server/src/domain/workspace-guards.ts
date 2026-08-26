@@ -146,7 +146,7 @@ export function lookupTeam(
   context: WorkspaceLookupContext,
   ref: { id?: string | null; key?: string | null },
 ): TeamRow | null {
-  const row = getTeam(context.db, ref);
+  const row = getTeam(context.db, ref, context.workspace.workspaceId);
   if (!row) {
     assertActiveWorkspace(context);
     return null;

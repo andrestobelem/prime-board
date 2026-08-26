@@ -18,8 +18,17 @@ export function mapLabel(row: LabelRow) {
   return { id: row.id, name: row.name, color: row.color, teamId: row.team_id };
 }
 
-export function getLabel(db: Database, id: string): LabelRow | null {
-  return db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow | null;
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
+export function getLabel(db: Database, id: string, workspaceId?: string): LabelRow | null {
+  const query = workspaceId
+    ? `SELECT * FROM labels WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT * FROM labels WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as LabelRow | null;
 }
 
 export function createLabel(
@@ -30,13 +39,27 @@ export function createLabel(
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
   if (input.teamId) {
-    const team = db.query("SELECT id FROM teams WHERE id = ?1").get(input.teamId);
+    const team = workspaceId
+      ? db
+          .query(`SELECT id FROM teams WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`)
+          .get(input.teamId, workspaceId)
+      : db.query("SELECT id FROM teams WHERE id = ?1").get(input.teamId);
     if (!team) throw apiError("NOT_FOUND", "Team not found");
   }
   // UNIQUE(team_id, name) no cubre NULL en SQLite: chequeo explícito.
+  const teamScope = workspaceId ? ` AND ${workspaceClause("workspace_id", "?3")}` : "";
+  const workspaceScope = workspaceId ? ` AND ${workspaceClause("workspace_id", "?2")}` : "";
   const duplicate = input.teamId
-    ? db.query("SELECT id FROM labels WHERE team_id = ?1 AND name = ?2").get(input.teamId, name)
-    : db.query("SELECT id FROM labels WHERE team_id IS NULL AND name = ?1").get(name);
+    ? workspaceId
+      ? db
+          .query(`SELECT id FROM labels WHERE team_id = ?1 AND name = ?2${teamScope}`)
+          .get(input.teamId, name, workspaceId)
+      : db.query("SELECT id FROM labels WHERE team_id = ?1 AND name = ?2").get(input.teamId, name)
+    : workspaceId
+      ? db
+          .query(`SELECT id FROM labels WHERE team_id IS NULL AND name = ?1${workspaceScope}`)
+          .get(name, workspaceId)
+      : db.query("SELECT id FROM labels WHERE team_id IS NULL AND name = ?1").get(name);
   if (duplicate) throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
 
   const id = newId();
@@ -54,19 +77,32 @@ export function updateLabel(
   db: Database,
   id: string,
   input: { name?: string | null; color?: string | null },
+  workspaceId?: string,
 ): LabelRow {
-  const label = db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow | null;
+  const label = getLabel(db, id, workspaceId);
   if (!label) throw apiError("NOT_FOUND", "Label not found");
   if (input.name != null) {
     const name = input.name.trim();
     if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
     const duplicate = label.team_id
-      ? db
-          .query("SELECT id FROM labels WHERE team_id = ?1 AND name = ?2 AND id != ?3")
-          .get(label.team_id, name, id)
-      : db
-          .query("SELECT id FROM labels WHERE team_id IS NULL AND name = ?1 AND id != ?2")
-          .get(name, id);
+      ? workspaceId
+        ? db
+            .query(
+              `SELECT id FROM labels WHERE team_id = ?1 AND name = ?2 AND id != ?3 AND ${workspaceClause("workspace_id", "?4")}`,
+            )
+            .get(label.team_id, name, id, workspaceId)
+        : db
+            .query("SELECT id FROM labels WHERE team_id = ?1 AND name = ?2 AND id != ?3")
+            .get(label.team_id, name, id)
+      : workspaceId
+        ? db
+            .query(
+              `SELECT id FROM labels WHERE team_id IS NULL AND name = ?1 AND id != ?2 AND ${workspaceClause("workspace_id", "?3")}`,
+            )
+            .get(name, id, workspaceId)
+        : db
+            .query("SELECT id FROM labels WHERE team_id IS NULL AND name = ?1 AND id != ?2")
+            .get(name, id);
     if (duplicate)
       throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
   }
@@ -86,7 +122,9 @@ export function updateLabel(
       ...(params as never[]),
     );
   }
-  return db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow;
+  const updated = getLabel(db, id, workspaceId);
+  if (!updated) throw apiError("NOT_FOUND", "Label not found");
+  return updated;
 }
 
 /** Borra la label y la quita de todos los issues que la tenían. */
@@ -96,18 +134,16 @@ export function deleteLabel(
   id: string,
   workspaceId?: string,
 ): number {
-  const label = workspaceId
-    ? (db
-        .query("SELECT * FROM labels WHERE id = ?1 AND workspace_id = ?2")
-        .get(id, workspaceId) as LabelRow | null)
-    : (db.query("SELECT * FROM labels WHERE id = ?1").get(id) as LabelRow | null);
+  const label = getLabel(db, id, workspaceId);
   if (!label) throw apiError("NOT_FOUND", "Label not found");
   let affected = 0;
   db.transaction(() => {
     const issues = workspaceId
       ? (
           db
-            .query("SELECT issue_id FROM issue_labels WHERE label_id = ?1 AND workspace_id = ?2")
+            .query(
+              `SELECT issue_id FROM issue_labels WHERE label_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+            )
             .all(id, workspaceId) as Array<{ issue_id: string }>
         ).map((row) => row.issue_id)
       : db
@@ -116,21 +152,18 @@ export function deleteLabel(
           .map((row) => row[0] as string);
     affected = issues.length;
     if (workspaceId) {
-      db.query("DELETE FROM issue_labels WHERE label_id = ?1 AND workspace_id = ?2").run(
-        id,
-        workspaceId,
-      );
+      db.query(
+        `DELETE FROM issue_labels WHERE label_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+      ).run(id, workspaceId);
     } else {
       db.query("DELETE FROM issue_labels WHERE label_id = ?1").run(id);
     }
     const timestamp = now();
     for (const issueId of issues) {
       if (workspaceId) {
-        db.query("UPDATE issues SET updated_at = ?1 WHERE id = ?2 AND workspace_id = ?3").run(
-          timestamp,
-          issueId,
-          workspaceId,
-        );
+        db.query(
+          `UPDATE issues SET updated_at = ?1 WHERE id = ?2 AND ${workspaceClause("workspace_id", "?3")}`,
+        ).run(timestamp, issueId, workspaceId);
       } else {
         db.query("UPDATE issues SET updated_at = ?1 WHERE id = ?2").run(timestamp, issueId);
       }
@@ -145,7 +178,10 @@ export function deleteLabel(
       );
     }
     if (workspaceId) {
-      db.query("DELETE FROM labels WHERE id = ?1 AND workspace_id = ?2").run(id, workspaceId);
+      db.query(`DELETE FROM labels WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`).run(
+        id,
+        workspaceId,
+      );
     } else {
       db.query("DELETE FROM labels WHERE id = ?1").run(id);
     }
@@ -154,13 +190,21 @@ export function deleteLabel(
 }
 
 /** Labels visibles para un team: las de workspace + las propias. Sin team: todas. */
-export function listLabels(db: Database, teamId?: string | null): LabelRow[] {
+export function listLabels(db: Database, teamId?: string | null, workspaceId?: string): LabelRow[] {
+  const teamScope = workspaceId ? workspaceClause("labels.workspace_id", "?2") : "";
+  const workspaceScope = workspaceId ? workspaceClause("labels.workspace_id", "?1") : "";
   if (teamId) {
-    return db
-      .query("SELECT * FROM labels WHERE team_id IS NULL OR team_id = ?1 ORDER BY name")
-      .all(teamId) as LabelRow[];
+    const query = workspaceId
+      ? `SELECT * FROM labels WHERE (team_id IS NULL OR team_id = ?1) AND ${teamScope} ORDER BY name`
+      : "SELECT * FROM labels WHERE team_id IS NULL OR team_id = ?1 ORDER BY name";
+    return (
+      workspaceId ? db.query(query).all(teamId, workspaceId) : db.query(query).all(teamId)
+    ) as LabelRow[];
   }
-  return db.query("SELECT * FROM labels ORDER BY name").all() as LabelRow[];
+  const query = workspaceId
+    ? `SELECT * FROM labels WHERE ${workspaceScope} ORDER BY name`
+    : "SELECT * FROM labels ORDER BY name";
+  return (workspaceId ? db.query(query).all(workspaceId) : db.query(query).all()) as LabelRow[];
 }
 
 export function listIssueLabels(db: Database, issueId: string, workspaceId?: string): LabelRow[] {
@@ -168,8 +212,8 @@ export function listIssueLabels(db: Database, issueId: string, workspaceId?: str
     ? `SELECT labels.* FROM labels
        JOIN issue_labels ON issue_labels.label_id = labels.id
        WHERE issue_labels.issue_id = ?1
-         AND issue_labels.workspace_id = ?2
-         AND labels.workspace_id = ?2
+         AND ${workspaceClause("issue_labels.workspace_id", "?2")}
+         AND ${workspaceClause("labels.workspace_id", "?2")}
        ORDER BY labels.name`
     : `SELECT labels.* FROM labels
        JOIN issue_labels ON issue_labels.label_id = labels.id
@@ -181,11 +225,7 @@ export function listIssueLabels(db: Database, issueId: string, workspaceId?: str
 
 function assertApplicable(db: Database, issue: IssueRow, labelId: string): LabelRow {
   const workspaceId = issue.workspace_id ?? undefined;
-  const label = workspaceId
-    ? (db
-        .query("SELECT * FROM labels WHERE id = ?1 AND workspace_id = ?2")
-        .get(labelId, workspaceId) as LabelRow | null)
-    : (db.query("SELECT * FROM labels WHERE id = ?1").get(labelId) as LabelRow | null);
+  const label = getLabel(db, labelId, workspaceId);
   if (!label) throw apiError("NOT_FOUND", `Label not found: ${labelId}`);
   if (label.team_id !== null && label.team_id !== issue.team_id) {
     throw apiError("VALIDATION_FAILED", `Label ${label.name} belongs to another team`);
@@ -237,16 +277,10 @@ export function applyLabelOps(
     );
   }
   for (const labelId of toRemove) {
-    const label = issue.workspace_id
-      ? (db
-          .query("SELECT name FROM labels WHERE id = ?1 AND workspace_id = ?2")
-          .get(labelId, issue.workspace_id) as { name: string } | null)
-      : (db.query("SELECT name FROM labels WHERE id = ?1").get(labelId) as {
-          name: string;
-        } | null);
+    const label = getLabel(db, labelId, issue.workspace_id ?? undefined);
     if (issue.workspace_id) {
       db.query(
-        "DELETE FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2 AND workspace_id = ?3",
+        `DELETE FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2 AND ${workspaceClause("workspace_id", "?3")}`,
       ).run(issue.id, labelId, issue.workspace_id);
     } else {
       db.query("DELETE FROM issue_labels WHERE issue_id = ?1 AND label_id = ?2").run(

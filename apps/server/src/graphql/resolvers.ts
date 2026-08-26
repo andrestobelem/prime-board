@@ -521,7 +521,7 @@ export const resolvers = {
           : [];
       }
       return canAccessTeam(context.db, viewer, team.id)
-        ? listTeamStates(context.db, team.id).map(mapWorkflowState)
+        ? listTeamStates(context.db, team.id, context.workspace.workspaceId).map(mapWorkflowState)
         : [];
     },
     defaultState: async (
@@ -551,7 +551,10 @@ export const resolvers = {
           : [];
       }
       return canAccessTeam(context.db, viewer, team.id)
-        ? scopeWorkspaceRows(context, listLabels(context.db, team.id)).map(mapLabel)
+        ? scopeWorkspaceRows(
+            context,
+            listLabels(context.db, team.id, context.workspace.workspaceId),
+          ).map(mapLabel)
         : [];
     },
     projects: async (team: { id: string }, _args: unknown, context: Context) => {
@@ -612,7 +615,9 @@ export const resolvers = {
         );
       }
       return isWorkspaceAdmin(viewer) || isTeamMember(context.db, team.id, viewer.id)
-        ? listTeamMemberships(context.db, team.id).map(mapTeamMembership)
+        ? listTeamMemberships(context.db, team.id, context.workspace.workspaceId).map(
+            mapTeamMembership,
+          )
         : [];
     },
     documents: (team: { id: string }, args: { includeArchived?: boolean }, context: Context) =>
@@ -1093,9 +1098,10 @@ export const resolvers = {
         if (!team || !(isWorkspaceAdmin(viewer) || isTeamMember(context.db, team.id, viewer.id))) {
           return [];
         }
-        return scopeWorkspaceRows(context, listTeamMemberships(context.db, args.teamId)).map(
-          mapTeamMembership,
-        );
+        return scopeWorkspaceRows(
+          context,
+          listTeamMemberships(context.db, args.teamId, context.workspace.workspaceId),
+        ).map(mapTeamMembership);
       },
       labels: async (_parent: unknown, args: { team?: string }, context: Context) => {
         const viewer = requireViewer(context);
@@ -1139,7 +1145,11 @@ export const resolvers = {
         // Selectors omit inaccessible and archived Team labels while preserving workspace labels.
         return scopeWorkspaceRows(
           context,
-          listLabels(context.db, team?.archived_at ? null : args.team),
+          listLabels(
+            context.db,
+            team?.archived_at ? null : args.team,
+            context.workspace.workspaceId,
+          ),
         )
           .filter(
             (label) => label.team_id == null || canAccessTeam(context.db, viewer, label.team_id),
@@ -1331,8 +1341,8 @@ export const resolvers = {
             )
           ).map(mapPostgresCycle);
         }
-        const team = lookupTeam(context, { id: args.teamId });
-        if (!team || !canAccessTeam(context.db, viewer, team.id)) return [];
+        const team = requireTeam(context, { id: args.teamId });
+        if (!canAccessTeam(context.db, viewer, team.id)) return [];
         if (team.archived_at && !args.includeArchived) return [];
         return scopeWorkspaceRows(
           context,
@@ -1543,7 +1553,10 @@ export const resolvers = {
             };
           }
           requireTeam(context, { id: args.id });
-          return { success: true, team: mapTeam(archiveTeam(context.db, args.id, true)) };
+          return {
+            success: true,
+            team: mapTeam(archiveTeam(context.db, args.id, true, context.workspace.workspaceId)),
+          };
         },
         teamUnarchive: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
@@ -1555,7 +1568,10 @@ export const resolvers = {
             };
           }
           requireTeam(context, { id: args.id });
-          return { success: true, team: mapTeam(archiveTeam(context.db, args.id, false)) };
+          return {
+            success: true,
+            team: mapTeam(archiveTeam(context.db, args.id, false, context.workspace.workspaceId)),
+          };
         },
         teamDelete: async (
           _parent: unknown,
@@ -1591,7 +1607,12 @@ export const resolvers = {
               .query("SELECT actor_id FROM team_memberships WHERE team_id = ?1 AND role = 'owner'")
               .all(args.id) as Array<{ actor_id: string }>
           ).map((row) => row.actor_id);
-          const deleted = deleteTeam(context.db, args.id, args.confirmation);
+          const deleted = deleteTeam(
+            context.db,
+            args.id,
+            args.confirmation,
+            context.workspace.workspaceId,
+          );
           context.events.emit("team.deleted", viewer, {
             id: deleted.id,
             key: deleted.key,
@@ -1746,7 +1767,9 @@ export const resolvers = {
           }
           assertCanManageTeam(context.db, viewer, args.id);
           requireTeam(context, { id: args.id });
-          const team = mapTeam(updateTeam(context.db, args.id, args.input));
+          const team = mapTeam(
+            updateTeam(context.db, args.id, args.input, context.workspace.workspaceId),
+          );
           return { success: true, team };
         },
         teamMembershipCreate: async (
@@ -2309,9 +2332,11 @@ export const resolvers = {
               ),
             };
           }
-          const existing = getWorkflowState(context.db, args.id);
+          const existing = getWorkflowState(context.db, args.id, context.workspace.workspaceId);
           if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
-          const state = mapWorkflowState(updateWorkflowState(context.db, args.id, args.input));
+          const state = mapWorkflowState(
+            updateWorkflowState(context.db, args.id, args.input, context.workspace.workspaceId),
+          );
           return { success: true, workflowState: state };
         },
         workflowStateDelete: async (
@@ -2341,13 +2366,19 @@ export const resolvers = {
             );
             return { success: true, movedIssues };
           }
-          const existing = getWorkflowState(context.db, args.id);
+          const existing = getWorkflowState(context.db, args.id, context.workspace.workspaceId);
           if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
           const affected = context.db
             .query("SELECT id FROM issues WHERE state_id = ?1")
             .all(args.id)
             .map((row) => (row as { id: string }).id);
-          const moved = deleteWorkflowState(context.db, viewer.id, args.id, args.moveToStateId);
+          const moved = deleteWorkflowState(
+            context.db,
+            viewer.id,
+            args.id,
+            args.moveToStateId,
+            context.workspace.workspaceId,
+          );
           emitBulkIssueUpdates(context, viewer, affected, {
             state: { from: args.id, to: args.moveToStateId ?? null },
           });
@@ -2372,12 +2403,14 @@ export const resolvers = {
             );
             return { success: true, label: mapPostgresLabel(label) };
           }
-          const existing = getLabel(context.db, args.id);
+          const existing = getLabel(context.db, args.id, context.workspace.workspaceId);
           if (existing) {
             if (existing.team_id == null) assertWorkspaceAdmin(viewer);
             else assertCanManageTeam(context.db, viewer, existing.team_id);
           }
-          const label = mapLabel(updateLabel(context.db, args.id, args.input));
+          const label = mapLabel(
+            updateLabel(context.db, args.id, args.input, context.workspace.workspaceId),
+          );
           return { success: true, label };
         },
         labelDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
@@ -2390,7 +2423,7 @@ export const resolvers = {
             const affected = await deletePostgresLabel(context.persistence, viewer, args.id);
             return { success: true, affectedIssues: affected };
           }
-          const existing = getLabel(context.db, args.id);
+          const existing = getLabel(context.db, args.id, context.workspace.workspaceId);
           if (existing) {
             if (existing.team_id == null) assertWorkspaceAdmin(viewer);
             else assertCanManageTeam(context.db, viewer, existing.team_id);
@@ -2444,7 +2477,9 @@ export const resolvers = {
             };
           }
           assertCanManageTeam(context.db, viewer, args.input.teamId);
-          const workflowState = mapWorkflowState(createWorkflowState(context.db, args.input));
+          const workflowState = mapWorkflowState(
+            createWorkflowState(context.db, args.input, context.workspace.workspaceId),
+          );
           return { success: true, workflowState };
         },
         savedViewCreate: async (
