@@ -1,1 +1,58 @@
-[]
+[
+  {
+    "activityIndex": 14,
+    "actor": "admin",
+    "archivedAt": null,
+    "issue": "PRB-440",
+    "readAt": "2026-08-25T03:17:33.046Z"
+  },
+  {
+    "activityIndex": 14,
+    "actor": "Carorila",
+    "archivedAt": null,
+    "issue": "PRB-486",
+    "readAt": "2026-08-25T04:04:08.866Z"
+  },
+  {
+    "activityIndex": 12,
+    "actor": "Lucía",
+    "archivedAt": null,
+    "issue": "PRB-516",
+    "readAt": "2026-08-25T04:05:41.298Z"
+  },
+  {
+    "activityIndex": 13,
+    "actor": "Lucía",
+    "archivedAt": null,
+    "issue": "PRB-516",
+    "readAt": "2026-08-25T04:03:55.962Z"
+  },
+  {
+    "activityIndex": 12,
+    "actor": "admin",
+    "archivedAt": null,
+    "issue": "PRB-557",
+    "readAt": "2026-08-25T03:04:40.225Z"
+  },
+  {
+    "activityIndex": 7,
+    "actor": "admin",
+    "archivedAt": "2026-08-25T03:02:47.497Z",
+    "issue": "PRB-563",
+    "readAt": "2026-08-25T02:51:41.859Z"
+  },
+  {
+    "activityIndex": 12,
+    "actor": "admin",
+    "archivedAt": "2026-08-25T03:44:16.852Z",
+    "issue": "PRB-563",
+    "readAt": "2026-08-25T03:00:28.163Z"
+  },
+  {
+    "activityIndex": 13,
+    "actor": "admin",
+    "archivedAt": "2026-08-25T03:01:32.265Z",
+    "issue": "PRB-563",
+    "readAt": "2026-08-25T02:54:44.058Z"
+  }
+]

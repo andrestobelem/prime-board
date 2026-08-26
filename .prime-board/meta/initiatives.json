@@ -17,7 +17,8 @@
     "name": "Settings parity con Linear",
     "owner": "admin",
     "projects": [
-      "Settings parity con Linear"
+      "Settings parity con Linear",
+      "Soporte multi-workspace"
     ],
     "state": "planned",
     "targetDate": null,
@@ -32,6 +33,20 @@
     "owner": "admin",
     "projects": [
       "Multi-workspace readiness"
+    ],
+    "state": "planned",
+    "targetDate": null,
+    "teams": [
+      "PRB"
+    ]
+  },
+  {
+    "archived": false,
+    "description": "## Objetivo\nAgrupar el trabajo directo de PostgreSQL y su migración en prime-board.\n\n## Proyecto\n- Migración SQLite a PostgreSQL con Podman\n\n## Alcance\nIncluye 49 Issues: contrato async, driver y harness, migraciones, dominios PostgreSQL, autenticación y grants, Documents, event log y proyección, paridad, operación, documentación y pruebas directamente relacionadas.\n\nExcluye Issues que solo mencionan PostgreSQL como contexto tangencial de otros esfuerzos.\n\n## Estado\nPostgreSQL es un backend opcional con migración incremental. El Repository Source sigue siendo la autoridad prevista para el estado compartido.",
+    "name": "PostgreSQL en prime-board",
+    "owner": "admin",
+    "projects": [
+      "Migración SQLite a PostgreSQL con Podman"
     ],
     "state": "planned",
     "targetDate": null,

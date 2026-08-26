@@ -7,3 +7,5 @@
 {"actor":"admin","issue":"PRB-555","payload":{"body":"PASS independiente sobre `a7a019b`: solo 4 constantes documentales, sin relajar aserciones. Integrado en `main` como `253503c`. Validación reviewer: `public-schema.test.ts` 2/2 pass, Prettier y diff-check pasan, árbol limpio. PRB-555 queda completado."},"ts":"2026-08-24T04:39:44.090Z","type":"commented"}
 {"actor":"admin","issue":"PRB-555","payload":{"from":"Ready for Review","to":"PRB/Done"},"ts":"2026-08-24T04:39:44.200Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-555","payload":{"body":"Validación posterior a la integración `main`: `cd apps/server && bun test src` → 423 pass, 5 skip, 0 fail (428 tests, 2153 expects). La suite pública documental queda verde junto con el resto del server."},"ts":"2026-08-24T04:40:39.173Z","type":"commented"}
+{"actor":"admin","issue":"PRB-555","payload":{"from":null,"to":"Migración SQLite a PostgreSQL con Podman"},"ts":"2026-08-25T03:44:40.503Z","type":"project_changed"}
+{"actor":"admin","issue":"PRB-555","payload":{"label":"pausa"},"ts":"2026-08-25T03:57:43.633Z","type":"labeled"}

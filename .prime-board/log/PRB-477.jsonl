@@ -4,3 +4,6 @@
 {"actor":"admin","issue":"PRB-477","payload":{"type":"blocks","issue":"PRB-414"},"ts":"2026-08-21T18:37:20.623Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-477","payload":{"type":"related","issue":"PRB-527"},"ts":"2026-08-23T03:59:54.289Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-477","payload":{"type":"related","issue":"PRB-535"},"ts":"2026-08-23T03:59:56.109Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-477","payload":{"actor":"admin"},"ts":"2026-08-25T03:44:47.812Z","type":"subscribed"}
+{"actor":"admin","issue":"PRB-477","payload":{"body":"## Triage — bloqueada por ticket abierto\n\nLa relación nativa `BLOCKED_BY` con `PRB-476` sigue activa; `PRB-476` está `In Progress`. Sus slices integradas (`e2b7e15`, `d45c70f`, `c94c7fe`) cubren partes de FTS/filtros SQLite, despacho de Webhooks y membresías, pero su última evidencia deja fuera PostgreSQL, roots/nested restantes, relaciones derivadas y la matriz completa de permisos. `PRB-477` no duplica ese trabajo. Mantener en `Backlog` hasta cerrar el blocker."},"ts":"2026-08-25T04:11:38.330Z","type":"commented"}
+{"actor":"admin","issue":"PRB-477","payload":{"from":"Needs Triage","to":"PRB/Backlog"},"ts":"2026-08-25T04:12:15.245Z","type":"state_changed"}

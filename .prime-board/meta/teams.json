@@ -117,7 +117,7 @@
     "visibility": "public"
   },
   {
-    "accessPolicy": "team_members",
+    "accessPolicy": "workspace_members",
     "archived": false,
     "defaultState": "Needs Triage",
     "description": null,
@@ -150,6 +150,10 @@
       {
         "color": "#5e6ad2",
         "name": "mcp"
+      },
+      {
+        "color": "#95a2b3",
+        "name": "pausa"
       },
       {
         "color": "#eb5757",

@@ -10,3 +10,4 @@
 {"actor":"admin","issue":"PRB-441","payload":{"from":"PRB/In Progress","to":"Ready for Human"},"ts":"2026-08-23T03:57:20.941Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-441","payload":{"body":"Aprobado por revisión humana.\n\nSe verificó el commit `6c95b0c`, el worktree limpio y la evidencia reportada: `bun test` en `apps/server` (352 pass) y `apps/cli` (34 pass), sin cambios en `bun.lock`."},"ts":"2026-08-23T04:05:11.144Z","type":"commented"}
 {"actor":"admin","issue":"PRB-441","payload":{"from":"Ready for Human","to":"PRB/Done"},"ts":"2026-08-23T04:05:11.239Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-441","payload":{"label":"pausa"},"ts":"2026-08-25T03:57:33.467Z","type":"labeled"}
