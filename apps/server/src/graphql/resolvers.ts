@@ -1155,9 +1155,11 @@ export const resolvers = {
               (webhook) =>
                 !webhook.team_id || apiKeyTeamsWithinLimit(context.auth, [webhook.team_id]),
             )
-            .map(mapPostgresWebhook);
+            .map((webhook) => mapPostgresWebhook(webhook, context.workspace.workspaceId));
         }
-        return listWebhooksInWorkspace(context, viewer).map(mapWebhook);
+        return listWebhooksInWorkspace(context, viewer).map((webhook) =>
+          mapWebhook(webhook, context.workspace.workspaceId),
+        );
       },
       savedViews: async (
         _parent: unknown,
@@ -1563,7 +1565,24 @@ export const resolvers = {
           const viewer = requireViewer(context);
           assertWorkspaceAdmin(viewer);
           if (context.persistence) {
-            await deletePostgresTeam(context.persistence, args.id, args.confirmation);
+            const owners = (
+              await context.persistence.many<{ actor_id: string }>(
+                "SELECT actor_id FROM team_memberships WHERE team_id = $1 AND role = 'owner'",
+                [args.id],
+              )
+            ).map((row) => row.actor_id);
+            const deleted = await deletePostgresTeam(
+              context.persistence,
+              args.id,
+              args.confirmation,
+            );
+            context.events.emit("team.deleted", viewer, {
+              id: deleted.id,
+              key: deleted.key,
+              name: deleted.name,
+              teamId: deleted.id,
+              _teamOwnerIds: owners,
+            });
             return { success: true };
           }
           requireTeam(context, { id: args.id });
@@ -1615,6 +1634,11 @@ export const resolvers = {
             if (!access) {
               throw apiError("UNAUTHORIZED", "Workspace access is not granted");
             }
+            context.events.emitForWorkspace(row.id, "workspace.created", viewer, {
+              id: row.id,
+              name: row.name,
+              urlKey: row.url_key,
+            });
             return { success: true, workspace: mapWorkspace(access) };
           } catch (error) {
             if (error && typeof error === "object" && "extensions" in error) throw error;
@@ -1678,11 +1702,23 @@ export const resolvers = {
             const team = mapPostgresTeam(
               await createPostgresTeam(context.persistence, args.input, viewer.id),
             );
+            context.events.emit("team.created", viewer, {
+              id: team.id,
+              teamId: team.id,
+              key: team.key,
+              name: team.name,
+            });
             return { success: true, team };
           }
           const team = mapTeam(
             createTeam(context.db, args.input, viewer.id, context.workspace.workspaceId),
           );
+          context.events.emit("team.created", viewer, {
+            id: team.id,
+            teamId: team.id,
+            key: team.key,
+            name: team.name,
+          });
           return { success: true, team };
         },
         teamUpdate: async (
@@ -2167,7 +2203,11 @@ export const resolvers = {
               viewer,
               args.input,
             );
-            return { success: true, webhook: mapPostgresWebhook(row), secret };
+            return {
+              success: true,
+              webhook: mapPostgresWebhook(row, context.workspace.workspaceId),
+              secret,
+            };
           }
           if (args.input.teamId) {
             requireTeam(context, { id: args.input.teamId });
@@ -2186,7 +2226,7 @@ export const resolvers = {
             args.input,
             context.workspace.workspaceId,
           );
-          return { success: true, webhook: mapWebhook(row), secret };
+          return { success: true, webhook: mapWebhook(row, context.workspace.workspaceId), secret };
         },
         webhookDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);

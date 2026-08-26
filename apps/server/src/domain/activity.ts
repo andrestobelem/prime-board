@@ -35,11 +35,12 @@ export interface ActivityRow {
   workspace_id: string | null;
 }
 
-export function mapActivity(row: ActivityRow) {
+export function mapActivity(row: ActivityRow, effectiveWorkspaceId?: string) {
   return {
     id: row.id,
     type: row.type,
     actorId: row.actor_id,
+    workspaceId: row.workspace_id ?? effectiveWorkspaceId ?? null,
     // Uso interno: permite que el resolver de payload aplique el límite Team
     // de la issue fuente sin exponer un campo adicional en GraphQL.
     _issueId: row.issue_id,

@@ -120,17 +120,21 @@ describe("issue Workspace isolation", () => {
   it("lista Issues, comentarios y relaciones solo del Workspace seleccionado", async () => {
     const a = await gql(
       app,
-      `query { issues { nodes { id } } issue(id: \"${issueA1}\") { comments { body } relations { id } } }`,
+      `query { issues { nodes { id } } issue(id: \"${issueA1}\") { comments { body } relations { id } activity { workspaceId } } }`,
     );
     expect(a.errors).toBeUndefined();
     expect(a.data!.issues.nodes.map((row: { id: string }) => row.id)).toContain(issueA1);
     expect(a.data!.issues.nodes.map((row: { id: string }) => row.id)).not.toContain(issueB1);
     expect(a.data!.issue.comments).toEqual([{ body: "A comment" }]);
     expect(a.data!.issue.relations).toHaveLength(1);
+    expect(a.data!.issue.activity.length).toBeGreaterThan(0);
+    expect(
+      new Set(a.data!.issue.activity.map((row: { workspaceId: string }) => row.workspaceId)),
+    ).toEqual(new Set([workspaceAId]));
 
     const b = await gql(
       app,
-      `query { issues { nodes { id } } issue(id: \"${issueB1}\") { comments { body } labels { id } relations { id } } }`,
+      `query { issues { nodes { id } } issue(id: \"${issueB1}\") { comments { body } labels { id } relations { id } activity { workspaceId } } }`,
       {},
       app.apiKey,
       workspaceBKey,
@@ -141,6 +145,10 @@ describe("issue Workspace isolation", () => {
     expect(b.data!.issue.comments).toEqual([{ body: "B comment" }]);
     expect(b.data!.issue.labels).toEqual([{ id: labelB }]);
     expect(b.data!.issue.relations).toEqual([{ id: relationB }]);
+    expect(b.data!.issue.activity.length).toBeGreaterThan(0);
+    expect(
+      new Set(b.data!.issue.activity.map((row: { workspaceId: string }) => row.workspaceId)),
+    ).toEqual(new Set([workspaceBId]));
 
     expect(
       (

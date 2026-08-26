@@ -7,6 +7,9 @@ export const WEBHOOK_EVENT_NAMES = [
   "comment.created",
   "project.created",
   "project.updated",
+  "workspace.created",
+  "workspace.deleted",
+  "team.created",
   "team.deleted",
 ] as const;
 

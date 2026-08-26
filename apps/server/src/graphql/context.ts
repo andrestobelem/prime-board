@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import type { Config } from "../config.ts";
 import type { ActorRow, AuthContext } from "../auth/viewer.ts";
 import type { TrackedRepoSync } from "./repo-sync-dispatch.ts";
-import type { WebhookDispatcher } from "../webhooks/dispatcher.ts";
+import type { WebhookEventSink } from "../webhooks/dispatcher.ts";
 import type { WorkspaceContext } from "../domain/workspace-context.ts";
 import type { Persistence } from "../db/persistence.ts";
 
@@ -17,7 +17,7 @@ export interface Context {
   viewer: ActorRow | null;
   /** Credencial efectiva, incluyendo límites por key; null para requests anónimos. */
   auth: AuthContext | null;
-  events: WebhookDispatcher;
+  events: WebhookEventSink;
   /**
    * Replica del board en el repo; null si PRIME_BOARD_REPO no está configurado.
    * Es un TrackedRepoSync (AT-191): además de sync()/syncIssue() (lo único que

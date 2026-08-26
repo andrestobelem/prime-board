@@ -87,7 +87,11 @@ export function createApp({
         baseUrl,
         viewer: auth?.actor ?? null,
         auth,
-        events,
+        events: events.scoped(
+          persistence
+            ? (workspace as { id: string }).id
+            : (workspace as { workspaceId: string }).workspaceId,
+        ),
         repo: repo ? trackedRepoSync(repo) : null,
         persistence,
       };

@@ -393,6 +393,46 @@ describe("webhooks", () => {
     expect(JSON.parse(received[0]!.body).event).toBe("issue.created");
   });
 
+  it("emits Team lifecycle events with the effective Workspace", async () => {
+    received.length = 0;
+    const hook = await gql(
+      app,
+      `mutation($url: String!) {
+        webhookCreate(input: { url: $url, events: ["team.created", "team.deleted"] }) {
+          webhook { id }
+        }
+      }`,
+      { url: `http://localhost:${receiver.port}/team-lifecycle` },
+    );
+    const created = await gql(
+      app,
+      `mutation { teamCreate(input: { name: "Lifecycle team", key: "LIFE" }) { team { id key } } }`,
+    );
+    expect(created.errors).toBeUndefined();
+    await app.events.idle();
+    expect(received).toHaveLength(1);
+    const createdPayload = JSON.parse(received[0]!.body);
+    expect(createdPayload).toMatchObject({
+      event: "team.created",
+      workspaceId: expect.any(String),
+      data: { id: created.data!.teamCreate.team.id, key: "LIFE" },
+    });
+
+    await gql(app, `mutation($id: ID!) { teamDelete(id: $id, confirmation: "LIFE") { success } }`, {
+      id: created.data!.teamCreate.team.id,
+    });
+    await app.events.idle();
+    expect(received).toHaveLength(2);
+    expect(JSON.parse(received[1]!.body)).toMatchObject({
+      event: "team.deleted",
+      workspaceId: createdPayload.workspaceId,
+      data: { id: created.data!.teamCreate.team.id, key: "LIFE" },
+    });
+    await gql(app, `mutation($id: ID!) { webhookDelete(id: $id) { success } }`, {
+      id: hook.data!.webhookCreate.webhook.id,
+    });
+  });
+
   it("rechaza eventos desconocidos y acepta todos los eventos soportados", async () => {
     const before = await gql(app, `{ webhooks { id } }`);
     const bad = await gql(

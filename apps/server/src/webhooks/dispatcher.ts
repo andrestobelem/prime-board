@@ -35,6 +35,24 @@ export interface DispatcherOptions {
   log?: (message: string) => void;
 }
 
+export interface WebhookEventSink {
+  emit(
+    event: WebhookEventName,
+    actor: EventActor,
+    data: Record<string, unknown>,
+    changes?: Record<string, { from: unknown; to: unknown }>,
+  ): void;
+  /** Emits an event for a specific Workspace, including its internal scope. */
+  emitForWorkspace(
+    workspaceId: string,
+    event: WebhookEventName,
+    actor: EventActor,
+    data: Record<string, unknown>,
+    changes?: Record<string, { from: unknown; to: unknown }>,
+  ): void;
+  idle(): Promise<void>;
+}
+
 export function signPayload(secret: string, body: string): string {
   const hasher = new Bun.CryptoHasher("sha256", secret);
   hasher.update(body);
@@ -283,7 +301,7 @@ async function allAsync(values: readonly Promise<boolean>[]): Promise<boolean> {
   return resolved.every(Boolean);
 }
 
-export class WebhookDispatcher {
+export class WebhookDispatcher implements WebhookEventSink {
   private readonly pending = new Set<Promise<void>>();
 
   constructor(
@@ -294,6 +312,37 @@ export class WebhookDispatcher {
 
   /** Emite un evento a todos los webhooks suscriptos. No bloquea al caller. */
   emit(
+    event: WebhookEventName,
+    actor: EventActor,
+    data: Record<string, unknown>,
+    changes?: Record<string, { from: unknown; to: unknown }>,
+  ): void {
+    this.enqueue(event, actor, data, changes);
+  }
+
+  /** Adds the effective Workspace to an event before dispatch. */
+  emitForWorkspace(
+    workspaceId: string,
+    event: WebhookEventName,
+    actor: EventActor,
+    data: Record<string, unknown>,
+    changes?: Record<string, { from: unknown; to: unknown }>,
+  ): void {
+    this.enqueue(event, actor, { ...data, _workspaceId: workspaceId }, changes);
+  }
+
+  /** Creates the request-scoped event sink used by GraphQL resolvers. */
+  scoped(workspaceId: string): WebhookEventSink {
+    return {
+      emit: (event, actor, data, changes) =>
+        this.emitForWorkspace(workspaceId, event, actor, data, changes),
+      emitForWorkspace: (targetWorkspaceId, event, actor, data, changes) =>
+        this.emitForWorkspace(targetWorkspaceId, event, actor, data, changes),
+      idle: () => this.idle(),
+    };
+  }
+
+  private enqueue(
     event: WebhookEventName,
     actor: EventActor,
     data: Record<string, unknown>,
@@ -341,10 +390,7 @@ export class WebhookDispatcher {
       event === "team.deleted" && Array.isArray(data._teamOwnerIds)
         ? data._teamOwnerIds.filter((id): id is string => typeof id === "string")
         : [];
-    const subscribed: WebhookRow[] = [];
-    for (const hook of hooks) {
-      const events = parseEvents(hook.events);
-      if (!(events.includes("*") || events.includes(event))) continue;
+    const canReceive = async (hook: WebhookRow): Promise<boolean> => {
       const ownerCanReceive = this.persistence
         ? await postgresOwnerCanReceive(
             this.persistence,
@@ -359,35 +405,40 @@ export class WebhookDispatcher {
             sqliteWorkspaceId!,
             deletedTeamOwnerIds,
           );
-      if (
-        hook.team_id &&
-        (!teamIds.includes(hook.team_id) ||
-          !(this.persistence
-            ? await postgresOwnerCanReceive(
-                this.persistence,
-                hook.owner_id,
-                [hook.team_id],
-                deletedTeamOwnerIds,
-              )
-            : await sqliteOwnerCanReceive(
-                this.db,
-                hook.owner_id,
-                [hook.team_id],
-                sqliteWorkspaceId!,
-                deletedTeamOwnerIds,
-              )))
-      ) {
-        continue;
-      }
-      if (ownerCanReceive) subscribed.push(hook);
+      if (!ownerCanReceive) return false;
+      if (!hook.team_id) return true;
+      if (!teamIds.includes(hook.team_id)) return false;
+      return this.persistence
+        ? postgresOwnerCanReceive(
+            this.persistence,
+            hook.owner_id,
+            [hook.team_id],
+            deletedTeamOwnerIds,
+          )
+        : sqliteOwnerCanReceive(
+            this.db,
+            hook.owner_id,
+            [hook.team_id],
+            sqliteWorkspaceId!,
+            deletedTeamOwnerIds,
+          );
+    };
+    const subscribed: WebhookRow[] = [];
+    for (const hook of hooks) {
+      const events = parseEvents(hook.events);
+      if (!(events.includes("*") || events.includes(event))) continue;
+      if (await canReceive(hook)) subscribed.push(hook);
     }
     if (subscribed.length === 0) return;
 
+    const workspaceId =
+      sqliteWorkspaceId ?? (typeof data._workspaceId === "string" ? data._workspaceId : null);
     const publicData = Object.fromEntries(
       Object.entries(data).filter(([key]) => key !== "_teamOwnerIds" && key !== "_workspaceId"),
     );
     const body = JSON.stringify({
       event,
+      workspaceId,
       actor: { id: actor.id, name: actor.name, type: actor.type },
       data: publicData,
       ...(changes && Object.keys(changes).length > 0 ? { changes } : {}),
@@ -396,7 +447,7 @@ export class WebhookDispatcher {
 
     await allAsync(
       subscribed.map((hook) =>
-        this.deliver(hook, body).catch((error) => {
+        this.deliver(hook, body, () => canReceive(hook)).catch((error) => {
           this.options.log?.(
             `webhook delivery to ${safeWebhookUrl(hook.url)} failed: ${redactSecrets(String(error))}`,
           );
@@ -406,12 +457,19 @@ export class WebhookDispatcher {
     );
   }
 
-  private async deliver(hook: WebhookRow, body: string): Promise<boolean> {
+  private async deliver(
+    hook: WebhookRow,
+    body: string,
+    canReceive?: () => Promise<boolean>,
+  ): Promise<boolean> {
     const fetchFn = this.options.fetchFn ?? fetch;
     const delays = this.options.retryDelays ?? [1_000, 5_000, 25_000];
     const signature = signPayload(hook.secret, body);
 
     for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+      // Recheck membership before every attempt. A suspended or departed
+      // owner must stop an in-flight retry without deleting historical data.
+      if (canReceive && !(await canReceive())) return false;
       try {
         const response = await fetchFn(hook.url, {
           method: "POST",
