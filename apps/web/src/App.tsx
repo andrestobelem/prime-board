@@ -866,7 +866,7 @@ export function App() {
             <div className="modal-header">
               <h2 id="shortcuts-title">Keyboard shortcuts</h2>
               <button
-                className="icon-action"
+                className="icon-button"
                 aria-label="Close shortcuts"
                 onClick={() => setShortcutsOpen(false)}
               >

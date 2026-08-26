@@ -452,7 +452,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
               <span className="issue-identifier">{issue.identifier}</span>
               <div className="issue-actions">
                 <button
-                  className="issue-icon-button"
+                  className="icon-button"
                   aria-label="Issue actions"
                   aria-expanded={actionsOpen}
                   onClick={() => setActionsOpen((open) => !open)}
@@ -501,7 +501,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
                 {subscriptionButtonLabel(issue.subscribers, result.data?.viewer.id)}
               </button>
               <button
-                className="issue-icon-button"
+                className="icon-button"
                 aria-label="Previous issue"
                 disabled={!previousIssue || navigation.loading || navigationLoading}
                 onClick={() => previousIssue && navigate(`/issue/${previousIssue}`)}
@@ -509,7 +509,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
                 ‹
               </button>
               <button
-                className="issue-icon-button"
+                className="icon-button"
                 aria-label="Next issue"
                 disabled={!nextIssue || navigation.loading || navigationLoading}
                 onClick={() => nextIssue && navigate(`/issue/${nextIssue}`)}

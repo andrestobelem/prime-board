@@ -384,7 +384,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
               </div>
               {canManage && (
                 <button
-                  className="icon-action danger"
+                  className="btn compact danger"
                   aria-label={`Remove ${membership.actor.name}`}
                   disabled={membershipSaving}
                   onClick={() =>
@@ -512,7 +512,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     </button>
                   )}
                   <button
-                    className="icon-action danger"
+                    className="icon-button danger"
                     aria-label={`Delete ${state.name}`}
                     title="Delete state"
                     disabled={!canManage || stateSaving}
@@ -523,7 +523,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     <Icon name="x" size={14} />
                   </button>
                   <button
-                    className="icon-action"
+                    className="icon-button"
                     aria-label={`Move ${state.name} up`}
                     title="Move up"
                     disabled={!canManage || stateSaving || index === 0}
@@ -532,7 +532,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     <Icon name="arrow-up" size={14} />
                   </button>
                   <button
-                    className="icon-action"
+                    className="icon-button"
                     aria-label={`Move ${state.name} down`}
                     title="Move down"
                     disabled={!canManage || stateSaving || index === team.states.length - 1}
@@ -625,7 +625,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     onChange={(event) => void updateLabel(label.id, { color: event.target.value })}
                   />
                   <button
-                    className="icon-action danger"
+                    className="icon-button danger"
                     aria-label={`Delete ${label.name}`}
                     title="Delete label"
                     disabled={!canManageLabel || labelSaving}

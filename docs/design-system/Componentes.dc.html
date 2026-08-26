@@ -47,10 +47,11 @@
         <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">.btn.compact</span>
       </div>
       <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px;">
-        <button style="width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: #313244; border: 1px solid #585b70; border-radius: 6px; color: #cdd6f4; cursor: pointer;">
+        <button style="width: 28px; height: 28px; min-width: 28px; flex: 0 0 28px; display: inline-flex; align-items: center; justify-content: center; background: #313244; border: 1px solid #585b70; border-radius: 6px; color: #cdd6f4; cursor: pointer;">
           <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="M10 12h4"></path></svg>
         </button>
-        <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">.icon-action:hover</span>
+        <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">.icon-button:hover</span>
+        <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">28×28 desktop · 44×44 móvil</span>
       </div>
     </div>
   </div>
@@ -59,15 +60,15 @@
     <span style="font-size: 12px; font-weight: 600; color: #bac2de;">Inputs</span>
     <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start;">
       <div style="display: flex; flex-direction: column; gap: 6px;">
-        <input placeholder="Search issues…" style="font-family: inherit; font-size: 16px; color: #cdd6f4; background: #313244; border: 1px solid #585b70; border-radius: 6px; padding: 6px 8px; outline: none; width: 100%; box-sizing: border-box;">
+        <input placeholder="Search issues…" style="font-family: inherit; font-size: 16px; color: #cdd6f4; background: #313244; border: 1px solid #585b70; border-radius: 6px; padding: 6px 8px; width: 100%; box-sizing: border-box;">
         <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">input · 6px 8px · hereda base 16px</span>
       </div>
       <div style="display: flex; flex-direction: column; gap: 6px;">
-        <input value="PRB-476: migración a Postgres" style="font-family: inherit; font-size: 16px; color: #cdd6f4; background: #313244; border: 1px solid #cba6f7; border-radius: 6px; padding: 6px 8px; outline: none; width: 100%; box-sizing: border-box;">
+        <input value="PRB-476: migración a Postgres" style="font-family: inherit; font-size: 16px; color: #cdd6f4; background: #313244; border: 1px solid #cba6f7; border-radius: 6px; padding: 6px 8px; outline: 2px solid #cba6f7; outline-offset: 2px; width: 100%; box-sizing: border-box;">
         <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">input:focus · border --accent</span>
       </div>
       <div style="display: flex; flex-direction: column; gap: 6px;">
-        <select style="font-family: inherit; font-size: 16px; color: #cdd6f4; background: #313244; border: 1px solid #585b70; border-radius: 6px; padding: 6px 8px; outline: none; width: 100%; box-sizing: border-box;">
+        <select style="font-family: inherit; font-size: 16px; color: #cdd6f4; background: #313244; border: 1px solid #585b70; border-radius: 6px; padding: 6px 8px; width: 100%; box-sizing: border-box;">
           <option>All states</option>
           <option>In Progress</option>
           <option>Done</option>
@@ -90,7 +91,7 @@
         <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">kbd</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
-        <span style="padding: 2px 7px; border: 1px solid #585b70; border-radius: 5px; color: #bac2de; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; font-weight: 600; letter-spacing: 0.4px;">PRB</span>
+        <span style="padding: 2px 7px; border: 1px solid #585b70; border-radius: 4px; color: #bac2de; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; font-weight: 600; letter-spacing: 0.4px;">PRB</span>
         <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">.workspace-team-key</span>
       </div>
     </div>
@@ -117,7 +118,7 @@
       </div>
       <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px;">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="min-width: 18px; padding: 1px 5px; border-radius: 9px; color: #cdd6f4; background: #cba6f7; font-size: 11px; text-align: center;">3</span>
+          <span style="min-width: 18px; padding: 1px 5px; border-radius: 10px; color: #1e1e2e; background: #cba6f7; font-size: 11px; text-align: center;">3</span>
           <span style="min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #cba6f7; color: #1e1e2e; font-size: 10px; line-height: 16px; text-align: center;">2</span>
         </div>
         <span style="font-size: 10px; color: #a6adc8; font-family: ui-monospace, Menlo, monospace;">.nav-count / .filter-count</span>

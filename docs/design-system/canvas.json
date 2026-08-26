@@ -1,13 +1,52 @@
 {
   "artboards": [
-    { "file": "Main.dc.html", "title": "Fundamentos", "x": 0, "y": 0, "w": 880, "h": 1520 },
-    { "file": "Temas.dc.html", "x": 960, "y": 0, "w": 880, "h": 700 },
-    { "file": "Iconos.dc.html", "x": 960, "y": 820, "w": 880, "h": 940 },
-    { "file": "Componentes.dc.html", "x": 0, "y": 1640, "w": 880, "h": 1020 },
-    { "file": "Patrones.dc.html", "x": 960, "y": 1880, "w": 880, "h": 1240 }
+    {
+      "file": "Main.dc.html",
+      "title": "Fundamentos",
+      "x": 0,
+      "y": 0,
+      "w": 880,
+      "h": 1520
+    },
+    {
+      "file": "Temas.dc.html",
+      "x": 960,
+      "y": 0,
+      "w": 880,
+      "h": 700
+    },
+    {
+      "file": "Iconos.dc.html",
+      "x": 960,
+      "y": 820,
+      "w": 880,
+      "h": 940
+    },
+    {
+      "file": "Componentes.dc.html",
+      "x": 0,
+      "y": 1640,
+      "w": 880,
+      "h": 1020
+    },
+    {
+      "file": "Patrones.dc.html",
+      "x": 960,
+      "y": 1880,
+      "w": 880,
+      "h": 1240
+    }
   ],
   "annotations": [
-    { "id": "fuente", "x": 0, "y": -150, "w": 340, "text": "Fuente de verdad: apps/web/src/styles.css, theme.ts y components/icons.tsx.\nValores en Catppuccin Mocha (tema oscuro por defecto).\nEscala tipográfica actualizada según PRB-557 (base 16px)." }
+    {
+      "id": "fuente",
+      "x": 0,
+      "y": -150,
+      "w": 340,
+      "text": "Fuente de verdad: apps/web/src/styles.css, theme.ts y components/icons.tsx.\nValores en Catppuccin Mocha (tema oscuro por defecto).\nEscala tipográfica actualizada según PRB-557 y decisiones de consistencia de PRB-565.\nBoard card mantiene densidad compacta; .icon-button usa 28px desktop y 44px en móvil."
+    }
   ],
-  "launch": { "view": "canvas" }
+  "launch": {
+    "view": "canvas"
+  }
 }

@@ -630,7 +630,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
                     {canManage && (
                       <span className="milestone-actions">
                         <button
-                          className="icon-action"
+                          className="btn compact secondary"
                           aria-label={`Edit milestone ${milestone.name}`}
                           onClick={() => {
                             setMilestoneTarget(milestone);
@@ -640,21 +640,21 @@ export function ProjectView({ projectId }: { projectId: string }) {
                           Edit
                         </button>
                         <button
-                          className="icon-action"
+                          className="icon-button"
                           aria-label={`Move ${milestone.name} up`}
                           onClick={() => void moveMilestone(milestone, -1)}
                         >
                           ↑
                         </button>
                         <button
-                          className="icon-action"
+                          className="icon-button"
                           aria-label={`Move ${milestone.name} down`}
                           onClick={() => void moveMilestone(milestone, 1)}
                         >
                           ↓
                         </button>
                         <button
-                          className="icon-action danger"
+                          className="icon-button danger"
                           aria-label={`Delete milestone ${milestone.name}`}
                           onClick={() => setMilestoneDelete(milestone)}
                         >

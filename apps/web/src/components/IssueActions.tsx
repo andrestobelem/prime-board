@@ -127,7 +127,7 @@ export function IssueActionMenu({
   return (
     <div className="issue-context-actions">
       <button
-        className="icon-action"
+        className="icon-button"
         aria-label="Issue actions"
         aria-haspopup="menu"
         aria-expanded={open}

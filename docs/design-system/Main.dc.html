@@ -87,7 +87,7 @@
         <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">#f38ba8</span>
       </div>
     </div>
-    <span style="font-size: 11px; color: #a6adc8;">--accent-contrast: #1e1e2e (texto sobre accent) · --selection: color-mix(#9399b2 25%, transparent) · --danger-bg / --danger-border: color-mix(danger 12% / 40%, transparent) · --radius: 6px</span>
+    <span style="font-size: 11px; color: #a6adc8;">--accent-contrast: #1e1e2e (texto sobre accent) · --selection: color-mix(#9399b2 25%, transparent) · --danger-bg / --danger-border: color-mix(danger 12% / 40%, transparent) · radios: --radius (6px), --radius-sm (4px), --radius-md (8px), --radius-lg (10px), --radius-pill (999px), --radius-round (50%)</span>
   </div>
 
   <div style="display: flex; flex-direction: column; gap: 12px;">
@@ -167,7 +167,7 @@
         <span style="font-size: 11px; color: #a6adc8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;">10px · 600 · mono — kbd, .workspace-team-key</span>
       </div>
     </div>
-    <span style="font-size: 11px; color: #a6adc8;">PRB-557 subió la escala visible: base y navegación 16px, controles 15px, metadatos 14px, .btn.compact 13px. No cambian: labels compactos y secciones (11px), kbd y team keys (10px), ni los tamaños del board card (13/12/11px).</span>
+    <span style="font-size: 11px; color: #a6adc8;">PRB-557 subió la escala visible: base y navegación 16px, controles 15px, metadatos y encabezados de grupo 14px, .btn.compact 13px. El contenido del board card conserva una densidad intencional (título 13px, identifier 11px); el encabezado de columna usa 14px.</span>
   </div>
 
   <div style="display: flex; flex-direction: column; gap: 12px;">
@@ -178,19 +178,19 @@
         <div style="display: flex; align-items: flex-end; gap: 12px;">
           <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
             <div style="width: 40px; height: 40px; background: #313244; border: 1px solid #585b70; border-radius: 4px;"></div>
-            <span style="font-size: 10px; color: #a6adc8;">4 · kbd</span>
+            <span style="font-size: 10px; color: #a6adc8;">--radius-sm · 4px · kbd</span>
           </div>
           <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
             <div style="width: 40px; height: 40px; background: #313244; border: 1px solid #585b70; border-radius: 6px;"></div>
-            <span style="font-size: 10px; color: #a6adc8;">6 · base</span>
+            <span style="font-size: 10px; color: #a6adc8;">--radius · 6px · base</span>
           </div>
           <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
             <div style="width: 40px; height: 40px; background: #313244; border: 1px solid #585b70; border-radius: 8px;"></div>
-            <span style="font-size: 10px; color: #a6adc8;">8 · menú</span>
+            <span style="font-size: 10px; color: #a6adc8;">--radius-md · 8px · menú</span>
           </div>
           <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
             <div style="width: 40px; height: 40px; background: #313244; border: 1px solid #585b70; border-radius: 10px;"></div>
-            <span style="font-size: 10px; color: #a6adc8;">10 · modal</span>
+            <span style="font-size: 10px; color: #a6adc8;">--radius-lg · 10px · modal</span>
           </div>
         </div>
       </div>
@@ -198,13 +198,13 @@
         <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.4px; text-transform: uppercase; color: #a6adc8;">Sombras</span>
         <div style="display: flex; flex-direction: column; gap: 10px;">
           <div style="height: 30px; border-radius: 6px; background: #313244; box-shadow: 0 8px 24px rgb(0 0 0 / 30%); display: flex; align-items: center; padding: 0 10px;">
-            <span style="font-size: 10px; color: #a6adc8;">popup · 0 8 24 / 30%</span>
+            <span style="font-size: 10px; color: #a6adc8;">--shadow-popup · 0 8 24 / 30%</span>
           </div>
           <div style="height: 30px; border-radius: 6px; background: #313244; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35); display: flex; align-items: center; padding: 0 10px;">
-            <span style="font-size: 10px; color: #a6adc8;">popover · 0 16 40 / 35%</span>
+            <span style="font-size: 10px; color: #a6adc8;">--shadow-popover · 0 16 40 / 35%</span>
           </div>
           <div style="height: 30px; border-radius: 6px; background: #313244; box-shadow: 0 16px 60px rgba(0, 0, 0, 0.5); display: flex; align-items: center; padding: 0 10px;">
-            <span style="font-size: 10px; color: #a6adc8;">modal · 0 16 60 / 50%</span>
+            <span style="font-size: 10px; color: #a6adc8;">--shadow-modal · 0 16 60 / 50%</span>
           </div>
         </div>
       </div>
@@ -212,7 +212,7 @@
         <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.4px; text-transform: uppercase; color: #a6adc8;">Focus y medidas</span>
         <div style="display: flex; flex-direction: column; gap: 10px;">
           <button style="align-self: flex-start; background: #313244; color: #cdd6f4; border: 1px solid #585b70; border-radius: 6px; padding: 5px 12px; font-family: inherit; font-size: 12px; font-weight: 500; outline: 2px solid #cba6f7; outline-offset: 2px; cursor: pointer;">:focus-visible</button>
-          <span style="font-size: 11px; color: #bac2de;">Sidebar 220px · Panel de props 260px · Columna de board 280px</span>
+          <span style="font-size: 11px; color: #bac2de;">Sidebar 220px · Panel de props 260px · Columna de board 280px · .icon-button 28px desktop / 44px móvil</span>
           <span style="font-size: 11px; color: #a6adc8;">Anillo de foco: outline 2px --accent, offset 2px.</span>
         </div>
       </div>

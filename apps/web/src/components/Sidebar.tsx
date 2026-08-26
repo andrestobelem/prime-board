@@ -100,7 +100,7 @@ export function Sidebar({
     const current = favoriteFor(target);
     return (
       <button
-        className="favorite-action"
+        className="icon-button"
         aria-label={current ? `Remove ${label} from favorites` : `Add ${label} to favorites`}
         title={current ? "Remove from favorites" : "Add to favorites"}
         aria-busy={favoritePending}
@@ -145,7 +145,7 @@ export function Sidebar({
   return (
     <>
       <button
-        className={`mobile-sidebar-toggle${mobileOpen ? " hidden" : ""}`}
+        className={`icon-button mobile-sidebar-toggle${mobileOpen ? " hidden" : ""}`}
         aria-label="Open sidebar"
         onClick={() => setMobileOpen(true)}
       >
@@ -160,7 +160,7 @@ export function Sidebar({
       )}
       <nav className={`sidebar${mobileOpen ? " mobile-open" : ""}`}>
         <button
-          className="mobile-sidebar-close"
+          className="icon-button mobile-sidebar-close"
           aria-label="Close sidebar"
           onClick={() => setMobileOpen(false)}
         >
@@ -310,7 +310,7 @@ export function Sidebar({
                       {onReorderFavorite && (
                         <span className="favorite-order">
                           <button
-                            className="favorite-action"
+                            className="icon-button"
                             aria-label={`Move ${name} up`}
                             title="Move up"
                             aria-busy={favoritePending}
@@ -320,7 +320,7 @@ export function Sidebar({
                             <Icon name="arrow-up" size={11} />
                           </button>
                           <button
-                            className="favorite-action"
+                            className="icon-button"
                             aria-label={`Move ${name} down`}
                             title="Move down"
                             aria-busy={favoritePending}
@@ -333,7 +333,7 @@ export function Sidebar({
                       )}
                       {onToggleFavorite && (
                         <button
-                          className="favorite-action"
+                          className="icon-button"
                           aria-label={`Remove ${name} from favorites`}
                           title="Remove from favorites"
                           aria-busy={favoritePending}
