@@ -68,6 +68,20 @@ function getSelectedWorkspaceIdForRequest(): string | null {
 
 let workspaceGeneration = 0;
 
+// El gate de Workspace se consulta antes de montar el resto de la UI. Unifica
+// el adaptador de requests para que ningún schema legacy valide campos nuevos.
+let workspaceContractSupported: boolean | null = null;
+
+export function setWorkspaceContractSupported(supported: boolean): void {
+  workspaceContractSupported = supported;
+}
+
+function queryForWorkspaceContract(query: string): string {
+  return workspaceContractSupported === false
+    ? query.replace(/(?<![$A-Za-z0-9_])workspaceId\b/g, "")
+    : query;
+}
+
 /** Invalidates in-flight UI work before changing the effective Workspace. */
 export function invalidateWorkspaceContext(): void {
   workspaceGeneration += 1;
@@ -84,7 +98,11 @@ export async function gql<T = any>(
   variables: Record<string, unknown> = {},
   options: { signal?: AbortSignal; workspaceHeader?: boolean } = {},
 ): Promise<T> {
-  const workspaceId = options.workspaceHeader === false ? null : getSelectedWorkspaceIdForRequest();
+  const workspaceId =
+    options.workspaceHeader === false || workspaceContractSupported === false
+      ? null
+      : getSelectedWorkspaceIdForRequest();
+  const requestQuery = queryForWorkspaceContract(query);
   const requestCredentialGeneration = getCredentialGeneration();
   const requestWorkspaceGeneration = getWorkspaceGeneration();
   const headers: Record<string, string> = {
@@ -95,7 +113,7 @@ export async function gql<T = any>(
   const response = await fetch("/graphql", {
     method: "POST",
     headers,
-    body: JSON.stringify({ query, variables }),
+    body: JSON.stringify({ query: requestQuery, variables }),
     cache: "no-store",
     signal: options.signal,
   });

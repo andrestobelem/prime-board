@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { gql } from "../src/api.ts";
 import { getEffectiveWorkspaceContext } from "../src/ui-context.ts";
+import { LEGACY_SCHEMA_INTROSPECTION } from "./fixtures/legacy-schema-introspection.ts";
 import { parseRoute, workspacePath } from "../src/router.tsx";
 import {
   getSelectedWorkspaceId,
@@ -68,6 +69,59 @@ describe("Workspace contract feature gate", () => {
       )) as unknown as typeof fetch;
 
     await expect(getWorkspaceContract()).resolves.toEqual({ supported: false });
+  });
+});
+
+describe("Legacy SDL compatibility", () => {
+  const originalFetch = globalThis.fetch;
+  const originalStorage = globalThis.localStorage;
+  const originalWindow = globalThis.window;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, "localStorage", {
+      value: originalStorage,
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, "window", { value: originalWindow, configurable: true });
+  });
+
+  it("classifies the real 4295813 SDL and strips scoped fields from every request", async () => {
+    const values = new Map<string, string>([["pb.workspace.selection.local", "stale-workspace"]]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { localStorage: storage },
+    });
+    const requests: Array<{ query: string; headers: Headers }> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      const query = JSON.parse(String(init?.body)).query as string;
+      requests.push({ query, headers });
+      if (query.includes("__schema")) {
+        return new Response(JSON.stringify({ data: LEGACY_SCHEMA_INTROSPECTION }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ data: { viewer: { id: "actor", name: "Admin", type: "HUMAN" } } }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(getWorkspaceContract()).resolves.toEqual({ supported: false });
+    await gql(`query LegacySurface {
+      viewer { id workspaceId name }
+      team(key: "PB") { id workspaceId key }
+      labels { id workspaceId name }
+    }`);
+
+    const request = requests[1];
+    expect(request?.query).not.toContain("workspaceId");
+    expect(request?.headers.has("x-workspace-id")).toBe(false);
   });
 });
 

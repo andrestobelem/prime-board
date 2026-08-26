@@ -1,4 +1,4 @@
-import { gql, invalidateWorkspaceContext } from "./api.ts";
+import { gql, invalidateWorkspaceContext, setWorkspaceContractSupported } from "./api.ts";
 import { credentialNamespace } from "./ui-context.ts";
 
 export interface AccessibleWorkspace {
@@ -11,8 +11,25 @@ export interface WorkspaceContract {
   supported: boolean;
 }
 
+const WORKSPACE_SCOPED_TYPES = [
+  "Actor",
+  "ApiKey",
+  "ActorInvitation",
+  "Team",
+  "Label",
+  "Webhook",
+] as const;
+
+type IntrospectionType = {
+  name: string;
+  fields?: Array<{ name: string }> | null;
+};
+
 const CONTRACT_QUERY = `query WorkspaceContract {
-  __schema { queryType { fields { name } } }
+  __schema {
+    queryType { fields { name } }
+    types { name fields { name } }
+  }
 }`;
 
 const WORKSPACES_QUERY = `query AccessibleWorkspaces {
@@ -52,12 +69,23 @@ export function clearSelectedWorkspaceId(): void {
 export async function getWorkspaceContract(): Promise<WorkspaceContract> {
   try {
     const result = await gql<{
-      __schema?: { queryType?: { fields?: Array<{ name: string }> } };
+      __schema?: {
+        queryType?: { fields?: Array<{ name: string }> };
+        types?: IntrospectionType[];
+      };
     }>(CONTRACT_QUERY, {}, { workspaceHeader: false });
-    const fields = result.__schema?.queryType?.fields ?? [];
-    return { supported: fields.some((field) => field.name === "workspaces") };
+    const queryFields = result.__schema?.queryType?.fields ?? [];
+    const types = new Map((result.__schema?.types ?? []).map((type) => [type.name, type]));
+    const hasWorkspaceFields = WORKSPACE_SCOPED_TYPES.every((typeName) =>
+      types.get(typeName)?.fields?.some((field) => field.name === "workspaceId"),
+    );
+    const supported =
+      queryFields.some((field) => field.name === "workspaces") && hasWorkspaceFields;
+    setWorkspaceContractSupported(supported);
+    return { supported };
   } catch {
     // Introspection is optional for legacy/single-Workspace servers.
+    setWorkspaceContractSupported(false);
     return { supported: false };
   }
 }
