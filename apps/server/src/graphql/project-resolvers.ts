@@ -406,6 +406,10 @@ export const projectResolvers = {
           args.input.teamIds == null
             ? (await listPostgresTeams(context.persistence)).map((team) => team.id)
             : args.input.teamIds;
+        for (const teamId of teamIds) {
+          const team = await getPostgresTeam(context.persistence, { id: teamId });
+          if (!team) throw apiError("NOT_FOUND", "Team not found");
+        }
         await assertPostgresProjectKeyLimit(context, teamIds);
         const project = mapPostgresProject(
           await createPostgresProject(context.persistence, viewer, args.input),
@@ -413,9 +417,9 @@ export const projectResolvers = {
         context.events.emit("project.created", viewer, project);
         return { success: true, project };
       }
+      for (const teamId of args.input.teamIds ?? []) requireTeam(context, { id: teamId });
       assertCanCreateProject(context.db, viewer, args.input.teamIds);
       if (args.input.leadId) requireActor(context, args.input.leadId);
-      for (const teamId of args.input.teamIds ?? []) requireTeam(context, { id: teamId });
       const project = mapProject(
         createProject(context.db, args.input, context.workspace.workspaceId),
       );
@@ -479,8 +483,8 @@ export const projectResolvers = {
         });
         return { success: true, project: archived };
       }
-      assertCanManageProject(context.db, viewer, args.id);
       const projectBefore = requireProject(context, args.id);
+      assertCanManageProject(context.db, viewer, projectBefore.id);
       const archived = mapProject(
         archiveProject(context.db, args.id, true, context.workspace.workspaceId),
       );
@@ -509,8 +513,8 @@ export const projectResolvers = {
         });
         return { success: true, project: restored };
       }
-      assertCanManageProject(context.db, viewer, args.id);
       const projectBefore = requireProject(context, args.id);
+      assertCanManageProject(context.db, viewer, projectBefore.id);
       const restored = mapProject(
         archiveProject(context.db, args.id, false, context.workspace.workspaceId),
       );
@@ -526,17 +530,19 @@ export const projectResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
+        const project = await getPostgresProject(context.persistence, args.input.projectId);
+        if (!project) throw apiError("NOT_FOUND", "Project not found");
         await assertPostgresProjectKeyLimit(
           context,
-          await listPostgresProjectTeamIds(context.persistence, args.input.projectId),
+          await listPostgresProjectTeamIds(context.persistence, project.id),
         );
         const created = mapPostgresMilestone(
           await createPostgresMilestone(context.persistence, viewer, args.input),
         );
         return { success: true, milestone: created };
       }
-      assertCanManageProject(context.db, viewer, args.input.projectId);
-      requireProject(context, args.input.projectId);
+      const project = requireProject(context, args.input.projectId);
+      assertCanManageProject(context.db, viewer, project.id);
       const created = mapMilestone(
         createMilestone(context.db, args.input, context.workspace.workspaceId),
       );
@@ -575,7 +581,9 @@ export const projectResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const currentTeams = await listPostgresProjectTeamIds(context.persistence, args.id);
+        const existing = await getPostgresProject(context.persistence, args.id);
+        if (!existing) throw apiError("NOT_FOUND", "Project not found");
+        const currentTeams = await listPostgresProjectTeamIds(context.persistence, existing.id);
         const targetTeams =
           args.input.teamIds === undefined ? currentTeams : (args.input.teamIds ?? []);
         await assertPostgresProjectKeyLimit(context, targetTeams);
@@ -585,18 +593,20 @@ export const projectResolvers = {
         context.events.emit("project.updated", viewer, project);
         return { success: true, project };
       }
-      requireProject(context, args.id);
-      assertCanManageProject(context.db, viewer, args.id);
+      const project = requireProject(context, args.id);
+      if (args.input.teamIds !== undefined && args.input.teamIds !== null) {
+        for (const teamId of args.input.teamIds) requireTeam(context, { id: teamId });
+      }
+      assertCanManageProject(context.db, viewer, project.id);
       if (args.input.leadId) requireActor(context, args.input.leadId);
       if (args.input.teamIds !== undefined && args.input.teamIds !== null) {
         assertCanManageProjectTeams(context.db, viewer, args.input.teamIds);
-        for (const teamId of args.input.teamIds) requireTeam(context, { id: teamId });
       }
-      const project = mapProject(
+      const updatedProject = mapProject(
         updateProject(context.db, args.id, args.input, context.workspace.workspaceId),
       );
-      context.events.emit("project.updated", viewer, project);
-      return { success: true, project };
+      context.events.emit("project.updated", viewer, updatedProject);
+      return { success: true, project: updatedProject };
     },
     projectUpdateCreate: async (
       _parent: unknown,

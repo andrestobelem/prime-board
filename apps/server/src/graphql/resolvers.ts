@@ -1545,32 +1545,42 @@ export const resolvers = {
         ...documentResolvers.Mutation,
         teamArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
-          assertWorkspaceAdmin(viewer);
           if (context.persistence) {
+            const team = await getPostgresTeam(context.persistence, { id: args.id });
+            if (!team) throw apiError("NOT_FOUND", "Team not found");
+            assertWorkspaceAdmin(viewer);
             return {
               success: true,
-              team: mapPostgresTeam(await archivePostgresTeam(context.persistence, args.id, true)),
+              team: mapPostgresTeam(await archivePostgresTeam(context.persistence, team.id, true)),
             };
           }
-          requireTeam(context, { id: args.id });
+          const scopedTeam = requireTeam(context, { id: args.id });
+          assertWorkspaceAdmin(viewer);
           return {
             success: true,
-            team: mapTeam(archiveTeam(context.db, args.id, true, context.workspace.workspaceId)),
+            team: mapTeam(
+              archiveTeam(context.db, scopedTeam.id, true, context.workspace.workspaceId),
+            ),
           };
         },
         teamUnarchive: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
-          assertWorkspaceAdmin(viewer);
           if (context.persistence) {
+            const team = await getPostgresTeam(context.persistence, { id: args.id });
+            if (!team) throw apiError("NOT_FOUND", "Team not found");
+            assertWorkspaceAdmin(viewer);
             return {
               success: true,
-              team: mapPostgresTeam(await archivePostgresTeam(context.persistence, args.id, false)),
+              team: mapPostgresTeam(await archivePostgresTeam(context.persistence, team.id, false)),
             };
           }
-          requireTeam(context, { id: args.id });
+          const scopedTeam = requireTeam(context, { id: args.id });
+          assertWorkspaceAdmin(viewer);
           return {
             success: true,
-            team: mapTeam(archiveTeam(context.db, args.id, false, context.workspace.workspaceId)),
+            team: mapTeam(
+              archiveTeam(context.db, scopedTeam.id, false, context.workspace.workspaceId),
+            ),
           };
         },
         teamDelete: async (
@@ -1579,17 +1589,19 @@ export const resolvers = {
           context: Context,
         ) => {
           const viewer = requireViewer(context);
-          assertWorkspaceAdmin(viewer);
           if (context.persistence) {
+            const team = await getPostgresTeam(context.persistence, { id: args.id });
+            if (!team) throw apiError("NOT_FOUND", "Team not found");
+            assertWorkspaceAdmin(viewer);
             const owners = (
               await context.persistence.many<{ actor_id: string }>(
                 "SELECT actor_id FROM team_memberships WHERE team_id = $1 AND role = 'owner'",
-                [args.id],
+                [team.id],
               )
             ).map((row) => row.actor_id);
             const deleted = await deletePostgresTeam(
               context.persistence,
-              args.id,
+              team.id,
               args.confirmation,
             );
             context.events.emit("team.deleted", viewer, {
@@ -1601,7 +1613,8 @@ export const resolvers = {
             });
             return { success: true };
           }
-          requireTeam(context, { id: args.id });
+          const scopedTeam = requireTeam(context, { id: args.id });
+          assertWorkspaceAdmin(viewer);
           const teamOwnerIds = (
             context.db
               .query("SELECT actor_id FROM team_memberships WHERE team_id = ?1 AND role = 'owner'")
@@ -1609,7 +1622,7 @@ export const resolvers = {
           ).map((row) => row.actor_id);
           const deleted = deleteTeam(
             context.db,
-            args.id,
+            scopedTeam.id,
             args.confirmation,
             context.workspace.workspaceId,
           );
@@ -2501,20 +2514,21 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           if (context.persistence) {
-            if (
-              args.input.scope.toLowerCase() === "team" &&
-              args.input.teamId &&
-              !apiKeyTeamsWithinLimit(context.auth, [args.input.teamId])
-            ) {
-              throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+            if (args.input.scope.toLowerCase() === "team" && args.input.teamId) {
+              const team = await getPostgresTeam(context.persistence, { id: args.input.teamId });
+              if (!team) throw apiError("NOT_FOUND", "Team not found");
+              if (!apiKeyTeamsWithinLimit(context.auth, [team.id])) {
+                throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+              }
             }
             const savedView = mapPostgresSavedView(
               await createPostgresSavedView(context.persistence, viewer, args.input),
             );
             return { success: true, savedView };
           }
-          if (args.input.scope.toLowerCase() === "team") {
-            assertCanManageIssue(context.db, viewer, args.input.teamId);
+          if (args.input.scope.toLowerCase() === "team" && args.input.teamId) {
+            const scopedTeam = requireTeam(context, { id: args.input.teamId });
+            assertCanManageIssue(context.db, viewer, scopedTeam.id);
           }
           const savedView = mapSavedView(
             createSavedView(context.db, viewer, args.input, context.workspace.workspaceId),

@@ -10,6 +10,12 @@ import {
 } from "./permissions.ts";
 import type { ApiKeyScope } from "../domain/actors.ts";
 import { getIssueByRef } from "../domain/issues.ts";
+import { getMilestone } from "../domain/milestones.ts";
+import { getCycle } from "../domain/cycles.ts";
+import { getReview } from "../domain/reviews.ts";
+import { getSavedView } from "../domain/saved-views.ts";
+import { getTeam } from "../domain/teams.ts";
+import { listProjectTeamIds } from "../domain/projects.ts";
 import { postgresInboxTeamId } from "../domain/postgres-inbox.ts";
 
 const ADMIN_MUTATIONS = new Set([
@@ -146,64 +152,63 @@ function ids(value: unknown): string[] {
 function teamForRef(context: Context, ref: unknown): string | null {
   const value = scalar(ref);
   if (!value) return null;
-  const row = context.db.query("SELECT id FROM teams WHERE id = ?1 OR key = ?1").get(value) as {
-    id: string;
-  } | null;
-  return row?.id ?? null;
+  // The scope dispatcher runs before the resolver. Resolve Team references with
+  // the effective Workspace so a limited key cannot authorize a foreign ID.
+  return (
+    getTeam(context.db, { id: value }, context.workspace.workspaceId)?.id ??
+    getTeam(context.db, { key: value }, context.workspace.workspaceId)?.id ??
+    null
+  );
+}
+
+function scopedTeamIds(context: Context, value: unknown): string[] {
+  return ids(value).flatMap((ref) => {
+    const teamId = teamForRef(context, ref);
+    return teamId ? [teamId] : [];
+  });
 }
 
 function teamIdsForIssue(context: Context, issueId: unknown): string[] {
   const id = scalar(issueId);
   if (!id) return [];
-  const row = getIssueByRef(context.db, id);
-  return row ? [row.team_id] : [];
+  const row = getIssueByRef(context.db, id, context.workspace.workspaceId);
+  return row ? scopedTeamIds(context, row.team_id) : [];
 }
 
 function teamIdsForProject(context: Context, projectId: unknown): string[] {
   const id = scalar(projectId);
   if (!id) return [];
-  return context.db
-    .query("SELECT team_id FROM project_teams WHERE project_id = ?1 ORDER BY team_id")
-    .all(id)
-    .map((row) => (row as { team_id: string }).team_id);
+  return scopedTeamIds(context, listProjectTeamIds(context.db, id, context.workspace.workspaceId));
 }
 
 function teamIdsForMilestone(context: Context, milestoneId: unknown): string[] {
   const id = scalar(milestoneId);
   if (!id) return [];
-  const row = context.db.query("SELECT project_id FROM milestones WHERE id = ?1").get(id) as {
-    project_id: string;
-  } | null;
+  const row = getMilestone(context.db, id, context.workspace.workspaceId);
   return row ? teamIdsForProject(context, row.project_id) : [];
 }
 
 function teamIdsForCycle(context: Context, cycleId: unknown): string[] {
   const id = scalar(cycleId);
   if (!id) return [];
-  const row = context.db.query("SELECT team_id FROM cycles WHERE id = ?1").get(id) as {
-    team_id: string;
-  } | null;
-  return row ? [row.team_id] : [];
+  const row = getCycle(context.db, id, context.workspace.workspaceId);
+  return row ? scopedTeamIds(context, [row.team_id]) : [];
 }
 
 function teamIdsForReview(context: Context, reviewId: unknown): string[] {
   if (context.persistence) return [];
   const id = scalar(reviewId);
   if (!id) return [];
-  const row = context.db.query("SELECT issue_id FROM reviews WHERE id = ?1").get(id) as {
-    issue_id: string;
-  } | null;
+  const row = getReview(context.db, id, context.workspace.workspaceId);
   return row ? teamIdsForIssue(context, row.issue_id) : [];
 }
 
 function teamIdsForSavedView(context: Context, viewId: unknown): string[] {
   const id = scalar(viewId);
-  if (!id) return ["__missing__"];
-  const row = context.db.query("SELECT team_id FROM saved_views WHERE id = ?1").get(id) as {
-    team_id: string | null;
-  } | null;
-  if (!row) return ["__missing__"];
-  return row.team_id ? [row.team_id] : ["__workspace__"];
+  if (!id) return [];
+  const row = getSavedView(context.db, id, context.workspace.workspaceId);
+  if (!row) return [];
+  return row.team_id ? scopedTeamIds(context, [row.team_id]) : ["__workspace__"];
 }
 
 async function operationTeamIdsForSavedView(context: Context, viewId: unknown): Promise<string[]> {
@@ -237,11 +242,12 @@ function teamIdsForInitiative(context: Context, initiativeId: unknown): string[]
     .query("SELECT team_id FROM initiative_teams WHERE initiative_id = ?1")
     .all(id)
     .map((row) => (row as { team_id: string }).team_id);
+  const scopedDirect = scopedTeamIds(context, direct);
   const projects = context.db
     .query("SELECT project_id FROM initiative_projects WHERE initiative_id = ?1")
     .all(id)
     .flatMap((row) => teamIdsForProject(context, (row as { project_id: string }).project_id));
-  const teams = [...new Set([...direct, ...projects])].sort();
+  const teams = [...new Set([...scopedDirect, ...projects])].sort();
   return teams.length ? teams : ["__workspace__"];
 }
 
@@ -262,7 +268,7 @@ function teamIdsForDocument(context: Context, documentId: unknown): string[] {
   if (!row) return ["__missing__"];
   if (row.issue_id) return teamIdsForIssue(context, row.issue_id);
   if (row.project_id) return teamIdsForProject(context, row.project_id);
-  if (row.team_id) return [row.team_id];
+  if (row.team_id) return scopedTeamIds(context, row.team_id);
   if (row.cycle_id) return teamIdsForCycle(context, row.cycle_id);
   if (row.initiative_id) return teamIdsForInitiative(context, row.initiative_id);
   return [];
@@ -271,7 +277,7 @@ function teamIdsForDocument(context: Context, documentId: unknown): string[] {
 function teamIdsForDocumentTarget(context: Context, input: Record<string, unknown>): string[] {
   if (input.issueId) return teamIdsForIssue(context, input.issueId);
   if (input.projectId) return teamIdsForProject(context, input.projectId);
-  if (input.teamId) return [scalar(input.teamId) ?? "__missing__"];
+  if (input.teamId) return scopedTeamIds(context, input.teamId);
   if (input.cycleId) return teamIdsForCycle(context, input.cycleId);
   if (input.initiativeId) return teamIdsForInitiative(context, input.initiativeId);
   return [];
@@ -365,11 +371,11 @@ async function operationTeamIds(
       // PostgreSQL team lookup happens asynchronously in the resolver; it
       // applies the key allowlist after resolving the Team.
       if (context.persistence) return [];
-      return [teamForRef(context, args.id ?? args.key) ?? "__missing__"];
+      return scopedTeamIds(context, [args.id ?? args.key]);
     case "teamMemberships":
     case "cycles":
       if (context.persistence) return [];
-      return [scalar(args.teamId) ?? "__missing__"];
+      return scopedTeamIds(context, args.teamId);
     case "cycle":
       if (context.persistence) return [];
       return teamIdsForCycle(context, args.id);
@@ -384,18 +390,18 @@ async function operationTeamIds(
       return teamIdsForProject(context, args.id);
     case "projects":
       if (context.persistence) return [];
-      return args.team ? [teamForRef(context, args.team) ?? "__missing__"] : null;
+      return args.team ? scopedTeamIds(context, args.team) : null;
     case "labels":
       if (context.persistence) return [];
-      return args.team ? [teamForRef(context, args.team) ?? "__missing__"] : null;
+      return args.team ? scopedTeamIds(context, args.team) : null;
     case "savedView":
       return operationTeamIdsForSavedView(context, args.id);
     case "savedViews":
-      return args.teamId ? [scalar(args.teamId) ?? "__missing__"] : null;
+      return args.teamId ? scopedTeamIds(context, args.teamId) : null;
     case "review":
       return teamIdsForReview(context, args.id);
     case "reviews":
-      if (args.teamId) return [scalar(args.teamId) ?? "__missing__"];
+      if (args.teamId) return scopedTeamIds(context, args.teamId);
       if (args.projectId) return teamIdsForProject(context, args.projectId);
       return null;
     case "initiative":
@@ -432,27 +438,27 @@ async function operationTeamIds(
     case "teamArchive":
     case "teamUnarchive":
     case "teamDelete":
-      return [scalar(args.id) ?? "__missing__"];
+      return scopedTeamIds(context, args.id);
     case "teamMembershipCreate":
-      return [scalar(input.teamId) ?? "__missing__"];
+      return scopedTeamIds(context, input.teamId);
     case "teamMembershipDelete":
       if (context.persistence) return [];
       return context.db
         .query("SELECT team_id FROM team_memberships WHERE id = ?1")
         .all(scalar(args.id))
-        .map((row) => (row as { team_id: string }).team_id);
+        .flatMap((row) => scopedTeamIds(context, (row as { team_id: string }).team_id));
     case "workflowStateCreate":
-      return [scalar(input.teamId) ?? "__missing__"];
+      return scopedTeamIds(context, input.teamId);
     case "workflowStateUpdate":
     case "workflowStateDelete": {
       if (context.persistence) return [];
       const row = context.db
         .query("SELECT team_id FROM workflow_states WHERE id = ?1")
         .get(scalar(args.id)) as { team_id: string } | null;
-      return row ? [row.team_id] : ["__missing__"];
+      return row ? scopedTeamIds(context, row.team_id) : [];
     }
     case "labelCreate":
-      return input.teamId ? [scalar(input.teamId) ?? "__missing__"] : null;
+      return input.teamId ? scopedTeamIds(context, input.teamId) : null;
     case "labelUpdate":
     case "labelDelete": {
       if (context.persistence) {
@@ -465,13 +471,13 @@ async function operationTeamIds(
       const row = context.db
         .query("SELECT team_id FROM labels WHERE id = ?1")
         .get(scalar(args.id)) as { team_id: string | null } | null;
-      return row?.team_id ? [row.team_id] : null;
+      return row?.team_id ? scopedTeamIds(context, row.team_id) : null;
     }
     case "issueCreate": {
       if (context.persistence) return [];
       const direct = input.teamId ?? input.teamKey;
       return [
-        ...(direct ? [teamForRef(context, direct) ?? "__missing__"] : []),
+        ...(direct ? scopedTeamIds(context, direct) : []),
         ...(input.projectId ? teamIdsForProject(context, input.projectId) : []),
       ];
     }
@@ -518,16 +524,18 @@ async function operationTeamIds(
       if (context.persistence) return [];
       return input.teamIds == null
         ? context.db
-            .query("SELECT id FROM teams WHERE archived_at IS NULL ORDER BY id")
-            .all()
+            .query(
+              "SELECT id FROM teams WHERE archived_at IS NULL AND (workspace_id = ?1 OR (workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1)) ORDER BY id",
+            )
+            .all(context.workspace.workspaceId)
             .map((row) => (row as { id: string }).id)
-        : ids(input.teamIds);
+        : scopedTeamIds(context, input.teamIds);
     case "projectUpdate": {
       if (context.persistence) return [];
       const current = teamIdsForProject(context, args.id);
       return input.teamIds === undefined
         ? current
-        : [...new Set([...current, ...ids(input.teamIds)])];
+        : [...new Set([...current, ...scopedTeamIds(context, input.teamIds)])];
     }
     case "projectArchive":
     case "projectUnarchive":
@@ -548,10 +556,10 @@ async function operationTeamIds(
       const row = context.db
         .query("SELECT project_id FROM project_updates WHERE id = ?1")
         .get(scalar(args.id)) as { project_id: string } | null;
-      return row ? teamIdsForProject(context, row.project_id) : ["__missing__"];
+      return row ? teamIdsForProject(context, row.project_id) : [];
     }
     case "cycleCreate":
-      return [scalar(input.teamId) ?? "__missing__"];
+      return scopedTeamIds(context, input.teamId);
     case "cycleUpdate":
     case "cycleDelete":
       if (context.persistence) return [];
@@ -572,7 +580,7 @@ async function operationTeamIds(
       return teamIdsForReview(context, args.id);
     case "savedViewCreate":
       return input.scope?.toString().toLowerCase() === "team"
-        ? [scalar(input.teamId) ?? "__missing__"]
+        ? scopedTeamIds(context, input.teamId)
         : null;
     case "savedViewUpdate":
     case "savedViewDuplicate":
@@ -597,7 +605,7 @@ async function operationTeamIds(
       if (context.persistence) return [];
       const teams = [
         ...new Set([
-          ...ids(input.teamIds),
+          ...scopedTeamIds(context, input.teamIds),
           ...ids(input.projectIds).flatMap((id) => teamIdsForProject(context, id)),
         ]),
       ];
@@ -607,7 +615,9 @@ async function operationTeamIds(
       if (context.persistence) return [];
       const current = teamIdsForInitiative(context, args.id);
       const direct =
-        input.teamIds !== undefined && input.teamIds !== null ? ids(input.teamIds) : current;
+        input.teamIds !== undefined && input.teamIds !== null
+          ? scopedTeamIds(context, input.teamIds)
+          : current;
       const projects =
         input.projectIds !== undefined && input.projectIds !== null
           ? ids(input.projectIds).flatMap((id) => teamIdsForProject(context, id))

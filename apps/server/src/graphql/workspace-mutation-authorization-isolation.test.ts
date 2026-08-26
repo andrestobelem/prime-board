@@ -6,34 +6,76 @@ const app = createTestApp();
 let workspaceBKey: string;
 let teamAId: string;
 let teamBId: string;
+let projectAId: string;
+let projectBId: string;
 let memberKey: string;
+let limitedMemberKey: string;
 
 type MutationCase = readonly [query: string, variables: Record<string, unknown>];
 
-const crossWorkspaceMutations = (teamId: string): MutationCase[] => [
+const crossWorkspaceMutations = (
+  teamId: string,
+  projectId: string,
+  activeProjectId: string,
+): MutationCase[] => [
   [
     `mutation($id: ID!) { teamUpdate(id: $id, input: { name: "cross-workspace" }) { success } }`,
     { id: teamId },
   ],
+  [`mutation($id: ID!) { teamArchive(id: $id) { success } }`, { id: teamId }],
+  [`mutation($id: ID!) { teamUnarchive(id: $id) { success } }`, { id: teamId }],
   [
-    `mutation($teamId: ID!) { labelCreate(input: { teamId: $teamId, name: "cross-workspace" }) { success } }`,
+    `mutation($teamId: ID!) { projectCreate(input: { name: "cross-workspace", teamIds: [$teamId] }) { success } }`,
+    { teamId },
+  ],
+  [`mutation($id: ID!) { projectArchive(id: $id) { success } }`, { id: projectId }],
+  [`mutation($id: ID!) { projectUnarchive(id: $id) { success } }`, { id: projectId }],
+  [
+    `mutation($projectId: ID!, $teamId: ID!) { projectUpdate(id: $projectId, input: { teamIds: [$teamId] }) { success } }`,
+    { projectId: activeProjectId, teamId },
+  ],
+  [
+    `mutation($projectId: ID!) { milestoneCreate(input: { projectId: $projectId, name: "cross-workspace" }) { success } }`,
+    { projectId },
+  ],
+  [
+    `mutation($teamId: ID!) { savedViewCreate(input: { name: "cross-workspace", scope: TEAM, teamId: $teamId }) { success } }`,
     { teamId },
   ],
   [
-    `mutation($teamId: ID!) { workflowStateCreate(input: { teamId: $teamId, name: "cross-workspace", type: STARTED }) { success } }`,
-    { teamId },
-  ],
-  [
-    `mutation($teamId: ID!) { cycleCreate(input: { teamId: $teamId, name: "cross-workspace", startsAt: "2027-01-01", endsAt: "2027-01-14" }) { success } }`,
-    { teamId },
+    `mutation($id: ID!) { teamDelete(id: $id, confirmation: "cross-workspace") { success } }`,
+    { id: teamId },
   ],
 ];
+
+const limitedCrossWorkspaceMutations = (
+  teamId: string,
+  projectId: string,
+  activeProjectId: string,
+): MutationCase[] =>
+  crossWorkspaceMutations(teamId, projectId, activeProjectId).filter(
+    ([query]) =>
+      query.includes("projectCreate") ||
+      query.includes("projectArchive") ||
+      query.includes("projectUnarchive") ||
+      query.includes("projectUpdate") ||
+      query.includes("milestoneCreate") ||
+      query.includes("savedViewCreate"),
+  );
 
 describe("Workspace context before team mutation authorization", () => {
   beforeAll(async () => {
     const teamA = await gql(app, `{ team(key: "PB") { id } }`);
     expect(teamA.errors).toBeUndefined();
     teamAId = teamA.data!.team.id as string;
+
+    const projectA = await gql(
+      app,
+      `mutation($teamId: ID!) { projectCreate(input: { name: "Mutation source A", teamIds: [$teamId] }) { project { id } } }`,
+      { teamId: teamAId },
+    );
+    expect(projectA.errors).toBeUndefined();
+    projectAId = projectA.data!.projectCreate.project.id as string;
 
     const workspace = await gql(
       app,
@@ -51,6 +93,16 @@ describe("Workspace context before team mutation authorization", () => {
     );
     expect(teamB.errors).toBeUndefined();
     teamBId = teamB.data!.teamCreate.team.id as string;
+
+    const projectB = await gql(
+      app,
+      `mutation($teamId: ID!) { projectCreate(input: { name: "Mutation target B", teamIds: [$teamId] }) { project { id } } }`,
+      { teamId: teamBId },
+      app.apiKey,
+      workspaceBKey,
+    );
+    expect(projectB.errors).toBeUndefined();
+    projectBId = projectB.data!.projectCreate.project.id as string;
 
     const actor = await gql(
       app,
@@ -72,6 +124,16 @@ describe("Workspace context before team mutation authorization", () => {
     expect(key.errors).toBeUndefined();
     memberKey = key.data!.apiKeyCreate.key as string;
 
+    const limitedKey = await gql(
+      app,
+      `mutation($actorId: ID!, $teamId: ID!) { apiKeyCreate(input: { actorId: $actorId, name: "workspace-b-member-limited-key", scopes: [WRITE], teamIds: [$teamId] }) { key } }`,
+      { actorId, teamId: teamBId },
+      app.apiKey,
+      workspaceBKey,
+    );
+    expect(limitedKey.errors).toBeUndefined();
+    limitedMemberKey = limitedKey.data!.apiKeyCreate.key as string;
+
     const membership = await gql(
       app,
       `mutation($teamId: ID!, $actorId: ID!) { teamMembershipCreate(input: { teamId: $teamId, actorId: $actorId, role: MEMBER }) { success } }`,
@@ -85,15 +147,26 @@ describe("Workspace context before team mutation authorization", () => {
   afterAll(() => app.stop());
 
   it("devuelve NOT_FOUND para un miembro ante IDs del Workspace ajeno", async () => {
-    for (const [query, variables] of crossWorkspaceMutations(teamAId)) {
+    for (const [query, variables] of crossWorkspaceMutations(teamAId, projectAId, projectBId)) {
       const result = await gql(app, query, variables, memberKey, workspaceBKey);
       expect(result.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
     }
   });
 
   it("devuelve NOT_FOUND para un admin ante IDs del Workspace ajeno", async () => {
-    for (const [query, variables] of crossWorkspaceMutations(teamAId)) {
+    for (const [query, variables] of crossWorkspaceMutations(teamAId, projectAId, projectBId)) {
       const result = await gql(app, query, variables, app.apiKey, workspaceBKey);
+      expect(result.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+    }
+  });
+
+  it("scopea los límites de Team antes de autorizar IDs ajenos", async () => {
+    for (const [query, variables] of limitedCrossWorkspaceMutations(
+      teamAId,
+      projectAId,
+      projectBId,
+    )) {
+      const result = await gql(app, query, variables, limitedMemberKey, workspaceBKey);
       expect(result.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
     }
   });
