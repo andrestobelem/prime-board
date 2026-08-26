@@ -1765,8 +1765,8 @@ export const resolvers = {
               ),
             };
           }
-          assertCanManageTeam(context.db, viewer, args.id);
-          requireTeam(context, { id: args.id });
+          const scopedTeam = requireTeam(context, { id: args.id });
+          assertCanManageTeam(context.db, viewer, scopedTeam.id);
           const team = mapTeam(
             updateTeam(context.db, args.id, args.input, context.workspace.workspaceId),
           );
@@ -2297,7 +2297,8 @@ export const resolvers = {
             return { success: true, label: mapPostgresLabel(label) };
           }
           if (args.input.teamId != null) {
-            assertCanManageTeam(context.db, viewer, args.input.teamId);
+            const scopedTeam = requireTeam(context, { id: args.input.teamId });
+            assertCanManageTeam(context.db, viewer, scopedTeam.id);
           } else {
             assertWorkspaceAdmin(viewer);
           }
@@ -2476,7 +2477,8 @@ export const resolvers = {
               ),
             };
           }
-          assertCanManageTeam(context.db, viewer, args.input.teamId);
+          const scopedTeam = requireTeam(context, { id: args.input.teamId });
+          assertCanManageTeam(context.db, viewer, scopedTeam.id);
           const workflowState = mapWorkflowState(
             createWorkflowState(context.db, args.input, context.workspace.workspaceId),
           );
@@ -2727,7 +2729,8 @@ export const resolvers = {
               ),
             };
           }
-          assertCanManageTeam(context.db, viewer, args.input.teamId);
+          const scopedTeam = requireTeam(context, { id: args.input.teamId });
+          assertCanManageTeam(context.db, viewer, scopedTeam.id);
           return {
             success: true,
             cycle: mapCycle(createCycle(context.db, args.input, context.workspace.workspaceId)),
