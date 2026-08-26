@@ -18,10 +18,14 @@ También puedes instalarlo desde npm o Git cuando exista un release del paquete.
 
 La extensión registra:
 
-- `session_start`: descubre la raíz Git desde `ctx.cwd`, reutiliza o inicia el launcher aislado y espera `GET /health`.
+- `session_start`: descubre la raíz Git desde `ctx.cwd`, reutiliza o inicia el launcher aislado y espera `GET /health`. Después consulta `viewer { id name type }` con la credencial efectiva, valida que sea un Actor `AGENT` y fija `pi.setSessionName(actor.name)`. También persiste un binding `prime-board-actor-binding` con el ID y el nombre del Actor.
 - `session_shutdown`: libera la referencia de la sesión sin detener un runtime compartido.
 - `/prime-board start|status|open|logs|stop|auth`: comandos finos de lifecycle y diagnóstico.
 - `prime_board_status`: expone el estado del runtime como herramienta del agente.
+
+El binding impide reabrir una sesión con otro Actor: si el ID persistido no coincide, la extensión rechaza el arranque antes de cambiar el nombre. El runtime de Prime Agent debe exponer `setSessionName`, `appendEntry` y `ctx.sessionManager.getEntries()`. Una versión sin esas APIs recibe un error explícito y no se considera compatible con nombres ligados al Actor.
+
+`--session-dir` y el catálogo de sesiones son responsabilidad del runtime de Prime Agent. Cuando el runtime inicia una sesión con `prime-agent --session-dir <dir>`, la extensión fija el nombre y el binding dentro del `SessionManager` de ese directorio. No puede hacer que un directorio aislado aparezca en un catálogo global que el runtime no escanee. En `prime-agent 0.8.0`, `list` no acepta `--session-dir`; por eso la validación end-to-end de persistir, listar y reabrir con cuatro directorios aislados usa `SessionManager.list(cwd, dir)` del runtime instalado.
 
 El launcher se ejecuta con argumentos, nunca mediante un shell. Su lock por proyecto evita
 procesos duplicados. Los logs se guardan fuera del repositorio, con secretos redactados y modo

@@ -22,6 +22,7 @@ type SessionEvent = { reason?: string };
 type ExtensionContext = {
   cwd: string;
   hasUI?: boolean;
+  sessionManager?: { getEntries(): readonly unknown[] };
   ui: { notify(message: string, level: NotificationLevel): void };
 };
 
@@ -39,6 +40,10 @@ type ExtensionAPI = {
     event: "session_start" | "session_shutdown",
     handler: (event: SessionEvent, ctx: ExtensionContext) => unknown,
   ) => void;
+  /** Disponible en el runtime de Prime Agent que admite nombres persistentes. */
+  setSessionName?: (name: string) => void | Promise<void>;
+  /** Persiste una entrada propia de la extensión en la sesión actual. */
+  appendEntry?: (customType: string, data?: unknown) => void;
   registerCommand(
     name: string,
     definition: {
@@ -143,7 +148,17 @@ function notifyRuntime(ctx: ExtensionContext, status: RuntimeStatus): void {
 
 type JsonObject = { [key: string]: unknown };
 
+type ActorIdentity = {
+  id: string;
+  name: string;
+  type: "AGENT" | "HUMAN";
+};
+
+type ActorBinding = Pick<ActorIdentity, "id" | "name">;
+
 type ProjectCredentialSource = "environment" | "stored";
+
+const ACTOR_BINDING_ENTRY = "prime-board-actor-binding";
 
 function asObject(value: unknown): JsonObject | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -193,15 +208,92 @@ async function graphqlData(
   return data;
 }
 
+function actorType(value: unknown): ActorIdentity["type"] | null {
+  const type = asString(value)?.toUpperCase();
+  return type === "AGENT" || type === "HUMAN" ? type : null;
+}
+
+function actorIdentityFromData(data: JsonObject): ActorIdentity | null {
+  const viewer = asObject(data.viewer);
+  const id = asString(viewer?.id);
+  const name = asString(viewer?.name);
+  const type = actorType(viewer?.type);
+  return id && name && type ? { id, name, type } : null;
+}
+
 async function viewerType(
   url: string,
   apiKey: string,
   fetchImpl: FetchLike,
 ): Promise<"AGENT" | "HUMAN" | null> {
   const data = await graphqlData(url, apiKey, "query { viewer { type } }", {}, fetchImpl);
-  const viewer = asObject(data.viewer);
-  const type = asString(viewer?.type)?.toUpperCase();
-  return type === "AGENT" || type === "HUMAN" ? type : null;
+  return actorType(asObject(data.viewer)?.type);
+}
+
+async function viewerIdentity(
+  url: string,
+  apiKey: string,
+  fetchImpl: FetchLike,
+): Promise<ActorIdentity | null> {
+  const data = await graphqlData(url, apiKey, "query { viewer { id name type } }", {}, fetchImpl);
+  return actorIdentityFromData(data);
+}
+
+function sessionActorBinding(ctx: ExtensionContext): ActorBinding | null {
+  const entries = ctx.sessionManager?.getEntries();
+  if (!entries) return null;
+  for (const entry of [...entries].reverse()) {
+    const object = asObject(entry);
+    if (object?.customType !== ACTOR_BINDING_ENTRY) continue;
+    const data = asObject(object.data);
+    const id = asString(data?.actorId);
+    const name = asString(data?.actorName);
+    if (id && name) return { id, name };
+  }
+  return null;
+}
+
+function sessionHasAssistant(ctx: ExtensionContext): boolean {
+  const entries = ctx.sessionManager?.getEntries();
+  if (!entries) return true;
+  return entries.some((entry) => {
+    const object = asObject(entry);
+    const message = asObject(object?.message);
+    return object?.type === "message" && message?.role === "assistant";
+  });
+}
+
+async function bindSessionToActor(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  authenticated: ActorIdentity,
+): Promise<void> {
+  if (authenticated.type !== "AGENT") {
+    throw new Error("The authenticated prime-board Actor has no stable AGENT identity.");
+  }
+  const previous = sessionActorBinding(ctx);
+  if (previous && previous.id !== authenticated.id) {
+    throw new Error(
+      `The session is bound to Actor ${previous.id}, not authenticated Actor ${authenticated.id}.`,
+    );
+  }
+  if (!ctx.sessionManager || !pi.setSessionName || !pi.appendEntry) {
+    throw new Error(
+      "The installed Prime Agent runtime must expose pi.setSessionName, pi.appendEntry, and ctx.sessionManager.getEntries() to bind a session to its authenticated Actor.",
+    );
+  }
+  const needsBinding = !previous || previous.name !== authenticated.name;
+  await pi.setSessionName(authenticated.name);
+  if (needsBinding) {
+    pi.appendEntry(ACTOR_BINDING_ENTRY, {
+      actorId: authenticated.id,
+      actorName: authenticated.name,
+    });
+    // SessionManager difiere las entradas arbitrarias de la extensión hasta el
+    // primer mensaje del asistente. Un segundo session_info guarda el binding
+    // de una sesión nueva sin cambiar el nombre visible.
+    if (!sessionHasAssistant(ctx)) await pi.setSessionName(authenticated.name);
+  }
 }
 
 function actorIdFromActors(data: JsonObject, name: string): string | null {
@@ -398,7 +490,16 @@ export function createPrimeBoardExtension(options: PrimeBoardExtensionOptions = 
         return status;
       }
       current = await runtime.ensure(projectRoot);
-      if (current.url) await authenticate(projectRoot, current.url);
+      if (current.url) {
+        const credential = await authenticate(projectRoot, current.url);
+        if (credential) {
+          const identity = await viewerIdentity(current.url, credential.apiKey, fetchImpl);
+          if (!identity) {
+            throw new Error("The authenticated prime-board Actor has no stable id and name.");
+          }
+          await bindSessionToActor(pi, ctx, identity);
+        }
+      }
       return current;
     };
 

@@ -28,6 +28,7 @@ import {
 
 type FakeContext = {
   cwd: string;
+  sessionManager?: { getEntries(): readonly unknown[] };
   ui: { notify(message: string, level: string): void };
 };
 
@@ -141,9 +142,17 @@ describe("Prime Board extension lifecycle", () => {
       const notifications: string[] = [];
       const events = new Map<string, (event: { reason?: string }, ctx: FakeContext) => unknown>();
       const commands = new Map<string, (args: string, ctx: FakeContext) => unknown>();
+      const sessionEntries: unknown[] = [];
+      const namedSessions: string[] = [];
       const fakePi = {
         on(name: string, handler: (event: { reason?: string }, ctx: FakeContext) => unknown) {
           events.set(name, handler);
+        },
+        setSessionName(name: string) {
+          namedSessions.push(name);
+        },
+        appendEntry(_customType: string, data: unknown) {
+          sessionEntries.push({ customType: "prime-board-actor-binding", data });
         },
         registerCommand(
           name: string,
@@ -157,10 +166,13 @@ describe("Prime Board extension lifecycle", () => {
         if (String(input).endsWith("/health")) return new Response("ok", { status: 200 });
         const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
         if (body.query?.includes("viewer")) {
-          return new Response(JSON.stringify({ data: { viewer: { type: "AGENT" } } }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
+          return new Response(
+            JSON.stringify({ data: { viewer: { id: "agent-1", name: "Scout", type: "AGENT" } } }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
         }
         return new Response(JSON.stringify({ data: {} }), {
           status: 200,
@@ -192,6 +204,12 @@ describe("Prime Board extension lifecycle", () => {
       controller(fakePi);
       const context = {
         cwd: project.root,
+        sessionManager: {
+          getEntries: () => [
+            ...sessionEntries,
+            { type: "message", message: { role: "assistant" } },
+          ],
+        },
         ui: { notify: (message: string) => notifications.push(message) },
       };
       const sessionStart = events.get("session_start")!;
@@ -200,6 +218,8 @@ describe("Prime Board extension lifecycle", () => {
         sessionStart({ reason: "startup" }, context),
       ]);
       expect(launches).toBe(1);
+      expect(namedSessions).toEqual(["Scout", "Scout"]);
+      expect(sessionEntries).toHaveLength(2);
       expect(notifications.filter((value) => value.includes("Runtime is running"))).toHaveLength(2);
       expect(readProjectCredential(project.root, project.home)).toMatchObject({
         apiKey: "pb_test_secret",
@@ -211,6 +231,174 @@ describe("Prime Board extension lifecycle", () => {
       await events.get("session_shutdown")!({ reason: "shutdown" }, context);
       await events.get("session_start")!({ reason: "reload" }, context);
       expect(launches).toBe(1);
+    } finally {
+      rmSync(project.home, { recursive: true, force: true });
+    }
+  });
+
+  it("binds four concurrent isolated sessions to distinct authenticated Actor names", async () => {
+    const sessions = ["Scout", "Builder", "Micaela", "Carorila"].map((actor) => ({
+      actor,
+      project: gitProject(),
+    }));
+    const results: Array<{ actor: string; names: string[]; entries: unknown[] }> = [];
+    try {
+      await Promise.all(
+        sessions.map(async ({ actor, project }, index) => {
+          let running = false;
+          const events = new Map<
+            string,
+            (event: { reason?: string }, ctx: FakeContext) => unknown
+          >();
+          const names: string[] = [];
+          const entries: unknown[] = [];
+          const port = 3420 + index;
+          const controller = createPrimeBoardExtension({
+            home: project.home,
+            env: {
+              PRIME_BOARD_ROOT: project.runtimeRoot,
+              PRIME_BOARD_API_KEY: `pb_${actor.toLowerCase()}`,
+            },
+            runtimeDependencies: {
+              runStatus: () => ({
+                status: running ? 0 : 1,
+                stdout: running
+                  ? `running project=${project.root} port=${port} pid=${port} db=/tmp/${port}.db`
+                  : `not-running project=${project.root} db=/tmp/${port}.db`,
+                stderr: "",
+              }),
+              launch: () => {
+                running = true;
+                return { pid: port, unref() {} };
+              },
+              fetch: async (input, init) => {
+                if (String(input).endsWith("/health")) return new Response("ok");
+                const body = String(init?.body ?? "");
+                return body.includes("viewer")
+                  ? new Response(
+                      JSON.stringify({
+                        data: {
+                          viewer: {
+                            id: `actor-${actor.toLowerCase()}`,
+                            name: actor,
+                            type: "AGENT",
+                          },
+                        },
+                      }),
+                      { status: 200, headers: { "content-type": "application/json" } },
+                    )
+                  : new Response(JSON.stringify({ data: {} }), {
+                      status: 200,
+                      headers: { "content-type": "application/json" },
+                    });
+              },
+              sleep: async () => undefined,
+            },
+          });
+          const fakePi = {
+            on(name: string, handler: (event: { reason?: string }, ctx: FakeContext) => unknown) {
+              events.set(name, handler);
+            },
+            setSessionName(name: string) {
+              names.push(name);
+            },
+            appendEntry(customType: string, data: unknown) {
+              entries.push({ customType, data });
+            },
+            registerCommand() {},
+            registerTool() {},
+          };
+          controller(fakePi);
+          const context = {
+            cwd: project.root,
+            sessionManager: {
+              getEntries: () => [...entries, { type: "message", message: { role: "assistant" } }],
+            },
+            ui: { notify: () => undefined },
+          };
+          await events.get("session_start")!({ reason: "startup" }, context);
+          results.push({ actor, names, entries });
+        }),
+      );
+
+      expect(results).toHaveLength(4);
+      expect(new Set(results.map((result) => result.names[0]))).toEqual(
+        new Set(["Scout", "Builder", "Micaela", "Carorila"]),
+      );
+      for (const result of results) {
+        expect(result.names).toEqual([result.actor]);
+        expect(result.entries).toHaveLength(1);
+        expect(result.entries[0]).toMatchObject({
+          customType: "prime-board-actor-binding",
+          data: { actorId: `actor-${result.actor.toLowerCase()}`, actorName: result.actor },
+        });
+      }
+    } finally {
+      for (const { project } of sessions) rmSync(project.home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a persisted session when its Actor binding differs from authentication", async () => {
+    const project = gitProject();
+    const notifications: string[] = [];
+    const names: string[] = [];
+    const events = new Map<string, (event: { reason?: string }, ctx: FakeContext) => unknown>();
+    const entries = [
+      {
+        customType: "prime-board-actor-binding",
+        data: { actorId: "actor-scout", actorName: "Scout" },
+      },
+    ];
+    try {
+      let running = true;
+      const controller = createPrimeBoardExtension({
+        home: project.home,
+        env: {
+          PRIME_BOARD_ROOT: project.runtimeRoot,
+          PRIME_BOARD_API_KEY: "pb_builder",
+        },
+        runtimeDependencies: {
+          runStatus: () => ({
+            status: running ? 0 : 1,
+            stdout: `running project=${project.root} port=3428 pid=3428 db=/tmp/3428.db`,
+            stderr: "",
+          }),
+          fetch: async (input, init) =>
+            String(input).endsWith("/health")
+              ? new Response("ok")
+              : new Response(
+                  JSON.stringify({
+                    data: { viewer: { id: "actor-builder", name: "Builder", type: "AGENT" } },
+                  }),
+                  { status: 200, headers: { "content-type": "application/json" } },
+                ),
+          sleep: async () => undefined,
+        },
+      });
+      const fakePi = {
+        on(name: string, handler: (event: { reason?: string }, ctx: FakeContext) => unknown) {
+          events.set(name, handler);
+        },
+        setSessionName(name: string) {
+          names.push(name);
+        },
+        appendEntry() {},
+        registerCommand() {},
+        registerTool() {},
+      };
+      controller(fakePi);
+      await events.get("session_start")!(
+        { reason: "resume" },
+        {
+          cwd: project.root,
+          sessionManager: { getEntries: () => entries },
+          ui: { notify: (message: string) => notifications.push(message) },
+        },
+      );
+      expect(names).toEqual([]);
+      expect(notifications.some((message) => message.includes("bound to Actor actor-scout"))).toBe(
+        true,
+      );
     } finally {
       rmSync(project.home, { recursive: true, force: true });
     }
@@ -231,7 +419,13 @@ describe("Prime Board extension lifecycle", () => {
         if (body.query?.includes("viewer")) {
           return new Response(
             JSON.stringify({
-              data: { viewer: { type: key.includes("pb_agent") ? "AGENT" : "HUMAN" } },
+              data: {
+                viewer: {
+                  id: key.includes("pb_agent") ? "agent-1" : "human-1",
+                  name: key.includes("pb_agent") ? "Builder" : "admin",
+                  type: key.includes("pb_agent") ? "AGENT" : "HUMAN",
+                },
+              },
             }),
             { status: 200, headers: { "content-type": "application/json" } },
           );
@@ -298,11 +492,17 @@ describe("Prime Board extension lifecycle", () => {
         on(name: string, handler: (event: { reason?: string }, ctx: FakeContext) => unknown) {
           events.set(name, handler);
         },
+        setSessionName() {},
+        appendEntry() {},
         registerCommand() {},
         registerTool() {},
       };
       extension(fakePi);
-      const context = { cwd: project.root, ui: { notify: () => undefined } };
+      const context = {
+        cwd: project.root,
+        sessionManager: { getEntries: () => [] },
+        ui: { notify: () => undefined },
+      };
       await events.get("session_start")!({ reason: "startup" }, context);
       expect(readProjectCredential(project.root, project.home)).toMatchObject({
         apiKey: "pb_agent",
