@@ -353,14 +353,16 @@ export const issueResolvers = {
     state: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
         const state = await getPostgresWorkflowState(context.persistence, issue._row.state_id);
-        return state ? mapPostgresWorkflowState(state) : null;
+        return state && state.team_id === issue._row.team_id
+          ? mapPostgresWorkflowState(state)
+          : null;
       }
       const state = getWorkflowState(
         context.db,
         issue._row.state_id,
         context.workspace.workspaceId,
       );
-      return state ? mapWorkflowState(state) : null;
+      return state && state.team_id === issue._row.team_id ? mapWorkflowState(state) : null;
     },
     assignee: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.assignee_id) return null;

@@ -7,6 +7,8 @@ let workspaceBKey: string;
 let teamBId: string;
 let labelBId: string;
 let stateBId: string;
+let sameWorkspaceIssueId: string;
+let sameWorkspaceForeignStateId: string;
 
 describe("Team, label y workflow state Workspace isolation", () => {
   beforeAll(async () => {
@@ -17,6 +19,27 @@ describe("Team, label y workflow state Workspace isolation", () => {
       `mutation { labelCreate(input: { name: "Shared label" }) { label { id } } }`,
     );
     expect(labelA.errors).toBeUndefined();
+
+    const sameWorkspaceTeam = await gql(
+      app,
+      `mutation { teamCreate(input: { name: "Same Workspace Team", key: "SW" }) { team { id } } }`,
+    );
+    expect(sameWorkspaceTeam.errors).toBeUndefined();
+    const sameWorkspaceTeamId = sameWorkspaceTeam.data!.teamCreate.team.id as string;
+    sameWorkspaceForeignStateId = (
+      app.db
+        .query("SELECT id FROM workflow_states WHERE team_id = ?1 ORDER BY position LIMIT 1")
+        .get(sameWorkspaceTeamId) as { id: string }
+    ).id;
+    const issue = await gql(
+      app,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Invalid state reference" }) { issue { id } } }`,
+    );
+    expect(issue.errors).toBeUndefined();
+    sameWorkspaceIssueId = issue.data!.issueCreate.issue.id as string;
+    app.db
+      .query("UPDATE issues SET state_id = ?1 WHERE id = ?2")
+      .run(sameWorkspaceForeignStateId, sameWorkspaceIssueId);
 
     const workspace = await gql(
       app,
@@ -81,6 +104,14 @@ describe("Team, label y workflow state Workspace isolation", () => {
     expect(fromB.data!.team.states.map((state: { id: string }) => state.id)).toContain(stateBId);
     expect(fromB.data!.team.labels).toContainEqual({ id: labelBId, name: "Shared label" });
     expect(fromB.data!.labels).toContainEqual({ id: labelBId, name: "Shared label" });
+  });
+
+  it("oculta un estado de otro Team del mismo Workspace ante una referencia inválida", async () => {
+    const result = await gql(app, `query($id: ID!) { issue(id: $id) { state { id name } } }`, {
+      id: sameWorkspaceIssueId,
+    });
+    expect(result.errors).toBeUndefined();
+    expect(result.data!.issue.state).toBeNull();
   });
 
   it("rechaza mutaciones cross-Workspace sin tocar las filas", async () => {

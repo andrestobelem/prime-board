@@ -234,7 +234,7 @@ export const typeDefs = /* GraphQL */ `
     title: String!
     description: String
     team: Team!
-    state: WorkflowState!
+    state: WorkflowState
     """
     0 none, 1 urgent, 2 high, 3 medium, 4 low (as in Linear).
     """
