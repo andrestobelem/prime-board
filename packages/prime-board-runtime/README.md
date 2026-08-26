@@ -12,7 +12,8 @@ binarios nativos. La matriz de plataforma es la matriz de Bun soportada por el u
 
 La aplicación no depende de `workspace:*` ni de paquetes privados de producción. El servidor,
 la UI y las migraciones se incluyen en `dist/`. `dist/manifest.json` contiene SHA-256 por
-archivo y `dist/checksums.txt` permite comprobar el artefacto después de descargarlo.
+archivo y del `package.json`; `dist/checksums.txt` permite comprobar el artefacto después de
+la descarga.
 
 ## Construcción e instalación
 
@@ -129,5 +130,6 @@ no sustituye una copia externa de largo plazo. Conserva los artefactos hasta ver
 con la nueva versión. PostgreSQL no usa este flujo; PRB-458 solo cubre el runtime SQLite.
 
 El archivo `dist/manifest.json` registra la versión del package, el backend SQLite, Bun mínimo y
-los SHA-256 de cada archivo. `dist/checksums.txt` contiene la misma lista para validar el artefacto
-antes de instalarlo.
+los SHA-256 de cada archivo y del `package.json`. `dist/checksums.txt` contiene la misma lista
+para validar el artefacto antes de instalarlo. El smoke de distribución empaqueta dos veces,
+compara el SHA-256 del tarball e inspecciona los checksums después de la instalación.

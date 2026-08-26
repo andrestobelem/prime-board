@@ -138,7 +138,13 @@ function assertFreshArtifact(): void {
     JSON.parse(readFileSync(join(builtDist, "manifest.json"), "utf8")) as unknown,
     "manifest",
   );
-  expect(stringValue(manifest.runtimeVersion, "manifest.runtimeVersion")).toBe("0.1.0");
+  const packageMetadata = objectValue(
+    JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as unknown,
+    "package metadata",
+  );
+  expect(stringValue(manifest.runtimeVersion, "manifest.runtimeVersion")).toBe(
+    stringValue(packageMetadata.version, "package metadata.version"),
+  );
   const entries = arrayValue(manifest.files, "manifest.files");
   const manifestPaths = new Set<string>();
   for (const entryValue of entries) {
@@ -152,6 +158,7 @@ function assertFreshArtifact(): void {
   expect(manifestPaths.has("server.js")).toBe(true);
   expect(manifestPaths.has("cli.js")).toBe(true);
   expect(manifestPaths.has("web/index.html")).toBe(true);
+  expect(manifestPaths.has("../package.json")).toBe(true);
   expect([...manifestPaths].filter((path) => path.startsWith("migrations/")).length).toBe(
     source.length,
   );
@@ -193,7 +200,19 @@ describe("distribución del runtime", () => {
       );
       const tarballs = readdirSync(packageRoot).filter((name) => name.endsWith(".tgz"));
       expect(tarballs).toHaveLength(1);
-      packageTarball = join(packageRoot, tarballs[0]!);
+      const firstTarball = join(packageRoot, tarballs[0]!);
+      const firstTarballSha256 = sha256(firstTarball);
+      rmSync(firstTarball, { force: true });
+      runChecked(
+        ["npm", "pack", "--ignore-scripts", "--json"],
+        packageRoot,
+        cleanEnv,
+        "reproducible runtime package",
+      );
+      const reproducibleTarballs = readdirSync(packageRoot).filter((name) => name.endsWith(".tgz"));
+      expect(reproducibleTarballs).toHaveLength(1);
+      packageTarball = join(packageRoot, reproducibleTarballs[0]!);
+      expect(sha256(packageTarball)).toBe(firstTarballSha256);
 
       runChecked(
         ["npm", "install", "--ignore-scripts", packageTarball],
@@ -211,6 +230,18 @@ describe("distribución del runtime", () => {
       );
       expect(existsSync(runtimeBinary)).toBe(true);
       expect(runtimeBinary.startsWith(repoRoot)).toBe(false);
+      const installedDist = join(consumer, "node_modules", "@prime-board", "runtime", "dist");
+      const installedManifest = objectValue(
+        JSON.parse(readFileSync(join(installedDist, "manifest.json"), "utf8")) as unknown,
+        "installed manifest",
+      );
+      const installedFiles = arrayValue(installedManifest.files, "installed manifest files");
+      for (const entryValue of installedFiles) {
+        const entry = objectValue(entryValue, "installed manifest entry");
+        const path = stringValue(entry.path, "installed manifest path");
+        const digest = stringValue(entry.sha256, "installed manifest checksum");
+        expect(sha256(join(installedDist, path))).toBe(digest);
+      }
 
       const port = await freePort();
       expect(port).not.toBe(3333);

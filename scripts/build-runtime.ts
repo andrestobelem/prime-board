@@ -79,10 +79,19 @@ function releaseFiles(root: string, current = root): ReleaseFile[] {
   return result.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-const runtimePackage = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
+const packageMetadataPath = join(packageRoot, "package.json");
+const runtimePackage = JSON.parse(readFileSync(packageMetadataPath, "utf8")) as {
   version?: string;
 };
-const files = releaseFiles(dist);
+const packageMetadata = readFileSync(packageMetadataPath);
+const files = [
+  ...releaseFiles(dist),
+  {
+    path: "../package.json",
+    sha256: createHash("sha256").update(packageMetadata).digest("hex"),
+    bytes: packageMetadata.byteLength,
+  },
+].sort((left, right) => left.path.localeCompare(right.path));
 writeFileSync(
   join(dist, "manifest.json"),
   `${JSON.stringify(

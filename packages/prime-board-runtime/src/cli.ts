@@ -407,8 +407,10 @@ try {
   });
   if (server.pid === undefined) throw new Error("prime-board server did not expose a PID");
   const owner = { pid: server.pid, processGroupId: server.pid };
-  promoteDatabaseReservationOwner(identity, owner, instanceId);
+  // Publica primero el owner del proyecto. Si el launcher muere en esta
+  // ventana, un launcher nuevo ve el hijo saludable y no toma la DB.
   promoteInstanceOwner(identity, owner, instanceId);
+  promoteDatabaseReservationOwner(identity, owner, instanceId);
   const serverExit = new Promise<number>((resolveExit) => {
     server?.once("exit", (code, signal) => resolveExit(code ?? (signal ? 1 : 0)));
   });

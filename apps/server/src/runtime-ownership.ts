@@ -92,18 +92,20 @@ export function claimRuntimeOwnership(projectRoot: string, databasePath: string)
   const launcherPid = numericEnvironment("PRIME_BOARD_LAUNCHER_PID");
   if (!metadataPath || !instanceId || launcherPid === null) return;
 
-  for (const path of reservationMetadataPaths()) {
-    const record = readJson(path);
-    if (record && matchesReservation(record, projectRoot, databasePath, instanceId, launcherPid)) {
-      writeJsonAtomically(path, claimedRecord(record));
-    }
-  }
-
+  // Publica primero el owner del proyecto. Esto cierra la ventana en la que un
+  // launcher nuevo puede tomar la reserva antes de que el hijo abra SQLite.
   const instance = readJson(metadataPath);
   if (
     instance &&
     matchesReservation(instance, projectRoot, databasePath, instanceId, launcherPid)
   ) {
     writeJsonAtomically(metadataPath, claimedRecord(instance));
+  }
+
+  for (const path of reservationMetadataPaths()) {
+    const record = readJson(path);
+    if (record && matchesReservation(record, projectRoot, databasePath, instanceId, launcherPid)) {
+      writeJsonAtomically(path, claimedRecord(record));
+    }
   }
 }

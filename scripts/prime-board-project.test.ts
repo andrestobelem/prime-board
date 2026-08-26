@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { linkSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import {
   acquireDatabaseReservation,
   acquireInstanceLock,
   classifyInstance,
+  promoteDatabaseReservationOwner,
+  promoteInstanceOwner,
   deriveProjectIdentity,
   chooseAvailablePort,
   reserveAvailablePort,
@@ -191,6 +193,52 @@ describe("project instance lock", () => {
     expect(classifyInstance(identity, () => false).state).toBe("stale");
     release();
   });
+});
+
+test("transfers project and database ownership to the child", () => {
+  const home = `/tmp/prime-board-handoff-test-${crypto.randomUUID()}`;
+  const identity = deriveProjectIdentity(
+    "/tmp/projects/handoff",
+    home,
+    `/tmp/prime-board-handoff-${crypto.randomUUID()}.db`,
+  );
+  const instanceId = crypto.randomUUID();
+  const instanceRecord = {
+    version: 1 as const,
+    projectRoot: identity.projectRoot,
+    databasePath: identity.databasePath,
+    port: 3333,
+    pid: 1111,
+    launcherPid: 1111,
+    instanceId,
+    startedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const reservationRecord = {
+    version: 1 as const,
+    projectRoot: identity.projectRoot,
+    databasePath: identity.databasePath,
+    pid: 1111,
+    launcherPid: 1111,
+    instanceId,
+    reservedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const releaseInstance = acquireInstanceLock(identity, instanceRecord);
+  const releaseDatabase = acquireDatabaseReservation(identity, reservationRecord, () => false);
+  try {
+    promoteInstanceOwner(identity, { pid: 2222, processGroupId: 2222 }, instanceId);
+    promoteDatabaseReservationOwner(identity, { pid: 2222, processGroupId: 2222 }, instanceId);
+
+    expect(classifyInstance(identity, (pid) => pid === 2222).state).toBe("running");
+    const metadata = JSON.parse(readFileSync(identity.metadataPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(metadata).toMatchObject({ pid: 2222, serverPid: 2222, launcherPid: 1111 });
+  } finally {
+    releaseDatabase();
+    releaseInstance();
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 describe("project instance ports", () => {

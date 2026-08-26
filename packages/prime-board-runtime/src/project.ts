@@ -447,10 +447,12 @@ export async function resolveInstanceStatus(
     processGroupId: health.processGroupId ?? health.pid,
   };
   try {
-    // Reserva la DB primero. Si un launcher concurrente gana la carrera, esta
+    // Publica primero el owner del proyecto. Un launcher nuevo no debe tomar
+    // la reserva de DB mientras el hijo completa el handoff.
+    promoteInstanceOwner(identity, owner, status.record.instanceId);
+    // Reserva la DB después. Si un launcher concurrente gana la carrera, esta
     // reparación no debe sobrescribir su metadata.
     promoteDatabaseReservationOwner(identity, owner, status.record.instanceId);
-    promoteInstanceOwner(identity, owner, status.record.instanceId);
   } catch {
     // Es más seguro tratar un server coincidente y saludable como activo que
     // iniciar un segundo escritor. La siguiente llamada puede terminar el handoff.

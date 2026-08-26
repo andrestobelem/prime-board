@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  constants,
   existsSync,
   fsyncSync,
   mkdirSync,
@@ -16,10 +17,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, parse, relative, resolve, sep } from "node:path";
+import { RUNTIME_VERSION } from "./version.ts";
 
+export { RUNTIME_VERSION };
 export const BACKUP_FORMAT = 1;
-export const RUNTIME_VERSION = "0.1.0";
 
 const DATABASE_MODE = 0o600;
 const DIRECTORY_MODE = 0o700;
@@ -122,6 +124,45 @@ function assertAbsolutePath(path: string, label: string): string {
   return resolvedPath;
 }
 
+/** Rechaza enlaces simbólicos en cada componente existente, no solo en la hoja. */
+function isAllowedSystemSymlink(path: string): boolean {
+  return process.platform === "darwin" && path === "/var";
+}
+
+function assertNoSymlinkParents(path: string, label: string, allowMissingLeaf = true): string {
+  const resolvedPath = assertAbsolutePath(path, label);
+  const root = parse(resolvedPath).root;
+  const segments = relative(root, resolvedPath).split(sep).filter(Boolean);
+  let current = root;
+  let missing = false;
+  for (const segment of segments) {
+    current = join(current, segment);
+    const record = recordFile(current);
+    if (!record) {
+      missing = true;
+      continue;
+    }
+    if (record.isSymbolicLink) {
+      // macOS expone el árbol temporal del sistema mediante /var. Conserva este
+      // alias estable, pero rechaza padres simbólicos controlados por el proyecto.
+      if (!isAllowedSystemSymlink(current)) {
+        throw new Error(`${label} must not use a symbolic-link parent: ${current}`);
+      }
+    }
+    if (!record.isSymbolicLink && missing && !record.isDirectory) {
+      throw new Error(`${label} parent must be a directory: ${current}`);
+    }
+    if (!record.isSymbolicLink && current !== resolvedPath && !record.isDirectory) {
+      throw new Error(`${label} parent must be a directory: ${current}`);
+    }
+    missing = false;
+  }
+  if (!allowMissingLeaf && !recordFile(resolvedPath)) {
+    throw new Error(`${label} does not exist: ${resolvedPath}`);
+  }
+  return resolvedPath;
+}
+
 function assertNoSymlink(path: string, label: string, allowMissing = true): FileRecord | null {
   const record = recordFile(path);
   if (!record) {
@@ -132,8 +173,34 @@ function assertNoSymlink(path: string, label: string, allowMissing = true): File
   return record;
 }
 
+function isProjectReplicaDirectory(path: string, projectRoot: string): boolean {
+  if (samePath(path, join(projectRoot, ".prime-board"))) return true;
+
+  // El runtime también guarda backups y locks debajo de ~/.prime-board. No
+  // confundas esa raíz de estado con una réplica del repositorio. Un marcador
+  // Git o los directorios de réplica identifican un .prime-board del proyecto.
+  const owner = dirname(path);
+  if (recordFile(join(owner, ".git"))) return true;
+  return ["meta", "issues", "log"].some((name) => {
+    const record = recordFile(join(path, name));
+    return record?.isDirectory === true;
+  });
+}
+
+function pathHasReplicaParent(path: string, projectRoot: string): boolean {
+  let current = dirname(path);
+  while (true) {
+    if (basename(current) === ".prime-board" && isProjectReplicaDirectory(current, projectRoot)) {
+      return true;
+    }
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
 function assertDatabasePath(path: string, allowMissing: boolean): string {
-  const databasePath = assertAbsolutePath(path, "Database path");
+  const databasePath = assertNoSymlinkParents(path, "Database path", allowMissing);
   const record = assertNoSymlink(databasePath, "Database", allowMissing);
   if (record && !record.isFile)
     throw new Error(`Database path must be a regular file: ${databasePath}`);
@@ -143,25 +210,64 @@ function assertDatabasePath(path: string, allowMissing: boolean): string {
     if (sidecarRecord?.isSymbolicLink) {
       throw new Error(`Database sidecar must not be a symbolic link: ${sidecarPath}`);
     }
+    if (sidecarRecord && !sidecarRecord.isFile) {
+      throw new Error(`Database sidecar must be a regular file: ${sidecarPath}`);
+    }
   }
   return databasePath;
 }
 
 function ensurePrivateFile(path: string, label: string): void {
+  assertNoSymlinkParents(path, label, false);
   const record = assertNoSymlink(path, label, false);
   if (!record || !record.isFile) throw new Error(`${label} must be a regular file: ${path}`);
   chmodSync(path, DATABASE_MODE);
   const mode = statSync(path).mode & 0o777;
   if (mode !== DATABASE_MODE) throw new Error(`${label} must have mode 0600: ${path}`);
+  // Persiste el modo y el contenido antes de publicar la ruta a los consumidores.
+  let descriptor: number | null = null;
+  try {
+    const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+    descriptor = openSync(path, constants.O_RDONLY | noFollow);
+    fsyncSync(descriptor);
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+  }
 }
 
 function ensurePrivateDirectory(path: string): void {
-  mkdirSync(path, { recursive: true, mode: DIRECTORY_MODE });
-  const record = recordFile(path);
-  if (!record || record.isSymbolicLink || !record.isDirectory) {
-    throw new Error(`Backup directory must be a real directory: ${path}`);
+  const directory = assertNoSymlinkParents(path, "Private directory");
+  const root = parse(directory).root;
+  const segments = relative(root, directory).split(sep).filter(Boolean);
+  let current = root;
+  for (const segment of segments) {
+    current = join(current, segment);
+    let record = recordFile(current);
+    let created = false;
+    if (!record) {
+      mkdirSync(current, { mode: DIRECTORY_MODE });
+      record = recordFile(current);
+      created = true;
+    }
+    if (
+      !record ||
+      (record.isSymbolicLink && !isAllowedSystemSymlink(current)) ||
+      (!record.isSymbolicLink && !record.isDirectory)
+    ) {
+      throw new Error(`Backup directory must be a real directory: ${current}`);
+    }
+    if (created || current === directory) {
+      if (!isAllowedSystemSymlink(current)) chmodSync(current, DIRECTORY_MODE);
+    }
+    const verified = recordFile(current);
+    if (
+      !verified ||
+      (verified.isSymbolicLink && !isAllowedSystemSymlink(current)) ||
+      (!verified.isSymbolicLink && !verified.isDirectory)
+    ) {
+      throw new Error(`Backup directory changed during creation: ${current}`);
+    }
   }
-  chmodSync(path, DIRECTORY_MODE);
 }
 
 function isWithin(path: string, parent: string): boolean {
@@ -175,7 +281,7 @@ function assertDestinationPath(
   projectRoot: string,
   destination: string,
 ): string {
-  const backupPath = assertAbsolutePath(destination, "Backup destination");
+  const backupPath = assertNoSymlinkParents(destination, "Backup destination");
   if (
     backupPath === databasePath ||
     SIDECAR_SUFFIXES.some((suffix) => backupPath === `${databasePath}${suffix}`)
@@ -183,8 +289,8 @@ function assertDestinationPath(
     throw new Error("Backup destination must not be the live database or its WAL sidecar");
   }
   const replicaPath = join(projectRoot, ".prime-board");
-  if (isWithin(backupPath, replicaPath)) {
-    throw new Error("Backup destination must not be inside the project replica");
+  if (pathHasReplicaParent(backupPath, projectRoot) || isWithin(backupPath, replicaPath)) {
+    throw new Error("Backup destination must not be inside a project replica");
   }
   const existing = recordFile(backupPath);
   if (existing) throw new Error(`Backup destination already exists: ${backupPath}`);
@@ -221,7 +327,11 @@ function atomicWrite(path: string, data: Uint8Array, mode = DATABASE_MODE): void
   const temporaryPath = `${path}.tmp-${process.pid}-${randomUUID()}`;
   let descriptor: number | null = null;
   try {
+    // Comprueba otra vez antes de abrir el archivo temporal. El archivo está
+    // en el directorio de destino ya creado.
+    assertNoSymlinkParents(path, "Atomic destination");
     descriptor = openSync(temporaryPath, "wx", mode);
+    assertNoSymlinkParents(temporaryPath, "Atomic temporary file", false);
     writeFileSync(descriptor, data);
     fsyncSync(descriptor);
     closeSync(descriptor);
@@ -238,10 +348,75 @@ function atomicWrite(path: string, data: Uint8Array, mode = DATABASE_MODE): void
       if (existsSync(path)) throw new Error(`Atomic destination already exists: ${path}`);
       renameSync(temporaryPath, path);
     }
+    syncDirectory(dirname(path));
   } finally {
     if (descriptor !== null) closeSync(descriptor);
-    rmSync(temporaryPath, { force: true });
+    if (
+      recordFile(temporaryPath) &&
+      assertNoSymlinkParents(temporaryPath, "Atomic temporary file")
+    ) {
+      rmSync(temporaryPath, { force: true });
+    }
   }
+}
+
+/** Reemplaza un archivo regular de forma atómica y conserva el journal entre fases. */
+function atomicReplace(path: string, data: Uint8Array, mode = DATABASE_MODE): void {
+  const temporaryPath = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  let descriptor: number | null = null;
+  try {
+    assertNoSymlinkParents(path, "Atomic replacement destination");
+    descriptor = openSync(temporaryPath, "wx", mode);
+    assertNoSymlinkParents(temporaryPath, "Atomic replacement temporary file", false);
+    writeFileSync(descriptor, data);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = null;
+    chmodSync(temporaryPath, mode);
+    const existing = recordFile(path);
+    if (existing?.isSymbolicLink || (existing && !existing.isFile)) {
+      throw new Error(`Atomic replacement destination must be a regular file: ${path}`);
+    }
+    renameSync(temporaryPath, path);
+    syncDirectory(dirname(path));
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+    if (
+      recordFile(temporaryPath) &&
+      assertNoSymlinkParents(temporaryPath, "Atomic replacement temporary file")
+    ) {
+      rmSync(temporaryPath, { force: true });
+    }
+  }
+}
+
+function syncDirectory(path: string): void {
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY);
+    fsyncSync(descriptor);
+  } catch (error) {
+    // Windows no admite fsync sobre handles de directorio. El contenido y el
+    // orden de rename siguen verificados, pero la barrera del directorio no está disponible.
+    if (process.platform !== "win32") throw error;
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+  }
+}
+
+function durableRename(source: string, destination: string, directory: string): void {
+  assertNoSymlinkParents(source, "Durable rename source", false);
+  assertNoSymlinkParents(destination, "Durable rename destination");
+  assertNoSymlinkParents(directory, "Durable rename directory", false);
+  renameSync(source, destination);
+  syncDirectory(directory);
+}
+
+function durableRemove(path: string, directory: string): void {
+  assertNoSymlinkParents(path, "Durable removal path");
+  assertNoSymlinkParents(directory, "Durable removal directory", false);
+  removeIfPresent(path);
+  syncDirectory(directory);
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -386,7 +561,7 @@ function readBackup(backupPathInput: string): {
   manifest: BackupManifest;
   bytes: Buffer;
 } {
-  const backupPath = assertAbsolutePath(backupPathInput, "Backup path");
+  const backupPath = assertNoSymlinkParents(backupPathInput, "Backup path", false);
   const backupFile = assertNoSymlink(backupPath, "Backup", false);
   if (!backupFile || !backupFile.isFile)
     throw new Error(`Backup must be a regular file: ${backupPath}`);
@@ -397,7 +572,12 @@ function readBackup(backupPathInput: string): {
   if (!samePath(metadata.backupPath, backupPath)) {
     throw new Error(`Backup metadata path does not match the backup: ${backupPath}`);
   }
-  if (metadata.projectHash !== projectHash(metadata.projectRoot)) {
+  const manifestProjectRoot = assertNoSymlinkParents(
+    metadata.projectRoot,
+    "Backup project root",
+    false,
+  );
+  if (metadata.projectHash !== projectHash(manifestProjectRoot)) {
     throw new Error(`Backup project identity is invalid: ${backupPath}`);
   }
   const bytes = readFileSync(backupPath);
@@ -420,16 +600,218 @@ function quarantinePath(databasePath: string, suffix: string): string {
 }
 
 function renameIfPresent(source: string, destination: string): boolean {
-  if (!recordFile(source)) return false;
+  assertNoSymlinkParents(source, "Restore source");
+  assertNoSymlinkParents(destination, "Restore quarantine destination");
+  const record = recordFile(source);
+  if (!record) return false;
+  if (record.isSymbolicLink || !record.isFile) {
+    throw new Error(`Restore source must be a regular file: ${source}`);
+  }
   renameSync(source, destination);
+  const moved = recordFile(destination);
+  if (!moved || moved.isSymbolicLink || !moved.isFile) {
+    throw new Error(`Restore source changed during quarantine: ${source}`);
+  }
   return true;
 }
 
 function removeIfPresent(path: string): void {
+  assertNoSymlinkParents(path, "Removal path");
   const record = recordFile(path);
   if (!record) return;
   if (record.isSymbolicLink) throw new Error(`Refusing to remove symbolic link: ${path}`);
   rmSync(path, { force: true });
+}
+
+type RestorePhase = "prepared" | "database-quarantined" | "target-installed";
+
+interface RestoreJournal {
+  version: 1;
+  phase: RestorePhase;
+  databasePath: string;
+  directory: string;
+  stagedPath: string;
+  originalPath: string;
+  originalSidecars: Record<BackupSidecar, string>;
+  backupPath: string;
+  expectedSha256: string;
+}
+
+function restoreJournalPath(databasePath: string): string {
+  return `${databasePath}.restore.json`;
+}
+
+function quarantinePathsAreSafe(journal: RestoreJournal): void {
+  const candidates = [
+    journal.stagedPath,
+    journal.originalPath,
+    journal.originalSidecars["-wal"],
+    journal.originalSidecars["-shm"],
+  ];
+  for (const path of candidates) {
+    if (!samePath(dirname(path), journal.directory)) {
+      throw new Error(`Restore journal path escapes the database directory: ${path}`);
+    }
+    if (!basename(path).startsWith(`${basename(journal.databasePath)}.restore-`)) {
+      throw new Error(`Restore journal path is not a quarantine path: ${path}`);
+    }
+    assertNoSymlinkParents(path, "Restore quarantine path");
+    const record = recordFile(path);
+    if (record && (!record.isFile || record.isSymbolicLink)) {
+      throw new Error(`Restore quarantine path must be a regular file: ${path}`);
+    }
+  }
+}
+
+function parseRestoreJournal(value: unknown, databasePath: string): RestoreJournal {
+  const record = objectRecord(value);
+  if (!record || record.version !== 1) throw new Error("Unsupported SQLite restore journal");
+  const phase = record.phase;
+  if (phase !== "prepared" && phase !== "database-quarantined" && phase !== "target-installed") {
+    throw new Error("Invalid SQLite restore journal phase");
+  }
+  const directory = assertNoSymlinkParents(
+    stringField(record, "directory"),
+    "Restore journal directory",
+    false,
+  );
+  const journal: RestoreJournal = {
+    version: 1,
+    phase,
+    databasePath: assertNoSymlinkParents(
+      stringField(record, "databasePath"),
+      "Restore journal database path",
+    ),
+    directory,
+    stagedPath: assertAbsolutePath(stringField(record, "stagedPath"), "Restore staged path"),
+    originalPath: assertAbsolutePath(stringField(record, "originalPath"), "Restore original path"),
+    originalSidecars: {
+      "-wal": assertAbsolutePath(
+        stringField(objectRecord(record.originalSidecars) ?? {}, "-wal"),
+        "Restore WAL quarantine path",
+      ),
+      "-shm": assertAbsolutePath(
+        stringField(objectRecord(record.originalSidecars) ?? {}, "-shm"),
+        "Restore SHM quarantine path",
+      ),
+    },
+    backupPath: assertAbsolutePath(stringField(record, "backupPath"), "Restore backup path"),
+    expectedSha256: stringField(record, "expectedSha256"),
+  };
+  if (
+    !samePath(journal.databasePath, databasePath) ||
+    !samePath(journal.directory, dirname(databasePath))
+  ) {
+    throw new Error("SQLite restore journal does not match the database path");
+  }
+  quarantinePathsAreSafe(journal);
+  return journal;
+}
+
+function writeRestoreJournal(journal: RestoreJournal): void {
+  const path = restoreJournalPath(journal.databasePath);
+  atomicReplace(path, Buffer.from(`${JSON.stringify(journal, null, 2)}\n`, "utf8"));
+  ensurePrivateFile(path, "Restore journal");
+}
+
+function readRestoreJournal(databasePath: string): RestoreJournal | null {
+  const path = restoreJournalPath(databasePath);
+  const record = recordFile(path);
+  if (!record) return null;
+  if (record.isSymbolicLink || !record.isFile) {
+    throw new Error(`Restore journal must be a regular file: ${path}`);
+  }
+  ensurePrivateFile(path, "Restore journal");
+  return parseRestoreJournal(JSON.parse(readFileSync(path, "utf8")), databasePath);
+}
+
+function removeRestoreJournal(databasePath: string): void {
+  const path = restoreJournalPath(databasePath);
+  if (!recordFile(path)) return;
+  durableRemove(path, dirname(databasePath));
+}
+
+function removeLiveSidecar(databasePath: string, sidecar: BackupSidecar, directory: string): void {
+  const path = `${databasePath}${sidecar}`;
+  const record = recordFile(path);
+  if (record?.isSymbolicLink)
+    throw new Error(`Database sidecar must not be a symbolic link: ${path}`);
+  if (record && !record.isFile) throw new Error(`Database sidecar must be a regular file: ${path}`);
+  if (record) durableRemove(path, directory);
+}
+
+function cleanRestoreQuarantines(journal: RestoreJournal): void {
+  durableRemove(journal.stagedPath, journal.directory);
+  durableRemove(journal.originalPath, journal.directory);
+  durableRemove(journal.originalSidecars["-wal"], journal.directory);
+  durableRemove(journal.originalSidecars["-shm"], journal.directory);
+}
+
+function restoreOriginalFromJournal(journal: RestoreJournal): void {
+  const directory = journal.directory;
+  const target = journal.databasePath;
+  const original = recordFile(journal.originalPath);
+  if (!original)
+    throw new Error(`Restore journal has no original database: ${journal.originalPath}`);
+  if (recordFile(target)) durableRemove(target, directory);
+  for (const sidecar of SIDECAR_SUFFIXES) {
+    const quarantined = journal.originalSidecars[sidecar];
+    if (recordFile(quarantined)) {
+      removeLiveSidecar(target, sidecar, directory);
+      durableRename(quarantined, `${target}${sidecar}`, directory);
+    }
+  }
+  durableRename(journal.originalPath, target, directory);
+  verifyLiveDatabaseFile(target);
+  durableRemove(journal.stagedPath, directory);
+  removeRestoreJournal(target);
+}
+
+function finishStagedRestore(journal: RestoreJournal): void {
+  const target = journal.databasePath;
+  const directory = journal.directory;
+  if (recordFile(target)) durableRemove(target, directory);
+  for (const sidecar of SIDECAR_SUFFIXES) removeLiveSidecar(target, sidecar, directory);
+  if (!recordFile(journal.stagedPath)) {
+    throw new Error(`Restore journal has no staged database: ${journal.stagedPath}`);
+  }
+  durableRename(journal.stagedPath, target, directory);
+  verifyDatabaseFile(target, journal.expectedSha256);
+  durableRemove(journal.originalPath, directory);
+  durableRemove(journal.originalSidecars["-wal"], directory);
+  durableRemove(journal.originalSidecars["-shm"], directory);
+  removeRestoreJournal(target);
+}
+
+/** Completa o revierte un restore interrumpido por un fallo de proceso o host. */
+export function recoverSqliteRestore(databasePathInput: string): void {
+  const databasePath = assertDatabasePath(databasePathInput, true);
+  const journal = readRestoreJournal(databasePath);
+  if (!journal) return;
+
+  let targetIsValid = false;
+  const target = recordFile(databasePath);
+  if (target) {
+    if (target.isSymbolicLink || !target.isFile) {
+      throw new Error(`Database path must be a regular file: ${databasePath}`);
+    }
+    try {
+      verifyDatabaseFile(databasePath, journal.expectedSha256);
+      targetIsValid = true;
+    } catch {
+      targetIsValid = false;
+    }
+  }
+  if (targetIsValid) {
+    cleanRestoreQuarantines(journal);
+    removeRestoreJournal(databasePath);
+    return;
+  }
+  if (recordFile(journal.originalPath)) {
+    restoreOriginalFromJournal(journal);
+    return;
+  }
+  finishStagedRestore(journal);
 }
 
 function verifyDatabaseFile(path: string, expectedSha256?: string): void {
@@ -443,12 +825,27 @@ function verifyDatabaseFile(path: string, expectedSha256?: string): void {
     throw new Error(`Restored database is unstable: ${path}`);
 }
 
+/** Valida un archivo SQLite activo junto con sus sidecars WAL/SHM. */
+function verifyLiveDatabaseFile(path: string): void {
+  ensurePrivateFile(path, "Restored database");
+  const db = new Database(path, { readonly: true, strict: true });
+  try {
+    readIntegrity(db);
+  } finally {
+    db.close();
+  }
+}
+
 export function createSqliteBackup(options: BackupOptions): BackupResult {
-  const databasePath = assertDatabasePath(options.databasePath, false);
-  const projectRoot = assertAbsolutePath(options.projectRoot, "Project root");
+  const projectRoot = assertNoSymlinkParents(options.projectRoot, "Project root", false);
   const projectRecord = assertNoSymlink(projectRoot, "Project root", false);
   if (!projectRecord || !projectRecord.isDirectory)
     throw new Error(`Project root must be a directory: ${projectRoot}`);
+  const databasePath = assertDatabasePath(options.databasePath, false);
+  if (pathHasReplicaParent(databasePath, projectRoot)) {
+    throw new Error("Database path must not be inside a project replica");
+  }
+  recoverSqliteRestore(databasePath);
   const destination = assertDestinationPath(
     databasePath,
     projectRoot,
@@ -462,10 +859,14 @@ export function createSqliteBackup(options: BackupOptions): BackupResult {
   const sourceShmPresent = existsSync(`${databasePath}-shm`);
   const snapshot = serializeDatabase(databasePath, quarantinePath(destination, "snapshot"));
   const databaseSha256 = sha256(snapshot.bytes);
+  const runtimeVersion = options.runtimeVersion ?? RUNTIME_VERSION;
+  if (runtimeVersion !== RUNTIME_VERSION) {
+    throw new Error(`Runtime version must match the package version: ${RUNTIME_VERSION}`);
+  }
   const metadata: BackupManifest = {
     format: BACKUP_FORMAT,
     createdAt: new Date().toISOString(),
-    runtimeVersion: options.runtimeVersion ?? RUNTIME_VERSION,
+    runtimeVersion,
     bunVersion: Bun.version,
     platform: process.platform,
     architecture: process.arch,
@@ -503,7 +904,11 @@ export function createSqliteBackup(options: BackupOptions): BackupResult {
 }
 
 export function createSqliteBackupIfPresent(options: BackupOptions): BackupResult | null {
+  const projectRoot = assertNoSymlinkParents(options.projectRoot, "Project root", false);
   const databasePath = assertDatabasePath(options.databasePath, true);
+  if (pathHasReplicaParent(databasePath, projectRoot)) {
+    throw new Error("Database path must not be inside a project replica");
+  }
   if (!existsSync(databasePath)) return null;
   return createSqliteBackup({ ...options, databasePath });
 }
@@ -518,9 +923,17 @@ export function readSqliteBackup(backupPath: string): BackupResult {
 }
 
 export function restoreSqliteBackup(options: RestoreOptions): RestoreResult {
-  const backup = readBackup(options.backupPath);
   const databasePath = assertDatabasePath(options.databasePath, true);
-  const projectRoot = assertAbsolutePath(options.projectRoot, "Project root");
+  const projectRoot = assertNoSymlinkParents(options.projectRoot, "Project root", false);
+  if (pathHasReplicaParent(databasePath, projectRoot)) {
+    throw new Error("Database path must not be inside a project replica");
+  }
+  const projectRecord = assertNoSymlink(projectRoot, "Project root", false);
+  if (!projectRecord || !projectRecord.isDirectory) {
+    throw new Error(`Project root must be a directory: ${projectRoot}`);
+  }
+  recoverSqliteRestore(databasePath);
+  const backup = readBackup(options.backupPath);
   if (!samePath(backup.manifest.projectRoot, projectRoot)) {
     throw new Error(`Backup belongs to another project: ${backup.manifest.projectRoot}`);
   }
@@ -537,52 +950,65 @@ export function restoreSqliteBackup(options: RestoreOptions): RestoreResult {
   ensurePrivateDirectory(targetDirectory);
   const temporaryPath = quarantinePath(databasePath, "restore-staged");
   const originalPath = quarantinePath(databasePath, "restore-original");
-  const originalSidecars = new Map<BackupSidecar, string>();
-  let originalDatabaseMoved = false;
-  let staged = false;
-  let targetInstalled = false;
+  const originalSidecars = {
+    "-wal": `${originalPath}-wal`,
+    "-shm": `${originalPath}-shm`,
+  } satisfies Record<BackupSidecar, string>;
+  const journal: RestoreJournal = {
+    version: 1,
+    phase: "prepared",
+    databasePath,
+    directory: targetDirectory,
+    stagedPath: temporaryPath,
+    originalPath,
+    originalSidecars,
+    backupPath: backup.path,
+    expectedSha256: backup.manifest.databaseSha256,
+  };
   try {
     atomicWrite(temporaryPath, backup.bytes);
     verifyDatabaseFile(temporaryPath, backup.manifest.databaseSha256);
-    staged = true;
+    writeRestoreJournal(journal);
 
-    originalDatabaseMoved = renameIfPresent(databasePath, originalPath);
+    if (renameIfPresent(databasePath, originalPath)) {
+      syncDirectory(targetDirectory);
+      journal.phase = "database-quarantined";
+      writeRestoreJournal(journal);
+    }
     for (const sidecar of SIDECAR_SUFFIXES) {
       const source = `${databasePath}${sidecar}`;
-      const destination = `${originalPath}${sidecar}`;
-      if (renameIfPresent(source, destination)) originalSidecars.set(sidecar, destination);
+      const destination = originalSidecars[sidecar];
+      if (renameIfPresent(source, destination)) {
+        syncDirectory(targetDirectory);
+        writeRestoreJournal(journal);
+      }
     }
-    renameSync(temporaryPath, databasePath);
-    staged = false;
-    targetInstalled = true;
+    durableRename(temporaryPath, databasePath, targetDirectory);
+    journal.phase = "target-installed";
+    writeRestoreJournal(journal);
     verifyDatabaseFile(databasePath, backup.manifest.databaseSha256);
-
-    try {
-      if (originalDatabaseMoved) removeIfPresent(originalPath);
-      for (const sidecarPath of originalSidecars.values()) removeIfPresent(sidecarPath);
-    } catch {
-      // The verified target is usable. Keep a previous copy when cleanup is not possible.
-    }
+    const previousDatabasePath = recordFile(originalPath) ? originalPath : null;
+    cleanRestoreQuarantines(journal);
+    removeRestoreJournal(databasePath);
     return {
       backupPath: backup.path,
       databasePath,
       databaseSha256: backup.manifest.databaseSha256,
-      previousDatabasePath: originalDatabaseMoved ? originalPath : null,
+      previousDatabasePath,
     };
   } catch (error) {
-    if (staged) removeIfPresent(temporaryPath);
-    if (targetInstalled) {
-      removeIfPresent(databasePath);
-      for (const sidecar of SIDECAR_SUFFIXES) removeIfPresent(`${databasePath}${sidecar}`);
-    }
-    if (originalDatabaseMoved) renameSync(originalPath, databasePath);
-    for (const [sidecar, sidecarPath] of originalSidecars) {
-      renameSync(sidecarPath, `${databasePath}${sidecar}`);
+    try {
+      recoverSqliteRestore(databasePath);
+    } catch (recoveryError) {
+      const cause = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+      throw new Error(`SQLite restore failed and recovery is pending: ${cause}`, {
+        cause: recoveryError,
+      });
     }
     throw error;
   }
 }
 
 export function backupMetadataPath(backupPath: string): string {
-  return metadataPathFor(assertAbsolutePath(backupPath, "Backup path"));
+  return metadataPathFor(assertNoSymlinkParents(backupPath, "Backup path"));
 }
