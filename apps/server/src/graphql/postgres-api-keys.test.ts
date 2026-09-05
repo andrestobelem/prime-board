@@ -520,6 +520,127 @@ describe("PostgreSQL API key Workspace isolation", () => {
           )
         )?.count,
       ).toBe(0);
+
+      const emptyProject = await request(
+        `mutation { projectCreate(input: { name: "PRB-587 empty project", teamIds: [] }) { success } }`,
+        {},
+        limited.key,
+      );
+      expect(emptyProject.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+      const scopedProject = await request(
+        `mutation($teamId: ID!) { projectCreate(input: { name: "PRB-587 scoped project", teamIds: [$teamId] }) { project { id } } }`,
+        { teamId: teamB.id },
+      );
+      expect(scopedProject.errors).toBeUndefined();
+      const scopedProjectId = (scopedProject.data!.projectCreate as { project: { id: string } })
+        .project.id;
+      const foreignProject = await request(
+        `mutation($teamId: ID!) { projectCreate(input: { name: "PRB-587 foreign project", teamIds: [$teamId] }) { project { id } } }`,
+        { teamId: teamA.id },
+      );
+      expect(foreignProject.errors).toBeUndefined();
+      const foreignProjectId = (foreignProject.data!.projectCreate as { project: { id: string } })
+        .project.id;
+      const emptyProjectUpdate = await request(
+        `mutation($id: ID!) { projectUpdate(id: $id, input: { teamIds: [] }) { success } }`,
+        { id: scopedProjectId },
+        limited.key,
+      );
+      expect(emptyProjectUpdate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+      const emptyInitiative = await request(
+        `mutation { initiativeCreate(input: { name: "PRB-587 empty initiative", teamIds: [] }) { success } }`,
+        {},
+        limited.key,
+      );
+      expect(emptyInitiative.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+      const projectOnlyInitiative = await request(
+        `mutation($projectId: ID!) { initiativeCreate(input: { name: "PRB-587 project-only initiative", projectIds: [$projectId], teamIds: [] }) { initiative { id } } }`,
+        { projectId: scopedProjectId },
+        limited.key,
+      );
+      expect(projectOnlyInitiative.errors).toBeUndefined();
+      const projectOnlyInitiativeId = (
+        projectOnlyInitiative.data!.initiativeCreate as { initiative: { id: string } }
+      ).initiative.id;
+      const projectOnlyClear = await request(
+        `mutation($id: ID!) { initiativeUpdate(id: $id, input: { projectIds: [] }) { success } }`,
+        { id: projectOnlyInitiativeId },
+        limited.key,
+      );
+      expect(projectOnlyClear.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+      const missingProject = await request(
+        `mutation { initiativeCreate(input: { name: "PRB-587 missing project initiative", projectIds: ["missing-project"], teamIds: [] }) { success } }`,
+        {},
+        limited.key,
+      );
+      expect(missingProject.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+
+      const missingTeam = await request(
+        `mutation { initiativeCreate(input: { name: "PRB-587 missing team initiative", teamIds: ["missing-team"] }) { success } }`,
+        {},
+        limited.key,
+      );
+      expect(missingTeam.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+
+      const foreignTeamInitiative = await request(
+        `mutation($teamId: ID!) { initiativeCreate(input: { name: "PRB-587 foreign team initiative", teamIds: [$teamId] }) { success } }`,
+        { teamId: teamA.id },
+        limited.key,
+      );
+      expect(foreignTeamInitiative.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+      const foreignProjectInitiative = await request(
+        `mutation($projectId: ID!) { initiativeCreate(input: { name: "PRB-587 foreign project initiative", projectIds: [$projectId], teamIds: [] }) { success } }`,
+        { projectId: foreignProjectId },
+        limited.key,
+      );
+      expect(foreignProjectInitiative.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+      const mixedInitiative = await request(
+        `mutation($projectId: ID!, $teamId: ID!) { initiativeCreate(input: { name: "PRB-587 mixed scope initiative", projectIds: [$projectId], teamIds: [$teamId] }) { initiative { id } } }`,
+        { projectId: foreignProjectId, teamId: teamB.id },
+      );
+      expect(mixedInitiative.errors).toBeUndefined();
+      const mixedInitiativeId = (
+        mixedInitiative.data!.initiativeCreate as { initiative: { id: string } }
+      ).initiative.id;
+      const mixedRescope = await request(
+        `mutation($id: ID!) { initiativeUpdate(id: $id, input: { projectIds: [] }) { success } }`,
+        { id: mixedInitiativeId },
+        limited.key,
+      );
+      expect(mixedRescope.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+      const mixedRelation = await persistence.one<{ count: number }>(
+        "SELECT count(*)::int AS count FROM initiative_projects WHERE initiative_id = $1 AND project_id = $2",
+        [mixedInitiativeId, foreignProjectId],
+      );
+      expect(mixedRelation?.count).toBe(1);
+
+      const missingInitiativeUpdate = await request(
+        `mutation { initiativeUpdate(id: "missing-initiative", input: { projectIds: [], teamIds: [] }) { success } }`,
+        {},
+        limited.key,
+      );
+      expect(missingInitiativeUpdate.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+
+      const scopedInitiative = await request(
+        `mutation($teamId: ID!) { initiativeCreate(input: { name: "PRB-587 scoped initiative", teamIds: [$teamId] }) { initiative { id } } }`,
+        { teamId: teamB.id },
+      );
+      expect(scopedInitiative.errors).toBeUndefined();
+      const scopedInitiativeId = (
+        scopedInitiative.data!.initiativeCreate as { initiative: { id: string } }
+      ).initiative.id;
+      const emptyInitiativeUpdate = await request(
+        `mutation($id: ID!) { initiativeUpdate(id: $id, input: { teamIds: [] }) { success } }`,
+        { id: scopedInitiativeId },
+        limited.key,
+      );
+      expect(emptyInitiativeUpdate.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
     } finally {
       stop?.();
       db.close();

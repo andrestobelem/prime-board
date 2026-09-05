@@ -355,22 +355,51 @@ async function assertPostgresInitiativeKeyLimit(
   teamIds?: readonly string[] | null,
 ): Promise<void> {
   if (!context.auth?.teamIds || !context.persistence) return;
+  if (initiativeId && !(await getPostgresInitiative(context.persistence, initiativeId))) {
+    throw apiError("NOT_FOUND", "Initiative not found");
+  }
+  const currentProjectIds = initiativeId
+    ? await listPostgresInitiativeProjectIds(context.persistence, initiativeId)
+    : [];
+  const currentTeamIds = initiativeId
+    ? await listPostgresInitiativeTeamIds(context.persistence, initiativeId)
+    : [];
+  const effectiveProjectIds =
+    initiativeId && projectIds == null ? currentProjectIds : (projectIds ?? []);
+  const effectiveTeamIds = initiativeId && teamIds == null ? currentTeamIds : (teamIds ?? []);
   const scope = new Set<string>();
-  if (initiativeId) {
-    for (const teamId of await listPostgresInitiativeScopeTeamIds(
-      context.persistence,
-      initiativeId,
-    )) {
-      scope.add(teamId);
+  const targetScope = new Set<string>();
+  const addProjectTeams = async (
+    ids: readonly string[],
+    destination: Set<string>,
+  ): Promise<void> => {
+    for (const projectId of ids) {
+      const project = await getPostgresProject(context.persistence!, projectId);
+      if (!project) throw apiError("NOT_FOUND", "Project not found");
+      for (const teamId of await listPostgresProjectTeamIds(context.persistence!, project.id)) {
+        destination.add(teamId);
+      }
     }
-  }
-  for (const projectId of projectIds ?? []) {
-    for (const teamId of await listPostgresProjectTeamIds(context.persistence, projectId)) {
-      scope.add(teamId);
+  };
+  const addDirectTeams = async (
+    ids: readonly string[],
+    destination: Set<string>,
+  ): Promise<void> => {
+    for (const teamId of ids) {
+      const team = await getPostgresTeam(context.persistence!, { id: teamId });
+      if (!team) throw apiError("NOT_FOUND", "Team not found");
+      destination.add(team.id);
     }
+  };
+  await addProjectTeams(currentProjectIds, scope);
+  await addDirectTeams(currentTeamIds, scope);
+  await addProjectTeams(effectiveProjectIds, targetScope);
+  await addDirectTeams(effectiveTeamIds, targetScope);
+  if (!targetScope.size) {
+    throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
   }
-  for (const teamId of teamIds ?? []) scope.add(teamId);
-  if (!scope.size || !apiKeyTeamsWithinLimit(context.auth, [...scope])) {
+  for (const teamId of targetScope) scope.add(teamId);
+  if (!apiKeyTeamsWithinLimit(context.auth, [...scope])) {
     throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
   }
 }

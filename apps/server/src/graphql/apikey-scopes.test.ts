@@ -466,4 +466,169 @@ describe("API key scopes and lifecycle", () => {
         .get("Blocked list project"),
     ).toEqual({ count: 0 });
   });
+
+  it("conserva los errores de dominio para listas vacías scoped", async () => {
+    app = createTestApp();
+    const actorId = (
+      app.db
+        .query("SELECT id FROM actors WHERE workspace_role = 'admin' ORDER BY created_at LIMIT 1")
+        .get() as {
+        id: string;
+      }
+    ).id;
+    const teamId = (app.db.query("SELECT id FROM teams WHERE key = 'PB'").get() as { id: string })
+      .id;
+    const keyResult = await gql(
+      app,
+      `mutation($actorId: ID!, $teamId: ID!) {
+        apiKeyCreate(input: { actorId: $actorId, name: "empty-list-key", scopes: [WRITE], teamIds: [$teamId] }) { key }
+      }`,
+      { actorId, teamId },
+    );
+    const key = keyResult.data!.apiKeyCreate.key as string;
+
+    const project = await gql(
+      app,
+      `mutation($teamId: ID!) { projectCreate(input: { name: "empty-list-project", teamIds: [$teamId] }) { project { id } } }`,
+      { teamId },
+    );
+    const projectId = project.data!.projectCreate.project.id as string;
+    const foreignTeam = await gql(
+      app,
+      `mutation { teamCreate(input: { key: "OTHER", name: "Other empty-list Team" }) { team { id } } }`,
+    );
+    const foreignTeamId = foreignTeam.data!.teamCreate.team.id as string;
+    const foreignProject = await gql(
+      app,
+      `mutation($teamId: ID!) { projectCreate(input: { name: "other-empty-list-project", teamIds: [$teamId] }) { project { id } } }`,
+      { teamId: foreignTeamId },
+    );
+    const foreignProjectId = foreignProject.data!.projectCreate.project.id as string;
+
+    const projectOnlyInitiative = await gql(
+      app,
+      `mutation($projectId: ID!) { initiativeCreate(input: { name: "project-only-empty-team-initiative", projectIds: [$projectId], teamIds: [] }) { initiative { id } } }`,
+      { projectId },
+      key,
+    );
+    expect(projectOnlyInitiative.errors).toBeUndefined();
+    const projectOnlyInitiativeId = projectOnlyInitiative.data!.initiativeCreate.initiative
+      .id as string;
+
+    const projectOnlyRescope = await gql(
+      app,
+      `mutation($id: ID!, $projectId: ID!) { initiativeUpdate(id: $id, input: { projectIds: [$projectId], teamIds: [] }) { success } }`,
+      { id: projectOnlyInitiativeId, projectId },
+      key,
+    );
+    expect(projectOnlyRescope.errors).toBeUndefined();
+
+    const projectOnlyClear = await gql(
+      app,
+      `mutation($id: ID!) { initiativeUpdate(id: $id, input: { projectIds: [] }) { success } }`,
+      { id: projectOnlyInitiativeId },
+      key,
+    );
+    expect(projectOnlyClear.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+    const missingProject = await gql(
+      app,
+      `mutation { initiativeCreate(input: { name: "missing-project-initiative", projectIds: ["missing-project"], teamIds: [] }) { success } }`,
+      {},
+      key,
+    );
+    expect(missingProject.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+
+    const missingTeam = await gql(
+      app,
+      `mutation { initiativeCreate(input: { name: "missing-team-initiative", teamIds: ["missing-team"] }) { success } }`,
+      {},
+      key,
+    );
+    expect(missingTeam.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+
+    const foreignTeamInitiative = await gql(
+      app,
+      `mutation($teamId: ID!) { initiativeCreate(input: { name: "foreign-team-initiative", teamIds: [$teamId] }) { success } }`,
+      { teamId: foreignTeamId },
+      key,
+    );
+    expect(foreignTeamInitiative.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+    const foreignProjectInitiative = await gql(
+      app,
+      `mutation($projectId: ID!) { initiativeCreate(input: { name: "foreign-project-initiative", projectIds: [$projectId], teamIds: [] }) { success } }`,
+      { projectId: foreignProjectId },
+      key,
+    );
+    expect(foreignProjectInitiative.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+    const mixedInitiative = await gql(
+      app,
+      `mutation($projectId: ID!, $teamId: ID!) { initiativeCreate(input: { name: "mixed-scope-initiative", projectIds: [$projectId], teamIds: [$teamId] }) { initiative { id } } }`,
+      { projectId: foreignProjectId, teamId },
+    );
+    expect(mixedInitiative.errors).toBeUndefined();
+    const mixedInitiativeId = mixedInitiative.data!.initiativeCreate.initiative.id as string;
+    const mixedRescope = await gql(
+      app,
+      `mutation($id: ID!) { initiativeUpdate(id: $id, input: { projectIds: [] }) { success } }`,
+      { id: mixedInitiativeId },
+      key,
+    );
+    expect(mixedRescope.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+    expect(
+      app.db
+        .query(
+          "SELECT count(*) AS count FROM initiative_projects WHERE initiative_id = ?1 AND project_id = ?2",
+        )
+        .get(mixedInitiativeId, foreignProjectId),
+    ).toEqual({ count: 1 });
+
+    const missingInitiativeUpdate = await gql(
+      app,
+      `mutation { initiativeUpdate(id: "missing-initiative", input: { projectIds: [], teamIds: [] }) { success } }`,
+      {},
+      key,
+    );
+    expect(missingInitiativeUpdate.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+
+    const projectCreate = await gql(
+      app,
+      `mutation { projectCreate(input: { name: "invalid-empty-project", teamIds: [] }) { success } }`,
+      {},
+      key,
+    );
+    expect(projectCreate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const projectUpdate = await gql(
+      app,
+      `mutation($id: ID!) { projectUpdate(id: $id, input: { teamIds: [] }) { success } }`,
+      { id: projectId },
+      key,
+    );
+    expect(projectUpdate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const initiativeCreate = await gql(
+      app,
+      `mutation { initiativeCreate(input: { name: "empty-list-initiative", teamIds: [] }) { success } }`,
+      {},
+      key,
+    );
+    expect(initiativeCreate.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+
+    const initiative = await gql(
+      app,
+      `mutation($teamId: ID!) { initiativeCreate(input: { name: "scoped-empty-list-initiative", teamIds: [$teamId] }) { initiative { id } } }`,
+      { teamId },
+    );
+    const initiativeId = initiative.data!.initiativeCreate.initiative.id as string;
+    const initiativeUpdate = await gql(
+      app,
+      `mutation($id: ID!) { initiativeUpdate(id: $id, input: { teamIds: [] }) { success } }`,
+      { id: initiativeId },
+      key,
+    );
+    expect(initiativeUpdate.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+  });
 });

@@ -15,7 +15,7 @@ import { getCycle } from "../domain/cycles.ts";
 import { getReview } from "../domain/reviews.ts";
 import { getSavedView } from "../domain/saved-views.ts";
 import { getTeam } from "../domain/teams.ts";
-import { listProjectTeamIds } from "../domain/projects.ts";
+import { getProject, listProjectTeamIds } from "../domain/projects.ts";
 import { postgresInboxTeamId } from "../domain/postgres-inbox.ts";
 import { getPostgresTeam } from "../domain/postgres-teams.ts";
 
@@ -148,7 +148,6 @@ function scalar(value: unknown): string | null {
 function ids(value: unknown): string[] {
   if (value === undefined || value === null) return [];
   const values = Array.isArray(value) ? value : [value];
-  if (values.length === 0) return ["__missing__"];
   return values.map((item) => scalar(item) ?? "__missing__");
 }
 
@@ -172,7 +171,6 @@ function scopedTeamIds(context: Context, value: unknown): string[] {
 async function operationScopedTeamIds(context: Context, value: unknown): Promise<string[]> {
   if (!context.persistence) return scopedTeamIds(context, value);
   const refs = ids(value);
-  if (refs.length === 0) return ["__missing__"];
   const persistence = context.persistence;
   return Promise.all(
     refs.map(async (ref) => {
@@ -194,6 +192,7 @@ function teamIdsForIssue(context: Context, issueId: unknown): string[] {
 function teamIdsForProject(context: Context, projectId: unknown): string[] {
   const id = scalar(projectId);
   if (!id) return [];
+  if (!getProject(context.db, id, context.workspace.workspaceId)) return ["__missing__"];
   return scopedTeamIds(context, listProjectTeamIds(context.db, id, context.workspace.workspaceId));
 }
 
@@ -250,20 +249,31 @@ async function operationTeamIdsForProject(context: Context, projectId: unknown):
   return rows.map((row) => row.team_id);
 }
 
-function teamIdsForInitiative(context: Context, initiativeId: unknown): string[] {
+function initiativeRelationTeams(
+  context: Context,
+  initiativeId: unknown,
+): { direct: string[]; projects: string[] } | null {
   const id = scalar(initiativeId);
-  if (!id) return ["__missing__"];
-  if (!context.db.query("SELECT id FROM initiatives WHERE id = ?1").get(id)) return ["__missing__"];
+  if (!id) return null;
+  if (!context.db.query("SELECT id FROM initiatives WHERE id = ?1").get(id)) return null;
   const direct = context.db
     .query("SELECT team_id FROM initiative_teams WHERE initiative_id = ?1")
     .all(id)
     .map((row) => (row as { team_id: string }).team_id);
-  const scopedDirect = scopedTeamIds(context, direct);
-  const projects = context.db
+  const projectTeams = context.db
     .query("SELECT project_id FROM initiative_projects WHERE initiative_id = ?1")
     .all(id)
     .flatMap((row) => teamIdsForProject(context, (row as { project_id: string }).project_id));
-  const teams = [...new Set([...scopedDirect, ...projects])].sort();
+  return {
+    direct: scopedTeamIds(context, direct),
+    projects: projectTeams,
+  };
+}
+
+function teamIdsForInitiative(context: Context, initiativeId: unknown): string[] {
+  const relationTeams = initiativeRelationTeams(context, initiativeId);
+  if (!relationTeams) return ["__missing__"];
+  const teams = [...new Set([...relationTeams.direct, ...relationTeams.projects])].sort();
   return teams.length ? teams : ["__workspace__"];
 }
 
@@ -635,17 +645,19 @@ async function operationTeamIds(
     }
     case "initiativeUpdate": {
       if (context.persistence) return [];
-      const current = teamIdsForInitiative(context, args.id);
+      const current = initiativeRelationTeams(context, args.id);
+      if (!current) return ["__missing__"];
       const direct =
         input.teamIds !== undefined && input.teamIds !== null
           ? scopedTeamIds(context, input.teamIds)
-          : current;
+          : current.direct;
       const projects =
         input.projectIds !== undefined && input.projectIds !== null
           ? ids(input.projectIds).flatMap((id) => teamIdsForProject(context, id))
-          : [];
-      const teams = [...new Set([...direct, ...projects])];
-      return teams.length ? teams : ["__workspace__"];
+          : current.projects;
+      const targetTeams = [...new Set([...direct, ...projects])];
+      if (!targetTeams.length) return ["__workspace__"];
+      return [...new Set([...current.direct, ...current.projects, ...targetTeams])];
     }
     case "initiativeDelete":
       if (context.persistence) return [];
