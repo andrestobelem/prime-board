@@ -37,4 +37,16 @@ describe("Workspace selector popup layout", () => {
     expect(urlKeyRule).toContain("text-overflow: ellipsis;");
     expect(urlKeyRule).toContain("white-space: nowrap;");
   });
+
+  test("reserves room below the popup in desktop and mobile viewports", () => {
+    const mobileStyles = styles.slice(styles.indexOf("@media (max-width: 720px)"));
+    const mobilePopupRule = mobileStyles.includes("  .workspace-menu-popup {")
+      ? mobileStyles.slice(mobileStyles.indexOf("  .workspace-menu-popup {"))
+      : "";
+
+    expect(rule(".workspace-menu-popup")).toContain("max-height: calc(100vh - 64px);");
+    expect(rule(".workspace-menu-popup")).toContain("max-height: calc(100dvh - 64px);");
+    expect(mobilePopupRule).toContain("max-height: calc(100vh - 112px);");
+    expect(mobilePopupRule).toContain("max-height: calc(100dvh - 112px);");
+  });
 });
