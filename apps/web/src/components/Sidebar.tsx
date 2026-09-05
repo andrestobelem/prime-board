@@ -117,7 +117,8 @@ export function Sidebar({
   ) => (
     <div className="resource-row" key={project.id}>
       <Link to={`/project/${project.id}`} className={active(`/project/${project.id}`)}>
-        <Icon name="project" className={iconClass} /> {project.name}
+        <Icon name="project" className={iconClass} />
+        <span className="resource-label">{project.name}</span>
       </Link>
       {favoriteButton({ projectId: project.id }, project.name)}
     </div>
@@ -125,7 +126,8 @@ export function Sidebar({
   const renderView = (view: NavigationView) => (
     <div className="resource-row" key={view.id}>
       <Link to={`/view/${view.id}`} className={active(`/view/${view.id}`)}>
-        <Icon name="filter" className="nested" /> {view.name}
+        <Icon name="filter" className="nested" />
+        <span className="resource-label">{view.name}</span>
       </Link>
       {favoriteButton({ savedViewId: view.id }, view.name)}
     </div>
@@ -305,7 +307,7 @@ export function Sidebar({
                     <div className="favorite-row" key={favorite.id}>
                       <Link to={path} className={active(path)}>
                         <Icon name={favorite.project ? "project" : "filter"} className="nested" />
-                        <span>{name}</span>
+                        <span className="resource-label">{name}</span>
                       </Link>
                       {onReorderFavorite && (
                         <span className="favorite-order">
@@ -367,7 +369,8 @@ export function Sidebar({
             to={`/initiative/${initiative.id}`}
             className={active(`/initiative/${initiative.id}`)}
           >
-            <Icon name="milestone" className="nested" /> {initiative.name}
+            <Icon name="milestone" className="nested" />
+            <span className="resource-label">{initiative.name}</span>
           </Link>
         ))}
         <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -453,7 +456,8 @@ export function Sidebar({
                 to={`/cycle/${cycle.id}`}
                 className={active(`/cycle/${cycle.id}`)}
               >
-                <Icon name="calendar" className="nested" /> {cycle.name}
+                <Icon name="calendar" className="nested" />
+                <span className="resource-label">{cycle.name}</span>
               </Link>
             ))}
           </div>

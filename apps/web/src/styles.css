@@ -258,8 +258,11 @@ select:focus {
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
+  min-height: 0;
   padding: 12px 8px;
   gap: 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .sidebar .workspace {
   font-weight: 600;
@@ -406,8 +409,8 @@ select:focus {
   flex: 1;
   min-width: 0;
 }
-.sidebar .resource-row > a > :last-child,
-.sidebar .favorite-row > a > :last-child {
+.sidebar .resource-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
