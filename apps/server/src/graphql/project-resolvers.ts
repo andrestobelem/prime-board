@@ -72,7 +72,6 @@ import {
   scopeWorkspaceRows,
 } from "../domain/workspace-guards.ts";
 import { issueEventData } from "./issue-resolvers.ts";
-import { documentResolvers } from "./document-resolvers.ts";
 import { apiError, requireViewer } from "./errors.ts";
 import {
   assertCanCreateProject,
@@ -210,12 +209,6 @@ export const projectResolvers = {
           )
         : [];
     },
-    documents: (project: MappedProject, args: { includeArchived?: boolean }, context: Context) =>
-      documentResolvers.Query.documents(
-        null,
-        { projectId: project.id, includeArchived: Boolean(args.includeArchived) },
-        context,
-      ),
   },
 
   ProjectStatusUpdate: {

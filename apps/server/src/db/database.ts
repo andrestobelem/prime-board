@@ -31,6 +31,8 @@ import migration0026 from "./migrations/0026_api_key_workspaces.sql" with { type
 import migration0027 from "./migrations/0027_documents.sql" with { type: "text" };
 import migration0028 from "./migrations/0028_issue_subscribers.sql" with { type: "text" };
 import migration0029 from "./migrations/0029_comments_fts.sql" with { type: "text" };
+import migration0030 from "./migrations/0030_documents_retirement.sql" with { type: "text" };
+import { verifyDocumentRows } from "../export/documents-archive.ts";
 import { newId, now } from "./util.ts";
 
 interface Migration {
@@ -69,6 +71,7 @@ const MIGRATIONS: Migration[] = [
   { version: 27, name: "documents", sql: migration0027 },
   { version: 28, name: "issue_subscribers", sql: migration0028 },
   { version: 29, name: "comments_fts", sql: migration0029 },
+  { version: 30, name: "documents_retirement", sql: migration0030 },
 ];
 
 const WORKSPACE_ROOT_TABLES = [
@@ -199,7 +202,52 @@ function hardenDatabaseFiles(path: string): void {
   }
 }
 
-export function openDatabase(path: string): Database {
+export interface DatabaseOptions {
+  /** Archivo externo ya verificado antes de retirar Documents. */
+  documentsArchivePath?: string;
+}
+
+export interface MigrationOptions extends DatabaseOptions {}
+
+function documentArchivePath(options: DatabaseOptions): string | undefined {
+  const configured = options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+  const trimmed = configured?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function activeDocuments(db: Database): Array<Record<string, unknown>> | null {
+  const table = db
+    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'documents' LIMIT 1")
+    .get() as { name?: string } | null;
+  if (!table) return null;
+  return db.query("SELECT * FROM documents ORDER BY id").all() as Array<Record<string, unknown>>;
+}
+
+/**
+ * Las migraciones históricas crean Documents para conservar su registro. Antes
+ * de ejecutar la migración de retiro, exige un archivo externo cuyo manifest
+ * coincida exactamente con las filas actuales. Nunca escribe ni elimina datos
+ * durante esta comprobación.
+ */
+function verifyDocumentsBeforeRetirement(db: Database, options: MigrationOptions): void {
+  const rows = activeDocuments(db);
+  if (!rows?.length) return;
+  const archivePath = documentArchivePath(options);
+  if (!archivePath) {
+    throw new Error(
+      "Cannot retire Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
+    );
+  }
+  try {
+    verifyDocumentRows(rows, archivePath, "sqlite");
+  } catch (error) {
+    throw new Error(
+      `Cannot retire Documents safely: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+export function openDatabase(path: string, options: DatabaseOptions = {}): Database {
   if (path !== ":memory:") {
     const directory = dirname(path);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -212,7 +260,7 @@ export function openDatabase(path: string): Database {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   if (path !== ":memory:") hardenDatabaseFiles(path);
-  migrate(db);
+  migrate(db, options);
   if (path !== ":memory:") hardenDatabaseFiles(path);
   return db;
 }
@@ -231,7 +279,7 @@ function validateWorkspaceConstraints(db: Database): void {
   }
 }
 
-export function migrate(db: Database): void {
+export function migrate(db: Database, options: MigrationOptions = {}): void {
   db.exec(
     "CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
   );
@@ -253,6 +301,7 @@ export function migrate(db: Database): void {
       db.transaction(() => {
         if (migration.version === 24) validateWorkspaceMigration(db, "before");
         if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "before");
+        if (migration.version === 30) verifyDocumentsBeforeRetirement(db, options);
         db.exec(migration.sql);
         if (migration.version === 24) {
           normalizeBackfilledMembershipIds(db);

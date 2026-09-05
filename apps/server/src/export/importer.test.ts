@@ -1,12 +1,20 @@
 // Tests de AT-157: la DB se reconstruye desde el repo (round-trip fiel).
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrate } from "../db/database.ts";
 import { exportBoard } from "./exporter.ts";
-import { rebuildFromRepo } from "./importer.ts";
+import { preflightRetiredDocuments, rebuildFromRepo } from "./importer.ts";
 import { appendEvent } from "./event-log.ts";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 
@@ -86,15 +94,6 @@ beforeAll(async () => {
     `mutation($s: ID!) { issueUpdate(id: "PB-1", input: { stateId: $s }) { success } }`,
     { s: started },
   );
-  const document = await gql(
-    app,
-    `mutation($content: String!) {
-      documentCreate(input: { title: "PB runbook", content: $content, issueId: "PB-1" }) {
-        success
-      }
-    }`,
-    { content: "# Rebuild\n\nKeep the Markdown." },
-  );
 });
 
 afterAll(() => {
@@ -115,18 +114,6 @@ describe("rebuildFromRepo", () => {
     expect(result.issues).toBe(2);
     expect(result.comments).toBe(1);
     expect(result.events).toBeGreaterThan(0);
-    expect(fresh.query("SELECT title, content FROM documents").get()).toEqual({
-      title: "PB runbook",
-      content: "# Rebuild\n\nKeep the Markdown.",
-    });
-    expect(
-      fresh
-        .query(
-          "SELECT teams.key || '-' || issues.number AS issue FROM documents JOIN issues ON issues.id = documents.issue_id JOIN teams ON teams.id = issues.team_id",
-        )
-        .get(),
-    ).toEqual({ issue: "PB-1" });
-
     // Exportar la DB reconstruida produce exactamente los mismos archivos.
     const other = mkdtempSync(join(tmpdir(), "pb-roundtrip-"));
     try {
@@ -233,56 +220,78 @@ describe("rebuildFromRepo", () => {
     }
   });
 
-  it("preserva archivedAt exacto de Documents en el round-trip", async () => {
-    const snapshot = mkdtempSync(join(tmpdir(), "pb-document-archive-roundtrip-"));
-    const created = await gql(
-      app,
-      `mutation { documentCreate(input: { title: "Archived document", content: "keep timestamp" }) { document { id } } }`,
-    );
-    const documentId = created.data!.documentCreate.document.id as string;
-    const archived = await gql(
-      app,
-      `mutation($id: ID!) { documentArchive(id: $id) { document { archivedAt } } }`,
-      { id: documentId },
-    );
-    const archivedAt = archived.data!.documentArchive.document.archivedAt as string;
+  it("rechaza documents.json sin archivo externo y no toca la DB", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-retired-documents-preflight-"));
     const fresh = new Database(":memory:", { strict: true });
     try {
       exportBoard(app.db, snapshot);
+      const documentsPath = join(snapshot, ".prime-board", "meta", "documents.json");
+      writeFileSync(
+        documentsPath,
+        `${JSON.stringify([
+          {
+            title: "Retired runbook",
+            content: "must not become an issue description",
+            creator: "admin",
+            target: null,
+          },
+        ])}\n`,
+      );
       fresh.exec("PRAGMA foreign_keys = ON;");
       migrate(fresh);
-      rebuildFromRepo(fresh, snapshot);
-      expect(
-        fresh.query("SELECT archived_at FROM documents WHERE title = 'Archived document'").get(),
-      ).toEqual({ archived_at: archivedAt });
+
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/documents.json/);
+      expect(existsSync(documentsPath)).toBe(true);
+      expect(fresh.query("SELECT count(*) AS count FROM issues").get()).toEqual({ count: 0 });
     } finally {
-      app.db.query("DELETE FROM documents WHERE id = ?1").run(documentId);
       fresh.close();
       rmSync(snapshot, { recursive: true, force: true });
     }
   });
 
-  it("conserva como enlace y reporta warning un Document sin contenido", () => {
-    const snapshot = mkdtempSync(join(tmpdir(), "pb-document-link-"));
+  it("archiva y retira documents.json solo con un destino explícito", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-retired-documents-archive-"));
+    const archive = join(snapshot, "..", `documents-${Date.now()}.archive.json`);
     const fresh = new Database(":memory:", { strict: true });
     try {
       exportBoard(app.db, snapshot);
       const documentsPath = join(snapshot, ".prime-board", "meta", "documents.json");
-      const documents = JSON.parse(readFileSync(documentsPath, "utf8")) as Array<
-        Record<string, unknown>
-      >;
-      documents[0] = { ...documents[0], content: undefined, url: "https://example.test/document" };
-      writeFileSync(documentsPath, `${JSON.stringify(documents)}\n`);
+      writeFileSync(
+        documentsPath,
+        `${JSON.stringify([
+          {
+            title: "Retired runbook",
+            content: "must not become an issue description",
+            creator: "admin",
+            target: null,
+          },
+        ])}\n`,
+      );
       fresh.exec("PRAGMA foreign_keys = ON;");
       migrate(fresh);
-      const result = rebuildFromRepo(fresh, snapshot);
-      expect(result.warnings).toHaveLength(1);
-      expect(fresh.query("SELECT content FROM documents LIMIT 1").get()).toEqual({
-        content: "[Open external document](https://example.test/document)",
-      });
+      preflightRetiredDocuments(snapshot, archive);
+      expect(existsSync(documentsPath)).toBe(false);
+      const manifest = JSON.parse(readFileSync(archive, "utf8")) as {
+        count: number;
+        sha256: string;
+        sources: Record<string, { count: number; documents: Array<Record<string, unknown>> }>;
+      };
+      expect(manifest.count).toBe(1);
+      expect(manifest.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(manifest.sources.replica?.documents[0]?.content).toBe(
+        "must not become an issue description",
+      );
+      rebuildFromRepo(fresh, snapshot);
+      expect(fresh.query("SELECT count(*) AS count FROM issues").get()).toEqual({ count: 2 });
+      expect(
+        fresh
+          .query("SELECT count(*) AS count FROM issues WHERE description = ?1")
+          .get("must not become an issue description"),
+      ).toEqual({ count: 0 });
     } finally {
       fresh.close();
       rmSync(snapshot, { recursive: true, force: true });
+      rmSync(archive, { force: true });
     }
   });
 

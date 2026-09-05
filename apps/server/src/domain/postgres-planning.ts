@@ -1,4 +1,4 @@
-// Lecturas de planificación usadas por resolvers anidados de Documents en PostgreSQL.
+// Lecturas de planificación usadas por resolvers de PostgreSQL.
 import type { Persistence } from "../db/persistence.ts";
 
 export interface PostgresProjectRow {

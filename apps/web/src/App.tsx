@@ -46,8 +46,7 @@ import { TeamView } from "./views/TeamView.tsx";
 import { TeamHomeView } from "./views/TeamHomeView.tsx";
 import { TeamsView } from "./views/TeamsView.tsx";
 import { ProjectsView } from "./views/ProjectsView.tsx";
-import { DocumentsView } from "./views/DocumentsView.tsx";
-import { DocumentView } from "./views/DocumentView.tsx";
+import { getRetiredRouteResponse } from "./retired-routes.ts";
 import { buildNavigation, getDefaultTeamPath, getTeamKeyForRoute } from "./navigation.ts";
 import {
   clearSelectedWorkspaceId,
@@ -503,6 +502,7 @@ export function App() {
   }
 
   const [section, param, subroute] = route;
+  const retiredRoute = getRetiredRouteResponse(route);
   const teams = shell.data?.teams ?? [];
   const navigation = buildNavigation(teams, shell.data?.savedViews ?? []);
   const defaultTeam = teams[0]?.key;
@@ -515,7 +515,10 @@ export function App() {
   let topbar = null;
   let content = <div className="loading">Loading…</div>;
 
-  if (shell.error) {
+  if (retiredRoute) {
+    topbar = <span className="title">Not found</span>;
+    content = <ErrorState message={retiredRoute.message} />;
+  } else if (shell.error) {
     content = <ErrorState message={shell.error.message} onRetry={shell.refetch} />;
   } else if (section === "teams") {
     topbar = <span className="title">Teams</span>;
@@ -523,12 +526,6 @@ export function App() {
   } else if (section === "projects") {
     topbar = <span className="title">Projects</span>;
     content = <ProjectsView projects={navigation.projects} />;
-  } else if (section === "documents") {
-    topbar = <span className="title">Documents</span>;
-    content = <DocumentsView />;
-  } else if (section === "document" && param) {
-    topbar = <span className="title">Document</span>;
-    content = <DocumentView documentId={param} />;
   } else if (section === "settings") {
     topbar = <span className="title">Settings</span>;
     content = <SettingsView localAuth={localAuth} />;
@@ -791,7 +788,6 @@ export function App() {
             "project-board",
             "cycle",
             "initiative",
-            "document",
             "view",
           ]);
           const currentPath =

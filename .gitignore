@@ -115,5 +115,9 @@ dist
 # scratchpad (trabajo temporal, no se versiona)
 scratchpad/
 
+# Python bytecode
+__pycache__/
+*.py[cod]
+
 # build de la UI
 apps/web/dist/

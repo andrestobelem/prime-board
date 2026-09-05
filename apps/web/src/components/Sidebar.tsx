@@ -263,9 +263,6 @@ export function Sidebar({
           <Link to="/projects" className={active("/projects")}>
             <Icon name="project" /> Projects
           </Link>
-          <Link to="/documents" className={active("/documents")}>
-            <Icon name="file-text" /> Documents
-          </Link>
           {(favorites.length > 0 || onToggleFavorite || favoritePending || favoriteError) && (
             <>
               <button

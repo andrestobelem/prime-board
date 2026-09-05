@@ -140,8 +140,8 @@ _Avoid_: Status report, pulse
 
 ## Contenido
 
-**Document**:
-Unidad de contenido Markdown que pertenece a un Workspace. Puede ser global o vincularse a exactamente un recurso de trabajo: Issue, Project, Team, Initiative o Cycle. Es contenido largo independiente de la descripción operativa de una Issue.
+**Document (retirado)**:
+Capacidad histórica de contenido Markdown. Ya no forma parte del modelo operativo ni de la réplica vigente. Los datos existentes se archivan fuera del repositorio con un manifest verificable; su contenido no se convierte en descripciones de Issues ni se elimina sin archivo.
 _Avoid_: Issue description, attachment, page
 
 ## Colaboración y superficies personales

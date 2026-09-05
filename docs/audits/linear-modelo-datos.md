@@ -10,7 +10,7 @@
 
 El relevamiento de 2026-08-18 revisó el SDL y las migraciones de SQLite hasta `0018_team_archive.sql`.
 Ese material es un snapshot histórico. La verificación del contrato vigente revisó además las migraciones
-SQLite `0019`–`0028`, el backend PostgreSQL y la selección de Workspace. Usamos como referencia externa la
+SQLite `0019`–`0030`, el backend PostgreSQL y la selección de Workspace. Usamos como referencia externa la
 documentación oficial de Linear:
 
 - [Modelo conceptual](https://linear.app/docs/conceptual-model)
@@ -31,23 +31,25 @@ La comparación distingue **paridad conceptual**, **divergencias intencionales**
 El mapa y el veredicto que siguen conservan el snapshot histórico de 2026-08-18. No deben leerse como
 la topología actual sin estas correcciones:
 
-- El backend predeterminado es SQLite (`apps/server/src/config.ts`). Su runner aplica `0001`–`0028`.
+- El backend predeterminado es SQLite (`apps/server/src/config.ts`). Su runner aplica `0001`–`0030`.
   Las migraciones `0024` y `0025` agregan `workspace_id`, Memberships y FKs compuestas; `0026`
-  agrega grants de API keys, `0027` agrega Documents y `0028` agrega suscriptores de Issues. El contrato
+  agrega grants de API keys, `0027` conserva el esquema histórico de Documents, `0028` agrega
+  suscriptores de Issues y `0030` retira Documents después de validar el archivo externo. El contrato
   GraphQL lista/crea Workspaces y selecciona el contexto mediante `X-Workspace-ID`; la CLI y la web
   tienen el mismo camino.
 - PostgreSQL es un backend opcional (`PRIME_BOARD_PERSISTENCE=postgres`) con migrador independiente
-  de nueve versiones (`apps/server/src/db/postgres/migrator.ts`). `0005` agrega Documents, `0006`
-  suscriptores, `0007` Memberships y grants, `0008` el Workspace de los límites de Team de API keys
-  y `0009` el grant explícito del Workspace efectivo. Su baseline impone un singleton de Workspace;
+  de once versiones (`apps/server/src/db/postgres/migrator.ts`). `0005` conserva el esquema histórico
+  de Documents y `0011` lo retira después de validar el archivo externo; `0006` agrega suscriptores,
+  `0007` Memberships y grants, `0008` el Workspace de los límites de Team de API keys y `0009` el
+  grant explícito del Workspace efectivo. Su baseline impone un singleton de Workspace;
   `workspaceCreate` no está migrado y el servidor mantiene un SQLite efímero o devuelve un error
   explícito para dominios aún no migrados. Issues, Teams, Projects, Milestones, Cycles, Labels,
-  Documents, Activity, suscriptores y Relations tienen paths PostgreSQL; PRB-437 implementa lectura y
-  mutaciones de Relations y PRB-552 implementa API keys y límites. Comments no tiene ruta PostgreSQL.
-  El event log canónico y el proyector Repository Source → PostgreSQL siguen pendientes según ADR-0019
-  y PRB-445/453. No debe describirse PostgreSQL como un modelo multi-Workspace ni como un cutover
-  completo.
-- El SDL vigente contiene 28 campos de `Query`, 67 de `Mutation`, 25 de `Issue`, 14 de `Project` y
+  Activity, suscriptores y Relations tienen paths PostgreSQL; Documents no tiene un path operativo.
+  PRB-437 implementa lectura y mutaciones de Relations y PRB-552 implementa API keys y límites.
+  Comments no tiene ruta PostgreSQL. El event log canónico y el proyector Repository Source → PostgreSQL
+  siguen pendientes según ADR-0019 y PRB-445/453. No debe describirse PostgreSQL como un modelo
+  multi-Workspace ni como un cutover completo.
+- El SDL vigente contiene 26 campos de `Query`, 66 de `Mutation`, 25 de `Issue`, 13 de `Project` y
   2 de `PageInfo`. Los conteos del snapshot histórico no son un objetivo de paridad.
 
 ## Veredicto
@@ -133,8 +135,9 @@ un cutover completo.
 
 1. **Issue:** faltan estimate, due date, timestamps de transición, subscribers, reactions, attachments, documents, releases y otros recursos externos.
 2. **Project:** faltan miembros, labels de project, dependencias/enlaces entre projects, documents y attachments.
-3. **Documents y attachments:** en el snapshot no existían entidades ni vínculos; SQLite ahora tiene
-   `Document` desde `0027`, y el backend PostgreSQL ya tiene el dominio equivalente desde la migración `0005`; los adjuntos ricos siguen ausentes.
+3. **Documents y attachments:** en el snapshot no existían entidades ni vínculos; Documents se añadió
+   después en SQLite (`0027`) y PostgreSQL (`0005`) y quedó retirado por SQLite `0030` y PostgreSQL
+   `0011`, con archivo externo verificable; los adjuntos ricos siguen ausentes.
 4. **Historial y auditoría:** `Activity` es issue-céntrica y genérica; Linear separa issue history, audit entries y notificaciones.
 5. **Favorites:** solo apunta a Project o SavedView; Linear permite favoritos de más tipos, como Issue, Cycle, Label, Team y Document.
 6. **Superficies actuales de Linear:** releases/release notes, integraciones y recursos externos no forman parte del modelo MVP.
@@ -142,7 +145,7 @@ un cutover completo.
 ## Prioridad sugerida
 
 1. Separar, si el producto lo necesita, historial de issue, auditoría y notificaciones.
-2. Añadir documents/attachments como recursos vinculables.
+2. Evaluar adjuntos como recursos vinculables; no reintroducir Documents locales sin una nueva decisión.
 3. Completar metadatos de Issue.
 4. Añadir miembros y dependencias de Project.
 5. Evaluar releases e integraciones solo después de definir el alcance del producto agent-first.

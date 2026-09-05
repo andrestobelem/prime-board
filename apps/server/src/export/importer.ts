@@ -5,7 +5,7 @@
 // (API keys y secrets de webhooks), así que se preservan re-vinculándolas
 // por nombre de actor — de lo contrario un rebuild dejaría a todos afuera.
 import type { Database } from "bun:sqlite";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_URL_KEY } from "../db/defaults.ts";
@@ -14,6 +14,7 @@ import { translateActivityRefs, type RefTable } from "../domain/activity-schema.
 import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
 import { readReplicaMetadata, type ReadReplicaMetadata } from "./replica-metadata.ts";
 import { readEventLog } from "./event-log.ts";
+import { archiveDocumentSnapshot } from "./documents-archive.ts";
 
 export interface RebuildResult {
   issues: number;
@@ -26,9 +27,32 @@ export interface RebuildResult {
 export interface RebuildOptions {
   /** Permite reemplazar el índice con un export team-scoped explícito. */
   allowPartial?: boolean;
+  /** Archivo externo para archivar y verificar una captura histórica de Documents. */
+  documentsArchivePath?: string;
 }
 
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+
+/**
+ * Puerta de seguridad de la fuente de rebuild. Una captura histórica no es una
+ * entrada vigente del índice: se conserva en el repositorio, pero el operador
+ * debe archivarla fuera de él antes de reconstruir una DB sin Documents.
+ */
+export function preflightRetiredDocuments(rootDir: string, documentsArchivePath?: string): void {
+  const snapshotPath = join(rootDir, ".prime-board", "meta", "documents.json");
+  if (!existsSync(snapshotPath)) return;
+  const configured = documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+  const trimmed = configured?.trim();
+  if (!trimmed) {
+    throw new Error(
+      "Refusing rebuild: .prime-board/meta/documents.json is retired; provide PRIME_BOARD_DOCUMENTS_ARCHIVE after archiving it externally",
+    );
+  }
+  // This is an explicit operator opt-in. Remove the source only after the
+  // external bundle has been written and parsed back with its checksum.
+  archiveDocumentSnapshot(snapshotPath, trimmed, "replica");
+  unlinkSync(snapshotPath);
+}
 
 /**
  * Comprueba el destino antes de leer credenciales o ejecutar SQL destructivo.
@@ -89,45 +113,6 @@ function validatePartialScope(base: string, teamKey: string): void {
         (initiative.projects ?? []).some((project: unknown) => !projectNames.has(String(project)))
       ) {
         throw new Error(`Partial export ${teamKey} contains an out-of-scope initiative project`);
-      }
-    }
-  }
-  const documentsPath = join(base, "meta", "documents.json");
-  if (existsSync(documentsPath)) {
-    const initiativeNames = new Set(
-      (existsSync(initiativesPath)
-        ? (readJson(initiativesPath) as Array<Record<string, any>>)
-        : []
-      ).map((initiative) => String(initiative.name)),
-    );
-    for (const document of readJson(documentsPath) as Array<Record<string, any>>) {
-      const target = document.target;
-      if (target == null) continue;
-      if (!target || typeof target !== "object" || Array.isArray(target)) {
-        throw new Error("Document target must be an object or null");
-      }
-      const entries = Object.entries(target);
-      if (entries.length !== 1) {
-        throw new Error("Document must reference exactly one target");
-      }
-      const [kind, value] = entries[0]!;
-      if (kind === "issue" && !String(value).startsWith(`${teamKey}-`)) {
-        throw new Error(`Partial export ${teamKey} contains an out-of-scope document issue`);
-      }
-      if (kind === "project" && !projectNames.has(String(value))) {
-        throw new Error(`Partial export ${teamKey} contains an out-of-scope document project`);
-      }
-      if (kind === "team" && String(value) !== teamKey) {
-        throw new Error(`Partial export ${teamKey} contains an out-of-scope document team`);
-      }
-      if (kind === "initiative" && !initiativeNames.has(String(value))) {
-        throw new Error(`Partial export ${teamKey} contains an out-of-scope document initiative`);
-      }
-      if (kind === "cycle" && !String(value).startsWith(`${teamKey}/`)) {
-        throw new Error(`Partial export ${teamKey} contains an out-of-scope document cycle`);
-      }
-      if (!["issue", "project", "team", "initiative", "cycle"].includes(kind)) {
-        throw new Error(`Unknown document target: ${kind}`);
       }
     }
   }
@@ -223,6 +208,10 @@ export function rebuildFromRepo(
 ): RebuildResult {
   const base = join(rootDir, ".prime-board");
   if (!existsSync(base)) throw new Error(`No .prime-board directory in ${rootDir}`);
+
+  // La captura retirada se archiva (o se rechaza) antes de leer metadata,
+  // credenciales o abrir la transacción destructiva.
+  preflightRetiredDocuments(rootDir, options.documentsArchivePath);
 
   // La metadata del export se valida antes de leer credenciales o abrir la
   // transacción destructiva (PRB-237/403). Los repos antiguos sin este archivo
@@ -394,7 +383,6 @@ export function rebuildFromRepo(
     db.query("UPDATE teams SET default_state_id = NULL").run();
     // 2. Vaciar el índice (orden inverso a las FKs).
     for (const table of [
-      "documents",
       "issue_relations",
       "issue_subscribers",
       "issue_labels",
@@ -979,77 +967,6 @@ export function rebuildFromRepo(
           review.status,
           review.createdAt ?? timestamp,
           review.updatedAt ?? review.createdAt ?? timestamp,
-        );
-      }
-    }
-
-    // 7c. Documents (PRB-541): el contenido Markdown y los vínculos naturales
-    // se reconstruyen después de todos sus recursos.
-    const documentsPath = join(base, "meta", "documents.json");
-    if (existsSync(documentsPath)) {
-      for (const document of readJson(documentsPath) as Array<Record<string, any>>) {
-        const creatorId = actorIds.get(String(document.creator));
-        if (!creatorId) {
-          throw new Error(
-            `Document "${document.title}" references unknown creator ${document.creator}`,
-          );
-        }
-        const target = document.target;
-        if (target != null && (typeof target !== "object" || Array.isArray(target))) {
-          throw new Error(`Document "${document.title}" target must be an object or null`);
-        }
-        const entries = target == null ? [] : Object.entries(target as Record<string, unknown>);
-        if (entries.length > 1) {
-          throw new Error(`Document "${document.title}" references more than one target`);
-        }
-        const [kind, reference] = entries[0] ?? [];
-        const targetIds: Record<string, string | null> = {
-          issue: kind === "issue" ? (issueIds.get(String(reference)) ?? null) : null,
-          project: kind === "project" ? (projectIds.get(String(reference)) ?? null) : null,
-          team: kind === "team" ? (teamIds.get(String(reference)) ?? null) : null,
-          initiative: kind === "initiative" ? (initiativeIds.get(String(reference)) ?? null) : null,
-          cycle: kind === "cycle" ? (cycleIds.get(String(reference)) ?? null) : null,
-        };
-        if (kind != null && !(kind in targetIds)) {
-          throw new Error(`Document "${document.title}" has unknown target ${kind}`);
-        }
-        if (kind != null && !targetIds[kind]) {
-          throw new Error(
-            `Document "${document.title}" references unknown ${kind} ${String(reference)}`,
-          );
-        }
-        const createdAt = document.createdAt ?? timestamp;
-        const externalUrl = typeof document.url === "string" ? document.url.trim() : "";
-        const content =
-          document.content != null
-            ? String(document.content)
-            : externalUrl
-              ? `[Open external document](${externalUrl})`
-              : "";
-        if (document.content == null && externalUrl) {
-          result.warnings.push(
-            `Document "${String(document.title ?? "")}" was restored as a link because its content was unavailable`,
-          );
-        }
-        db.query(
-          `INSERT INTO documents
-            (id, workspace_id, title, content, creator_id, issue_id, project_id, team_id,
-             initiative_id, cycle_id, created_at, updated_at, archived_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
-        ).run(
-          newId(),
-          rebuiltWorkspaceId,
-          String(document.title ?? ""),
-          content,
-          creatorId,
-          targetIds.issue,
-          targetIds.project,
-          targetIds.team,
-          targetIds.initiative,
-          targetIds.cycle,
-          createdAt,
-          document.updatedAt ?? createdAt,
-          document.archivedAt ?? (document.archived ? timestamp : null),
         );
       }
     }

@@ -390,6 +390,23 @@ try {
     expect(after["PB-2.md"]).toBe(before["PB-2.md"]);
   });
 
+  it("no omite una captura retirada al sincronizar un Issue", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-retired-documents-"));
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const repo = createRepoSync(isolated.db, isolatedRoot);
+      expect(repo).not.toBeNull();
+      repo!.sync();
+      const documentsPath = join(isolatedRoot, ".prime-board", "meta", "documents.json");
+      writeFileSync(documentsPath, '[{"title":"retired","content":"must remain external"}]\n');
+      expect(() => repo!.syncIssue("PB-1")).toThrow(/documents.json/);
+      expect(existsSync(documentsPath)).toBe(true);
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("no reescribe archivos cuyo contenido no cambió", async () => {
     const base = join(repoDir, ".prime-board");
     const teamsFile = join(base, "meta", "teams.json");

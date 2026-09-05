@@ -9,6 +9,8 @@ import workspaceAuth from "./0007_workspace_auth.sql" with { type: "text" };
 import apiKeyTeamLimitsWorkspace from "./0008_api_key_team_limits_workspace.sql" with { type: "text" };
 import apiKeyWorkspaceGrantScope from "./0009_api_key_workspace_grant_scope.sql" with { type: "text" };
 import projectorCheckpoints from "./0010_projector_checkpoints.sql" with { type: "text" };
+import documentsRetirement from "./0011_documents_retirement.sql" with { type: "text" };
+import { verifyDocumentRows } from "../../export/documents-archive.ts";
 
 export interface PostgresMigration {
   readonly version: number;
@@ -27,6 +29,7 @@ export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
   { version: 8, name: "api_key_team_limits_workspace", sql: apiKeyTeamLimitsWorkspace },
   { version: 9, name: "api_key_workspace_grant_scope", sql: apiKeyWorkspaceGrantScope },
   { version: 10, name: "projector_checkpoints", sql: projectorCheckpoints },
+  { version: 11, name: "documents_retirement", sql: documentsRetirement },
 ];
 
 interface AppliedMigration {
@@ -99,6 +102,62 @@ function validateAppliedRows(
   }
 }
 
+export interface PostgresMigrationOptions {
+  /** Archivo externo ya creado por el operador, fuera de la réplica. */
+  readonly documentsArchivePath?: string;
+}
+
+function configuredDocumentsArchivePath(options: PostgresMigrationOptions): string | undefined {
+  const configured = options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+  const trimmed = configured?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Verifica la fuente PostgreSQL antes de ejecutar el SQL de retiro. Esta puerta
+ * solo lee PostgreSQL y el manifest externo; nunca escribe datos en ninguno de
+ * los dos. El archivo lo produce el comando archive-documents.
+ */
+async function verifyPostgresDocuments(
+  tx: Bun.SQL | Bun.TransactionSQL,
+  archivePath: string | undefined,
+  lockTable = false,
+): Promise<void> {
+  const table = (await tx<Array<{ exists: boolean }>>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = current_schema() AND table_name = 'documents'
+    ) AS exists
+  `) as Array<{ exists: boolean }>;
+  if (!table[0]?.exists) return;
+  // The destructive migration must inspect a stable snapshot. Without this
+  // lock, a writer could add a Document between the preflight query and DROP.
+  if (lockTable) await tx.unsafe('LOCK TABLE "documents" IN ACCESS EXCLUSIVE MODE').simple();
+  const rows = (await tx.unsafe<Array<Record<string, unknown>>>(
+    "SELECT * FROM documents ORDER BY id",
+  )) as Array<Record<string, unknown>>;
+  if (!rows.length) return;
+  if (!archivePath) {
+    throw new Error(
+      "Cannot retire PostgreSQL Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
+    );
+  }
+  verifyDocumentRows(rows, archivePath, "postgres");
+}
+
+/**
+ * Puerta previa al migrador. Consulta PostgreSQL y valida el manifest antes de
+ * abrir la transacción que aplicará el SQL de retiro. La comprobación dentro de
+ * la transacción se repite para cerrar la ventana de carrera.
+ */
+export async function preflightPostgresDocumentRetirement(
+  sql: PostgresSql,
+  archivePath?: string,
+): Promise<void> {
+  await verifyPostgresDocuments(sql, archivePath);
+}
+
 /**
  * Applies trusted, versioned PostgreSQL SQL while holding an advisory
  * transaction lock. Migration SQL is repository-owned and is intentionally
@@ -109,8 +168,16 @@ export async function migratePostgres(
   sql: PostgresSql,
   migrations: readonly PostgresMigration[] = POSTGRES_MIGRATIONS,
   lockKey = "prime-board-schema",
+  options: PostgresMigrationOptions = {},
 ): Promise<void> {
   const ordered = normalizeMigrations(migrations);
+  if (
+    ordered.some(
+      (migration) => migration.version === 11 && migration.name === "documents_retirement",
+    )
+  ) {
+    await preflightPostgresDocumentRetirement(sql, configuredDocumentsArchivePath(options));
+  }
   await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
     await tx.unsafe(`
@@ -132,6 +199,9 @@ export async function migratePostgres(
     for (const migration of ordered) {
       if (appliedVersions.has(migration.version)) continue;
       try {
+        if (migration.version === 11 && migration.name === "documents_retirement") {
+          await verifyPostgresDocuments(tx, configuredDocumentsArchivePath(options), true);
+        }
         await tx.unsafe(migration.sql).simple();
         await tx`
           INSERT INTO schema_migrations (version, name, checksum)

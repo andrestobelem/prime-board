@@ -136,7 +136,6 @@ import { parseDateTime } from "../domain/datetime.ts";
 import { newId } from "../db/util.ts";
 import { issueEventData, issueResolvers } from "./issue-resolvers.ts";
 import { projectResolvers } from "./project-resolvers.ts";
-import { documentResolvers } from "./document-resolvers.ts";
 import {
   createLabel,
   deleteLabel,
@@ -649,12 +648,6 @@ export const resolvers = {
           )
         : [];
     },
-    documents: (team: { id: string }, args: { includeArchived?: boolean }, context: Context) =>
-      documentResolvers.Query.documents(
-        null,
-        { teamId: team.id, includeArchived: Boolean(args.includeArchived) },
-        context,
-      ),
   },
 
   TeamMembership: {
@@ -682,8 +675,6 @@ export const resolvers = {
   Milestone: projectResolvers.Milestone,
   Comment: issueResolvers.Comment,
   Activity: issueResolvers.Activity,
-  Document: documentResolvers.Document,
-
   Favorite: {
     project: async (favorite: { projectId: string | null }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
@@ -792,12 +783,6 @@ export const resolvers = {
       context.persistence
         ? (await postgresCycleProgress(context.persistence, cycle.id)).totalIssues
         : cycleProgress(context.db, cycle.id, context.workspace.workspaceId).totalIssues,
-    documents: (cycle: { id: string }, args: { includeArchived?: boolean }, context: Context) =>
-      documentResolvers.Query.documents(
-        null,
-        { cycleId: cycle.id, includeArchived: Boolean(args.includeArchived) },
-        context,
-      ),
   },
 
   Review: {
@@ -896,16 +881,6 @@ export const resolvers = {
       context.persistence
         ? (await postgresInitiativeProgress(context.persistence, initiative.id)).totalIssues
         : initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).totalIssues,
-    documents: (
-      initiative: { id: string },
-      args: { includeArchived?: boolean },
-      context: Context,
-    ) =>
-      documentResolvers.Query.documents(
-        null,
-        { initiativeId: initiative.id, includeArchived: Boolean(args.includeArchived) },
-        context,
-      ),
   },
 
   ApiKey: {
@@ -978,7 +953,6 @@ export const resolvers = {
     {
       ...issueResolvers.Query,
       ...projectResolvers.Query,
-      ...documentResolvers.Query,
       viewer: (_parent: unknown, _args: unknown, context: Context) =>
         mapActor(requireViewer(context)),
       workspaces: async (_parent: unknown, _args: unknown, context: Context) => {
@@ -1571,7 +1545,6 @@ export const resolvers = {
       {
         ...issueResolvers.Mutation,
         ...projectResolvers.Mutation,
-        ...documentResolvers.Mutation,
         teamArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           if (context.persistence) {

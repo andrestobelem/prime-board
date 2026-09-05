@@ -365,6 +365,25 @@ Los exports no contienen API keys ni secretos de webhooks. El rebuild puede volv
 asociar keys locales por nombre de actor, pero la réplica nunca es un mecanismo para
 transportar credenciales.
 
+### Retiro de Documents históricos
+
+Documents locales ya no es una superficie operativa. Antes de actualizar una instalación con datos
+históricos, detén el server y cualquier sincronización de la réplica. Crea un archivo externo privado
+para cada fuente que exista (SQLite, PostgreSQL y la réplica):
+
+```bash
+bun run --cwd apps/server archive:documents --out /ruta/externa/prime-board-documents.archive.json
+bun run --cwd apps/server archive:documents --from-repo /ruta/proyecto \
+  --out /ruta/externa/prime-board-documents.archive.json
+```
+
+El manifest conserva las filas, la cantidad y el SHA-256 por fuente. El archivo debe estar fuera de
+`.prime-board` y usa permisos `0600`. Configura `PRIME_BOARD_DOCUMENTS_ARCHIVE` o pasa
+`--documents-archive` a `export`/`rebuild`. La migración SQLite `0030` o PostgreSQL `0011` falla
+cerrado si encuentra filas sin un manifest coincidente. Un `documents.json` antiguo también hace
+fallar `export`/`rebuild`; con un destino explícito se archiva, se verifica y se elimina solo esa
+captura. El contenido nunca se convierte en descripciones de Issues.
+
 Verificamos la receta anterior contra una DB temporal. Un export completo se reconstruye con
 `--from`. Un export `team:PRB` falla sin `--allow-partial` y se reconstruye con éxito al pasar ese
 flag. La prueba no usa ni reemplaza la DB operativa.

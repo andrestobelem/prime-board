@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  inspectRetiredDocumentsReplica,
   inspectTestPlan,
   inspectWorktrees,
   readActivePortReservations,
@@ -135,6 +136,25 @@ git -C "$fixture" commit -qm fixture
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true });
       caller.cleanup();
+    }
+  });
+});
+
+describe("PRB-570 Documents retirement preflight", () => {
+  test("fails when the replica still contains documents.json", () => {
+    const root = mkdtempSync(join(tmpdir(), "prime-board-documents-preflight-"));
+    try {
+      mkdirSync(join(root, ".prime-board", "meta"), { recursive: true });
+      writeFileSync(
+        join(root, ".prime-board", "meta", "documents.json"),
+        '[{"title":"retired","content":"private"}]\n',
+      );
+      const finding = inspectRetiredDocumentsReplica(root);
+      expect(finding.id).toBe("documents-retirement");
+      expect(finding.status).toBe("fail");
+      expect(finding.details?.[0]).toContain("documents.json");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

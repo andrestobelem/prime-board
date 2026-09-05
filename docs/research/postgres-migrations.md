@@ -5,9 +5,9 @@
 
 ## Contrato operativo
 
-`migratePostgres(sql, migrations, lockKey)` ordena y valida el registro de migraciones, abre una transacción, toma `pg_advisory_xact_lock` con la clave de la instalación y crea `schema_migrations` si todavía no existe. Cada fila conserva `version`, `name`, el SHA-256 del SQL y `applied_at`.
+`migratePostgres(sql, migrations, lockKey, options)` ordena y valida el registro de migraciones, abre una transacción, toma `pg_advisory_xact_lock` con la clave de la instalación y crea `schema_migrations` si todavía no existe. Cada fila conserva `version`, `name`, el SHA-256 del SQL y `applied_at`.
 
-El runner ejecuta el baseline PostgreSQL como migración `0001/baseline`. `0002/workspace_singleton` garantiza la fila única. Los SQL futuros deben vivir bajo el namespace PostgreSQL y nunca reutilizar archivos SQLite. El runner usa `unsafe(...).simple()` solo para SQL versionado y controlado por el repositorio, nunca para entrada de usuario.
+El runner ejecuta el baseline PostgreSQL como migración `0001/baseline`. `0002/workspace_singleton` garantiza la fila única. `0005` conserva el esquema histórico de Documents y `0011` lo retira después de verificar un archivo externo. Los SQL futuros deben vivir bajo el namespace PostgreSQL y nunca reutilizar archivos SQLite. El runner usa `unsafe(...).simple()` solo para SQL versionado y controlado por el repositorio, nunca para entrada de usuario.
 
 ## Seguridad de arranque
 
@@ -16,6 +16,16 @@ El runner ejecuta el baseline PostgreSQL como migración `0001/baseline`. `0002/
 - Un error durante el SQL produce `MIGRATION_FAILED`. La transacción de Bun.SQL hace rollback y no deja la fila de registro ni DDL parcial.
 - El mensaje de error no incluye SQL, URL ni parámetros. La causa original queda disponible para observabilidad controlada.
 - El runner calcula el checksum sobre el texto exacto versionado antes de enviarlo al driver.
+
+## Retiro seguro de Documents
+
+Antes de aplicar `0011`, el runner comprueba si existe la tabla histórica `documents`. Si contiene filas,
+exige `PRIME_BOARD_DOCUMENTS_ARCHIVE` (o `documentsArchivePath`) y verifica que la fuente `postgres`
+del manifest externo coincida por cantidad y SHA-256. La transacción vuelve a comprobar la fuente y toma
+un bloqueo `ACCESS EXCLUSIVE` antes de la comprobación final, para impedir escrituras concurrentes entre
+la validación y el `DROP`. Una tabla vacía puede retirarse sin archivo de contenido.
+
+El comando `archive:documents` crea o completa el manifest fuera de la réplica con permisos `0600`.
 
 ## Validación reproducible
 
@@ -32,4 +42,5 @@ El script crea una migración temporal, ejecuta dos runners concurrentes, verifi
 { "passed": true, "report": { "concurrent": true, "checksum": true, "rollback": true } }
 ```
 
-El equipo también ejecutó `migratePostgres` con la lista por defecto contra una base vacía. El runner aplicó el baseline y registró una fila en `schema_migrations`.
+El equipo también ejecutó `migratePostgres` con la lista por defecto contra una base vacía. El runner aplicó
+las migraciones registradas, incluida `0011`, y registró sus filas en `schema_migrations`.

@@ -11,7 +11,11 @@ import { createPostgresPersistence } from "../db/postgres/persistence.ts";
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
-  options: { out: { type: "string" }, team: { type: "string" } },
+  options: {
+    out: { type: "string" },
+    team: { type: "string" },
+    "documents-archive": { type: "string" },
+  },
 });
 
 /**
@@ -26,7 +30,10 @@ function repoRoot(): string {
 
 const config = loadConfig();
 const outDir = values.out ?? repoRoot();
-const options = { teamKey: values.team ?? null };
+const options = {
+  teamKey: values.team ?? null,
+  documentsArchivePath: values["documents-archive"] ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE,
+};
 if (config.persistenceBackend === "postgres") {
   if (!config.postgresUrl)
     throw new Error("PRIME_BOARD_POSTGRES_URL is required for PostgreSQL export");
@@ -40,7 +47,9 @@ if (config.persistenceBackend === "postgres") {
     await persistence.close();
   }
 } else {
-  const db = openDatabase(config.dbPath);
+  const db = openDatabase(config.dbPath, {
+    documentsArchivePath: options.documentsArchivePath,
+  });
   try {
     const result = exportBoard(db, outDir, options);
     console.log(`Exported ${result.issues} issues and ${result.events} events`);

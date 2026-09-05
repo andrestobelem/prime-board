@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { openDatabase } from "../db/database.ts";
 import type { Persistence, SqlValue } from "../db/persistence.ts";
 import { exportBoard, type ExportOptions, type ExportResult } from "./exporter.ts";
+import { archiveDocumentRows } from "./documents-archive.ts";
 
 const TABLES = [
   "workspace",
@@ -36,6 +37,33 @@ const TABLES = [
 
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+async function archiveRetiredPostgresDocuments(
+  persistence: Persistence,
+  archivePath: string | undefined,
+): Promise<void> {
+  // Query information_schema instead of selecting the table directly. This
+  // keeps exports compatible with databases that already ran the retirement
+  // migration, where `documents` no longer exists.
+  const columns = await persistence.many<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_schema = current_schema() AND table_name = $1
+     ORDER BY ordinal_position`,
+    ["documents"],
+  );
+  if (!columns.length) return;
+  const rows = await persistence.many<Record<string, unknown>>(
+    'SELECT * FROM "documents" ORDER BY "id"',
+  );
+  if (!rows.length) return;
+  const trimmed = archivePath?.trim();
+  if (!trimmed) {
+    throw new Error(
+      "Cannot export PostgreSQL Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
+    );
+  }
+  archiveDocumentRows(rows, trimmed, "postgres");
 }
 
 async function copyTable(persistence: Persistence, db: Database, table: string): Promise<void> {
@@ -100,6 +128,10 @@ export async function exportPostgresBoard(
   rootDir: string,
   options: ExportOptions = {},
 ): Promise<ExportResult> {
+  await archiveRetiredPostgresDocuments(
+    persistence,
+    options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE,
+  );
   const db = openDatabase(":memory:");
   try {
     // Teams y workflow_states se referencian mediante default_state_id.

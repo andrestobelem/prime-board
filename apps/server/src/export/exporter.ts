@@ -12,6 +12,7 @@ import { translateActivityRefs, type RefTable } from "../domain/activity-schema.
 import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
 import { getWorkspace } from "../domain/workspaces.ts";
 import { createReplicaMetadata, getReplicaWorkspaceId } from "./replica-metadata.ts";
+import { archiveDocumentRows, archiveDocumentSnapshot } from "./documents-archive.ts";
 
 /** JSON con claves ordenadas: sin esto, el diff cambia por reordenamientos casuales. */
 /**
@@ -449,9 +450,29 @@ function writeIssue(
   return lines.length;
 }
 
+function archiveRetiredSqliteDocuments(db: Database, archivePath?: string): void {
+  const table = db
+    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'documents' LIMIT 1")
+    .get() as { name?: string } | null;
+  if (!table) return;
+  const rows = db.query("SELECT * FROM documents ORDER BY id").all() as Array<
+    Record<string, unknown>
+  >;
+  if (!rows.length) return;
+  const trimmed = archivePath?.trim();
+  if (!trimmed) {
+    throw new Error(
+      "Cannot export SQLite Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
+    );
+  }
+  archiveDocumentRows(rows, trimmed, "sqlite");
+}
+
 export interface ExportOptions {
   /** Exportar solo un team (por key). Sin esto, exporta todo el workspace. */
   teamKey?: string | null;
+  /** Archivo externo para retirar una captura histórica de Documents. */
+  documentsArchivePath?: string;
 }
 
 export interface ExportResult {
@@ -466,6 +487,21 @@ export function exportBoard(
   options: ExportOptions = {},
 ): ExportResult {
   const base = join(rootDir, ".prime-board");
+  const archivePath = options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+  archiveRetiredSqliteDocuments(db, archivePath);
+  const documentsSnapshot = join(base, "meta", "documents.json");
+  if (existsSync(documentsSnapshot)) {
+    const trimmedArchivePath = archivePath?.trim();
+    if (!trimmedArchivePath) {
+      throw new Error(
+        "Refusing export: .prime-board/meta/documents.json is retired; provide PRIME_BOARD_DOCUMENTS_ARCHIVE after archiving it externally",
+      );
+    }
+    // The source is removed only after the external archive is written and
+    // verified. Without this explicit option, export and RepoSync fail closed.
+    archiveDocumentSnapshot(documentsSnapshot, trimmedArchivePath, "replica");
+    unlinkSync(documentsSnapshot);
+  }
   // No se borra todo de entrada: se escribe lo que cambió y al final se barren
   // los archivos que ya no corresponden (AT-166). Así un sync completo con datos
   // sin cambios no toca ningún archivo.
@@ -873,71 +909,10 @@ export function exportBoard(
     ),
   );
 
-  // Documents (PRB-541): Markdown + una referencia natural a un único recurso.
-  // Los Documents globales quedan fuera de un export team-scoped porque no
-  // pertenecen al alcance reemplazable de ese team.
-  const documents = db
-    .query(
-      `SELECT d.*, creators.name AS creator_name,
-              issue_teams.key AS issue_team_key, issue_rows.number AS issue_number,
-              projects.name AS project_name,
-              document_teams.key AS document_team_key,
-              initiatives.name AS initiative_name,
-              cycle_teams.key AS cycle_team_key, cycles.number AS cycle_number
-       FROM documents d
-       JOIN actors creators ON creators.id = d.creator_id
-       LEFT JOIN issues issue_rows ON issue_rows.id = d.issue_id
-       LEFT JOIN teams issue_teams ON issue_teams.id = issue_rows.team_id
-       LEFT JOIN projects ON projects.id = d.project_id
-       LEFT JOIN teams document_teams ON document_teams.id = d.team_id
-       LEFT JOIN initiatives ON initiatives.id = d.initiative_id
-       LEFT JOIN cycles ON cycles.id = d.cycle_id
-       LEFT JOIN teams cycle_teams ON cycle_teams.id = cycles.team_id
-       ${
-         teamFilter
-           ? `WHERE issue_rows.team_id = ?1
-                OR EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = d.project_id AND project_teams.team_id = ?1)
-                OR d.team_id = ?1
-                OR EXISTS (SELECT 1 FROM initiative_teams WHERE initiative_teams.initiative_id = d.initiative_id AND initiative_teams.team_id = ?1)
-                OR EXISTS (SELECT 1 FROM initiative_projects JOIN project_teams ON project_teams.project_id = initiative_projects.project_id WHERE initiative_projects.initiative_id = d.initiative_id AND project_teams.team_id = ?1)
-                OR cycles.team_id = ?1`
-           : ""
-       }
-       ORDER BY d.created_at, d.id`,
-    )
-    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
-  const initiativeNameCounts = new Map<string, number>();
-  for (const row of db
-    .query("SELECT name, count(*) AS count FROM initiatives GROUP BY name")
-    .all() as Array<{ name: string; count: number }>) {
-    initiativeNameCounts.set(row.name, row.count);
-  }
-  for (const document of documents) {
-    if (document.initiative_id && (initiativeNameCounts.get(document.initiative_name) ?? 0) > 1) {
-      throw new Error(
-        `Cannot export documents: ambiguous initiative reference "${document.initiative_name}"`,
-      );
-    }
-  }
-  const documentTarget = (document: Record<string, any>): Record<string, string> | null => {
-    if (document.issue_id) return { issue: `${document.issue_team_key}-${document.issue_number}` };
-    if (document.project_id) return { project: document.project_name };
-    if (document.team_id) return { team: document.document_team_key };
-    if (document.initiative_id) return { initiative: document.initiative_name };
-    if (document.cycle_id) return { cycle: `${document.cycle_team_key}/${document.cycle_number}` };
-    return null;
-  };
-  const documentRows = documents.map((document) => ({
-    title: document.title,
-    content: document.content,
-    creator: document.creator_name,
-    target: documentTarget(document),
-    createdAt: document.created_at,
-    updatedAt: document.updated_at,
-    archived: Boolean(document.archived_at),
-    archivedAt: document.archived_at,
-  }));
-  write(join(base, "meta", "documents.json"), stableStringify(documentRows));
+  // Documents dejó de ser una proyección vigente (PRB-570). No se consulta su
+  // tabla retirada ni se genera `documents.json`. El barrido de abajo conserva
+  // una captura histórica para que nunca desaparezca en silencio; el preflight
+  // y rebuild exigen archivarla fuera del repositorio antes de continuar.
 
   // Reviews (PRB-216): referencian issues por identifier legible.
   const reviews = db
@@ -1036,12 +1011,13 @@ export function exportBoard(
     const dir = join(base, folder);
     if (!existsSync(dir)) continue;
     for (const file of readdirSync(dir)) {
-      // La trazabilidad de una migración es metadata de origen, no una proyección
-      // de SQLite: el export normal no debe borrarla (AT-187). El stream
-      // canónico también es append-only y lo escribe RepoSync después del
-      // snapshot; nunca debe borrarlo durante un export.
+      // La trazabilidad de una migración y las capturas de Documents retirados
+      // son metadata de origen, no proyecciones de SQLite: el export normal no
+      // debe borrarlas (AT-187/PRB-570). El stream canónico también es append-only
+      // y lo escribe RepoSync después del snapshot; nunca debe borrarlo durante un export.
       if (
-        (folder === "meta" && ["source-map.json", "migration-report.json"].includes(file)) ||
+        (folder === "meta" &&
+          ["source-map.json", "migration-report.json", "documents.json"].includes(file)) ||
         (folder === "log" && file === "events.jsonl")
       )
         continue;
@@ -1056,6 +1032,7 @@ export function exportBoard(
 /** Exporta un solo issue (AT-166): el camino caliente de cada mutación. */
 export function exportIssue(db: Database, rootDir: string, issueId: string): boolean {
   const base = join(rootDir, ".prime-board");
+  archiveRetiredSqliteDocuments(db, process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE);
   const issue = db
     .query(
       "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id WHERE issues.id = ?1",

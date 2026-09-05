@@ -34,7 +34,6 @@ const PROJECT_QUERY = `query($id: ID!, $filter: IssueFilter, $after: String) {
     teams { id name memberships { actorId role } states { id name type color position } labels { id name color } cycles { id name number } }
     milestones { id name description targetDate progress position }
     updates { id health body risks createdAt author { id name type } }
-    documents { id title updatedAt archivedAt }
   }
   actors { id name type }
   availableTeams: teams { id name }
@@ -73,9 +72,6 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const [milestoneDelete, setMilestoneDelete] = useState<any | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
-  const [documentTitle, setDocumentTitle] = useState("");
-  const [documentContent, setDocumentContent] = useState("");
-  const [documentSaving, setDocumentSaving] = useState(false);
   const filterKey = `project-${projectId}`;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
@@ -131,7 +127,6 @@ export function ProjectView({ projectId }: { projectId: string }) {
         createdAt: string;
         author: { id: string; name: string; type: string };
       }>;
-      documents: Array<{ id: string; title: string; updatedAt: string; archivedAt: string | null }>;
     } | null;
     actors: Array<{ id: string; name: string; type: string }>;
     availableTeams: Array<{ id: string; name: string }>;
@@ -376,27 +371,6 @@ export function ProjectView({ projectId }: { projectId: string }) {
     }
   }
 
-  async function createDocument(): Promise<void> {
-    const title = documentTitle.trim();
-    if (!title) return;
-    setDocumentSaving(true);
-    try {
-      await mutate(
-        `mutation($input: DocumentCreateInput!) { documentCreate(input: $input) { document { id } } }`,
-        { input: { title, content: documentContent, projectId } },
-      );
-      await result.refetch();
-      setDocumentTitle("");
-      setDocumentContent("");
-    } catch (error) {
-      setProjectError(
-        error instanceof Error ? error.message : "The document could not be created.",
-      );
-    } finally {
-      setDocumentSaving(false);
-    }
-  }
-
   const projectTargetDate = formatProjectDate(project.targetDate);
 
   return (
@@ -465,46 +439,6 @@ export function ProjectView({ projectId }: { projectId: string }) {
       {!canManage && (
         <div className="pagination-notice" role="status">
           Read-only project · membership in an associated team is required to edit it.
-        </div>
-      )}
-      {project.documents.length > 0 && (
-        <div style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-          <div className="section" style={{ padding: "8px 24px" }}>
-            Documents
-          </div>
-          {project.documents.map((document) => (
-            <div className="sub-issue" key={document.id} style={{ padding: "10px 24px" }}>
-              <Icon name="file-text" size={14} />
-              <Link to={`/document/${document.id}`}>{document.title}</Link>
-              <span className="hint" style={{ marginLeft: "auto" }}>
-                {formatProjectDate(document.updatedAt)}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-      {canManage && (
-        <div className="composer" style={{ margin: "12px 24px" }}>
-          <input
-            placeholder="Document title…"
-            value={documentTitle}
-            disabled={documentSaving}
-            onChange={(event) => setDocumentTitle(event.target.value)}
-          />
-          <textarea
-            placeholder="Document content (markdown)…"
-            value={documentContent}
-            disabled={documentSaving}
-            onChange={(event) => setDocumentContent(event.target.value)}
-            rows={3}
-          />
-          <button
-            className="btn"
-            disabled={documentSaving || !documentTitle.trim()}
-            onClick={() => void createDocument()}
-          >
-            {documentSaving ? "Creating…" : "Add document"}
-          </button>
         </div>
       )}
       {project.updates.length > 0 && (

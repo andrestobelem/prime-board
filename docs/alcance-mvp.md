@@ -36,48 +36,48 @@ inventario de faltantes actuales.
 | Filtros, búsqueda y vistas guardadas         |      Sí |         Sí |  Sí |   Parcial |
 | Inbox, favoritos y seguimiento del actor     |      Sí |         Sí |  Sí |        Sí |
 | Initiatives y status updates                 |      Sí |         Sí |  Sí |   Parcial |
-| Documents Markdown                           |      Sí |         Sí |  Sí |        Sí |
+| Documents Markdown (retirado)                |      No |         No |  No |        No |
 | Webhooks y actividad/auditoría               |      Sí |         Sí |  Sí | No aplica |
 
-Las celdas `Parcial` indican gaps de experiencia de usuario. No indican ausencia del modelo o de la API. Tickets `PRB-*` independientes siguen esos gaps. El alcance de cada capacidad depende del backend: Documents está disponible en SQLite y PostgreSQL; ambos backends exponen el núcleo Markdown agent-first. El soporte de varios Workspaces también es incremental en SQLite y no tiene paridad en PostgreSQL.
+Las celdas `Parcial` indican gaps de experiencia de usuario. No indican ausencia del modelo o de la API. Tickets `PRB-*` independientes siguen esos gaps. Documents es una capacidad retirada: no forma parte del SDL, de los clientes ni de la réplica vigente. Los datos existentes se archivan fuera del repositorio con un manifest verificable. El soporte de varios Workspaces también es incremental en SQLite y no tiene paridad en PostgreSQL.
 
 ### Persistencia vigente: SQLite y PostgreSQL
 
 Los backends no tienen el mismo alcance. SQLite sigue siendo el backend predeterminado y la fuente
 operativa local. PostgreSQL es opcional y su migración todavía es incremental.
 
-| Backend        | Estado verificado                                                                                                                                                                                                             | Diferencias comprobadas                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **SQLite**     | `bun:sqlite`, archivo definido por `PRIME_BOARD_DB`, migraciones `0001`–`0028`.                                                                                                                                               | Es el camino operativo completo. Incluye Documents Markdown, FTS5 y el soporte de Workspace Context y aislamiento de las migraciones `0024`–`0028`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **PostgreSQL** | Se activa con `PRIME_BOARD_PERSISTENCE=postgres` y requiere `PRIME_BOARD_POSTGRES_URL`; usa migraciones independientes `0001`–`0010`. `0010` agrega la tabla `projector_checkpoints` para checkpoints durables del projector. | Mantiene una única Workspace y tiene cobertura incremental. Los paths directos cubren Actors, autenticación, API keys y límites de Team, Teams, Issues, Relations, Projects, Milestones, Cycles, Labels, Documents, Activity, suscriptores, Reviews, Initiatives, Project Updates, Saved Views, Favorites, Inbox y Webhooks. Relations está implementado por PRB-437; API keys y límites de Team usan `0008` y `0009` por PRB-552. `workspaceCreate` sigue sin migrar. Comments no tiene persistencia PostgreSQL y el event log canónico con su proyector Repository Source → PostgreSQL sigue pendiente según ADR-0019 y PRB-445/453. El SQLite efímero solo sirve como compatibilidad para dominios sin path PG. |
+| Backend        | Estado verificado                                                                                                                                                                                                                                     | Diferencias comprobadas                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **SQLite**     | `bun:sqlite`, archivo definido por `PRIME_BOARD_DB`, migraciones `0001`–`0030`.                                                                                                                                                                       | Es el camino operativo completo. La migración `0030` retira Documents después de validar el archivo externo; el esquema vigente conserva FTS5 y el soporte de Workspace Context.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **PostgreSQL** | Se activa con `PRIME_BOARD_PERSISTENCE=postgres` y requiere `PRIME_BOARD_POSTGRES_URL`; usa migraciones independientes `0001`–`0011`. `0010` agrega la tabla `projector_checkpoints` y `0011` retira Documents después de validar el archivo externo. | Mantiene una única Workspace y tiene cobertura incremental. Los paths directos cubren Actors, autenticación, API keys y límites de Team, Teams, Issues, Relations, Projects, Milestones, Cycles, Labels, Activity, suscriptores, Reviews, Initiatives, Project Updates, Saved Views, Favorites, Inbox y Webhooks. Relations está implementado por PRB-437; API keys y límites de Team usan `0008` y `0009` por PRB-552. `workspaceCreate` sigue sin migrar. Comments no tiene persistencia PostgreSQL y el event log canónico con su proyector Repository Source → PostgreSQL sigue pendiente según ADR-0019 y PRB-445/453. El SQLite efímero solo sirve como compatibilidad para dominios sin path PG. |
 
 No se debe presentar PostgreSQL como un reemplazo con paridad de persistencia. La diferencia es de
 capacidad implementada, no solo de configuración: el contrato GraphQL puede existir en ambos
 caminos, pero una operación puede no estar migrada en PostgreSQL.
 
-### Documents en el estado vigente
+### Documents retirados
 
-`Document` es un recurso de Markdown. Puede ser `Workspace-scoped`, o estar vinculado a exactamente un recurso:
-`Issue`, `Project`, `Team`, `Initiative` o `Cycle`. El contrato GraphQL expone `documents` y
-`document`, además de `documentCreate`, `documentUpdate`, `documentArchive` y
-`documentUnarchive`. El CLI `pb` y el MCP exponen listado, consulta, creación, edición y
-archivo reversible. La UI web expone listado, consulta, creación, edición y archivo. El contenido
-es Markdown; no incluye adjuntos ricos, reacciones ni colaboración avanzada. Estas operaciones funcionan en SQLite y PostgreSQL. PostgreSQL conserva el núcleo Markdown agent-first; las superficies avanzadas quedan fuera de alcance.
+`Document` es una capacidad histórica. Ya no forma parte del SDL GraphQL, del CLI `pb`, del MCP,
+de la UI ni de la Repository Replica. Las descripciones Markdown de las Issues siguen siendo
+operativas y no reciben contenido de Documents. Los datos existentes se archivan fuera del
+repositorio mediante `archive:documents`, con un manifest y checksums verificables, antes de la
+migración `0030` de SQLite o `0011` de PostgreSQL. Un rebuild con `meta/documents.json` antiguo
+falla cerrado si no recibe un archivo externo explícito. Los artefactos `documents` de una captura
+externa de Linear se conservan como enlaces Markdown con título; no crean entidades locales.
 
 ### Inventario de operaciones por cliente
 
-Este inventario estable verifica la paridad de las mutaciones administrativas, Documents y el archivo de Issues:
+Este inventario estable verifica la paridad de las mutaciones administrativas y el archivo de Issues:
 
-| Dominio         | CLI `pb`                                             | MCP                                                                                         |
-| --------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Issues          | `issue archive`                                      | `archive_issue`                                                                             |
-| Teams           | `team create/update`                                 | `save_team`                                                                                 |
-| Memberships     | `team membership-list/create/delete`                 | `list_team_memberships`, `save_team_membership`, `delete_team_membership`                   |
-| Actores         | `actor list/create/update`                           | `list_users`, `save_user`                                                                   |
-| API keys        | `api-key create/delete`                              | `save_api_key`, `delete_api_key`                                                            |
-| Workflow states | `team workflow-state-create/update/delete`           | `save_issue_status`, `delete_issue_status`                                                  |
-| Labels          | `team label-create/update/delete`                    | `save_issue_label`, `delete_issue_label`                                                    |
-| Documents       | `document list/view/create/update/archive/unarchive` | `list_documents`, `get_document`, `save_document`, `archive_document`, `unarchive_document` |
+| Dominio         | CLI `pb`                                   | MCP                                                                       |
+| --------------- | ------------------------------------------ | ------------------------------------------------------------------------- |
+| Issues          | `issue archive`                            | `archive_issue`                                                           |
+| Teams           | `team create/update`                       | `save_team`                                                               |
+| Memberships     | `team membership-list/create/delete`       | `list_team_memberships`, `save_team_membership`, `delete_team_membership` |
+| Actores         | `actor list/create/update`                 | `list_users`, `save_user`                                                 |
+| API keys        | `api-key create/delete`                    | `save_api_key`, `delete_api_key`                                          |
+| Workflow states | `team workflow-state-create/update/delete` | `save_issue_status`, `delete_issue_status`                                |
+| Labels          | `team label-create/update/delete`          | `save_issue_label`, `delete_issue_label`                                  |
 
 Las operaciones privilegiadas conservan la autorización del server GraphQL. CLI y MCP no intentan replicarla localmente. Los contratos e2e de ambos clientes verifican el inventario, las respuestas JSON y los errores GraphQL.
 
@@ -114,22 +114,22 @@ Regla heredada de Linear: **paridad total de API**. Todo lo que aparece en esta 
 
 La tabla describe las funcionalidades excluidas del MVP original. No debe leerse como un inventario de faltantes actuales. Para conocer el estado vigente, consulta la matriz anterior y los tickets `PRB-*`.
 
-| Funcionalidad                                      | Por qué queda afuera                                                                                                                                 |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Relaciones entre issues (blocks/related/duplicate) | Sub-issues cubren la descomposición, que es el caso agente principal; las dependencias llegan en Parte 5.                                            |
-| Milestones                                         | Estructura secundaria dentro de Projects; el MVP planifica con Projects y Labels.                                                                    |
-| Ciclos (sprints)                                   | Cadencia pensada para capacidad humana; es menos central para agentes 24/7.                                                                          |
-| Estimaciones, due dates editables                  | Metadatos de planificación fina; no bloquean el flujo core.                                                                                          |
-| Templates, issues recurrentes                      | Los Agents generan estructura por sí mismos; un cron o heartbeat externo cubre la recurrencia.                                                       |
-| Triage como bandeja dedicada                       | Un Workflow State de tipo `triage` simula la bandeja (el modelo ya lo soporta).                                                                      |
-| Status updates de Project                          | Los Comments de Project cubren esta necesidad en una parte posterior.                                                                                |
-| Initiatives, roadmap/timeline, insights            | Capa de management y visualización; no aporta valor API-first inmediato.                                                                             |
-| Documents, adjuntos, reacciones                    | No formaban parte del MVP original. El estado vigente de Documents Markdown se describe arriba; adjuntos ricos y colaboración avanzada siguen fuera. |
-| Custom Views persistidas                           | Los clientes (Agents) guardan sus propias queries; la UI del MVP ofrece vistas fijas.                                                                |
-| Notificaciones/Inbox en UI                         | Los Webhooks son el mecanismo correcto para Agents; el Inbox humano llega con la UI madura.                                                          |
-| OAuth, SSO/SCIM, multi-tenant                      | No son necesarios en local-first single-tenant.                                                                                                      |
-| Integraciones de terceros, importers               | Webhooks y API bastan para integrar otros sistemas; las migraciones no aplican sin usuarios.                                                         |
-| SLAs, asks, customer requests, releases/diffs      | Pertenecen a Enterprise u otro producto; quedan fuera de la misión.                                                                                  |
+| Funcionalidad                                      | Por qué queda afuera                                                                                                     |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Relaciones entre issues (blocks/related/duplicate) | Sub-issues cubren la descomposición, que es el caso agente principal; las dependencias llegan en Parte 5.                |
+| Milestones                                         | Estructura secundaria dentro de Projects; el MVP planifica con Projects y Labels.                                        |
+| Ciclos (sprints)                                   | Cadencia pensada para capacidad humana; es menos central para agentes 24/7.                                              |
+| Estimaciones, due dates editables                  | Metadatos de planificación fina; no bloquean el flujo core.                                                              |
+| Templates, issues recurrentes                      | Los Agents generan estructura por sí mismos; un cron o heartbeat externo cubre la recurrencia.                           |
+| Triage como bandeja dedicada                       | Un Workflow State de tipo `triage` simula la bandeja (el modelo ya lo soporta).                                          |
+| Status updates de Project                          | Los Comments de Project cubren esta necesidad en una parte posterior.                                                    |
+| Initiatives, roadmap/timeline, insights            | Capa de management y visualización; no aporta valor API-first inmediato.                                                 |
+| Documents, adjuntos, reacciones                    | No formaban parte del MVP original. Documents locales se retiraron; adjuntos ricos y colaboración avanzada siguen fuera. |
+| Custom Views persistidas                           | Los clientes (Agents) guardan sus propias queries; la UI del MVP ofrece vistas fijas.                                    |
+| Notificaciones/Inbox en UI                         | Los Webhooks son el mecanismo correcto para Agents; el Inbox humano llega con la UI madura.                              |
+| OAuth, SSO/SCIM, multi-tenant                      | No son necesarios en local-first single-tenant.                                                                          |
+| Integraciones de terceros, importers               | Webhooks y API bastan para integrar otros sistemas; las migraciones no aplican sin usuarios.                             |
+| SLAs, asks, customer requests, releases/diffs      | Pertenecen a Enterprise u otro producto; quedan fuera de la misión.                                                      |
 
 ## Plan histórico de implementación
 

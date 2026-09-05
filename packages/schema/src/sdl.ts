@@ -109,7 +109,6 @@ export const typeDefs = /* GraphQL */ `
     projects: [Project!]!
     cycles: [Cycle!]!
     memberships: [TeamMembership!]!
-    documents(includeArchived: Boolean = false): [Document!]!
     createdAt: DateTime!
     archivedAt: DateTime
   }
@@ -253,7 +252,6 @@ export const typeDefs = /* GraphQL */ `
     cycle: Cycle
     sortOrder: Float!
     comments: [Comment!]!
-    documents(includeArchived: Boolean = false): [Document!]!
     """
     Relations with other issues (blocking, related, and duplicates), from both ends.
     """
@@ -333,46 +331,6 @@ export const typeDefs = /* GraphQL */ `
     editedAt: DateTime
   }
 
-  """
-  Global Markdown document or document linked to a work resource.
-  """
-  type Document {
-    id: ID!
-    title: String!
-    content: String!
-    creator: Actor!
-    issue: Issue
-    project: Project
-    team: Team
-    initiative: Initiative
-    cycle: Cycle
-    url: String!
-    createdAt: DateTime!
-    updatedAt: DateTime!
-    archivedAt: DateTime
-  }
-
-  input DocumentCreateInput {
-    title: String!
-    content: String
-    issueId: ID
-    projectId: ID
-    teamId: ID
-    initiativeId: ID
-    cycleId: ID
-  }
-
-  input DocumentUpdateInput {
-    title: String
-    content: String
-    archived: Boolean
-  }
-
-  type DocumentPayload {
-    success: Boolean!
-    document: Document!
-  }
-
   type Activity {
     id: ID!
     type: String!
@@ -432,7 +390,6 @@ export const typeDefs = /* GraphQL */ `
     createdAt: DateTime!
     updatedAt: DateTime!
     archivedAt: DateTime
-    documents(includeArchived: Boolean = false): [Document!]!
   }
 
   input CycleCreateInput {
@@ -529,7 +486,6 @@ export const typeDefs = /* GraphQL */ `
     createdAt: DateTime!
     updatedAt: DateTime!
     archivedAt: DateTime
-    documents(includeArchived: Boolean = false): [Document!]!
   }
 
   input InitiativeCreateInput {
@@ -579,7 +535,6 @@ export const typeDefs = /* GraphQL */ `
     History of narrative updates (PRB-207).
     """
     updates: [ProjectStatusUpdate!]!
-    documents(includeArchived: Boolean = false): [Document!]!
     createdAt: DateTime!
     updatedAt: DateTime!
     archivedAt: DateTime
@@ -1138,16 +1093,6 @@ export const typeDefs = /* GraphQL */ `
     review(id: ID!): Review
     initiatives(includeArchived: Boolean = false): [Initiative!]!
     initiative(id: ID!): Initiative
-    documents(
-      issueId: ID
-      projectId: ID
-      teamId: ID
-      initiativeId: ID
-      cycleId: ID
-      search: String
-      includeArchived: Boolean = false
-    ): [Document!]!
-    document(id: ID!): Document
   }
 
   type WorkspaceCreatePayload {
@@ -1198,10 +1143,6 @@ export const typeDefs = /* GraphQL */ `
     commentCreate(input: CommentCreateInput!): CommentPayload!
     issueRelationCreate(input: IssueRelationCreateInput!): IssueRelationPayload!
     issueRelationDelete(id: ID!): DeletePayload!
-    documentCreate(input: DocumentCreateInput!): DocumentPayload!
-    documentUpdate(id: ID!, input: DocumentUpdateInput!): DocumentPayload!
-    documentArchive(id: ID!): DocumentPayload!
-    documentUnarchive(id: ID!): DocumentPayload!
     projectCreate(input: ProjectCreateInput!): ProjectPayload!
     projectUpdate(id: ID!, input: ProjectUpdateInput!): ProjectPayload!
     projectArchive(id: ID!): ProjectPayload!

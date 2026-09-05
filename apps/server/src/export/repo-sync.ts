@@ -94,7 +94,13 @@ export function createRepoSync(
       // identidad y el alcance del Workspace.
       sync(() => {
         const metadata = join(root, ".prime-board", "meta", "export.json");
-        if (!existsSync(metadata) || !exportIssue(db, root, issueId)) exportBoard(db, root);
+        const retiredDocuments = join(root, ".prime-board", "meta", "documents.json");
+        if (
+          !existsSync(metadata) ||
+          existsSync(retiredDocuments) ||
+          !exportIssue(db, root, issueId)
+        )
+          exportBoard(db, root);
       });
     },
   };

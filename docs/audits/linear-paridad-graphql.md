@@ -22,15 +22,15 @@ La comparación distingue la paridad del núcleo de la compatibilidad completa c
 
 El SDL es común, pero la capacidad operativa depende del backend configurado:
 
-- **SQLite** es el backend predeterminado. Usa `bun:sqlite`, migraciones `0001`–`0028` y
-  expone Documents Markdown.
+- **SQLite** es el backend predeterminado. Usa `bun:sqlite`, migraciones `0001`–`0030` y
+  conserva el esquema histórico de Documents solo durante la migración y no expone esa capacidad.
 - **PostgreSQL** es opcional. Se activa con `PRIME_BOARD_PERSISTENCE=postgres`, requiere
-  `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0010` y conserva una
+  `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0011` y conserva una
   única Workspace. `0010` agrega la tabla `projector_checkpoints` para checkpoints durables del projector. La migración es incremental: los dominios sin path PG usan un SQLite efímero
-  o devuelven un error explícito. `0005` agrega Documents, `0006` suscriptores, `0007` Memberships
+  o devuelven un error explícito. `0005` agrega Documents por compatibilidad histórica; `0011` los retira después de validar el archivo externo. `0006` suscriptores, `0007` Memberships
   y grants de Workspace, `0008` el alcance de Workspace de los límites de Team de API keys y `0009`
   el grant explícito del Workspace efectivo. Los paths directos incluyen Issues, Teams, Projects,
-  Milestones, Cycles, Labels, Documents, Activity, suscriptores, Relations, API keys y límites de
+  Milestones, Cycles, Labels, Activity, suscriptores, Relations, API keys y límites de
   Team. Relations tiene lectura y mutaciones desde PRB-437; API keys y límites desde PRB-552.
   Comments no tiene una ruta de persistencia PostgreSQL. El event log canónico y el proyector
   Repository Source → PostgreSQL siguen pendientes según ADR-0019 y PRB-445/453.
@@ -57,21 +57,21 @@ Los conteos no son una métrica de calidad. Linear expone funcionalidades que Pr
 
 ## Correspondencias del núcleo
 
-| Prime Board     | Linear             | Observación                                                                                                             |
-| --------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `Workspace`     | `Organization`     | Mismo contexto raíz; nombre y campos distintos.                                                                         |
-| `Actor`         | `User`             | Prime Board añade `ActorType.AGENT`; Linear distingue app/guest/active y más roles.                                     |
-| `Team`          | `Team`             | Correspondencia directa, pero Linear tiene settings, jerarquía y conexiones más ricas.                                  |
-| `WorkflowState` | `WorkflowState`    | Prime Board usa enum `StateType`; Linear publica `type: String` y más relaciones.                                       |
-| `Issue`         | `Issue`            | Correspondencia principal, con muchos metadatos y recursos omitidos localmente.                                         |
-| `Project`       | `Project`          | Estado, lead, teams, milestones, issues y updates; Linear añade members, labels, relaciones y resources.                |
-| `Milestone`     | `ProjectMilestone` | Mismo concepto, distinto nombre y campos de fecha/estado.                                                               |
-| `Cycle`         | `Cycle`            | Correspondencia directa; Linear expone más métricas y documentos.                                                       |
-| `Initiative`    | `Initiative`       | Correspondencia parcial; Linear añade jerarquía, labels, updates y relaciones.                                          |
-| `SavedView`     | `CustomView`       | Modelo de filtros común, contrato incompatible y capacidades distintas.                                                 |
-| `InboxItem`     | `Notification`     | Mismo flujo de atención, entidad y operaciones distintas.                                                               |
-| `Document`      | `Document`         | Prime Board ofrece Markdown `Workspace-scoped` o vinculado a un único recurso; no ofrece adjuntos ni colaboración rica. |
-| `Label`         | `IssueLabel`       | Prime Board simplifica labels a nombre/color/scope.                                                                     |
+| Prime Board     | Linear             | Observación                                                                                                                                                   |
+| --------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Workspace`     | `Organization`     | Mismo contexto raíz; nombre y campos distintos.                                                                                                               |
+| `Actor`         | `User`             | Prime Board añade `ActorType.AGENT`; Linear distingue app/guest/active y más roles.                                                                           |
+| `Team`          | `Team`             | Correspondencia directa, pero Linear tiene settings, jerarquía y conexiones más ricas.                                                                        |
+| `WorkflowState` | `WorkflowState`    | Prime Board usa enum `StateType`; Linear publica `type: String` y más relaciones.                                                                             |
+| `Issue`         | `Issue`            | Correspondencia principal, con muchos metadatos y recursos omitidos localmente.                                                                               |
+| `Project`       | `Project`          | Estado, lead, teams, milestones, issues y updates; Linear añade members, labels, relaciones y resources.                                                      |
+| `Milestone`     | `ProjectMilestone` | Mismo concepto, distinto nombre y campos de fecha/estado.                                                                                                     |
+| `Cycle`         | `Cycle`            | Correspondencia directa; Linear expone más métricas y documentos.                                                                                             |
+| `Initiative`    | `Initiative`       | Correspondencia parcial; Linear añade jerarquía, labels, updates y relaciones.                                                                                |
+| `SavedView`     | `CustomView`       | Modelo de filtros común, contrato incompatible y capacidades distintas.                                                                                       |
+| `InboxItem`     | `Notification`     | Mismo flujo de atención, entidad y operaciones distintas.                                                                                                     |
+| `Document`      | `Document`         | Document es una capacidad retirada de Prime Board. Se conserva el enlace a la documentación de Linear solo como fuente externa; no se crea una entidad local. |
+| `Label`         | `IssueLabel`       | Prime Board simplifica labels a nombre/color/scope.                                                                                                           |
 
 ## Hallazgos de contrato
 
@@ -128,7 +128,7 @@ Faltan en el tipo local `Issue` o en sus inputs:
 
 Linear publica `ProjectStatus` como objeto y campos para icon/color, prioridad, start date, target date, miembros, labels, documentos, attachments, relaciones/dependencias, iniciativas y conexiones de updates/milestones/issues.
 
-Prime Board publica un enum `ProjectState`, lead, target date, teams, milestones, issues, updates y Documents Markdown. No publica miembros, labels, dependencias ni attachments. Documents tiene una superficie propia y no equivale a la cobertura de Documents de Linear.
+Prime Board publica un enum `ProjectState`, lead, target date, teams, milestones, issues y updates. No publica miembros, labels, dependencias ni attachments. Los artefactos externos de Linear se conservan como enlaces cuando el export los entrega.
 
 Además, Linear usa `TimelessDate` para fechas sin hora (`targetDate`, `dueDate`). Prime Board usa `DateTime` para `targetDate` de Project, Milestone e Initiative. Los clientes observan esta diferencia semántica.
 
@@ -151,7 +151,7 @@ El local `Actor` solo ofrece nombre/email/type/workspace role/api keys. Linear `
 
 Además del CRUD del núcleo, Linear expone operaciones que no tienen equivalente local:
 
-- Attachments, file uploads y external links. Prime Board sí tiene Documents Markdown, pero con un modelo y una cobertura menores.
+- Attachments, file uploads y external links. Prime Board conserva enlaces de artefactos externos de Linear, pero no ofrece Documents locales ni copia su contenido.
 - Notifications, subscriptions, snooze y acciones batch de Inbox.
 - Reacciones y comentarios update/delete/resolve/threading.
 - Issue unarchive/delete/subscribe, issue batch create/update y relation update.
@@ -177,7 +177,7 @@ La documentación de Linear indica que `extensions` puede contener códigos y de
 1. Completar conexiones Relay y paginación de las colecciones públicas.
 2. Añadir metadatos y filtros de Issue que impactan búsqueda y planificación (`number`, estimate, due date, transición y subscribers).
 3. Completar Project con members, labels y relaciones/dependencias.
-4. Completar recursos vinculables y colaboración (attachments, external links y notifications); Documents Markdown ya existe en SQLite y PostgreSQL, con una cobertura menor en las superficies avanzadas.
+4. Completar recursos vinculables y colaboración (attachments, external links y notifications). Documents locales quedaron retirados; los artefactos externos de Linear siguen como enlaces.
 5. Evaluar operaciones avanzadas solo según el alcance agent-first.
 
 Esta auditoría no implementó correcciones ni creó tickets. Prioriza los gaps antes de convertirlos en trabajo.

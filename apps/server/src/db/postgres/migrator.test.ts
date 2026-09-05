@@ -5,6 +5,15 @@ import { POSTGRES_MIGRATIONS, migratePostgres } from "./migrator.ts";
 const postgresUrl = process.env.PRIME_BOARD_POSTGRES_URL;
 
 describe("PostgreSQL projector checkpoint migration", () => {
+  it("keeps historical Documents migration and appends retirement migration", () => {
+    expect(POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 5)).toMatchObject({
+      name: "documents",
+    });
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 11);
+    expect(migration).toMatchObject({ name: "documents_retirement" });
+    expect(migration?.sql).toContain("DROP TABLE documents");
+  });
+
   it("registers migration 0010 with the checkpoint schema", () => {
     const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 10);
     expect(migration).toMatchObject({ name: "projector_checkpoints" });

@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exportBoard } from "./exporter.ts";
+import { archiveDocumentRows } from "./documents-archive.ts";
 import { createSourceMap, readSourceMap, writeSourceMap } from "./source-map.ts";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 
@@ -86,7 +87,6 @@ describe("exportBoard", () => {
       "actors.json",
       "api-keys.json",
       "cycles.json",
-      "documents.json",
       "export.json",
       "favorites.json",
       "inbox-receipts.json",
@@ -101,6 +101,36 @@ describe("exportBoard", () => {
     ]);
     expect(readdirSync(join(base, "issues"))).toEqual(["PB-1.md"]);
     expect(readdirSync(join(base, "log"))).toEqual(["PB-1.jsonl"]);
+  });
+
+  it("archiva Documents legacy antes de exportar y falla sin destino", () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), "pb-export-legacy-documents-"));
+    try {
+      app.db.exec(`
+        CREATE TABLE documents (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL
+        );
+        INSERT INTO documents (id, title, content)
+        VALUES ('legacy-document', 'Runbook', 'Keep this content');
+      `);
+      expect(() => exportBoard(app.db, legacyRoot)).toThrow(/Cannot export SQLite Documents/);
+      expect(
+        (app.db.query("SELECT count(*) AS count FROM documents").get() as { count: number }).count,
+      ).toBe(1);
+
+      const archivePath = join(legacyRoot, "backup", "documents.archive.json");
+      const rows = app.db.query("SELECT * FROM documents ORDER BY id").all() as Array<
+        Record<string, unknown>
+      >;
+      archiveDocumentRows(rows, archivePath, "sqlite");
+      exportBoard(app.db, legacyRoot, { documentsArchivePath: archivePath });
+      expect(JSON.parse(readFileSync(archivePath, "utf8"))).toMatchObject({ count: 1 });
+    } finally {
+      app.db.exec("DROP TABLE IF EXISTS documents");
+      rmSync(legacyRoot, { recursive: true, force: true });
+    }
   });
 
   it("escribe markdown legible con front-matter y claves naturales", () => {

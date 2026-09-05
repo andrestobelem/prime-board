@@ -85,15 +85,6 @@ const PATHS = {
       <path d="M12 22V12" />
     </>
   ),
-  /** Documento Markdown (lucide: file-text). */
-  "file-text": (
-    <>
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <path d="M14 2v6h6" />
-      <path d="M8 13h8" />
-      <path d="M8 17h6" />
-    </>
-  ),
   /** Milestone de un proyecto (lucide: diamond). */
   milestone: (
     <path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.41 0Z" />

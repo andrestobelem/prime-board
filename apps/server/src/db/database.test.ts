@@ -2,13 +2,15 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { hashApiKey } from "../auth/keys.ts";
 import { migrate, openDatabase } from "./database.ts";
 import { bootstrap, seedWorkspace } from "./seed.ts";
 import migration0016 from "./migrations/0016_webhook_ownership.sql" with { type: "text" };
+import migration0027 from "./migrations/0027_documents.sql" with { type: "text" };
+import { archiveDocumentRows } from "../export/documents-archive.ts";
 
 const tempDirs: string[] = [];
 
@@ -16,6 +18,53 @@ function tempDbPath(): string {
   const dir = mkdtempSync(join(tmpdir(), "prime-board-test-"));
   tempDirs.push(dir);
   return join(dir, "test.db");
+}
+
+/** Crea una DB mínima con Documents y migraciones 1–29 ya registradas. */
+function preRetirementDatabase(): Database {
+  const db = new Database(":memory:", { strict: true });
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec(`
+    CREATE TABLE workspace (id TEXT PRIMARY KEY);
+    CREATE TABLE actors (id TEXT PRIMARY KEY);
+    CREATE TABLE teams (id TEXT PRIMARY KEY, workspace_id TEXT);
+    CREATE TABLE projects (id TEXT PRIMARY KEY, workspace_id TEXT);
+    CREATE TABLE issues (id TEXT PRIMARY KEY, workspace_id TEXT);
+    CREATE TABLE initiatives (id TEXT PRIMARY KEY, workspace_id TEXT);
+    CREATE TABLE cycles (id TEXT PRIMARY KEY, workspace_id TEXT);
+    CREATE TABLE workspace_memberships (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      actor_id TEXT
+    );
+    CREATE TABLE team_memberships (
+      id TEXT PRIMARY KEY,
+      team_id TEXT,
+      actor_id TEXT,
+      role TEXT,
+      created_at TEXT,
+      workspace_id TEXT
+    );
+  `);
+  db.exec(migration0027);
+  db.query("INSERT INTO workspace (id) VALUES ('workspace-1')").run();
+  db.query("INSERT INTO actors (id) VALUES ('actor-1')").run();
+  db.query(
+    `INSERT INTO documents
+      (id, workspace_id, title, content, creator_id, created_at, updated_at)
+     VALUES ('document-1', 'workspace-1', 'Runbook', 'Keep this content', 'actor-1', '2026-01-01', '2026-01-01')`,
+  ).run();
+  db.exec(
+    "CREATE TABLE _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
+  );
+  for (let version = 1; version <= 29; version += 1) {
+    db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
+      version,
+      `legacy-${version}`,
+      "2026-01-01",
+    );
+  }
+  return db;
 }
 
 /** Crea una copia mínima con el esquema legacy (migraciones 1–23). */
@@ -87,6 +136,8 @@ describe("openDatabase", () => {
     ]) {
       expect(tables).toContain(table);
     }
+    expect(tables).not.toContain("documents");
+    expect(tables).not.toContain("retired_documents");
     const mode = db.query("PRAGMA journal_mode").get() as { journal_mode: string };
     expect(mode.journal_mode).toBe("wal");
     db.close();
@@ -110,6 +161,45 @@ describe("openDatabase", () => {
     expect(after.n).toBe(initial.n);
     expect(after.n).toBeGreaterThanOrEqual(2);
     db.close();
+  });
+
+  it("rechaza retirar Documents sin un archivo externo coincidente", () => {
+    const db = preRetirementDatabase();
+    const archiveDir = mkdtempSync(join(tmpdir(), "pb-documents-invalid-archive-"));
+    tempDirs.push(archiveDir);
+    const archivePath = join(archiveDir, "documents.archive.json");
+    try {
+      expect(() => migrate(db)).toThrow(/archive-documents|Documents/);
+      archiveDocumentRows([], archivePath, "sqlite");
+      expect(() => migrate(db, { documentsArchivePath: archivePath })).toThrow(
+        /does not match|checksum/,
+      );
+      expect(db.query("SELECT count(*) AS count FROM documents").get()).toEqual({ count: 1 });
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 29 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("verifica el archivo externo antes de retirar y elimina la tabla", () => {
+    const db = preRetirementDatabase();
+    const archiveDir = mkdtempSync(join(tmpdir(), "pb-documents-archive-"));
+    tempDirs.push(archiveDir);
+    const archivePath = join(archiveDir, "documents.archive.json");
+    try {
+      const rows = db.query("SELECT * FROM documents ORDER BY id").all() as Array<
+        Record<string, unknown>
+      >;
+      archiveDocumentRows(rows, archivePath, "sqlite");
+      migrate(db, { documentsArchivePath: archivePath });
+      expect(db.query("SELECT name FROM sqlite_master WHERE name = 'documents'").get()).toBeNull();
+      expect(
+        db.query("SELECT name FROM sqlite_master WHERE name = 'retired_documents'").get(),
+      ).toBeNull();
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 30 });
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -440,7 +530,7 @@ describe("multi-workspace root migration", () => {
     });
     expect(membership.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 29 });
+    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 30 });
 
     migrate(db);
     expect(db.query("SELECT count(*) AS count FROM workspace_memberships").get()).toEqual({

@@ -168,7 +168,23 @@ Teams. Solo acepta esos exports con `bun run rebuild --from <repo> --allow-parti
 reemplaza explícitamente ese alcance y no hace un merge.
 
 No guardes API keys ni secretos de Webhooks en `.prime-board/`. Revisa el export antes de
-aplicarlo y conserva un backup de la base operativa. Consulta la terminología completa en
+aplicarlo y conserva un backup de la base operativa.
+
+Documents locales está retirado. Antes de migrar una instalación que todavía tenga datos de Documents,
+detén el server y archiva cada fuente existente en un destino fuera de `.prime-board`:
+
+```bash
+bun run --cwd apps/server archive:documents --out /ruta/externa/prime-board-documents.archive.json
+bun run --cwd apps/server archive:documents --from-repo /ruta/proyecto \
+  --out /ruta/externa/prime-board-documents.archive.json
+```
+
+El archivo contiene un manifest con cantidad y SHA-256 por fuente y usa permisos `0600`. Configura
+`PRIME_BOARD_DOCUMENTS_ARCHIVE` o pasa `--documents-archive` a `export`/`rebuild`. Las migraciones
+`0030` (SQLite) y `0011` (PostgreSQL) fallan cerrado si el archivo no coincide. Un `documents.json`
+histórico también se rechaza hasta archivarlo. El contenido no se convierte en descripciones de Issues.
+
+Consulta la terminología completa en
 [`CONTEXT.md`](CONTEXT.md) y las instrucciones para agentes en
 [`docs/guia-agentes.md`](docs/guia-agentes.md).
 

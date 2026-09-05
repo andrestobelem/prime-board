@@ -91,6 +91,22 @@ function check(
   return details?.length ? { id, status, message, details } : { id, status, message };
 }
 
+export function inspectRetiredDocumentsReplica(repoRoot: string): PreflightCheck {
+  const snapshotPath = join(repoRoot, ".prime-board", "meta", "documents.json");
+  return existsSync(snapshotPath)
+    ? check(
+        "documents-retirement",
+        "fail",
+        "The Repository Replica contains retired Documents; archive them outside the repository before rebuild or export.",
+        [snapshotPath],
+      )
+    : check(
+        "documents-retirement",
+        "pass",
+        "The Repository Replica has no retired Documents snapshot.",
+      );
+}
+
 function canonicalPath(path: string): string {
   try {
     return realpathSync(path);
@@ -688,6 +704,8 @@ export async function runPreflight(options: PreflightOptions = {}): Promise<Pref
     repoRoot = canonicalPath(rootResult.stdout.trim());
     checks.push(check("git-repository", "pass", `Git repository: ${repoRoot}.`));
   }
+
+  checks.push(inspectRetiredDocumentsReplica(repoRoot ?? repoPath));
 
   const insideWorktree = gitRunner(repoRoot, ["rev-parse", "--is-inside-work-tree"]);
   const bare = gitRunner(repoRoot, ["rev-parse", "--is-bare-repository"]);

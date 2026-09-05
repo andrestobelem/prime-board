@@ -5,11 +5,15 @@
 import { parseArgs } from "node:util";
 import { loadConfig } from "../config.ts";
 import { openDatabase } from "../db/database.ts";
-import { rebuildFromRepo } from "../export/importer.ts";
+import { preflightRetiredDocuments, rebuildFromRepo } from "../export/importer.ts";
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
-  options: { from: { type: "string" }, "allow-partial": { type: "boolean" } },
+  options: {
+    from: { type: "string" },
+    "allow-partial": { type: "boolean" },
+    "documents-archive": { type: "string" },
+  },
 });
 
 function repoRoot(): string {
@@ -19,9 +23,16 @@ function repoRoot(): string {
 }
 
 const config = loadConfig();
-const db = openDatabase(config.dbPath);
-const result = rebuildFromRepo(db, values.from ?? repoRoot(), {
+const sourceRoot = values.from ?? repoRoot();
+const documentsArchivePath =
+  values["documents-archive"] ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+// Inspect and archive the source before opening the operational DB. This keeps
+// an old documents.json from reaching a destructive rebuild by accident.
+preflightRetiredDocuments(sourceRoot, documentsArchivePath);
+const db = openDatabase(config.dbPath, { documentsArchivePath });
+const result = rebuildFromRepo(db, sourceRoot, {
   allowPartial: values["allow-partial"] ?? false,
+  documentsArchivePath,
 });
 
 console.log(
