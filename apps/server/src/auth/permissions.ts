@@ -9,6 +9,10 @@ import { getProject, listProjectTeamIds } from "../domain/projects.ts";
 import { isTeamMember, isTeamOwner } from "../domain/team-memberships.ts";
 import { apiError } from "../graphql/errors.ts";
 
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
+
 export function isWorkspaceAdmin(actor: ActorRow): boolean {
   return actor.workspace_role === "admin";
 }
@@ -176,17 +180,24 @@ export function assertCanCreateProject(
   db: Database,
   viewer: ActorRow,
   teamIds?: string[] | null,
+  workspaceId?: string,
 ): void {
   const destinations =
     teamIds == null
-      ? db
-          .query("SELECT id FROM teams WHERE archived_at IS NULL ORDER BY id")
-          .values()
-          .map((row) => row[0] as string)
+      ? (workspaceId
+          ? db
+              .query(
+                `SELECT id FROM teams
+                 WHERE archived_at IS NULL AND ${workspaceClause("workspace_id", "?1")}
+                 ORDER BY id`,
+              )
+              .values(workspaceId)
+          : db.query("SELECT id FROM teams WHERE archived_at IS NULL ORDER BY id").values()
+        ).map((row) => row[0] as string)
       : teamIds;
   // Deja que el dominio conserve sus errores de validación/not-found.
   if (destinations.length === 0) return;
-  if (destinations.some((teamId) => !getTeam(db, { id: teamId }))) return;
+  if (destinations.some((teamId) => !getTeam(db, { id: teamId }, workspaceId))) return;
   for (const teamId of destinations) assertCanAccessTeam(db, viewer, teamId);
   for (const teamId of destinations) assertTeamActive(db, teamId);
   if (isWorkspaceAdmin(viewer)) return;
