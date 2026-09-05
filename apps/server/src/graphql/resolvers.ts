@@ -1764,17 +1764,20 @@ export const resolvers = {
           if (context.persistence) {
             const team = await getPostgresTeam(context.persistence, { id: args.id });
             if (!team) throw apiError("NOT_FOUND", "Team not found");
+            if (!apiKeyTeamsWithinLimit(context.auth, [team.id])) {
+              throw apiError("NOT_FOUND", "Team resource not found");
+            }
             if (
               !isWorkspaceAdmin(viewer) &&
-              !(await isPostgresTeamOwner(context.persistence, args.id, viewer.id))
+              !(await isPostgresTeamOwner(context.persistence, team.id, viewer.id))
             ) {
               throw apiError("UNAUTHORIZED", "Team owner permission is required");
             }
-            await assertPostgresTeamActive(context.persistence, args.id);
+            await assertPostgresTeamActive(context.persistence, team.id);
             return {
               success: true,
               team: mapPostgresTeam(
-                await updatePostgresTeam(context.persistence, args.id, args.input),
+                await updatePostgresTeam(context.persistence, team.id, args.input),
               ),
             };
           }
@@ -1792,10 +1795,15 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           if (context.persistence) {
+            const team = await getPostgresTeam(context.persistence, { id: args.input.teamId });
+            if (!team) throw apiError("NOT_FOUND", "Team not found");
+            if (!apiKeyTeamsWithinLimit(context.auth, [team.id])) {
+              throw apiError("NOT_FOUND", "Team resource not found");
+            }
             const membership = await createPostgresTeamMembership(
               context.persistence,
               viewer.id,
-              args.input,
+              { ...args.input, teamId: team.id },
               isWorkspaceAdmin(viewer),
             );
             return { success: true, membership: mapPostgresTeamMembership(membership) };
@@ -2476,6 +2484,9 @@ export const resolvers = {
           if (context.persistence) {
             const team = await getPostgresTeam(context.persistence, { id: args.input.teamId });
             if (!team) throw apiError("NOT_FOUND", "Team not found");
+            if (!apiKeyTeamsWithinLimit(context.auth, [team.id])) {
+              throw apiError("NOT_FOUND", "Team resource not found");
+            }
             if (
               !isWorkspaceAdmin(viewer) &&
               !(await isPostgresTeamOwner(context.persistence, team.id, viewer.id))
@@ -2486,7 +2497,10 @@ export const resolvers = {
             return {
               success: true,
               workflowState: mapPostgresWorkflowState(
-                await createPostgresWorkflowState(context.persistence, args.input),
+                await createPostgresWorkflowState(context.persistence, {
+                  ...args.input,
+                  teamId: team.id,
+                }),
               ),
             };
           }

@@ -328,4 +328,142 @@ describe("API key scopes and lifecycle", () => {
     );
     expect(globalLabel.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
   });
+
+  it("rechaza una mutación escalar fuera del límite de la API key", async () => {
+    app = createTestApp();
+    const actor = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "limited-owner", type: AGENT }) { actor { id } } }`,
+    );
+    expect(actor.errors).toBeUndefined();
+    const actorId = actor.data!.actorCreate.actor.id as string;
+    const team = await gql(
+      app,
+      `mutation { teamCreate(input: { key: "SEC", name: "Security" }) { team { id } } }`,
+    );
+    expect(team.errors).toBeUndefined();
+    const teamId = team.data!.teamCreate.team.id as string;
+    const membership = await gql(
+      app,
+      `mutation($teamId: ID!, $actorId: ID!) {
+        teamMembershipCreate(input: { teamId: $teamId, actorId: $actorId, role: OWNER }) { success }
+      }`,
+      { teamId, actorId },
+    );
+    expect(membership.errors).toBeUndefined();
+    const primaryTeamId = (
+      app.db.query("SELECT id FROM teams WHERE key = 'PB'").get() as {
+        id: string;
+      }
+    ).id;
+    const limited = await gql(
+      app,
+      `mutation($actorId: ID!, $teamId: ID!) {
+        apiKeyCreate(input: { actorId: $actorId, name: "limited-owner-key", scopes: [WRITE], teamIds: [$teamId] }) { key }
+      }`,
+      { actorId, teamId: primaryTeamId },
+    );
+    expect(limited.errors).toBeUndefined();
+    const denied = await gql(
+      app,
+      `mutation($id: ID!) { teamUpdate(id: $id, input: { description: "must remain unchanged" }) { success } }`,
+      { id: teamId },
+      limited.data!.apiKeyCreate.key as string,
+    );
+    expect(denied.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+    expect(
+      (
+        app.db.query("SELECT description FROM teams WHERE id = ?1").get(teamId) as {
+          description: string | null;
+        }
+      ).description,
+    ).toBeNull();
+  });
+
+  it("rechaza las referencias escalares y de lista fuera del límite", async () => {
+    app = createTestApp();
+    const owner = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "limited-owner-list", type: AGENT }) { actor { id } } }`,
+    );
+    const ownerId = owner.data!.actorCreate.actor.id as string;
+    const target = await gql(
+      app,
+      `mutation { actorCreate(input: { name: "limited-target-list", type: AGENT }) { actor { id } } }`,
+    );
+    const targetId = target.data!.actorCreate.actor.id as string;
+    const team = await gql(
+      app,
+      `mutation { teamCreate(input: { key: "SEC", name: "Security list" }) { team { id } } }`,
+    );
+    const teamId = team.data!.teamCreate.team.id as string;
+    const ownerMembership = await gql(
+      app,
+      `mutation($teamId: ID!, $actorId: ID!) {
+        teamMembershipCreate(input: { teamId: $teamId, actorId: $actorId, role: OWNER }) { success }
+      }`,
+      { teamId, actorId: ownerId },
+    );
+    expect(ownerMembership.errors).toBeUndefined();
+    const primaryTeamId = (
+      app.db.query("SELECT id FROM teams WHERE key = 'PB'").get() as {
+        id: string;
+      }
+    ).id;
+    const limited = await gql(
+      app,
+      `mutation($actorId: ID!, $teamId: ID!) {
+        apiKeyCreate(input: { actorId: $actorId, name: "limited-owner-list-key", scopes: [WRITE], teamIds: [$teamId] }) { key }
+      }`,
+      { actorId: ownerId, teamId: primaryTeamId },
+    );
+    const limitedKey = limited.data!.apiKeyCreate.key as string;
+
+    const membership = await gql(
+      app,
+      `mutation($teamId: ID!, $actorId: ID!) {
+        teamMembershipCreate(input: { teamId: $teamId, actorId: $actorId, role: MEMBER }) { success }
+      }`,
+      { teamId, actorId: targetId },
+      limitedKey,
+    );
+    expect(membership.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+    expect(
+      app.db
+        .query(
+          "SELECT count(*) AS count FROM team_memberships WHERE team_id = ?1 AND actor_id = ?2",
+        )
+        .get(teamId, targetId),
+    ).toEqual({ count: 0 });
+
+    const state = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        workflowStateCreate(input: { teamId: $teamId, name: "Blocked state", type: UNSTARTED }) { success }
+      }`,
+      { teamId },
+      limitedKey,
+    );
+    expect(state.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+    expect(
+      app.db
+        .query("SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1 AND name = ?2")
+        .get(teamId, "Blocked state"),
+    ).toEqual({ count: 0 });
+
+    const project = await gql(
+      app,
+      `mutation($teamIds: [ID!]) {
+        projectCreate(input: { name: "Blocked list project", teamIds: $teamIds }) { success }
+      }`,
+      { teamIds: [teamId] },
+      limitedKey,
+    );
+    expect(project.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+    expect(
+      app.db
+        .query("SELECT count(*) AS count FROM projects WHERE name = ?1")
+        .get("Blocked list project"),
+    ).toEqual({ count: 0 });
+  });
 });

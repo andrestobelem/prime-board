@@ -364,4 +364,167 @@ describe("PostgreSQL API key Workspace isolation", () => {
       }
     },
   );
+
+  integration("rechaza mutaciones Team fuera del allowlist en el seam PostgreSQL", async () => {
+    const harness = await createPostgresHarness({
+      url: process.env.PRIME_BOARD_POSTGRES_URL!,
+      schemaPrefix: "prb584_scope_dispatch",
+      lockKey: `prb584-scope-dispatch-${randomUUID()}`,
+    });
+    const persistence = createPostgresPersistence(harness.sql as unknown as Bun.SQL, {
+      close: false,
+    });
+    const db = openDatabase(":memory:");
+    let stop: (() => void) | undefined;
+    try {
+      const seeded = await bootstrapPostgres(persistence);
+      if (!seeded.adminApiKey) throw new Error("PostgreSQL bootstrap did not issue an API key");
+      const config = {
+        port: 0,
+        host: "127.0.0.1",
+        authMode: "api-key",
+        dbPath: ":memory:",
+        postgresUrl: process.env.PRIME_BOARD_POSTGRES_URL,
+        persistenceBackend: "postgres",
+        dev: false,
+        webDist: "/tmp/prime-board-no-web",
+        repoRoot: null,
+        bootstrap: resolveBootstrapIdentity({}),
+      } as Config;
+      const app = createApp({ db, config, persistence });
+      stop = () => app.server.stop();
+
+      const request = async (
+        query: string,
+        variables?: Record<string, unknown>,
+        token = seeded.adminApiKey!,
+      ): Promise<GraphqlResponse> => {
+        const response = await fetch(`http://127.0.0.1:${app.server.port}/graphql`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ query, variables }),
+        });
+        return (await response.json()) as GraphqlResponse;
+      };
+
+      const teamA = await persistence.one<{ id: string }>(
+        "SELECT id FROM teams ORDER BY created_at, id LIMIT 1",
+      );
+      if (!teamA) throw new Error("PostgreSQL scope fixture has no initial Team");
+      const workerCreated = await request(
+        `mutation { actorCreate(input: { name: "PRB-584 worker", type: AGENT }) { actor { id } } }`,
+      );
+      expect(workerCreated.errors).toBeUndefined();
+      const workerId = (workerCreated.data!.actorCreate as { actor: { id: string } }).actor.id;
+      const targetCreated = await request(
+        `mutation { actorCreate(input: { name: "PRB-584 target", type: AGENT }) { actor { id } } }`,
+      );
+      expect(targetCreated.errors).toBeUndefined();
+      const targetId = (targetCreated.data!.actorCreate as { actor: { id: string } }).actor.id;
+      const ownerMembership = await request(
+        `mutation($teamId: ID!, $actorId: ID!) {
+           teamMembershipCreate(input: { teamId: $teamId, actorId: $actorId, role: OWNER }) { success }
+         }`,
+        { teamId: teamA.id, actorId: workerId },
+      );
+      expect(ownerMembership.errors).toBeUndefined();
+
+      const teamBResult = await request(
+        `mutation { teamCreate(input: { key: "SEC", name: "PRB-584 other Team" }) { team { id } } }`,
+      );
+      expect(teamBResult.errors).toBeUndefined();
+      const teamB = (teamBResult.data!.teamCreate as { team: { id: string } }).team;
+      const limitedResult = await request(
+        `mutation($actorId: ID!, $teamId: ID!) {
+           apiKeyCreate(input: { actorId: $actorId, name: "PRB-584 limited", scopes: [WRITE], teamIds: [$teamId] }) {
+             apiKey { teamIds }
+             key
+           }
+         }`,
+        { actorId: workerId, teamId: teamB.id },
+      );
+      expect(limitedResult.errors).toBeUndefined();
+      const limited = limitedResult.data!.apiKeyCreate as {
+        apiKey: { teamIds: string[] };
+        key: string;
+      };
+      expect(limited.apiKey.teamIds).toEqual([teamB.id]);
+
+      const teamUpdate = await request(
+        `mutation($id: ID!) {
+           teamUpdate(id: $id, input: { description: "must remain unchanged" }) { success }
+         }`,
+        { id: teamA.id },
+        limited.key,
+      );
+      expect(teamUpdate.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+      expect(
+        (
+          await persistence.one<{ description: string | null }>(
+            "SELECT description FROM teams WHERE id = $1",
+            [teamA.id],
+          )
+        )?.description,
+      ).toBeNull();
+
+      const membership = await request(
+        `mutation($teamId: ID!, $actorId: ID!) {
+           teamMembershipCreate(input: { teamId: $teamId, actorId: $actorId, role: MEMBER }) { success }
+         }`,
+        { teamId: teamA.id, actorId: targetId },
+        limited.key,
+      );
+      expect(membership.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+      expect(
+        (
+          await persistence.one<{ count: number }>(
+            "SELECT count(*)::int AS count FROM team_memberships WHERE team_id = $1 AND actor_id = $2",
+            [teamA.id, targetId],
+          )
+        )?.count,
+      ).toBe(0);
+
+      const state = await request(
+        `mutation($teamId: ID!) {
+           workflowStateCreate(input: { teamId: $teamId, name: "PRB-584 blocked state", type: UNSTARTED }) { success }
+         }`,
+        { teamId: teamA.id },
+        limited.key,
+      );
+      expect(state.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+      expect(
+        (
+          await persistence.one<{ count: number }>(
+            "SELECT count(*)::int AS count FROM workflow_states WHERE team_id = $1 AND name = $2",
+            [teamA.id, "PRB-584 blocked state"],
+          )
+        )?.count,
+      ).toBe(0);
+
+      const project = await request(
+        `mutation($teamIds: [ID!]!) {
+           projectCreate(input: { name: "PRB-584 blocked project", teamIds: $teamIds }) { success }
+         }`,
+        { teamIds: [teamA.id] },
+        limited.key,
+      );
+      expect(project.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+      expect(
+        (
+          await persistence.one<{ count: number }>(
+            "SELECT count(*)::int AS count FROM projects WHERE name = $1",
+            ["PRB-584 blocked project"],
+          )
+        )?.count,
+      ).toBe(0);
+    } finally {
+      stop?.();
+      db.close();
+      await persistence.close();
+      await harness.close();
+    }
+  });
 });

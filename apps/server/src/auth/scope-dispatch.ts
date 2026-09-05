@@ -17,6 +17,7 @@ import { getSavedView } from "../domain/saved-views.ts";
 import { getTeam } from "../domain/teams.ts";
 import { listProjectTeamIds } from "../domain/projects.ts";
 import { postgresInboxTeamId } from "../domain/postgres-inbox.ts";
+import { getPostgresTeam } from "../domain/postgres-teams.ts";
 
 const ADMIN_MUTATIONS = new Set([
   "workspaceCreate",
@@ -145,8 +146,10 @@ function scalar(value: unknown): string | null {
 }
 
 function ids(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string");
+  if (value === undefined || value === null) return [];
+  const values = Array.isArray(value) ? value : [value];
+  if (values.length === 0) return ["__missing__"];
+  return values.map((item) => scalar(item) ?? "__missing__");
 }
 
 function teamForRef(context: Context, ref: unknown): string | null {
@@ -162,10 +165,23 @@ function teamForRef(context: Context, ref: unknown): string | null {
 }
 
 function scopedTeamIds(context: Context, value: unknown): string[] {
-  return ids(value).flatMap((ref) => {
-    const teamId = teamForRef(context, ref);
-    return teamId ? [teamId] : [];
-  });
+  const refs = ids(value);
+  return refs.map((ref) => teamForRef(context, ref) ?? "__missing__");
+}
+
+async function operationScopedTeamIds(context: Context, value: unknown): Promise<string[]> {
+  if (!context.persistence) return scopedTeamIds(context, value);
+  const refs = ids(value);
+  if (refs.length === 0) return ["__missing__"];
+  const persistence = context.persistence;
+  return Promise.all(
+    refs.map(async (ref) => {
+      const team =
+        (await getPostgresTeam(persistence, { id: ref })) ??
+        (await getPostgresTeam(persistence, { key: ref }));
+      return team?.id ?? "__missing__";
+    }),
+  );
 }
 
 function teamIdsForIssue(context: Context, issueId: unknown): string[] {
@@ -358,7 +374,11 @@ async function operationTeamIds(
     const teamId = scalar(input.teamId);
     return teamId ? [teamId] : null;
   }
-  const directTeam = teamForRef(context, args.teamId ?? input.teamId ?? args.team ?? input.team);
+  const directTeamRef = args.teamId ?? input.teamId ?? args.team ?? input.team;
+  if (context.persistence && directTeamRef !== undefined && directTeamRef !== null) {
+    return operationScopedTeamIds(context, directTeamRef);
+  }
+  const directTeam = teamForRef(context, directTeamRef);
   if (directTeam) return [directTeam];
 
   switch (field) {
@@ -438,9 +458,9 @@ async function operationTeamIds(
     case "teamArchive":
     case "teamUnarchive":
     case "teamDelete":
-      return scopedTeamIds(context, args.id);
+      return operationScopedTeamIds(context, args.id);
     case "teamMembershipCreate":
-      return scopedTeamIds(context, input.teamId);
+      return operationScopedTeamIds(context, input.teamId);
     case "teamMembershipDelete":
       if (context.persistence) return [];
       return context.db
@@ -448,7 +468,7 @@ async function operationTeamIds(
         .all(scalar(args.id))
         .flatMap((row) => scopedTeamIds(context, (row as { team_id: string }).team_id));
     case "workflowStateCreate":
-      return scopedTeamIds(context, input.teamId);
+      return operationScopedTeamIds(context, input.teamId);
     case "workflowStateUpdate":
     case "workflowStateDelete": {
       if (context.persistence) return [];
@@ -521,7 +541,9 @@ async function operationTeamIds(
         : ["__missing__"];
     }
     case "projectCreate":
-      if (context.persistence) return [];
+      if (context.persistence) {
+        return input.teamIds == null ? [] : operationScopedTeamIds(context, input.teamIds);
+      }
       return input.teamIds == null
         ? context.db
             .query(
@@ -650,6 +672,9 @@ async function assertOperationTeams(
       "UNAUTHORIZED",
       "A Team-limited API key cannot access an unrestricted operation",
     );
+  }
+  if (teamIds.includes("__missing__")) {
+    throw apiError("NOT_FOUND", "Team resource not found");
   }
   assertApiKeyTeams(context, teamIds);
 }
