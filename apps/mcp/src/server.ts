@@ -30,7 +30,11 @@ function json(value: unknown) {
 
 export function createServer(config: McpConfig | McpSession): McpServer {
   // Una instancia MCP es una sesión fija: ninguna tool puede cambiar credencial o contexto.
-  const sessionConfig: McpConfig = Object.freeze({ url: config.url, apiKey: config.apiKey });
+  const sessionConfig: McpConfig = Object.freeze({
+    url: config.url,
+    apiKey: config.apiKey,
+    workspaceId: "context" in config ? config.context.workspaceId : config.workspaceId,
+  });
   const server = new McpServer({ name: "prime-board", version: APP_VERSION });
 
   server.registerTool(
@@ -1035,7 +1039,6 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       },
     );
   }
-
 
   server.registerTool(
     "list_cycles",

@@ -1,4 +1,5 @@
 // Cliente GraphQL de la UI. La UI consume exclusivamente /graphql (spec §9).
+import { withoutWorkspaceFields } from "@prime-board/graphql-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRequestGate } from "./request-generation.ts";
 import {
@@ -70,16 +71,24 @@ let workspaceGeneration = 0;
 
 // El gate de Workspace se consulta antes de montar el resto de la UI. Unifica
 // el adaptador de requests para que ningún schema legacy valide campos nuevos.
-let workspaceContractSupported: boolean | null = null;
+type WorkspaceContractCacheKey = string;
+const workspaceContractSupported = new Map<WorkspaceContractCacheKey, boolean>();
 
-export function setWorkspaceContractSupported(supported: boolean): void {
-  workspaceContractSupported = supported;
+export function getWorkspaceContractKey(): WorkspaceContractCacheKey {
+  return JSON.stringify(["/graphql", localStorage.getItem("pb.apiKey") ?? ""]);
 }
 
-function queryForWorkspaceContract(query: string): string {
-  return workspaceContractSupported === false
-    ? query.replace(/(?<![$A-Za-z0-9_])workspaceId\b/g, "")
-    : query;
+export function setWorkspaceContractSupported(
+  supported: boolean,
+  key: WorkspaceContractCacheKey = getWorkspaceContractKey(),
+): void {
+  workspaceContractSupported.set(key, supported);
+}
+
+export function getWorkspaceContractSupported(
+  key: WorkspaceContractCacheKey = getWorkspaceContractKey(),
+): boolean | null {
+  return workspaceContractSupported.get(key) ?? null;
 }
 
 /** Invalidates in-flight UI work before changing the effective Workspace. */
@@ -98,11 +107,12 @@ export async function gql<T = any>(
   variables: Record<string, unknown> = {},
   options: { signal?: AbortSignal; workspaceHeader?: boolean } = {},
 ): Promise<T> {
+  const contractSupported = getWorkspaceContractSupported();
   const workspaceId =
-    options.workspaceHeader === false || workspaceContractSupported === false
+    options.workspaceHeader === false || contractSupported === false
       ? null
       : getSelectedWorkspaceIdForRequest();
-  const requestQuery = queryForWorkspaceContract(query);
+  const requestQuery = contractSupported === false ? withoutWorkspaceFields(query) : query;
   const requestCredentialGeneration = getCredentialGeneration();
   const requestWorkspaceGeneration = getWorkspaceGeneration();
   const headers: Record<string, string> = {

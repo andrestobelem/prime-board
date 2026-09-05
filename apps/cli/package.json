@@ -5,6 +5,7 @@
     "pb": "src/index.ts"
   },
   "dependencies": {
+    "@prime-board/graphql-client": "workspace:*",
     "@prime-board/schema": "workspace:*"
   }
 }

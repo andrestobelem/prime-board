@@ -1,4 +1,5 @@
 // Cliente GraphQL mínimo sobre fetch. El CLI no toca la DB: solo habla con la API.
+import { withoutWorkspaceFields } from "@prime-board/graphql-client";
 import type { CliConfig } from "./config.ts";
 import { ApiError } from "./errors.ts";
 
@@ -40,20 +41,24 @@ function hasWorkspaceContract(payload: unknown): boolean | null {
   return queryFields.some((field) => field.name === "workspaces") && hasWorkspaceFields;
 }
 
-function withoutWorkspaceFields(query: string): string {
-  return query.replace(/(?<![$A-Za-z0-9_])workspaceId\b/g, "");
+type ContractCacheKey = string;
+
+function contractCacheKey(url: string, apiKey: string): ContractCacheKey {
+  return JSON.stringify([url, apiKey]);
 }
 
-let detectedContract: { url: string; apiKey: string; supported: boolean } | null = null;
-let detectingContract: Promise<boolean> | null = null;
+const detectedContracts = new Map<ContractCacheKey, boolean>();
+const detectingContracts = new Map<ContractCacheKey, Promise<boolean>>();
 
 async function supportsWorkspaceContract(config: CliConfig): Promise<boolean> {
   const url = config.url.replace(/\/$/, "");
-  if (detectedContract?.url === url && detectedContract.apiKey === config.apiKey) {
-    return detectedContract.supported;
-  }
-  if (detectingContract) return detectingContract;
-  detectingContract = (async () => {
+  const key = contractCacheKey(url, config.apiKey);
+  const cached = detectedContracts.get(key);
+  if (cached !== undefined) return cached;
+  const inFlight = detectingContracts.get(key);
+  if (inFlight) return inFlight;
+
+  const detection = (async () => {
     try {
       const response = await fetch(`${url}/graphql`, {
         method: "POST",
@@ -74,12 +79,13 @@ async function supportsWorkspaceContract(config: CliConfig): Promise<boolean> {
       return true;
     }
   })();
+  detectingContracts.set(key, detection);
   try {
-    const supported = await detectingContract;
-    detectedContract = { url, apiKey: config.apiKey, supported };
+    const supported = await detection;
+    detectedContracts.set(key, supported);
     return supported;
   } finally {
-    detectingContract = null;
+    if (detectingContracts.get(key) === detection) detectingContracts.delete(key);
   }
 }
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { gql } from "../src/api.ts";
-import { getEffectiveWorkspaceContext } from "../src/ui-context.ts";
+import { credentialNamespace, getEffectiveWorkspaceContext } from "../src/ui-context.ts";
 import { LEGACY_SCHEMA_INTROSPECTION } from "./fixtures/legacy-schema-introspection.ts";
 import { parseRoute, workspacePath } from "../src/router.tsx";
 import {
@@ -9,6 +9,17 @@ import {
   selectWorkspace,
   setSelectedWorkspaceId,
 } from "../src/workspace.ts";
+
+const MODERN_SCHEMA_INTROSPECTION = {
+  __schema: {
+    queryType: LEGACY_SCHEMA_INTROSPECTION.__schema.queryType,
+    types: LEGACY_SCHEMA_INTROSPECTION.__schema.types.map((type) =>
+      ["Actor", "ApiKey", "ActorInvitation", "Team", "Label", "Webhook"].includes(type.name)
+        ? { ...type, fields: [...(type.fields ?? []), { name: "workspaceId" }] }
+        : type,
+    ),
+  },
+};
 
 describe("Workspace routes", () => {
   it("parses a Workspace deep-link and keeps the existing route shape", () => {
@@ -51,7 +62,7 @@ describe("Workspace contract feature gate", () => {
   });
 
   it("does not enable the switcher for a legacy schema", async () => {
-    const values = new Map<string, string>();
+    const values = new Map<string, string>([["pb.apiKey", "legacy-gate-key"]]);
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
       value: {
@@ -87,7 +98,10 @@ describe("Legacy SDL compatibility", () => {
   });
 
   it("classifies the real 4295813 SDL and strips scoped fields from every request", async () => {
-    const values = new Map<string, string>([["pb.workspace.selection.local", "stale-workspace"]]);
+    const values = new Map<string, string>([
+      ["pb.apiKey", "legacy-ui-key"],
+      ["pb.workspace.selection.legacy-ui-key", "stale-workspace"],
+    ]);
     const storage = {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
@@ -122,6 +136,86 @@ describe("Legacy SDL compatibility", () => {
     const request = requests[1];
     expect(request?.query).not.toContain("workspaceId");
     expect(request?.headers.has("x-workspace-id")).toBe(false);
+  });
+});
+
+describe("Workspace contract concurrency", () => {
+  const originalFetch = globalThis.fetch;
+  const originalStorage = globalThis.localStorage;
+  const originalWindow = globalThis.window;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, "localStorage", {
+      value: originalStorage,
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, "window", { value: originalWindow, configurable: true });
+  });
+
+  it("isolates concurrent credential probes and preserves modern and legacy requests", async () => {
+    const modernKey = "web-modern-concurrent";
+    const legacyKey = "web-legacy-concurrent";
+    const values = new Map<string, string>([["pb.apiKey", modernKey]]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { localStorage: storage },
+    });
+
+    const requests: Array<{ key: string; query: string; headers: Headers }> = [];
+    let contractProbes = 0;
+    let releaseModernProbe!: (response: Response) => void;
+    const modernProbe = new Promise<Response>((resolve) => {
+      releaseModernProbe = resolve;
+    });
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      const key = headers.get("authorization")?.replace("Bearer ", "") ?? "";
+      const query = JSON.parse(String(init?.body)).query as string;
+      if (query.includes("__schema")) {
+        contractProbes += 1;
+        if (key === modernKey) return modernProbe;
+        return new Response(JSON.stringify({ data: LEGACY_SCHEMA_INTROSPECTION }), { status: 200 });
+      }
+      requests.push({ key, query, headers });
+      return new Response(JSON.stringify({ data: { viewer: { id: "actor" } } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const modernDetection = getWorkspaceContract();
+    values.set("pb.apiKey", legacyKey);
+    const legacyDetection = getWorkspaceContract();
+    await legacyDetection;
+    releaseModernProbe(
+      new Response(JSON.stringify({ data: MODERN_SCHEMA_INTROSPECTION }), { status: 200 }),
+    );
+    await expect(modernDetection).resolves.toEqual({ supported: true });
+    await expect(getWorkspaceContract()).resolves.toEqual({ supported: false });
+    expect(contractProbes).toBe(2);
+
+    const query = `query Surface($workspaceId: ID!, $argumentWorkspaceId: ID!) {
+      viewer { id selected: workspaceId }
+      team(workspaceId: $argumentWorkspaceId) @include(if: true) { id }
+    }`;
+    values.set("pb.apiKey", modernKey);
+    values.set(`pb.workspace.selection.${credentialNamespace(modernKey)}`, "modern-workspace");
+    await gql(query, { workspaceId: "unused", argumentWorkspaceId: "unused" });
+    values.set("pb.apiKey", legacyKey);
+    values.set(`pb.workspace.selection.${credentialNamespace(legacyKey)}`, "stale-workspace");
+    await gql(query, { workspaceId: "unused", argumentWorkspaceId: "unused" });
+
+    const modernRequest = requests.find((request) => request.key === modernKey);
+    const legacyRequest = requests.find((request) => request.key === legacyKey);
+    expect(modernRequest?.query).toContain("selected: workspaceId");
+    expect(modernRequest?.headers.get("x-workspace-id")).toBe("modern-workspace");
+    expect(legacyRequest?.query).not.toMatch(/\bworkspaceId\b/);
+    expect(legacyRequest?.query).toContain("@include(if: true)");
+    expect(legacyRequest?.headers.has("x-workspace-id")).toBe(false);
   });
 });
 

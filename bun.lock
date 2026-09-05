@@ -18,6 +18,7 @@
         "pb": "src/index.ts",
       },
       "dependencies": {
+        "@prime-board/graphql-client": "workspace:*",
         "@prime-board/schema": "workspace:*",
       },
     },
@@ -28,6 +29,7 @@
       },
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.30.0",
+        "@prime-board/graphql-client": "workspace:*",
         "@prime-board/schema": "workspace:*",
         "zod": "^4.4.3",
       },
@@ -44,6 +46,7 @@
     "apps/web": {
       "name": "@prime-board/web",
       "dependencies": {
+        "@prime-board/graphql-client": "workspace:*",
         "dompurify": "^3.4.13",
         "marked": "^18.0.9",
         "react": "^19.2.8",
@@ -56,6 +59,12 @@
         "@vitejs/plugin-react": "^6.0.5",
         "jsdom": "^30.0.1",
         "vite": "^8.2.1",
+      },
+    },
+    "packages/graphql-client": {
+      "name": "@prime-board/graphql-client",
+      "dependencies": {
+        "graphql": "^17.0.2",
       },
     },
     "packages/prime-board-agent": {
@@ -135,6 +144,8 @@
     "@prime-board/agent": ["@prime-board/agent@workspace:packages/prime-board-agent"],
 
     "@prime-board/cli": ["@prime-board/cli@workspace:apps/cli"],
+
+    "@prime-board/graphql-client": ["@prime-board/graphql-client@workspace:packages/graphql-client"],
 
     "@prime-board/mcp": ["@prime-board/mcp@workspace:apps/mcp"],
 

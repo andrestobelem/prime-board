@@ -53,6 +53,9 @@ describe("MCP effective Workspace session", () => {
     });
     expect(Object.isFrozen(session)).toBe(true);
     expect(Object.isFrozen(session.context)).toBe(true);
-    expect(requests).toEqual([{ authorization: "Bearer pb_secret" }]);
+    expect(requests).toEqual([
+      { authorization: "Bearer pb_secret" },
+      { authorization: "Bearer pb_secret" },
+    ]);
   });
 });

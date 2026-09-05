@@ -1,4 +1,10 @@
-import { gql, invalidateWorkspaceContext, setWorkspaceContractSupported } from "./api.ts";
+import {
+  getWorkspaceContractKey,
+  getWorkspaceContractSupported,
+  gql,
+  invalidateWorkspaceContext,
+  setWorkspaceContractSupported,
+} from "./api.ts";
 import { credentialNamespace } from "./ui-context.ts";
 
 export interface AccessibleWorkspace {
@@ -66,27 +72,43 @@ export function clearSelectedWorkspaceId(): void {
   if (key) storage()?.removeItem(key);
 }
 
+const detectingWorkspaceContracts = new Map<string, Promise<WorkspaceContract>>();
+
 export async function getWorkspaceContract(): Promise<WorkspaceContract> {
+  const key = getWorkspaceContractKey();
+  const cached = getWorkspaceContractSupported(key);
+  if (cached !== null) return { supported: cached };
+  const inFlight = detectingWorkspaceContracts.get(key);
+  if (inFlight) return inFlight;
+
+  const detection = (async (): Promise<WorkspaceContract> => {
+    try {
+      const result = await gql<{
+        __schema?: {
+          queryType?: { fields?: Array<{ name: string }> };
+          types?: IntrospectionType[];
+        };
+      }>(CONTRACT_QUERY, {}, { workspaceHeader: false });
+      const queryFields = result.__schema?.queryType?.fields ?? [];
+      const types = new Map((result.__schema?.types ?? []).map((type) => [type.name, type]));
+      const hasWorkspaceFields = WORKSPACE_SCOPED_TYPES.every((typeName) =>
+        types.get(typeName)?.fields?.some((field) => field.name === "workspaceId"),
+      );
+      const supported =
+        queryFields.some((field) => field.name === "workspaces") && hasWorkspaceFields;
+      setWorkspaceContractSupported(supported, key);
+      return { supported };
+    } catch {
+      // Introspection is optional for legacy/single-Workspace servers.
+      setWorkspaceContractSupported(false, key);
+      return { supported: false };
+    }
+  })();
+  detectingWorkspaceContracts.set(key, detection);
   try {
-    const result = await gql<{
-      __schema?: {
-        queryType?: { fields?: Array<{ name: string }> };
-        types?: IntrospectionType[];
-      };
-    }>(CONTRACT_QUERY, {}, { workspaceHeader: false });
-    const queryFields = result.__schema?.queryType?.fields ?? [];
-    const types = new Map((result.__schema?.types ?? []).map((type) => [type.name, type]));
-    const hasWorkspaceFields = WORKSPACE_SCOPED_TYPES.every((typeName) =>
-      types.get(typeName)?.fields?.some((field) => field.name === "workspaceId"),
-    );
-    const supported =
-      queryFields.some((field) => field.name === "workspaces") && hasWorkspaceFields;
-    setWorkspaceContractSupported(supported);
-    return { supported };
-  } catch {
-    // Introspection is optional for legacy/single-Workspace servers.
-    setWorkspaceContractSupported(false);
-    return { supported: false };
+    return await detection;
+  } finally {
+    if (detectingWorkspaceContracts.get(key) === detection) detectingWorkspaceContracts.delete(key);
   }
 }
 
