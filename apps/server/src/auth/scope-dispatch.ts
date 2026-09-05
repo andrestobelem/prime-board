@@ -255,7 +255,12 @@ function initiativeRelationTeams(
 ): { direct: string[]; projects: string[] } | null {
   const id = scalar(initiativeId);
   if (!id) return null;
-  if (!context.db.query("SELECT id FROM initiatives WHERE id = ?1").get(id)) return null;
+  if (
+    !context.db
+      .query("SELECT id FROM initiatives WHERE id = ?1 AND workspace_id = ?2")
+      .get(id, context.workspace.workspaceId)
+  )
+    return null;
   const direct = context.db
     .query("SELECT team_id FROM initiative_teams WHERE initiative_id = ?1")
     .all(id)
