@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { getProject, listProjectTeamIds } from "./projects.ts";
+import { getTeam } from "./teams.ts";
 import { parseDateTime } from "./datetime.ts";
 import { isTeamMember } from "./team-memberships.ts";
 import type { ActorRow } from "../auth/viewer.ts";
@@ -133,6 +134,9 @@ function setTeams(
   const viewer = resolveViewer(db, viewerRef);
   if (!viewer) throw apiError("NOT_FOUND", "Actor not found");
   for (const teamId of new Set(teamIds)) {
+    if (!getTeam(db, { id: teamId }, workspaceId)) {
+      throw apiError("NOT_FOUND", `Team not found: ${teamId}`);
+    }
     assertCanManageIssue(db, viewer, teamId);
   }
   if (workspaceId) {
@@ -188,7 +192,9 @@ function setProjects(
   const viewer = resolveViewer(db, viewerRef);
   if (!viewer) throw apiError("NOT_FOUND", "Actor not found");
   for (const projectId of projectIds) {
-    if (!getProject(db, projectId)) throw apiError("NOT_FOUND", `Project not found: ${projectId}`);
+    if (!getProject(db, projectId, workspaceId)) {
+      throw apiError("NOT_FOUND", `Project not found: ${projectId}`);
+    }
     assertCanManageProject(db, viewer, projectId);
   }
   if (workspaceId) {
