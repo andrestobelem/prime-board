@@ -9,6 +9,8 @@ const schema = buildSchema(`
   }
   type Viewer { id: ID! workspaceId: ID workspaceIdentifier: ID }
   type Thing { id: ID! }
+  type Subscription { events: Event! }
+  type Event { id: ID! workspaceId: ID }
 `);
 
 describe("legacy GraphQL document transformation", () => {
@@ -73,6 +75,18 @@ describe("legacy GraphQL document transformation", () => {
       fragment ViewerFields on Viewer { ...WorkspaceFields }
       fragment WorkspaceFields on Viewer { workspaceId }
     `);
+    expect(validate(schema, parse(transformed))).toEqual([]);
+  });
+
+  it("rejects subscriptions with no compatible legacy root field", () => {
+    expect(() =>
+      withoutWorkspaceFields("subscription S($workspaceId: ID!) { workspaceId }"),
+    ).toThrow("Legacy subscription has no compatible root fields");
+    expect(() => withoutWorkspaceFields("subscription S { events { workspaceId } }")).toThrow(
+      "Legacy subscription has no compatible root fields",
+    );
+
+    const transformed = withoutWorkspaceFields("subscription S { events { id workspaceId } }");
     expect(validate(schema, parse(transformed))).toEqual([]);
   });
 

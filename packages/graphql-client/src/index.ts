@@ -24,6 +24,19 @@ function typenameSelection(): FieldNode {
   };
 }
 
+function fallbackOperationSelection(node: OperationNode): OperationNode {
+  if (node.operation === "subscription") {
+    throw new Error("Legacy subscription has no compatible root fields");
+  }
+  return {
+    ...node,
+    selectionSet: {
+      ...node.selectionSet,
+      selections: [typenameSelection()],
+    },
+  };
+}
+
 function variablesInSelectionSet(
   selectionSet: SelectionSetNode,
   fragments: ReadonlyMap<string, FragmentNode>,
@@ -143,13 +156,7 @@ function removeEmptySelectionNodes(document: DocumentNode): DocumentNode {
     OperationDefinition: {
       leave(node: OperationNode) {
         if (node.selectionSet.selections.length > 0) return node;
-        return {
-          ...node,
-          selectionSet: {
-            ...node.selectionSet,
-            selections: [typenameSelection()],
-          },
-        };
+        return fallbackOperationSelection(node);
       },
     },
   });
@@ -207,8 +214,9 @@ function removeUnusedFragments(document: DocumentNode): DocumentNode {
  * Quita selecciones y argumentos exclusivos de Workspace de un documento GraphQL válido.
  *
  * La transformación AST conserva textos, nombres, aliases y directivas. También
- * quita variables y fragmentos sin uso, y conserva una operación válida cuando
- * la selección raíz solo contenía workspaceId.
+ * quita variables y fragmentos sin uso, y conserva una operación válida de query o
+ * mutation cuando la selección raíz solo contenía workspaceId. Las subscriptions sin
+ * campos root compatibles se rechazan antes de enviarse.
  */
 export function withoutWorkspaceFields(query: string): string {
   const document = parse(query);
@@ -241,13 +249,7 @@ export function withoutWorkspaceFields(query: string): string {
     OperationDefinition: {
       leave(node) {
         if (node.selectionSet.selections.length > 0) return node;
-        return {
-          ...node,
-          selectionSet: {
-            ...node.selectionSet,
-            selections: [typenameSelection()],
-          },
-        };
+        return fallbackOperationSelection(node);
       },
     },
   });
