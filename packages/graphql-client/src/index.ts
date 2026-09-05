@@ -49,25 +49,41 @@ function variablesInSelectionSet(
     },
   });
 
-  for (const selection of selectionSet.selections) {
-    if (selection.kind !== Kind.FRAGMENT_SPREAD) continue;
-    const name = selection.name.value;
-    if (visitedFragments.has(name)) continue;
-    const fragment = fragments.get(name);
-    if (!fragment) continue;
-    const nextVisited = new Set(visitedFragments);
-    nextVisited.add(name);
-    for (const variable of variablesInSelectionSet(fragment.selectionSet, fragments, nextVisited)) {
-      variables.add(variable);
+  const visitFragmentSpreads = (current: SelectionSetNode, visited: ReadonlySet<string>): void => {
+    for (const selection of current.selections) {
+      if (selection.kind === Kind.FRAGMENT_SPREAD) {
+        const name = selection.name.value;
+        if (visited.has(name)) continue;
+        const fragment = fragments.get(name);
+        if (!fragment) continue;
+        const nextVisited = new Set(visited);
+        nextVisited.add(name);
+        for (const variable of variablesInSelectionSet(
+          fragment.selectionSet,
+          fragments,
+          nextVisited,
+        )) {
+          variables.add(variable);
+        }
+        for (const directive of fragment.directives ?? []) {
+          visit(directive, {
+            Variable(variable) {
+              variables.add(variable.name.value);
+            },
+          });
+        }
+        continue;
+      }
+      if (
+        (selection.kind === Kind.FIELD || selection.kind === Kind.INLINE_FRAGMENT) &&
+        selection.selectionSet
+      ) {
+        visitFragmentSpreads(selection.selectionSet, visited);
+      }
     }
-    for (const directive of fragment.directives ?? []) {
-      visit(directive, {
-        Variable(variable) {
-          variables.add(variable.name.value);
-        },
-      });
-    }
-  }
+  };
+
+  visitFragmentSpreads(selectionSet, visitedFragments);
   return variables;
 }
 

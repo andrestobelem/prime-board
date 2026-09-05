@@ -78,6 +78,27 @@ describe("legacy GraphQL document transformation", () => {
     expect(validate(schema, parse(transformed))).toEqual([]);
   });
 
+  it("retains variables used by nested fragment directives", () => {
+    const transformed = withoutWorkspaceFields(`
+      query Q($a: Boolean!, $b: Boolean!, $c: Boolean!) {
+        viewer { ...ViewerFields @include(if: $a) }
+      }
+      fragment ViewerFields on Viewer {
+        workspaceIdentifier @include(if: $b)
+        ...EventFields
+      }
+      fragment EventFields on Viewer {
+        id @include(if: $c)
+        workspaceId
+      }
+    `);
+    const document = parse(transformed);
+    expect(validate(schema, document)).toEqual([]);
+    expect(transformed).toContain("$a");
+    expect(transformed).toContain("$b");
+    expect(transformed).toContain("$c");
+  });
+
   it("rejects subscriptions with no compatible legacy root field", () => {
     expect(() =>
       withoutWorkspaceFields("subscription S($workspaceId: ID!) { workspaceId }"),
