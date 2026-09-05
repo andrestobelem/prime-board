@@ -86,10 +86,12 @@ describe("icon buttons and keyboard focus", () => {
 
   test("contains sidebar overflow and keeps resource labels truncatable", () => {
     const sidebarRule = styles.match(/\.sidebar \{([\s\S]*?)\n\}/)?.[1] ?? "";
+    const sidebarScrollRule = styles.match(/\.sidebar-scroll \{([\s\S]*?)\n\}/)?.[1] ?? "";
     const sidebar = componentSources[1] ?? "";
 
-    expect(sidebarRule).toContain("overflow-x: hidden;");
-    expect(sidebarRule).toContain("overflow-y: auto;");
+    expect(sidebarRule).toContain("overflow: visible;");
+    expect(sidebarScrollRule).toContain("overflow-x: hidden;");
+    expect(sidebarScrollRule).toContain("overflow-y: auto;");
     expect(sidebar).toContain('className="resource-label">{project.name}</span>');
     expect(sidebar).toContain('className="resource-label">{view.name}</span>');
     expect(sidebar).toContain('className="resource-label">{initiative.name}</span>');

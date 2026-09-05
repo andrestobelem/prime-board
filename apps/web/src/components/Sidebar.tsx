@@ -234,244 +234,247 @@ export function Sidebar({
             </div>
           )}
         </div>
-        {onCreateIssue && (
-          <button className="nav new-issue-nav" onClick={onCreateIssue}>
-            <Icon name="plus" size={14} />
-            <span>New issue</span>
-            <kbd>C</kbd>
-          </button>
-        )}
-        <div className="section">Workspace</div>
-        <Link to="/teams" className={active("/teams")}>
-          <Icon name="members" /> Teams
-        </Link>
-        <Link to="/inbox" className={active("/inbox")}>
-          <Icon name="comment" /> Inbox
-          {unreadInboxCount > 0 && (
-            <span className="nav-count" aria-label={`${unreadInboxCount} unread`}>
-              {unreadInboxCount}
-            </span>
-          )}
-        </Link>
-        <Link to="/my" className={active("/my")}>
-          <Icon name="assignee" /> My issues
-        </Link>
-        <Link to="/reviews" className={active("/reviews")}>
-          <Icon name="check" /> Reviews
-        </Link>
-        <Link to="/projects" className={active("/projects")}>
-          <Icon name="project" /> Projects
-        </Link>
-        <Link to="/documents" className={active("/documents")}>
-          <Icon name="file-text" /> Documents
-        </Link>
-        {(favorites.length > 0 || onToggleFavorite || favoritePending || favoriteError) && (
-          <>
-            <button
-              className="nav favorites-heading"
-              aria-expanded={favoritesOpen}
-              onClick={() => setFavoritesOpen((open) => !open)}
-            >
-              <Icon name={favoritesOpen ? "chevron-down" : "chevron-right"} size={12} />
-              <span>Favorites</span>
+        <div className="sidebar-scroll">
+          {onCreateIssue && (
+            <button className="nav new-issue-nav" onClick={onCreateIssue}>
+              <Icon name="plus" size={14} />
+              <span>New issue</span>
+              <kbd>C</kbd>
             </button>
-            {(favoritePending || favoriteError) && (
-              <div
-                className={`favorite-feedback${favoriteError ? " error" : ""}`}
-                role={favoriteError ? "alert" : "status"}
-                aria-live="polite"
+          )}
+          <div className="section">Workspace</div>
+          <Link to="/teams" className={active("/teams")}>
+            <Icon name="members" /> Teams
+          </Link>
+          <Link to="/inbox" className={active("/inbox")}>
+            <Icon name="comment" /> Inbox
+            {unreadInboxCount > 0 && (
+              <span className="nav-count" aria-label={`${unreadInboxCount} unread`}>
+                {unreadInboxCount}
+              </span>
+            )}
+          </Link>
+          <Link to="/my" className={active("/my")}>
+            <Icon name="assignee" /> My issues
+          </Link>
+          <Link to="/reviews" className={active("/reviews")}>
+            <Icon name="check" /> Reviews
+          </Link>
+          <Link to="/projects" className={active("/projects")}>
+            <Icon name="project" /> Projects
+          </Link>
+          <Link to="/documents" className={active("/documents")}>
+            <Icon name="file-text" /> Documents
+          </Link>
+          {(favorites.length > 0 || onToggleFavorite || favoritePending || favoriteError) && (
+            <>
+              <button
+                className="nav favorites-heading"
+                aria-expanded={favoritesOpen}
+                onClick={() => setFavoritesOpen((open) => !open)}
               >
-                <span>{favoriteError ?? favoritePendingLabel}</span>
-                {favoriteError && onRetryFavorite && (
-                  <button className="btn secondary" onClick={onRetryFavorite}>
-                    Retry
+                <Icon name={favoritesOpen ? "chevron-down" : "chevron-right"} size={12} />
+                <span>Favorites</span>
+              </button>
+              {(favoritePending || favoriteError) && (
+                <div
+                  className={`favorite-feedback${favoriteError ? " error" : ""}`}
+                  role={favoriteError ? "alert" : "status"}
+                  aria-live="polite"
+                >
+                  <span>{favoriteError ?? favoritePendingLabel}</span>
+                  {favoriteError && onRetryFavorite && (
+                    <button className="btn secondary" onClick={onRetryFavorite}>
+                      Retry
+                    </button>
+                  )}
+                </div>
+              )}
+              {favoritesOpen &&
+                (favorites.length === 0 ? (
+                  <div className="hint" style={{ padding: "0 12px 8px" }}>
+                    Pin a project or view to keep it here
+                  </div>
+                ) : (
+                  favorites.map((favorite, index) => {
+                    const target = favorite.project
+                      ? { projectId: favorite.project.id }
+                      : { savedViewId: favorite.savedView!.id };
+                    const path = favorite.project
+                      ? `/project/${favorite.project.id}`
+                      : `/view/${favorite.savedView!.id}`;
+                    const name = favorite.project?.name ?? favorite.savedView?.name ?? "Favorite";
+                    return (
+                      <div className="favorite-row" key={favorite.id}>
+                        <Link to={path} className={active(path)}>
+                          <Icon name={favorite.project ? "project" : "filter"} className="nested" />
+                          <span className="resource-label">{name}</span>
+                        </Link>
+                        {onReorderFavorite && (
+                          <span className="favorite-order">
+                            <button
+                              className="icon-button"
+                              aria-label={`Move ${name} up`}
+                              title="Move up"
+                              aria-busy={favoritePending}
+                              disabled={favoritePending || index === 0}
+                              onClick={() => void onReorderFavorite(favorite, index - 1)}
+                            >
+                              <Icon name="arrow-up" size={11} />
+                            </button>
+                            <button
+                              className="icon-button"
+                              aria-label={`Move ${name} down`}
+                              title="Move down"
+                              aria-busy={favoritePending}
+                              disabled={favoritePending || index === favorites.length - 1}
+                              onClick={() => void onReorderFavorite(favorite, index + 1)}
+                            >
+                              <Icon name="arrow-down" size={11} />
+                            </button>
+                          </span>
+                        )}
+                        {onToggleFavorite && (
+                          <button
+                            className="icon-button"
+                            aria-label={`Remove ${name} from favorites`}
+                            title="Remove from favorites"
+                            aria-busy={favoritePending}
+                            disabled={favoritePending}
+                            onClick={() => toggleFavorite(target)}
+                          >
+                            <Icon name="x" size={12} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
+                ))}
+            </>
+          )}
+          <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ flex: 1 }}>Initiatives</span>
+            {onCreateInitiative && (
+              <button
+                className="icon-button"
+                title="New initiative"
+                onClick={() => void onCreateInitiative()}
+              >
+                <Icon name="plus" size={12} />
+              </button>
+            )}
+          </div>
+          {initiatives.map((initiative) => (
+            <Link
+              key={initiative.id}
+              to={`/initiative/${initiative.id}`}
+              className={active(`/initiative/${initiative.id}`)}
+            >
+              <Icon name="milestone" className="nested" />
+              <span className="resource-label">{initiative.name}</span>
+            </Link>
+          ))}
+          <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ flex: 1 }}>Views</span>
+            {onCreateView && (
+              <button className="icon-button" title="New view" onClick={() => void onCreateView()}>
+                <Icon name="plus" size={12} />
+              </button>
+            )}
+          </div>
+          {views.length === 0 && (
+            <div className="hint" style={{ padding: "0 12px 8px" }}>
+              No workspace views yet
+            </div>
+          )}
+          {views.map(renderView)}
+          <div className="section">Your teams</div>
+          {teams.map((team) => (
+            <div key={team.id}>
+              <div className="section">{team.name}</div>
+              <Link to={`/team/${team.key}/home`} className={active(`/team/${team.key}/home`)}>
+                <Icon name="workspace" /> Home
+              </Link>
+              <Link to={`/triage/${team.key}`} className={active(`/triage/${team.key}`)}>
+                <Icon name="filter" /> Triage
+              </Link>
+              <Link
+                to={getDefaultTeamPath(team.key)}
+                className={active(getDefaultTeamPath(team.key))}
+              >
+                <Icon name="board" /> Board
+              </Link>
+              {team.projects.length > 0 && <div className="section">Projects</div>}
+              {team.projects
+                .filter((p) => !CLOSED_STATES.includes(p.state))
+                .map((project) => renderProject(project, "nested"))}
+              {team.projects.some((p) => CLOSED_STATES.includes(p.state)) && (
+                <>
+                  <button
+                    className="nav"
+                    onClick={() => setShowClosed((s) => ({ ...s, [team.id]: !s[team.id] }))}
+                  >
+                    <Icon
+                      name={showClosed[team.id] ? "chevron-down" : "chevron-right"}
+                      className="nested"
+                    />
+                    Completed ({team.projects.filter((p) => CLOSED_STATES.includes(p.state)).length}
+                    )
+                  </button>
+                  {showClosed[team.id] &&
+                    team.projects
+                      .filter((p) => CLOSED_STATES.includes(p.state))
+                      .map((project) => renderProject(project, "nested-deep"))}
+                </>
+              )}
+              <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ flex: 1 }}>Views</span>
+                {onCreateView && (
+                  <button
+                    className="icon-button"
+                    title={`New ${team.name} view`}
+                    onClick={() => void onCreateView(team.id)}
+                  >
+                    <Icon name="plus" size={12} />
                   </button>
                 )}
               </div>
-            )}
-            {favoritesOpen &&
-              (favorites.length === 0 ? (
-                <div className="hint" style={{ padding: "0 12px 8px" }}>
-                  Pin a project or view to keep it here
-                </div>
-              ) : (
-                favorites.map((favorite, index) => {
-                  const target = favorite.project
-                    ? { projectId: favorite.project.id }
-                    : { savedViewId: favorite.savedView!.id };
-                  const path = favorite.project
-                    ? `/project/${favorite.project.id}`
-                    : `/view/${favorite.savedView!.id}`;
-                  const name = favorite.project?.name ?? favorite.savedView?.name ?? "Favorite";
-                  return (
-                    <div className="favorite-row" key={favorite.id}>
-                      <Link to={path} className={active(path)}>
-                        <Icon name={favorite.project ? "project" : "filter"} className="nested" />
-                        <span className="resource-label">{name}</span>
-                      </Link>
-                      {onReorderFavorite && (
-                        <span className="favorite-order">
-                          <button
-                            className="icon-button"
-                            aria-label={`Move ${name} up`}
-                            title="Move up"
-                            aria-busy={favoritePending}
-                            disabled={favoritePending || index === 0}
-                            onClick={() => void onReorderFavorite(favorite, index - 1)}
-                          >
-                            <Icon name="arrow-up" size={11} />
-                          </button>
-                          <button
-                            className="icon-button"
-                            aria-label={`Move ${name} down`}
-                            title="Move down"
-                            aria-busy={favoritePending}
-                            disabled={favoritePending || index === favorites.length - 1}
-                            onClick={() => void onReorderFavorite(favorite, index + 1)}
-                          >
-                            <Icon name="arrow-down" size={11} />
-                          </button>
-                        </span>
-                      )}
-                      {onToggleFavorite && (
-                        <button
-                          className="icon-button"
-                          aria-label={`Remove ${name} from favorites`}
-                          title="Remove from favorites"
-                          aria-busy={favoritePending}
-                          disabled={favoritePending}
-                          onClick={() => toggleFavorite(target)}
-                        >
-                          <Icon name="x" size={12} />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })
+              {(team.views ?? []).map(renderView)}
+              <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ flex: 1 }}>Cycles</span>
+                {onCreateCycle && (
+                  <button
+                    className="icon-button"
+                    title="New cycle"
+                    onClick={() => void onCreateCycle(team.id)}
+                  >
+                    <Icon name="plus" size={12} />
+                  </button>
+                )}
+              </div>
+              {(team.cycles ?? []).map((cycle) => (
+                <Link
+                  key={cycle.id}
+                  to={`/cycle/${cycle.id}`}
+                  className={active(`/cycle/${cycle.id}`)}
+                >
+                  <Icon name="calendar" className="nested" />
+                  <span className="resource-label">{cycle.name}</span>
+                </Link>
               ))}
-          </>
-        )}
-        <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ flex: 1 }}>Initiatives</span>
-          {onCreateInitiative && (
-            <button
-              className="icon-button"
-              title="New initiative"
-              onClick={() => void onCreateInitiative()}
-            >
-              <Icon name="plus" size={12} />
-            </button>
-          )}
-        </div>
-        {initiatives.map((initiative) => (
-          <Link
-            key={initiative.id}
-            to={`/initiative/${initiative.id}`}
-            className={active(`/initiative/${initiative.id}`)}
-          >
-            <Icon name="milestone" className="nested" />
-            <span className="resource-label">{initiative.name}</span>
+            </div>
+          ))}
+          <div className="spacer" />
+          <div className="hint">
+            <kbd>C</kbd> new issue · <kbd>⌘K</kbd> commands
+          </div>
+          <Link to="/members" className={active("/members")}>
+            <Icon name="members" /> Members
           </Link>
-        ))}
-        <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ flex: 1 }}>Views</span>
-          {onCreateView && (
-            <button className="icon-button" title="New view" onClick={() => void onCreateView()}>
-              <Icon name="plus" size={12} />
-            </button>
-          )}
+          <Link to="/settings" className={active("/settings")}>
+            <Icon name="settings" /> Settings
+          </Link>
         </div>
-        {views.length === 0 && (
-          <div className="hint" style={{ padding: "0 12px 8px" }}>
-            No workspace views yet
-          </div>
-        )}
-        {views.map(renderView)}
-        <div className="section">Your teams</div>
-        {teams.map((team) => (
-          <div key={team.id}>
-            <div className="section">{team.name}</div>
-            <Link to={`/team/${team.key}/home`} className={active(`/team/${team.key}/home`)}>
-              <Icon name="workspace" /> Home
-            </Link>
-            <Link to={`/triage/${team.key}`} className={active(`/triage/${team.key}`)}>
-              <Icon name="filter" /> Triage
-            </Link>
-            <Link
-              to={getDefaultTeamPath(team.key)}
-              className={active(getDefaultTeamPath(team.key))}
-            >
-              <Icon name="board" /> Board
-            </Link>
-            {team.projects.length > 0 && <div className="section">Projects</div>}
-            {team.projects
-              .filter((p) => !CLOSED_STATES.includes(p.state))
-              .map((project) => renderProject(project, "nested"))}
-            {team.projects.some((p) => CLOSED_STATES.includes(p.state)) && (
-              <>
-                <button
-                  className="nav"
-                  onClick={() => setShowClosed((s) => ({ ...s, [team.id]: !s[team.id] }))}
-                >
-                  <Icon
-                    name={showClosed[team.id] ? "chevron-down" : "chevron-right"}
-                    className="nested"
-                  />
-                  Completed ({team.projects.filter((p) => CLOSED_STATES.includes(p.state)).length})
-                </button>
-                {showClosed[team.id] &&
-                  team.projects
-                    .filter((p) => CLOSED_STATES.includes(p.state))
-                    .map((project) => renderProject(project, "nested-deep"))}
-              </>
-            )}
-            <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ flex: 1 }}>Views</span>
-              {onCreateView && (
-                <button
-                  className="icon-button"
-                  title={`New ${team.name} view`}
-                  onClick={() => void onCreateView(team.id)}
-                >
-                  <Icon name="plus" size={12} />
-                </button>
-              )}
-            </div>
-            {(team.views ?? []).map(renderView)}
-            <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ flex: 1 }}>Cycles</span>
-              {onCreateCycle && (
-                <button
-                  className="icon-button"
-                  title="New cycle"
-                  onClick={() => void onCreateCycle(team.id)}
-                >
-                  <Icon name="plus" size={12} />
-                </button>
-              )}
-            </div>
-            {(team.cycles ?? []).map((cycle) => (
-              <Link
-                key={cycle.id}
-                to={`/cycle/${cycle.id}`}
-                className={active(`/cycle/${cycle.id}`)}
-              >
-                <Icon name="calendar" className="nested" />
-                <span className="resource-label">{cycle.name}</span>
-              </Link>
-            ))}
-          </div>
-        ))}
-        <div className="spacer" />
-        <div className="hint">
-          <kbd>C</kbd> new issue · <kbd>⌘K</kbd> commands
-        </div>
-        <Link to="/members" className={active("/members")}>
-          <Icon name="members" /> Members
-        </Link>
-        <Link to="/settings" className={active("/settings")}>
-          <Icon name="settings" /> Settings
-        </Link>
       </nav>
     </>
   );
