@@ -998,22 +998,165 @@ function executableTableDefinition(db: Database, definition: string): boolean {
   }
 }
 
+interface ParsedIndexDefinition {
+  name: string;
+  table: string;
+  unique: boolean;
+  terms: readonly SqlToken[][];
+}
+
+function isSqlNameToken(token: SqlToken | undefined): token is SqlToken {
+  return token?.kind === "identifier" || token?.kind === "quoted_identifier";
+}
+
+function isSqlKeyword(token: SqlToken | undefined, keyword: string): boolean {
+  return token?.kind === "identifier" && token.value.toLowerCase() === keyword;
+}
+
+/**
+ * Extrae el destino y los términos de un CREATE INDEX sin interpretar texto
+ * dentro de comentarios o literales como SQL. Solo acepta una sentencia simple.
+ */
+function indexDefinitionFromSql(definition: string): ParsedIndexDefinition | null {
+  const parsed = sqliteTokens(definition);
+  if (parsed === null) return null;
+  const tokens = singleSqlStatement(parsed);
+  if (tokens === null) return null;
+
+  let position = 0;
+  if (!isSqlKeyword(tokens[position], "create")) return null;
+  position += 1;
+
+  const unique = isSqlKeyword(tokens[position], "unique");
+  if (unique) position += 1;
+  if (!isSqlKeyword(tokens[position], "index")) return null;
+  position += 1;
+
+  if (isSqlKeyword(tokens[position], "if")) {
+    if (!isSqlKeyword(tokens[position + 1], "not")) return null;
+    if (!isSqlKeyword(tokens[position + 2], "exists")) return null;
+    position += 3;
+  }
+
+  const indexToken = tokens[position];
+  const onToken = tokens[position + 1];
+  const tableToken = tokens[position + 2];
+  const opening = tokens[position + 3];
+  if (
+    !isSqlNameToken(indexToken) ||
+    !isSqlKeyword(onToken, "on") ||
+    !isSqlNameToken(tableToken) ||
+    opening?.value !== "("
+  ) {
+    return null;
+  }
+
+  position += 4;
+  const terms: SqlToken[][] = [];
+  let termStart = position;
+  let depth = 0;
+  let closed = false;
+  for (; position < tokens.length; position += 1) {
+    const token = tokens[position];
+    if (!token) return null;
+    if (token.value === "(") {
+      depth += 1;
+      continue;
+    }
+    if (token.value === ")") {
+      if (depth > 0) {
+        depth -= 1;
+        continue;
+      }
+      const term = tokens.slice(termStart, position);
+      if (term.length === 0) return null;
+      terms.push(term);
+      closed = true;
+      break;
+    }
+    if (token.value === "," && depth === 0) {
+      const term = tokens.slice(termStart, position);
+      if (term.length === 0) return null;
+      terms.push(term);
+      termStart = position + 1;
+    }
+  }
+
+  if (!closed || position !== tokens.length - 1) return null;
+  return {
+    name: indexToken.value,
+    table: tableToken.value,
+    unique,
+    terms,
+  };
+}
+
+const VIEW_PREFERENCES_KEY_INDEX_TERMS = [
+  { sql: "workspace_id", column: "workspace_id" },
+  { sql: "ifnull(view_id, '')", column: null },
+  { sql: "view_type", column: "view_type" },
+  { sql: "ifnull(actor_id, '')", column: null },
+] satisfies readonly { sql: string; column: string | null }[];
+
+function comparableSqlExpressions(expressions: readonly string[]): string[][] | null {
+  const result: string[][] = [];
+  for (const expression of expressions) {
+    const tokens = sqliteTokens(expression);
+    if (tokens === null) return null;
+    result.push(comparableSqlTokens(tokens));
+  }
+  return result;
+}
+
+function sameSqlTokens(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((token, position) => token === right[position]);
+}
+
 function hasViewPreferencesKeyIndex(db: Database): boolean {
   const index = indexList(db, "view_preferences").find(
     (value) => value.name === "idx_view_preferences_key",
   );
+  if (!index || index.unique_value !== 1 || index.partial !== 0) return false;
+
   const definition = db
     .query<SqlDefinitionRow, SQLQueryBindings[]>(
       "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
     )
     .get("idx_view_preferences_key");
-  if (!index || index.unique_value !== 1 || index.partial !== 0 || !definition?.sql) return false;
-  const sql = normalizedSql(definition.sql);
-  return sql.includes(
-    normalizedSql(
-      "ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, ''))",
-    ),
+  if (!definition?.sql) return false;
+
+  const parsed = indexDefinitionFromSql(definition.sql);
+  if (
+    !parsed ||
+    !parsed.unique ||
+    parsed.name.toLowerCase() !== index.name.toLowerCase() ||
+    parsed.table.toLowerCase() !== "view_preferences"
+  ) {
+    return false;
+  }
+
+  const expectedTerms = comparableSqlExpressions(
+    VIEW_PREFERENCES_KEY_INDEX_TERMS.map((term) => term.sql),
   );
+  if (expectedTerms === null || parsed.terms.length !== expectedTerms.length) return false;
+
+  const actualTerms = indexTerms(db, index.name);
+  if (actualTerms.length !== VIEW_PREFERENCES_KEY_INDEX_TERMS.length) return false;
+  return actualTerms.every((term, position) => {
+    const expected = VIEW_PREFERENCES_KEY_INDEX_TERMS[position];
+    const expectedSql = expectedTerms[position];
+    const actualSql = parsed.terms[position];
+    return (
+      expected !== undefined &&
+      expectedSql !== undefined &&
+      actualSql !== undefined &&
+      term.seqno === position &&
+      term.name === expected.column &&
+      term.desc === 0 &&
+      term.coll === "BINARY" &&
+      sameSqlTokens(comparableSqlTokens(actualSql), expectedSql)
+    );
+  });
 }
 
 function savedViewsIndexDefinitions(db: Database): SavedViewsIndexDefinition[] {

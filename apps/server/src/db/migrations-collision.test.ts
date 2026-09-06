@@ -1125,6 +1125,210 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("rechaza un índice de preferencias que solo imita la definición en un comentario", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      db.exec(`
+        DROP INDEX idx_view_preferences_key;
+        CREATE UNIQUE INDEX idx_view_preferences_key ON view_preferences(id)
+          /* ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, '')) */;
+      `);
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      expect(runMigration).toThrow(
+        /legacy Views migration.*incompatible|idx_view_preferences_key/i,
+      );
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza columnas, orden, unicidad y textos falsos del índice de preferencias", () => {
+    const canonical = `
+      CREATE UNIQUE INDEX idx_view_preferences_key
+        ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, ''))
+    `;
+    const definitions = [
+      `
+        CREATE UNIQUE INDEX idx_view_preferences_key ON view_preferences(id)
+          /* ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, '')) */
+      `,
+      `
+        CREATE UNIQUE INDEX idx_view_preferences_key
+          ON view_preferences(id || 'ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, ''))')
+      `,
+      `
+        CREATE UNIQUE INDEX idx_view_preferences_key
+          ON view_preferences(workspace_id, ifnull(actor_id, ''), view_type, ifnull(view_id, ''))
+          /* ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, '')) */
+      `,
+      `
+        CREATE INDEX idx_view_preferences_key
+          ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, ''))
+      `,
+    ];
+
+    for (const definition of definitions) {
+      const db = databaseWithMigrationsThrough(30);
+      try {
+        seedLegacyViewsMigrationMarker(db);
+        db.exec("DROP INDEX idx_view_preferences_key");
+        db.exec(definition);
+        const beforeRows = db.query("SELECT * FROM view_preferences ORDER BY id").all();
+        const beforeSchema = db
+          .query(
+            `SELECT type, name, sql FROM sqlite_master
+             WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+                OR name IN ('idx_view_preferences_key', 'idx_view_preferences_view',
+                            'idx_view_preferences_actor', 'idx_view_subscriptions_view',
+                            'idx_view_subscriptions_actor')
+             ORDER BY type, name`,
+          )
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const runMigration = () => migrate(db);
+
+        let firstError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          firstError = error instanceof Error ? error.message : String(error);
+        }
+        expect(firstError).toMatch(
+          /legacy Views migration.*incompatible|idx_view_preferences_key/i,
+        );
+        expect(db.query("SELECT * FROM view_preferences ORDER BY id").all()).toEqual(beforeRows);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(
+          db
+            .query(
+              `SELECT type, name, sql FROM sqlite_master
+               WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+                  OR name IN ('idx_view_preferences_key', 'idx_view_preferences_view',
+                              'idx_view_preferences_actor', 'idx_view_subscriptions_view',
+                              'idx_view_subscriptions_actor')
+               ORDER BY type, name`,
+            )
+            .all(),
+        ).toEqual(beforeSchema);
+
+        let secondError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          secondError = error instanceof Error ? error.message : String(error);
+        }
+        expect(secondError).toBe(firstError);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+        db.exec("DROP INDEX idx_view_preferences_key");
+        db.exec(canonical);
+        migrate(db);
+        expect(db.query("SELECT version, name FROM _migrations WHERE version >= 32").all()).toEqual(
+          [
+            { version: 32, name: "notification_preferences" },
+            { version: 33, name: "views_preferences" },
+          ],
+        );
+        expect(() =>
+          db
+            .query(
+              `INSERT INTO view_preferences (
+                 id, workspace_id, view_id, actor_id, view_type, scope, layout, order_by,
+                 group_by, columns_json, created_at, updated_at
+               )
+               SELECT 'duplicate-preference', workspace_id, view_id, actor_id, view_type, scope,
+                      layout, order_by, group_by, columns_json, created_at, updated_at
+                 FROM view_preferences
+                WHERE id = 'view-preference-legacy'`,
+            )
+            .run(),
+        ).toThrow();
+        const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
+        migrate(db);
+        expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(migrationCount);
+        expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("vuelve a validar el índice con markers 32 y 33 sin escribir y permite reparar", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      migrate(db);
+      db.exec("DROP INDEX idx_view_preferences_key");
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_key ON view_preferences(id)
+          /* ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, '')) */
+      `);
+      const beforeRows = db.query("SELECT * FROM view_preferences ORDER BY id").all();
+      const beforeSchema = db
+        .query(
+          `SELECT type, name, sql FROM sqlite_master
+           WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+              OR name IN ('idx_view_preferences_key', 'idx_view_preferences_view',
+                          'idx_view_preferences_actor', 'idx_view_subscriptions_view',
+                          'idx_view_subscriptions_actor')
+           ORDER BY type, name`,
+        )
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      let firstError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(/migration 0033.*incompatible|idx_view_preferences_key/i);
+      expect(db.query("SELECT * FROM view_preferences ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db
+          .query(
+            `SELECT type, name, sql FROM sqlite_master
+             WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+                OR name IN ('idx_view_preferences_key', 'idx_view_preferences_view',
+                            'idx_view_preferences_actor', 'idx_view_subscriptions_view',
+                            'idx_view_subscriptions_actor')
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual(beforeSchema);
+
+      let secondError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        secondError = error instanceof Error ? error.message : String(error);
+      }
+      expect(secondError).toBe(firstError);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+      db.exec("DROP INDEX idx_view_preferences_key");
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_key
+          ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, ''))
+      `);
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
+      migrate(db);
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(migrationCount);
+    } finally {
+      db.close();
+    }
+  });
+
   it("conserva una UNIQUE de tabla representada por sqlite_autoindex durante el rebuild", () => {
     const db = databaseWithMigrationsThrough(32);
     try {
