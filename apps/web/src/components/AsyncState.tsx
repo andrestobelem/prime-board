@@ -6,12 +6,17 @@ export function LoadingState({ label = "Loading…" }: { label?: string }) {
   );
 }
 
-export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+type RetryAction = () => void | Promise<void>;
+
+export function ErrorState({ message, onRetry }: { message: string; onRetry?: RetryAction }) {
   return (
     <div className="error-state" role="alert">
       <div>{message}</div>
       {onRetry && (
-        <button className="btn secondary" onClick={onRetry}>
+        <button
+          className="btn secondary"
+          onClick={() => void Promise.resolve(onRetry()).catch(() => undefined)}
+        >
           Retry
         </button>
       )}

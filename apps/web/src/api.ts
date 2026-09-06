@@ -166,7 +166,7 @@ export interface QueryState<T> {
   data: T | null;
   error: GqlError | null;
   loading: boolean;
-  refetch: () => void;
+  refetch: () => Promise<void>;
 }
 
 export function useQuery<T = any>(
@@ -184,8 +184,8 @@ export function useQuery<T = any>(
   const workspaceGenerationRef = useRef(getWorkspaceGeneration());
   const abortRef = useRef<AbortController | null>(null);
 
-  const run = useCallback(() => {
-    if (!enabled) return;
+  const run = useCallback((): Promise<void> => {
+    if (!enabled) return Promise.resolve();
     const generation = requestGate.current.next();
     const requestAuthGeneration = getCredentialGeneration();
     const requestWorkspaceGeneration = getWorkspaceGeneration();
@@ -204,7 +204,7 @@ export function useQuery<T = any>(
     const controller = new AbortController();
     abortRef.current = controller;
     setLoading(true);
-    gql<T>(query, JSON.parse(key), { signal: controller.signal })
+    return gql<T>(query, JSON.parse(key), { signal: controller.signal })
       .then((result) => {
         if (
           !requestGate.current.isCurrent(generation) ||
@@ -224,7 +224,9 @@ export function useQuery<T = any>(
           (err as { name?: string }).name === "AbortError"
         )
           return;
-        setError(err instanceof GqlError ? err : new GqlError(String(err)));
+        const queryError = err instanceof GqlError ? err : new GqlError(String(err));
+        setError(queryError);
+        throw queryError;
       })
       .finally(() => {
         if (
@@ -245,10 +247,13 @@ export function useQuery<T = any>(
       return;
     }
     setError(null);
-    run();
-    listeners.add(run);
+    void run().catch(() => undefined);
+    const refresh = () => {
+      void run().catch(() => undefined);
+    };
+    listeners.add(refresh);
     return () => {
-      listeners.delete(run);
+      listeners.delete(refresh);
       requestGate.current.next();
       abortRef.current?.abort();
     };
@@ -257,11 +262,17 @@ export function useQuery<T = any>(
   return { data, error, loading, refetch: run };
 }
 
+/** Permite omitir la invalidación global cuando la vista hará un refresco dirigido. */
+export interface MutateOptions {
+  notify?: boolean;
+}
+
 export async function mutate<T = any>(
   query: string,
   variables: Record<string, unknown> = {},
+  options: MutateOptions = {},
 ): Promise<T> {
   const result = await gql<T>(query, variables);
-  notifyDataChanged();
+  if (options.notify !== false) notifyDataChanged();
   return result;
 }

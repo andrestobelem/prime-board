@@ -315,6 +315,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
         commentCreate(input: $input) { comment { id } }
       }`,
         { input: { issueId: issue.id, body } },
+        { notify: false },
       );
       await result.refetch();
       setComment("");
