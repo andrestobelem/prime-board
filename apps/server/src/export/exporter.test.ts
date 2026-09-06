@@ -76,6 +76,32 @@ afterAll(() => {
   app.stop();
 });
 
+async function createScopedFixture(): Promise<{
+  app: TestApp;
+  teamId: string;
+  otherTeamId: string;
+}> {
+  const app = createTestApp();
+  const teamId = (await gql(app, `{ team(key: "PB") { id } }`)).data!.team.id as string;
+  const otherTeamId = (
+    await gql(
+      app,
+      `mutation { teamCreate(input: { name: "Out of scope", key: "OX" }) { team { id } } }`,
+    )
+  ).data!.teamCreate.team.id as string;
+  return { app, teamId, otherTeamId };
+}
+
+async function createScopedProject(app: TestApp, name: string, teamId: string): Promise<string> {
+  return (
+    await gql(
+      app,
+      `mutation($name: String!, $team: ID!) { projectCreate(input: { name: $name, teamIds: [$team] }) { project { id } } }`,
+      { name, team: teamId },
+    )
+  ).data!.projectCreate.project.id as string;
+}
+
 describe("exportBoard", () => {
   it("escribe meta, snapshot de issues y log de eventos", () => {
     const result = exportBoard(app.db, dir);
@@ -263,6 +289,107 @@ describe("exportBoard", () => {
       );
     } finally {
       rmSync(invalidRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza una etiqueta de Initiative fuera del Team exportado", async () => {
+    const { app: scopedApp, teamId, otherTeamId } = await createScopedFixture();
+    const root = mkdtempSync(join(tmpdir(), "pb-export-scoped-label-"));
+    try {
+      const label = (
+        await gql(
+          scopedApp,
+          `mutation($team: ID!) { labelCreate(input: { name: "outside-label", color: "#f00", teamId: $team }) { label { id } } }`,
+          { team: otherTeamId },
+        )
+      ).data!.labelCreate.label.id as string;
+      const initiative = await gql(
+        scopedApp,
+        `mutation($team: ID!, $label: ID!) { initiativeCreate(input: { name: "Outside label", teamIds: [$team], labelIds: [$label] }) { success } }`,
+        { team: teamId, label },
+      );
+      expect(initiative.errors).toBeUndefined();
+      expect(() => exportBoard(scopedApp.db, root, { teamKey: "PB" })).toThrow(
+        /initiative label is out of scope/,
+      );
+    } finally {
+      scopedApp.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza un Team de Initiative fuera del Team exportado", async () => {
+    const { app: scopedApp, teamId, otherTeamId } = await createScopedFixture();
+    const root = mkdtempSync(join(tmpdir(), "pb-export-scoped-initiative-team-"));
+    try {
+      const initiative = await gql(
+        scopedApp,
+        `mutation($team: ID!, $other: ID!) { initiativeCreate(input: { name: "Outside team", teamIds: [$team, $other] }) { success } }`,
+        { team: teamId, other: otherTeamId },
+      );
+      expect(initiative.errors).toBeUndefined();
+      expect(() => exportBoard(scopedApp.db, root, { teamKey: "PB" })).toThrow(
+        /initiative team is out of scope/,
+      );
+    } finally {
+      scopedApp.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza un Project de Initiative fuera del Team exportado", async () => {
+    const { app: scopedApp, teamId, otherTeamId } = await createScopedFixture();
+    const root = mkdtempSync(join(tmpdir(), "pb-export-scoped-initiative-project-"));
+    try {
+      const outsideProject = await createScopedProject(
+        scopedApp,
+        "Outside initiative project",
+        otherTeamId,
+      );
+      const initiative = await gql(
+        scopedApp,
+        `mutation($team: ID!, $project: ID!) { initiativeCreate(input: { name: "Outside project", teamIds: [$team], projectIds: [$project] }) { success } }`,
+        { team: teamId, project: outsideProject },
+      );
+      expect(initiative.errors).toBeUndefined();
+      expect(() => exportBoard(scopedApp.db, root, { teamKey: "PB" })).toThrow(
+        /initiative project is out of scope/,
+      );
+    } finally {
+      scopedApp.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("acepta relaciones internas de Initiative y Project en el alcance Team", async () => {
+    const { app: scopedApp, teamId } = await createScopedFixture();
+    const root = mkdtempSync(join(tmpdir(), "pb-export-scoped-internal-"));
+    try {
+      const source = await createScopedProject(scopedApp, "Internal source", teamId);
+      const target = await createScopedProject(scopedApp, "Internal target", teamId);
+      const dependency = await gql(
+        scopedApp,
+        `mutation($source: ID!, $target: ID!) { projectDependencyCreate(input: { projectId: $source, dependsOnProjectId: $target }) { success } }`,
+        { source, target },
+      );
+      expect(dependency.errors).toBeUndefined();
+      const label = (
+        await gql(
+          scopedApp,
+          `mutation($team: ID!) { labelCreate(input: { name: "internal-label", color: "#0f0", teamId: $team }) { label { id } } }`,
+          { team: teamId },
+        )
+      ).data!.labelCreate.label.id as string;
+      const initiative = await gql(
+        scopedApp,
+        `mutation($team: ID!, $project: ID!, $label: ID!) { initiativeCreate(input: { name: "Internal relations", teamIds: [$team], leadTeamId: $team, projectIds: [$project], labelIds: [$label] }) { success } }`,
+        { team: teamId, project: source, label },
+      );
+      expect(initiative.errors).toBeUndefined();
+      expect(() => exportBoard(scopedApp.db, root, { teamKey: "PB" })).not.toThrow();
+    } finally {
+      scopedApp.stop();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
