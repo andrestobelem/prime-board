@@ -301,12 +301,49 @@ const SAVED_VIEWS_MIGRATION_COLUMNS = [
   "workspace_id",
 ];
 
+interface SavedViewsForeignKeyColumn {
+  from: string;
+  to: string;
+}
+
+interface SavedViewsForeignKeyDefinition {
+  table: string;
+  columns: readonly SavedViewsForeignKeyColumn[];
+  onUpdate: string;
+  onDelete: string;
+}
+
+interface SavedViewsForeignKeyRow extends SavedViewsForeignKeyColumn {
+  id: number;
+  seq: number;
+  table: string;
+  on_update: string;
+  on_delete: string;
+}
+
 const SAVED_VIEWS_REQUIRED_FOREIGN_KEYS = [
-  { table: "actors", from: "owner_id", to: "id", onDelete: "NO ACTION" },
-  { table: "workspace", from: "workspace_id", to: "id", onDelete: "CASCADE" },
-  { table: "teams", from: "workspace_id", to: "workspace_id", onDelete: "NO ACTION" },
-  { table: "teams", from: "team_id", to: "id", onDelete: "NO ACTION" },
-];
+  {
+    table: "actors",
+    columns: [{ from: "owner_id", to: "id" }],
+    onUpdate: "NO ACTION",
+    onDelete: "NO ACTION",
+  },
+  {
+    table: "workspace",
+    columns: [{ from: "workspace_id", to: "id" }],
+    onUpdate: "NO ACTION",
+    onDelete: "CASCADE",
+  },
+  {
+    table: "teams",
+    columns: [
+      { from: "workspace_id", to: "workspace_id" },
+      { from: "team_id", to: "id" },
+    ],
+    onUpdate: "NO ACTION",
+    onDelete: "NO ACTION",
+  },
+] satisfies readonly SavedViewsForeignKeyDefinition[];
 
 const VIEWS_MIGRATION_REQUIRED_INDEXES = [
   { table: "saved_views", columns: ["workspace_id", "id"], unique: true },
@@ -362,23 +399,82 @@ function hasIndexWithColumns(
   return Boolean(result);
 }
 
+function isSavedViewsForeignKeyRow(value: unknown): value is SavedViewsForeignKeyRow {
+  if (typeof value !== "object" || value === null) return false;
+  if (
+    !("id" in value) ||
+    !("seq" in value) ||
+    !("table" in value) ||
+    !("from" in value) ||
+    !("to" in value) ||
+    !("on_update" in value) ||
+    !("on_delete" in value)
+  ) {
+    return false;
+  }
+  return (
+    typeof value.id === "number" &&
+    typeof value.seq === "number" &&
+    typeof value.table === "string" &&
+    typeof value.from === "string" &&
+    typeof value.to === "string" &&
+    typeof value.on_update === "string" &&
+    typeof value.on_delete === "string"
+  );
+}
+
+function savedViewsForeignKeyGroups(db: Database): SavedViewsForeignKeyRow[][] {
+  const groups = new Map<number, SavedViewsForeignKeyRow[]>();
+  for (const value of db.query("PRAGMA foreign_key_list('saved_views')").all()) {
+    if (!isSavedViewsForeignKeyRow(value)) return [];
+    const group = groups.get(value.id);
+    if (group) {
+      group.push(value);
+    } else {
+      groups.set(value.id, [value]);
+    }
+  }
+  return [...groups.values()].map((group) =>
+    [...group].sort((left, right) => left.seq - right.seq),
+  );
+}
+
+function matchesSavedViewsForeignKey(
+  rows: readonly SavedViewsForeignKeyRow[],
+  expected: SavedViewsForeignKeyDefinition,
+): boolean {
+  if (rows.length !== expected.columns.length) return false;
+  return rows.every((row, position) => {
+    const expectedColumn = expected.columns[position];
+    return (
+      expectedColumn !== undefined &&
+      row.seq === position &&
+      row.table === expected.table &&
+      row.from === expectedColumn.from &&
+      row.to === expectedColumn.to &&
+      row.on_update === expected.onUpdate &&
+      row.on_delete === expected.onDelete
+    );
+  });
+}
+
+function describeSavedViewsForeignKey(rows: readonly SavedViewsForeignKeyRow[]): string {
+  const first = rows[0];
+  const table = first?.table ?? "unknown";
+  return (
+    `(${rows.map((row) => row.from).join(", ")}) -> ` +
+    `${table}(${rows.map((row) => row.to).join(", ")})`
+  );
+}
+
 function hasSavedViewsForeignKey(
   db: Database,
-  foreignKey: { table: string; from: string; to: string; onDelete: string },
+  foreignKey: SavedViewsForeignKeyDefinition,
 ): boolean {
-  return Boolean(
-    db
-      .query(
-        `SELECT 1
-         FROM pragma_foreign_key_list('saved_views')
-         WHERE "table" = ?1
-           AND "from" = ?2
-           AND "to" = ?3
-           AND on_delete = ?4
-         LIMIT 1`,
-      )
-      .get(foreignKey.table, foreignKey.from, foreignKey.to, foreignKey.onDelete),
+  const matchingGroups = savedViewsForeignKeyGroups(db).filter((rows) =>
+    matchesSavedViewsForeignKey(rows, foreignKey),
   );
+  return matchingGroups.length === 1;
 }
 
 function invalidSavedViewRows(db: Database): string[] {
@@ -465,8 +561,15 @@ function validateViewsMigrationPrerequisites(db: Database): void {
     );
   }
 
+  const foreignKeyGroups = savedViewsForeignKeyGroups(db);
   const missingForeignKeys = SAVED_VIEWS_REQUIRED_FOREIGN_KEYS.filter(
     (foreignKey) => !hasSavedViewsForeignKey(db, foreignKey),
+  );
+  const unexpectedForeignKeys = foreignKeyGroups.filter(
+    (rows) =>
+      !SAVED_VIEWS_REQUIRED_FOREIGN_KEYS.some((foreignKey) =>
+        matchesSavedViewsForeignKey(rows, foreignKey),
+      ),
   );
   const missingIndexes = VIEWS_MIGRATION_REQUIRED_INDEXES.filter(
     (index) => !hasIndexWithColumns(db, index.table, index.columns, index.unique),
@@ -480,7 +583,18 @@ function validateViewsMigrationPrerequisites(db: Database): void {
     ...(missingForeignKeys.length > 0
       ? [
           `missing foreign keys: ${missingForeignKeys
-            .map((foreignKey) => `${foreignKey.from} -> ${foreignKey.table}.${foreignKey.to}`)
+            .map(
+              (foreignKey) =>
+                `(${foreignKey.columns.map((column) => column.from).join(", ")}) -> ` +
+                `${foreignKey.table}(${foreignKey.columns.map((column) => column.to).join(", ")})`,
+            )
+            .join(", ")}`,
+        ]
+      : []),
+    ...(unexpectedForeignKeys.length > 0
+      ? [
+          `unexpected foreign keys: ${unexpectedForeignKeys
+            .map((rows) => describeSavedViewsForeignKey(rows))
             .join(", ")}`,
         ]
       : []),
