@@ -178,6 +178,9 @@ interface WorkspaceMembershipMetadata {
   readonly workspaceIds: ReadonlySet<string>;
 }
 
+type ActorScopeDecision =
+  { readonly kind: "membership" } | { readonly kind: "legacy" } | { readonly kind: "ambiguous" };
+
 interface RowIndexes {
   readonly byTable: ReadonlyMap<string, ReadonlyMap<string, SourceRow>>;
   readonly workspaceByTable: ReadonlyMap<string, ReadonlyMap<string, string>>;
@@ -443,12 +446,17 @@ function resolveScope(
   validateWorkspaceId(requestedWorkspaceId);
   const workspaceTable = resolveTable(db, "workspace");
   const hasWorkspaceTable = workspaceTable !== undefined;
+  const hasScopedMetadata =
+    hasWorkspaceTable || membershipMetadata.tablePresent || hasScopedWorkspaceColumns(db);
   if (
     requestedWorkspaceId !== undefined &&
     !hasWorkspaceTable &&
-    !membershipMetadata.tablePresent
+    membershipMetadata.state !== "found" &&
+    hasScopedMetadata
   ) {
-    throw new Error("SQLite history import workspaceId requires a workspace table");
+    throw new Error(
+      "SQLite history import workspaceId requires a workspace table or valid workspace membership metadata",
+    );
   }
 
   const workspaceIds: string[] = [];
@@ -531,9 +539,28 @@ function resolveScope(
     workspaceIds: new Set(workspaceIds),
     multipleWorkspaces,
     hasWorkspaceTable,
-    hasScopedMetadata:
-      hasWorkspaceTable || membershipMetadata.tablePresent || hasScopedWorkspaceColumns(db),
+    hasScopedMetadata,
   };
+}
+
+/**
+ * Decide if an Actor reference has authoritative Workspace metadata.
+ *
+ * A present Membership table is an authority boundary. An incomplete table
+ * cannot be treated as an absent table, even when Workspace has one row. The
+ * only legacy fallback is a source with no Membership metadata and no proven
+ * multi-Workspace topology.
+ */
+function actorScopeDecision(
+  scope: SourceScope,
+  metadata: WorkspaceMembershipMetadata,
+): ActorScopeDecision {
+  if (metadata.state === "found") return { kind: "membership" };
+  if (metadata.tablePresent || metadata.state !== "missing") return { kind: "ambiguous" };
+  if (scope.multipleWorkspaces || (!scope.hasWorkspaceTable && scope.hasScopedMetadata)) {
+    return { kind: "ambiguous" };
+  }
+  return { kind: "legacy" };
 }
 
 function readTable(db: Database, table: ResolvedTable): RawTable {
@@ -794,8 +821,7 @@ function workspaceIndexes(
 function referencedWorkspaceIds(
   identity: RowIdentity,
   indexes: RowIndexes,
-  multipleWorkspaces: boolean,
-  workspaceIds: ReadonlySet<string>,
+  scope: SourceScope,
 ): {
   candidates: Set<string>;
   missing: boolean;
@@ -805,6 +831,7 @@ function referencedWorkspaceIds(
   ambiguous: boolean;
 } {
   const { row, table } = identity;
+  const actorPolicy = actorScopeDecision(scope, indexes.workspaceMembershipMetadata);
   const candidates = new Set<string>();
   let missing = false;
   let invalid = false;
@@ -813,7 +840,7 @@ function referencedWorkspaceIds(
   const direct = directWorkspace(table, row);
   if (direct.invalid) invalid = true;
   if (direct.workspaceId !== undefined) {
-    if (!workspaceIds.has(direct.workspaceId)) missing = true;
+    if (!scope.workspaceIds.has(direct.workspaceId)) missing = true;
     else candidates.add(direct.workspaceId);
   }
   const refs = REFERENCED_WORKSPACE_FIELDS[table] ?? [];
@@ -842,14 +869,9 @@ function referencedWorkspaceIds(
         missing = true;
         continue;
       }
-      if (
-        indexes.workspaceMembershipMetadata.state === "ambiguous" ||
-        indexes.workspaceMembershipMetadata.state === "invalid" ||
-        (indexes.workspaceMembershipMetadata.state === "missing" && multipleWorkspaces)
-      ) {
-        // Una referencia a Actor no es segura si la metadata de Membership no
-        // prueba su Workspace. Solo una fuente singleton puede usar el
-        // fallback legacy cuando la metadata no existe.
+      if (actorPolicy.kind === "ambiguous") {
+        // Una tabla de Membership presente pero incompleta no prueba el
+        // Workspace del Actor. El scope directo de la fila no es un sustituto.
         ambiguous = true;
         continue;
       }
@@ -857,7 +879,7 @@ function referencedWorkspaceIds(
       // Una tabla de Membership encontrada solo prueba Actors con al menos
       // una Membership válida. workspace_id directo no prueba la pertenencia
       // del Actor ni puede autorizar por sí solo una fila dependiente.
-      if (indexes.workspaceMembershipMetadata.state === "found") {
+      if (actorPolicy.kind === "membership") {
         if (actorWorkspaces === undefined || actorWorkspaces.size === 0) {
           missing = true;
         } else if (direct.workspaceId !== undefined) {
@@ -895,21 +917,16 @@ function referencedWorkspaceIds(
       unknownReferenceScope = true;
       continue;
     }
-    if (!workspaceIds.has(workspace)) missing = true;
+    if (!scope.workspaceIds.has(workspace)) missing = true;
     else candidates.add(workspace);
   }
   if (table === "issue_subscribers") {
     // El contrato actual de suscriptores también exige una membresía de Workspace.
     // No aceptes la fila en silencio si falta la tabla o la fila referenciada.
     const memberships = indexes.byTable.get("workspace_memberships");
-    const membershipState = indexes.workspaceMembershipMetadata.state;
     const actorId = textValue(row.actor_id);
     const actorWorkspaces = actorId ? indexes.actorWorkspaceIds.get(actorId) : undefined;
-    if (
-      membershipState === "ambiguous" ||
-      membershipState === "invalid" ||
-      (membershipState === "missing" && indexes.workspaceMembershipMetadata.tablePresent)
-    ) {
+    if (actorPolicy.kind === "ambiguous") {
       ambiguous = true;
     } else if (!memberships || !actorWorkspaces || actorWorkspaces.size === 0) {
       missing = true;
@@ -942,12 +959,7 @@ function referencedWorkspaceIds(
 }
 
 function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes): RowScope {
-  const info = referencedWorkspaceIds(
-    identity,
-    indexes,
-    scope.multipleWorkspaces,
-    scope.workspaceIds,
-  );
+  const info = referencedWorkspaceIds(identity, indexes, scope);
   if (info.invalid)
     return {
       workspaceId: undefined,
@@ -965,9 +977,19 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
       rejected: false,
     };
   const candidates = info.candidates;
+  const actorPolicy = actorScopeDecision(scope, indexes.workspaceMembershipMetadata);
   // La identidad del Actor es global. Se puede usar en más de un Workspace,
   // pero la importación seleccionada emite un único evento con alcance.
   const isGlobalActor = identity.table === "actors";
+  if (isGlobalActor && actorPolicy.kind === "ambiguous") {
+    return {
+      workspaceId: undefined,
+      outOfScope: false,
+      orphaned: false,
+      ambiguous: true,
+      rejected: false,
+    };
+  }
   if (isGlobalActor && scope.workspaceId === undefined && scope.hasScopedMetadata) {
     return {
       workspaceId: undefined,
@@ -988,12 +1010,7 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
       };
     }
     const memberships = indexes.actorWorkspaceIds.get(identity.sourceId);
-    const membershipState = indexes.workspaceMembershipMetadata.state;
-    if (
-      membershipState === "ambiguous" ||
-      membershipState === "invalid" ||
-      (membershipState === "missing" && indexes.workspaceMembershipMetadata.tablePresent)
-    ) {
+    if (actorPolicy.kind === "ambiguous") {
       return {
         workspaceId: undefined,
         outOfScope: false,
@@ -1006,7 +1023,7 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
     // es una evidencia positiva de que no pertenece al Workspace. No uses una
     // referencia secundaria, como suspended_by, para emitir su identidad.
     if (memberships === undefined || memberships.size === 0) {
-      if (membershipState === "found") {
+      if (actorPolicy.kind === "membership") {
         return {
           workspaceId: undefined,
           outOfScope: false,

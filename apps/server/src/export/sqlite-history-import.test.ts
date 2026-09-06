@@ -1111,6 +1111,135 @@ describe("complete SQLite history import", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("blocks every Actor-dependent history family when Membership metadata is incomplete", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(
+      join(tmpdir(), "pb-sqlite-history-membership-incomplete-all-families-"),
+    );
+    try {
+      db.exec("DROP TABLE workspace_memberships");
+      db.exec("CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, role TEXT)");
+      db.query("INSERT INTO workspace_memberships VALUES ('broken-membership', 'admin')").run();
+      db.exec("ALTER TABLE projects ADD COLUMN lead_id TEXT");
+      db.exec("ALTER TABLE initiatives ADD COLUMN owner_id TEXT");
+      db.query("UPDATE projects SET lead_id = 'a1' WHERE id = 'p1'").run();
+      db.query("UPDATE initiatives SET owner_id = 'a1' WHERE id = 'n1'").run();
+
+      const blockedRows = [
+        ["activity", "ac1"],
+        ["comments", "cm1"],
+        ["initiatives", "n1"],
+        ["issues", "i1"],
+        ["project_updates", "u1"],
+        ["projects", "p1"],
+        ["reviews", "rv1"],
+        ["saved_views", "v1"],
+        ["team_memberships", "tm1"],
+        ["issue_subscribers", JSON.stringify(["i1", "a1"])],
+      ] as const;
+      const importOptions = {
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: true,
+        includeActivity: true,
+      } as const;
+
+      const dry = importSqliteHistory({ ...importOptions, dryRun: true });
+      expect(dry).toMatchObject({ multipleWorkspaces: false, workspaceId: "w1", written: 0 });
+      expect(dry.emitted).toBeGreaterThan(0);
+      for (const [table] of blockedRows) {
+        const report = dry.tables[table];
+        expect(report?.emitted).toBe(0);
+        expect(
+          (report?.ambiguous ?? 0) + (report?.orphaned ?? 0) + (report?.rejected ?? 0),
+        ).toBeGreaterThan(0);
+      }
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory(importOptions);
+      expect(applied.written).toBeGreaterThan(0);
+      const eventIds = readEventLog(root).map((event) => event.eventId);
+      for (const [table, id] of blockedRows) {
+        const eventId = table === "activity" ? id : `sqlite:${table}:${id}`;
+        expect(eventIds).not.toContain(eventId);
+      }
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an explicit selector when Membership metadata is invalid without Workspace", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-invalid-selector-"));
+    try {
+      db.exec("DROP TABLE workspace");
+      db.query("UPDATE workspace_memberships SET workspace_id = NULL WHERE id = 'wm1'").run();
+      const options = { db, rootDir: root, workspaceId: "arbitrary-workspace" } as const;
+      expect(() => importSqliteHistory({ ...options, dryRun: true })).toThrow(
+        "valid workspace membership metadata",
+      );
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+      expect(() => importSqliteHistory(options)).toThrow("valid workspace membership metadata");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the valid legacy singleton fallback without Workspace or Membership metadata", () => {
+    const db = legacySingletonDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-legacy-valid-fallback-"));
+    try {
+      db.exec("DROP TABLE workspace");
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        dryRun: true,
+        includeSnapshots: true,
+        includeActivity: true,
+      });
+      expect(dry).toMatchObject({ multipleWorkspaces: false, emitted: 5, written: 0 });
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        includeSnapshots: true,
+        includeActivity: true,
+      });
+      expect(applied).toMatchObject({ emitted: 5, written: 5 });
+      const events = readEventLog(root);
+      expect(events.map((event) => event.eventId)).toContain("legacy-ac1");
+      expect(events.find((event) => event.eventId === "legacy-ac1")?.workspaceId).toBeUndefined();
+
+      const selectedRoot = mkdtempSync(join(tmpdir(), "pb-sqlite-history-legacy-selected-"));
+      try {
+        const selected = importSqliteHistory({
+          db,
+          rootDir: selectedRoot,
+          workspaceId: "operator-selected-workspace",
+          dryRun: true,
+          includeSnapshots: true,
+          includeActivity: true,
+        });
+        expect(selected).toMatchObject({ emitted: 5, written: 0 });
+        expect(
+          readEventLog(selectedRoot).every(
+            (event) => event.workspaceId === "operator-selected-workspace",
+          ),
+        ).toBe(true);
+      } finally {
+        rmSync(selectedRoot, { recursive: true, force: true });
+      }
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 expect(SQLITE_HISTORY_TABLES.length).toBeGreaterThan(0);

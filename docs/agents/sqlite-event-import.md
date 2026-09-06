@@ -32,16 +32,28 @@ el tamaño de cada append. Si el proceso se interrumpe, se puede repetir: el
 - `workspace_id` y las referencias se validan antes de escribir. El reporte
   separa filas fuera de alcance, huérfanas, ambiguas, rechazadas y duplicadas.
   Una referencia a una tabla o fila ausente es huérfana. Una referencia a un Actor
-  solo es válida cuando una Membership de Workspace demuestra su pertenencia; una
-  metadata de Membership ausente, ambigua o inválida no forma un mapa parcial.
-- Una fuente sin tabla `workspace` puede inferir su topología desde filas válidas de
-  `workspace_memberships`. Un solo Workspace se usa como alcance; varios Workspaces
-  requieren `--workspace-id`. Un Actor sin Membership no se emite y una Membership
-  ambigua o inválida no autoriza ningún fallback.
+  solo es válida cuando una Membership de Workspace demuestra su pertenencia, salvo
+  el fallback legacy descrito abajo. Si `workspace_memberships` está presente pero
+  su metadata o sus filas son incompletas, ambiguas o inválidas, ninguna referencia
+  a Actor usa el `workspace_id` directo como sustituto: la fila queda ambigua,
+  huérfana o rechazada y no se escribe.
+- La tabla `workspace` es la autoridad cuando existe. Un único ID permite conservar
+  el alcance de una fuente singleton; varios IDs requieren `--workspace-id`. Sin
+  tabla `workspace`, una tabla `workspace_memberships` completa puede demostrar los
+  IDs: un solo ID se infiere y varios IDs requieren selector. El selector debe
+  coincidir con un ID demostrado por `workspace` o por Memberships; no autoriza un
+  Workspace arbitrario cuando la metadata scoped es incompleta.
 - El fallback singleton legacy solo aplica cuando no existe la tabla `workspace`, no
   existe `workspace_memberships` y ninguna tabla compartida conserva una columna
-  `workspace_id`. Una fuente multi-Workspace requiere selector y alcance explícitos;
-  no se infiere un `NULL` ni se confía solo en `workspace_id`.
+  `workspace_id`. En ese caso las filas previas al scope se emiten sin `workspaceId`,
+  salvo que el caller aporte un selector explícito: ese ID solo es una instrucción de
+  alcance y no una identidad demostrada por SQLite. Una fuente multi-Workspace no
+  usa un `NULL` como alcance ni confía solo en `workspace_id` para autorizar un Actor.
+- El adaptador de Activity de bajo nivel (`importSqliteActivity`) comparte esta
+  frontera para una Membership presente e incompleta. Conserva su contrato legacy
+  para fuentes sin tabla Membership: una fila legacy puede seguir usando el Workspace
+  seleccionado por el caller. El importador completo aplica la misma
+  decisión a Activity y a todas las familias de snapshots.
 - `api_keys`, sus grants, hashes y scopes, invitaciones, webhooks, Documents retirados,
   Favorites e Inbox Receipts se cuentan como `excluded` y no se leen como filas
   de eventos. Los nombres y campos sensibles (incluidos `hash`, `token_hash`,
