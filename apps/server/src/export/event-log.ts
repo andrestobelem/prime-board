@@ -179,46 +179,42 @@ function normalized(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/gu, "");
 }
 
-function isForbiddenKey(key: string): boolean {
-  const compact = normalized(key);
+/**
+ * Los nombres sensibles se rechazan antes de que un evento entre al Log canónico.
+ * La lista es amplia: una tabla legacy o un tipo Activity debe fallar cerrado
+ * cuando su nombre sea una variante de credencial, grant, invitación o vista personal.
+ */
+export function isSensitiveEventName(value: string): boolean {
+  const compact = normalized(value);
   return (
     compact.includes("secret") ||
     compact.includes("password") ||
     compact.includes("credential") ||
     compact.includes("privatekey") ||
     compact.includes("apikey") ||
-    compact.includes("apikeyhash") ||
-    compact.includes("apikeyhashed") ||
-    compact.includes("hashedapikey") ||
-    (compact.includes("webhook") && compact.includes("secret")) ||
-    compact === "token" ||
-    compact === "accesstoken" ||
-    compact === "refreshtoken" ||
-    compact === "authorization" ||
+    compact.includes("webhook") ||
+    compact.includes("token") ||
+    compact.includes("hash") ||
+    compact.includes("grant") ||
+    compact.includes("invitation") ||
+    compact.includes("invite") ||
     compact.includes("favorite") ||
-    compact === "inbox" ||
-    (compact.includes("inbox") && compact.includes("receipt"))
+    compact.includes("inbox")
+  );
+}
+
+function isForbiddenKey(key: string): boolean {
+  const compact = normalized(key);
+  return (
+    isSensitiveEventName(key) ||
+    compact === "authorization" ||
+    compact === "accesstoken" ||
+    compact === "refreshtoken"
   );
 }
 
 function isExcludedEvent(aggregate: string, type: string): boolean {
-  const aggregateName = normalized(aggregate);
-  const typeName = normalized(type);
-  return (
-    aggregateName === "favorite" ||
-    aggregateName === "favorites" ||
-    aggregateName === "inboxreceipt" ||
-    aggregateName === "inboxreceipts" ||
-    aggregateName.includes("apikey") ||
-    aggregateName.includes("webhooksecret") ||
-    aggregateName.includes("secret") ||
-    typeName.includes("favorite") ||
-    (typeName.includes("inbox") && typeName.includes("receipt")) ||
-    (aggregateName === "inbox" && typeName.includes("receipt")) ||
-    typeName.includes("apikey") ||
-    typeName.includes("webhooksecret") ||
-    typeName.includes("secret")
-  );
+  return isSensitiveEventName(aggregate) || isSensitiveEventName(type);
 }
 
 function assertIsoDate(value: unknown): asserts value is string {

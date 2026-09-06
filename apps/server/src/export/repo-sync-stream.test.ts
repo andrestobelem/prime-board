@@ -3,7 +3,11 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendActivityEvents, activityToDomainEvent } from "./activity-stream.ts";
+import {
+  appendActivityEvents,
+  areActivityEventsEquivalent,
+  activityToDomainEvent,
+} from "./activity-stream.ts";
 import { EventLogConflictError, EventLogWriter, type DomainEvent } from "./event-log.ts";
 
 function database(): Database {
@@ -45,6 +49,8 @@ describe("canonical Activity stream bridge", () => {
 
       expect(appendActivityEvents(db, root)).toBe(1);
       expect(appendActivityEvents(db, root)).toBe(1);
+      db.query("UPDATE teams SET key = 'RENAMED' WHERE id = 'team-1'").run();
+      expect(appendActivityEvents(db, root)).toBe(1);
       const path = join(root, ".prime-board", "log", "events.jsonl");
       expect(existsSync(path)).toBe(true);
       const lines = readFileSync(path, "utf8").trim().split("\n");
@@ -56,7 +62,7 @@ describe("canonical Activity stream bridge", () => {
         type: "created",
         actor: "actor-1",
         occurredAt: "2025-01-01T00:00:00.000Z",
-        payload: { title: "Shared issue" },
+        payload: { title: "Shared issue", issue_id: "issue-1" },
       });
     } finally {
       db.close();
@@ -178,6 +184,31 @@ describe("canonical Activity stream bridge", () => {
       db.close();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("matches renamed identifiers by the stable Issue ID", () => {
+    const before = activityToDomainEvent({
+      id: "activity-rename",
+      issue_identifier: "PB-7",
+      issue_id: "issue-1",
+      actor_id: "actor-1",
+      actor: "agent",
+      type: "updated",
+      payload: JSON.stringify({ title: "Shared issue" }),
+      occurred_at: "2025-01-01T00:00:00.000Z",
+    });
+    const after = activityToDomainEvent({
+      id: "activity-rename",
+      issue_identifier: "RENAMED-9",
+      issue_id: "issue-1",
+      actor_id: "actor-1",
+      actor: "agent",
+      type: "updated",
+      payload: JSON.stringify({ title: "Shared issue" }),
+      occurred_at: "2025-01-01T00:00:00.000Z",
+    });
+    if (!before || !after) throw new Error("expected stable Activity events");
+    expect(areActivityEventsEquivalent(before, after)).toBe(true);
   });
 
   it("uses the immutable Actor ID when a display name changes", () => {

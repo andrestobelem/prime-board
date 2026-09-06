@@ -109,6 +109,32 @@ function sourceDatabase(): Database {
   return db;
 }
 
+function legacySingletonDatabase(): Database {
+  const db = new Database(":memory:");
+  db.exec(`
+    CREATE TABLE workspace (id TEXT PRIMARY KEY, name TEXT, url_key TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT, type TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE teams (id TEXT PRIMARY KEY, key TEXT, name TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE workflow_states (id TEXT PRIMARY KEY, team_id TEXT, name TEXT, type TEXT, color TEXT, position REAL, created_at TEXT, updated_at TEXT);
+    CREATE TABLE issues (id TEXT PRIMARY KEY, team_id TEXT, number INTEGER, title TEXT, state_id TEXT, creator_id TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE activity (id TEXT PRIMARY KEY, issue_id TEXT, actor_id TEXT, type TEXT, payload TEXT, created_at TEXT);
+  `);
+  const date = "2025-01-01T00:00:00.000Z";
+  db.query("INSERT INTO workspace VALUES ('legacy-w1', 'Legacy', 'legacy', ?1, ?1)").run(date);
+  db.query("INSERT INTO actors VALUES ('legacy-a1', 'Author', 'agent', ?1, ?1)").run(date);
+  db.query("INSERT INTO teams VALUES ('legacy-t1', 'LEG', 'Legacy team', ?1, ?1)").run(date);
+  db.query(
+    "INSERT INTO workflow_states VALUES ('legacy-s1', 'legacy-t1', 'Todo', 'unstarted', '#fff', 1, ?1, ?1)",
+  ).run(date);
+  db.query(
+    "INSERT INTO issues VALUES ('legacy-i1', 'legacy-t1', 1, 'Legacy issue', 'legacy-s1', 'legacy-a1', ?1, ?1)",
+  ).run(date);
+  db.query(
+    "INSERT INTO activity VALUES ('legacy-ac1', 'legacy-i1', 'legacy-a1', 'created', '{\"title\":\"Legacy issue\"}', ?1)",
+  ).run(date);
+  return db;
+}
+
 describe("complete SQLite history import", () => {
   it("imports shared entities with stable IDs and excludes secrets/personal projections", () => {
     const db = sourceDatabase();
@@ -131,6 +157,7 @@ describe("complete SQLite history import", () => {
       const events = readEventLog(root);
       expect(events).toHaveLength(24);
       expect(events.some((event) => event.eventId === "ac1")).toBe(true);
+      expect(events.find((event) => event.eventId === "ac1")?.payload.issue_id).toBe("i1");
       expect(events.some((event) => event.eventId === "sqlite:issues:i1")).toBe(true);
       expect(events.some((event) => event.eventId === "sqlite:issue_relations:r1")).toBe(true);
       const issue = events.find((event) => event.eventId === "sqlite:issues:i1");
@@ -226,6 +253,167 @@ describe("complete SQLite history import", () => {
       expect(
         readEventLog(root).find((event) => event.eventId === "sqlite:issues:i1")?.payload.title,
       ).toBe("Issue");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("imports a pre-workspace_id singleton schema using its only Workspace", () => {
+    const db = legacySingletonDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-legacy-"));
+    try {
+      const result = importSqliteHistory({ db, rootDir: root });
+      expect(result).toMatchObject({
+        status: "completed",
+        multipleWorkspaces: false,
+        workspaceId: "legacy-w1",
+        orphaned: 0,
+        rejected: 0,
+      });
+      const events = readEventLog(root);
+      expect(events).toHaveLength(6);
+      expect(events.find((event) => event.eventId === "legacy-ac1")).toMatchObject({
+        aggregateKey: "LEG-1",
+        workspaceId: "legacy-w1",
+        payload: { issue_id: "legacy-i1" },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports missing FK rows and tables as orphaned", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-orphans-"));
+    try {
+      db.query("DELETE FROM workflow_states WHERE id = 's1'").run();
+      const result = importSqliteHistory({ db, rootDir: root, dryRun: true });
+      expect(result.orphaned).toBeGreaterThan(0);
+      expect(result.warnings.some((warning) => warning.includes("orphaned:issues:i1"))).toBe(true);
+
+      const missingDb = sourceDatabase();
+      try {
+        missingDb.query("DROP TABLE workflow_states").run();
+        const missingTable = importSqliteHistory({ db: missingDb, rootDir: root, dryRun: true });
+        expect(missingTable.orphaned).toBeGreaterThan(0);
+        expect(
+          missingTable.warnings.some((warning) => warning.includes("orphaned:issues:i1")),
+        ).toBe(true);
+      } finally {
+        missingDb.close();
+      }
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects duplicate source IDs instead of selecting one Workspace row", () => {
+    const db = new Database(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-duplicate-"));
+    try {
+      db.exec(`
+        CREATE TABLE workspace (id TEXT PRIMARY KEY);
+        CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT, type TEXT, created_at TEXT, updated_at TEXT);
+        CREATE TABLE teams (workspace_id TEXT, id TEXT, key TEXT, name TEXT, created_at TEXT, updated_at TEXT);
+        CREATE TABLE workflow_states (workspace_id TEXT, id TEXT, team_id TEXT, name TEXT, type TEXT, color TEXT, position REAL, created_at TEXT, updated_at TEXT);
+        CREATE TABLE issues (workspace_id TEXT, id TEXT, team_id TEXT, number INTEGER, title TEXT, state_id TEXT, creator_id TEXT, created_at TEXT, updated_at TEXT);
+        CREATE TABLE activity (workspace_id TEXT, id TEXT, issue_id TEXT, actor_id TEXT, type TEXT, payload TEXT, created_at TEXT);
+      `);
+      db.query("INSERT INTO workspace VALUES ('w1'), ('w2')").run();
+      db.query("INSERT INTO actors VALUES ('a1', 'Author', 'agent', ?1, ?1)").run(
+        "2025-01-01T00:00:00.000Z",
+      );
+      db.query("INSERT INTO teams VALUES ('w1', 't1', 'ONE', 'One', ?1, ?1)").run(
+        "2025-01-01T00:00:00.000Z",
+      );
+      db.query("INSERT INTO teams VALUES ('w2', 't2', 'TWO', 'Two', ?1, ?1)").run(
+        "2025-01-01T00:00:00.000Z",
+      );
+      db.query(
+        "INSERT INTO workflow_states VALUES ('w1', 's1', 't1', 'Todo', 'unstarted', '#fff', 1, ?1, ?1), ('w2', 's2', 't2', 'Todo', 'unstarted', '#fff', 1, ?1, ?1)",
+      ).run("2025-01-01T00:00:00.000Z");
+      db.query(
+        "INSERT INTO issues VALUES ('w1', 'duplicate', 't1', 1, 'One', 's1', 'a1', ?1, ?1), ('w2', 'duplicate', 't2', 1, 'Two', 's2', 'a1', ?1, ?1)",
+      ).run("2025-01-01T00:00:00.000Z");
+      const result = importSqliteHistory({ db, rootDir: root, workspaceId: "w1" });
+      expect(result.ambiguous).toBeGreaterThan(0);
+      expect(
+        result.warnings.some((warning) => warning.includes("ambiguous:issues:duplicate")),
+      ).toBe(true);
+      expect(readEventLog(root).some((event) => event.eventId === "sqlite:issues:duplicate")).toBe(
+        false,
+      );
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a missing actors.suspended_by row as orphaned", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-suspended-by-"));
+    try {
+      db.exec("ALTER TABLE actors ADD COLUMN suspended_by TEXT");
+      db.query("UPDATE actors SET suspended_by = 'missing-actor' WHERE id = 'a1'").run();
+      const result = importSqliteHistory({ db, rootDir: root, dryRun: true });
+      expect(result.tables.actors).toMatchObject({ scanned: 1, orphaned: 1, emitted: 0 });
+      expect(result.warnings).toContain("orphaned:actors:a1");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects sensitive snapshot fields before writing their values", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-payload-"));
+    try {
+      db.exec("ALTER TABLE comments ADD COLUMN token_hash TEXT");
+      db.query("UPDATE comments SET token_hash = 'fixture-value'").run();
+      const result = importSqliteHistory({ db, rootDir: root });
+      expect(result.tables.comments).toMatchObject({ rejected: 1, emitted: 0 });
+      expect(result.warnings.some((warning) => warning.includes("fixture-value"))).toBe(false);
+      const log = readFileSync(join(root, ".prime-board/log/events.jsonl"), "utf8");
+      expect(log).not.toContain("fixture-value");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when a multi-Workspace FK target has unknown scope", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-unknown-scope-"));
+    try {
+      db.query(
+        "INSERT INTO workspace VALUES ('w2', 'Other', 'other', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
+      db.query("UPDATE workflow_states SET workspace_id = NULL WHERE id = 's1'").run();
+      const result = importSqliteHistory({ db, rootDir: root, workspaceId: "w1" });
+      expect(result.orphaned).toBeGreaterThan(0);
+      expect(result.warnings.some((warning) => warning.includes("orphaned:issues:i1"))).toBe(true);
+      expect(readEventLog(root).some((event) => event.eventId === "sqlite:issues:i1")).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts sensitive table variants without reading them into the Log", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-sensitive-"));
+    try {
+      db.exec("CREATE TABLE grants (id TEXT PRIMARY KEY, token_hash TEXT, created_at TEXT)");
+      db.query("INSERT INTO grants VALUES ('grant-1', 'fixture-value', ?1)").run(
+        "2025-01-01T00:00:00.000Z",
+      );
+      const result = importSqliteHistory({ db, rootDir: root, dryRun: true });
+      expect(result.tables.grants).toMatchObject({ scanned: 1, excluded: 1 });
+      expect(result.warnings.some((warning) => warning.includes("fixture-value"))).toBe(false);
+      expect(result.emitted).toBeGreaterThan(0);
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

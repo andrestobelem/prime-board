@@ -157,8 +157,14 @@ describe("event log", () => {
 
   it.each([
     ["favorite.created", "favorite", {}],
-    ["issue.updated", "issue", { apiKeyHash: "sha256:secret" }],
-    ["issue.updated", "issue", { webhookSecret: "secret" }],
+    ["issue.updated", "issue", { apiKeyHash: "fixture-value" }],
+    ["issue.updated", "issue", { webhookSecret: "fixture-value" }],
+    ["hash.rotated", "issue", {}],
+    ["token_hash.rotated", "issue", {}],
+    ["grant.created", "issue", {}],
+    ["invitation.created", "issue", {}],
+    ["issue.updated", "issue", { nested: { HASH: "fixture-value" } }],
+    ["issue.updated", "issue", { grants: ["fixture-value"] }],
     ["inbox.receipt.created", "inbox", {}],
     ["issue.updated", "issue", { inboxReceipt: { id: "receipt-1" } }],
   ])("excludes sensitive or out-of-scope event data", (type, aggregate, payload) => {

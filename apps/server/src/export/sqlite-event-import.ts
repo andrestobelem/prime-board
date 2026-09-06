@@ -1,6 +1,10 @@
 import type { Database } from "bun:sqlite";
-import { areDomainEventsEquivalent, EventLogWriter, type DomainEvent } from "./event-log.ts";
-import { activityToDomainEvent, type ActivityEventRow } from "./activity-stream.ts";
+import { EventLogWriter, type DomainEvent } from "./event-log.ts";
+import {
+  areActivityEventsEquivalent,
+  activityToDomainEvent,
+  type ActivityEventRow,
+} from "./activity-stream.ts";
 
 export interface SQLiteEventImportOptions {
   readonly db: Database;
@@ -39,6 +43,7 @@ interface ActivityRow {
 
 interface ImportScope {
   readonly workspaceId: string | undefined;
+  readonly workspaceIds: ReadonlySet<string>;
   readonly multipleWorkspaces: boolean;
   readonly activityHasWorkspace: boolean;
   readonly issueHasWorkspace: boolean;
@@ -107,6 +112,7 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
 
   return {
     workspaceId: requestedWorkspaceId ?? workspaceIds[0],
+    workspaceIds: new Set(workspaceIds),
     multipleWorkspaces,
     activityHasWorkspace,
     issueHasWorkspace,
@@ -138,7 +144,7 @@ function activityQuery(scope: ImportScope): string {
       : "LEFT JOIN teams ON teams.id = issues.team_id";
   return `SELECT activity.id,
                  teams.key || '-' || issues.number AS issue_identifier,
-                 activity.actor_id AS actor_id,
+                 actors.id AS actor_id,
                  actors.name AS actor,
                  issues.id AS issue_id,
                  teams.id AS team_id,
@@ -162,10 +168,43 @@ function activityQuery(scope: ImportScope): string {
  */
 export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteEventImportResult {
   const scope = resolveImportScope(options.db, options.workspaceId);
+  if (!hasTable(options.db, "activity")) {
+    return {
+      status: "completed",
+      scanned: 0,
+      emitted: 0,
+      duplicates: 0,
+      orphaned: 0,
+      outOfScope: 0,
+      rejected: 0,
+      ambiguous: 0,
+      warnings: [],
+    };
+  }
+  const missingTables = ["issues", "teams", "actors"].filter(
+    (table) => !hasTable(options.db, table),
+  );
+  if (missingTables.length > 0) {
+    const rows = options.db.query("SELECT id FROM activity").all() as Array<{ id: string }>;
+    return {
+      status: "completed",
+      scanned: rows.length,
+      emitted: 0,
+      duplicates: 0,
+      orphaned: rows.length,
+      outOfScope: 0,
+      rejected: 0,
+      ambiguous: 0,
+      warnings: rows.slice(0, 100).map((row) => `orphaned:activity:${row.id}`),
+    };
+  }
   const rows = options.db.query(activityQuery(scope)).all() as ActivityRow[];
 
   const writer = new EventLogWriter({ rootDir: options.rootDir });
   const warnings: string[] = [];
+  // Solo una importación real puede reparar un tail truncado; el dry-run no
+  // debe modificar el Log y falla cerrado si el stream no es legible.
+  if (!options.dryRun) writer.recover();
   // El dry-run inspecciona el stream existente. Nunca crea el archivo, pero
   // informa los mismos duplicados y conflictos que una importación real.
   const existing = new Map(writer.read().map((event) => [event.eventId, event]));
@@ -180,12 +219,13 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
   for (const row of rows) {
     const rowWorkspaceId =
       row.activity_workspace_id ?? row.issue_workspace_id ?? row.team_workspace_id;
-    if (
-      scope.workspaceId !== undefined &&
-      rowWorkspaceId !== undefined &&
-      rowWorkspaceId !== null
-    ) {
-      if (rowWorkspaceId !== scope.workspaceId) {
+    if (rowWorkspaceId !== undefined && rowWorkspaceId !== null) {
+      if (!scope.workspaceIds.has(rowWorkspaceId)) {
+        orphaned += 1;
+        warning(warnings, "orphaned", row.id);
+        continue;
+      }
+      if (scope.workspaceId !== undefined && rowWorkspaceId !== scope.workspaceId) {
         outOfScope += 1;
         warning(warnings, "out_of_scope", row.id);
         continue;
@@ -206,6 +246,7 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
     const event = activityToDomainEvent({
       id: row.id,
       issue_identifier: row.issue_identifier,
+      issue_id: row.issue_id ?? undefined,
       actor_id: row.actor_id ?? undefined,
       actor,
       type: row.type,
@@ -220,7 +261,7 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
     }
     const previous = seen.get(event.eventId) ?? existing.get(event.eventId);
     if (previous) {
-      if (!areDomainEventsEquivalent(previous, event)) {
+      if (!areActivityEventsEquivalent(previous, event)) {
         ambiguous += 1;
         warning(warnings, "ambiguous", event.eventId);
       } else {

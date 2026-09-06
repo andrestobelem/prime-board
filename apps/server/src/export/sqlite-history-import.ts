@@ -3,12 +3,17 @@ import {
   areDomainEventsEquivalent,
   CURRENT_EVENT_SCHEMA_VERSION,
   EventLogWriter,
+  isSensitiveEventName,
   type DomainEvent,
   type JsonObject,
   type JsonValue,
   validateDomainEvent,
 } from "./event-log.ts";
-import { activityToDomainEvent, type ActivityEventRow } from "./activity-stream.ts";
+import {
+  areActivityEventsEquivalent,
+  activityToDomainEvent,
+  type ActivityEventRow,
+} from "./activity-stream.ts";
 
 /** Tablas SQLite compartidas que se pueden representar en el Repository Source. */
 export const SQLITE_HISTORY_TABLES = [
@@ -44,7 +49,12 @@ export const SQLITE_HISTORY_EXCLUDED_TABLES = [
   "api_key_team_limits",
   "api_key_team_limits_restricted",
   "api_key_workspaces",
+  "api_key_grants",
+  "api_key_hashes",
   "actor_invitations",
+  "invitations",
+  "grants",
+  "hashes",
   "webhooks",
   "favorites",
   "inbox_receipts",
@@ -141,6 +151,7 @@ interface RowIndexes {
   readonly byTable: ReadonlyMap<string, ReadonlyMap<string, SourceRow>>;
   readonly workspaceByTable: ReadonlyMap<string, ReadonlyMap<string, string>>;
   readonly actorWorkspaceIds: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly duplicateIdsByTable: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 interface RowScope {
@@ -188,6 +199,8 @@ const AGGREGATE_NAMES: Record<HistoryTable, string> = {
 const REFERENCED_WORKSPACE_FIELDS: Partial<
   Record<HistoryTable, ReadonlyArray<readonly [string, HistoryTable]>>
 > = {
+  actors: [["suspended_by", "actors"]],
+  teams: [["default_state_id", "workflow_states"]],
   workflow_states: [["team_id", "teams"]],
   projects: [["lead_id", "actors"]],
   project_teams: [
@@ -253,7 +266,30 @@ const REFERENCED_WORKSPACE_FIELDS: Partial<
     ["team_id", "teams"],
     ["owner_id", "actors"],
   ],
-  workspace_memberships: [["actor_id", "actors"]],
+  workspace_memberships: [
+    ["actor_id", "actors"],
+    ["suspended_by", "actors"],
+  ],
+};
+
+const REQUIRED_REFERENCE_FIELDS: Partial<Record<HistoryTable, ReadonlySet<string>>> = {
+  workspace_memberships: new Set(["actor_id"]),
+  workflow_states: new Set(["team_id"]),
+  project_teams: new Set(["project_id", "team_id"]),
+  milestones: new Set(["project_id"]),
+  cycles: new Set(["team_id"]),
+  issues: new Set(["team_id", "state_id", "creator_id"]),
+  issue_labels: new Set(["issue_id", "label_id"]),
+  issue_relations: new Set(["issue_id", "related_id"]),
+  comments: new Set(["issue_id", "actor_id"]),
+  activity: new Set(["issue_id", "actor_id"]),
+  team_memberships: new Set(["team_id", "actor_id"]),
+  initiative_projects: new Set(["initiative_id", "project_id"]),
+  initiative_teams: new Set(["initiative_id", "team_id"]),
+  project_updates: new Set(["project_id", "author_id"]),
+  reviews: new Set(["issue_id", "requester_id", "reviewer_id"]),
+  issue_subscribers: new Set(["issue_id", "actor_id"]),
+  saved_views: new Set(["owner_id"]),
 };
 
 function isRecord(value: unknown): value is SourceRow {
@@ -298,6 +334,32 @@ function hasColumn(db: Database, table: string, column: string): boolean {
   return (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
     (entry) => entry.name === column,
   );
+}
+
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/gu, '""')}"`;
+}
+
+function isSensitiveTableName(table: string): boolean {
+  const compact = table.toLowerCase().replace(/[^a-z0-9]+/gu, "");
+  return compact.includes("document") || isSensitiveEventName(table);
+}
+
+function excludedTableNames(db: Database): readonly string[] {
+  // SQLite table lookup is case-insensitive. Keep one report per physical
+  // table when a legacy source uses a different case than our known names.
+  const names = new Map<string, string>();
+  for (const table of SQLITE_HISTORY_EXCLUDED_TABLES) names.set(table.toLowerCase(), table);
+  const rows = db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+    name: string;
+  }>;
+  for (const row of rows) {
+    if (isSensitiveTableName(row.name)) {
+      const key = row.name.toLowerCase();
+      if (!names.has(key)) names.set(key, row.name);
+    }
+  }
+  return [...names.values()];
 }
 
 function resolveScope(db: Database, requestedWorkspaceId: string | undefined): SourceScope {
@@ -417,9 +479,11 @@ function tableRows(db: Database, reports: Map<string, MutableTableReport>): Map<
     reports.set(table, report);
     tables.set(table, raw);
   }
-  for (const table of SQLITE_HISTORY_EXCLUDED_TABLES) {
-    if (!hasTable(db, table)) continue;
-    const result = db.query(`SELECT count(*) AS count FROM ${table}`).get() as { count: number };
+  for (const table of excludedTableNames(db)) {
+    if (!hasTable(db, table) || tables.has(table)) continue;
+    const result = db.query(`SELECT count(*) AS count FROM ${quoteIdentifier(table)}`).get() as {
+      count: number;
+    };
     const count = Number(result.count);
     const report = reports.get(table) ?? mutableReport();
     report.scanned += count;
@@ -480,16 +544,22 @@ function workspaceIndexes(
   byId: ReadonlyMap<string, ReadonlyMap<string, SourceRow>>,
 ): RowIndexes {
   const direct = new Map<string, Map<string, string>>();
+  const duplicateIdsByTable = new Map<string, Set<string>>();
   const actorWorkspaceIds = new Map<string, Set<string>>();
   for (const [table, raw] of tables) {
     const tableIndex = new Map<string, string>();
+    const seenIds = new Set<string>();
+    const duplicateIds = new Set<string>();
     for (const row of raw.rows) {
       const id = sourceId(table as HistoryTable, row);
       if (id === undefined) continue;
+      if (seenIds.has(id)) duplicateIds.add(id);
+      else seenIds.add(id);
       const explicit = directWorkspace(table as HistoryTable, row);
       if (explicit.workspaceId !== undefined) tableIndex.set(id, explicit.workspaceId);
     }
     direct.set(table, tableIndex);
+    if (duplicateIds.size > 0) duplicateIdsByTable.set(table, duplicateIds);
   }
   // Los Actors son identidades globales. Las membresías indican en qué
   // Workspaces seleccionados se puede recibir el evento de identidad.
@@ -523,29 +593,54 @@ function workspaceIndexes(
     }
   }
   // Conserva la forma de tipos y mantiene los mapas inmutables para los callers.
-  return { byTable: byId, workspaceByTable: direct, actorWorkspaceIds };
+  return { byTable: byId, workspaceByTable: direct, actorWorkspaceIds, duplicateIdsByTable };
 }
 
 function referencedWorkspaceIds(
   identity: RowIdentity,
   indexes: RowIndexes,
-): { candidates: Set<string>; missing: boolean; invalid: boolean; explicitNull: boolean } {
+): {
+  candidates: Set<string>;
+  missing: boolean;
+  invalid: boolean;
+  explicitNull: boolean;
+  unknownReferenceScope: boolean;
+  ambiguous: boolean;
+} {
   const { row, table } = identity;
   const candidates = new Set<string>();
   let missing = false;
   let invalid = false;
+  let unknownReferenceScope = false;
+  let ambiguous = indexes.duplicateIdsByTable.get(table)?.has(identity.sourceId) ?? false;
   const direct = directWorkspace(table, row);
   if (direct.invalid) invalid = true;
-  if (direct.workspaceId !== undefined) candidates.add(direct.workspaceId);
+  if (direct.workspaceId !== undefined) {
+    const workspaces = indexes.byTable.get("workspace");
+    if (!workspaces || !workspaces.has(direct.workspaceId)) missing = true;
+    else candidates.add(direct.workspaceId);
+  }
   const refs = REFERENCED_WORKSPACE_FIELDS[table] ?? [];
+  const required = REQUIRED_REFERENCE_FIELDS[table] ?? new Set<string>();
   for (const [field, targetTable] of refs) {
-    if (!hasOwn(row, field) || row[field] === null) continue;
+    if (!hasOwn(row, field)) {
+      if (required.has(field)) missing = true;
+      continue;
+    }
+    if (row[field] === null) {
+      if (required.has(field)) missing = true;
+      continue;
+    }
     const value = textValue(row[field]);
     if (value === undefined) {
       invalid = true;
       continue;
     }
     if (targetTable === "actors") {
+      if (indexes.duplicateIdsByTable.get("actors")?.has(value)) {
+        ambiguous = true;
+        continue;
+      }
       const actor = indexes.byTable.get("actors")?.get(value);
       if (!actor) {
         missing = true;
@@ -559,11 +654,50 @@ function referencedWorkspaceIds(
       }
       continue;
     }
-    const target = indexes.workspaceByTable.get(targetTable);
-    if (!target) continue;
-    const workspace = target.get(value);
-    if (workspace === undefined) missing = true;
+    if (indexes.duplicateIdsByTable.get(targetTable)?.has(value)) {
+      ambiguous = true;
+      continue;
+    }
+    const targetRows = indexes.byTable.get(targetTable);
+    if (!targetRows || !targetRows.has(value)) {
+      missing = true;
+      continue;
+    }
+    // Una fila destino sin workspace_id es válida en el esquema singleton legacy.
+    // Un NULL explícito en el esquema multi-Workspace sigue siendo desconocido,
+    // aunque una fila padre pudiera sugerir un alcance.
+    const targetRow = targetRows.get(value)!;
+    const targetScope = directWorkspace(targetTable, targetRow);
+    if (targetScope.invalid) {
+      missing = true;
+      continue;
+    }
+    if (targetScope.explicitNull) {
+      unknownReferenceScope = true;
+      continue;
+    }
+    const workspace = indexes.workspaceByTable.get(targetTable)?.get(value);
+    if (workspace === undefined) {
+      unknownReferenceScope = true;
+      continue;
+    }
+    const workspaces = indexes.byTable.get("workspace");
+    if (!workspaces || !workspaces.has(workspace)) missing = true;
     else candidates.add(workspace);
+  }
+  if (table === "issue_subscribers") {
+    // El contrato actual de suscriptores también exige una membresía de Workspace.
+    // No aceptes la fila en silencio si falta la tabla o la fila referenciada.
+    const memberships = indexes.byTable.get("workspace_memberships");
+    const actorId = textValue(row.actor_id);
+    const actorWorkspaces = actorId ? indexes.actorWorkspaceIds.get(actorId) : undefined;
+    if (!memberships || !actorWorkspaces || actorWorkspaces.size === 0) {
+      missing = true;
+    } else if (direct.workspaceId !== undefined) {
+      if (!actorWorkspaces.has(direct.workspaceId)) missing = true;
+    } else {
+      for (const workspace of actorWorkspaces) candidates.add(workspace);
+    }
   }
   if (table === "actors") {
     const id = identity.sourceId;
@@ -574,7 +708,14 @@ function referencedWorkspaceIds(
     if (id !== undefined) candidates.add(id);
     else invalid = true;
   }
-  return { candidates, missing, invalid, explicitNull: direct.explicitNull };
+  return {
+    candidates,
+    missing,
+    invalid,
+    explicitNull: direct.explicitNull,
+    unknownReferenceScope,
+    ambiguous,
+  };
 }
 
 function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes): RowScope {
@@ -587,11 +728,28 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
       ambiguous: false,
       rejected: true,
     };
+  if (info.ambiguous)
+    return {
+      workspaceId: undefined,
+      outOfScope: false,
+      orphaned: false,
+      ambiguous: true,
+      rejected: false,
+    };
   const candidates = info.candidates;
   // La identidad del Actor es global. Se puede usar en más de un Workspace,
   // pero la importación seleccionada emite un único evento con alcance.
   const isGlobalActor = identity.table === "actors";
   if (isGlobalActor && scope.workspaceId !== undefined) {
+    if (info.missing || (scope.multipleWorkspaces && info.unknownReferenceScope)) {
+      return {
+        workspaceId: undefined,
+        outOfScope: false,
+        orphaned: true,
+        ambiguous: false,
+        rejected: false,
+      };
+    }
     const memberships = indexes.actorWorkspaceIds.get(identity.sourceId);
     if (memberships && memberships.size > 0 && !memberships.has(scope.workspaceId)) {
       return {
@@ -632,8 +790,28 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
       rejected: false,
     };
   }
+  if (scope.multipleWorkspaces && info.unknownReferenceScope) {
+    return {
+      workspaceId: undefined,
+      outOfScope: false,
+      orphaned: true,
+      ambiguous: false,
+      rejected: false,
+    };
+  }
   const candidate = [...candidates][0];
   if (candidate !== undefined) {
+    // Un destino FK ausente es un huérfano aunque otra referencia apunte a
+    // otro Workspace. No ocultes el hallazgo de fila ausente como alcance.
+    if (info.missing) {
+      return {
+        workspaceId: undefined,
+        outOfScope: false,
+        orphaned: true,
+        ambiguous: false,
+        rejected: false,
+      };
+    }
     if (scope.workspaceId !== undefined && candidate !== scope.workspaceId) {
       return {
         workspaceId: undefined,
@@ -814,6 +992,7 @@ function activityEvent(
   const row: ActivityEventRow = {
     id: identity.sourceId,
     issue_identifier: issue,
+    issue_id: issueId,
     actor_id: actorId,
     actor: actorName ?? actorId ?? "unknown",
     type,
@@ -841,12 +1020,13 @@ function addCandidate(
   warnings: string[],
   existing: ReadonlyMap<string, DomainEvent>,
   pending: Map<string, DomainEvent>,
+  equivalent: (left: DomainEvent, right: DomainEvent) => boolean = areDomainEventsEquivalent,
 ): void {
   const report = reports.get(table) ?? mutableReport();
   reports.set(table, report);
   const previous = pending.get(event.eventId) ?? existing.get(event.eventId);
   if (previous !== undefined) {
-    if (areDomainEventsEquivalent(previous, event)) {
+    if (equivalent(previous, event)) {
       addFinding(report, "duplicate");
     } else {
       addFinding(report, "ambiguous");
@@ -876,7 +1056,9 @@ export function importSqliteHistory(
   const byId = buildById(tables);
   const indexes = workspaceIndexes(tables, byId);
   const writer = new EventLogWriter({ rootDir: options.rootDir });
-  // Un dry-run no debe llamar a recover(): recover() repara el archivo y escribe.
+  // Solo una importación real puede reparar un tail truncado; el dry-run no
+  // debe modificar el Log y falla cerrado si el stream no es legible.
+  if (!options.dryRun) writer.recover();
   const existing = new Map(writer.read().map((event) => [event.eventId, event]));
   const pending = new Map<string, DomainEvent>();
   let orphaned = 0;
@@ -936,10 +1118,18 @@ export function importSqliteHistory(
           continue;
         }
         const before = pending.size;
-        addCandidate(event, table, reports, warnings, existing, pending);
+        addCandidate(
+          event,
+          table,
+          reports,
+          warnings,
+          existing,
+          pending,
+          areActivityEventsEquivalent,
+        );
         if (pending.size === before) {
           const previous = pending.get(event.eventId) ?? existing.get(event.eventId);
-          if (previous && areDomainEventsEquivalent(previous, event)) duplicates += 1;
+          if (previous && areActivityEventsEquivalent(previous, event)) duplicates += 1;
           else ambiguous += 1;
         }
         continue;

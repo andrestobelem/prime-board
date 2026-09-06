@@ -127,6 +127,10 @@ describe("SQLite history import", () => {
       const second = importSqliteActivity({ db, rootDir: root });
       expect(first.emitted).toBe(1);
       expect(second.duplicates).toBe(1);
+      expect(readEventLog(root)[0]?.payload.issue_id).toBe("issue-1");
+      db.query("UPDATE teams SET key = 'RENAMED' WHERE id = 'team-1'").run();
+      const renamed = importSqliteActivity({ db, rootDir: root });
+      expect(renamed).toMatchObject({ emitted: 0, duplicates: 1, ambiguous: 0 });
       const dryExisting = importSqliteActivity({ db, rootDir: root, dryRun: true });
       expect(dryExisting).toMatchObject({ emitted: 0, duplicates: 1, ambiguous: 0 });
       db.query("UPDATE actors SET name = ?1 WHERE id = ?2").run("renamed-agent", "actor-1");
@@ -152,6 +156,11 @@ describe("SQLite history import", () => {
     expect(isSharedActivityType("inbox_receipt_created")).toBe(false);
     expect(isSharedActivityType("API key rotated")).toBe(false);
     expect(isSharedActivityType("webhook_secret_changed")).toBe(false);
+    expect(isSharedActivityType("HASH_rotated")).toBe(false);
+    expect(isSharedActivityType("token_hash_created")).toBe(false);
+    expect(isSharedActivityType("grant_added")).toBe(false);
+    expect(isSharedActivityType("invitation_created")).toBe(false);
+    expect(isSharedActivityType("invite_sent")).toBe(false);
     expect(isSharedActivityType("issue_updated")).toBe(true);
   });
 
@@ -168,18 +177,69 @@ describe("SQLite history import", () => {
       addActivity(db, "inbox-1", "{}", "issue-1", "actor-1", "inbox_receipt_created");
       addActivity(db, "apikey-1", "{}", "issue-1", "actor-1", "API key rotated");
       addActivity(db, "webhook-secret-1", "{}", "issue-1", "actor-1", "webhook_secret_changed");
+      addActivity(db, "hash-1", JSON.stringify({ hash: "fixture-value" }));
+      addActivity(db, "token-hash-1", JSON.stringify({ nested: { TOKEN_hash: "fixture-value" } }));
+      addActivity(db, "grant-1", JSON.stringify({ grant_ids: ["fixture-value"] }));
+      addActivity(db, "invitation-1", JSON.stringify({ invitationToken: "fixture-value" }));
       const result = importSqliteActivity({ db, rootDir: root });
-      expect(result.scanned).toBe(9);
+      expect(result.scanned).toBe(13);
       expect(result.emitted).toBe(1);
       expect(result.orphaned).toBe(1);
-      expect(result.rejected).toBe(7);
+      expect(result.rejected).toBe(11);
       const eventIds = readEventLog(root).map((event) => event.eventId);
       expect(eventIds).toEqual(["valid-1"]);
-      for (const id of ["favorite-1", "favorite-sent-1", "inbox-1", "apikey-1", "webhook-secret-1"])
+      for (const id of [
+        "favorite-1",
+        "favorite-sent-1",
+        "inbox-1",
+        "apikey-1",
+        "webhook-secret-1",
+        "hash-1",
+        "token-hash-1",
+        "grant-1",
+        "invitation-1",
+      ])
         expect(eventIds).not.toContain(id);
-      expect(readFileSync(join(root, ".prime-board/log/events.jsonl"), "utf8")).not.toContain(
-        "never",
-      );
+      const log = readFileSync(join(root, ".prime-board/log/events.jsonl"), "utf8");
+      expect(log).not.toContain("never");
+      expect(log).not.toContain("fixture-value");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports an Activity row with an unknown Workspace as orphaned", () => {
+    const db = workspaceDatabase(1);
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-missing-workspace-"));
+    try {
+      addWorkspaceActivity(db, "workspace-missing", "activity-missing-workspace", "issue-1");
+      const result = importSqliteActivity({ db, rootDir: root, workspaceId: "workspace-1" });
+      expect(result).toMatchObject({
+        scanned: 1,
+        emitted: 0,
+        orphaned: 1,
+        outOfScope: 0,
+        rejected: 0,
+      });
+      expect(result.warnings).toContain("orphaned:activity-missing-workspace");
+      expect(readEventLog(root)).toEqual([]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a missing Activity Actor row as orphaned", () => {
+    const db = database();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-missing-actor-"));
+    try {
+      addActivity(db, "missing-actor-1", JSON.stringify({ title: "orphan" }));
+      db.query("DELETE FROM actors WHERE id = 'actor-1'").run();
+      const result = importSqliteActivity({ db, rootDir: root });
+      expect(result).toMatchObject({ scanned: 1, emitted: 0, orphaned: 1, rejected: 0 });
+      expect(result.warnings).toContain("orphaned:missing-actor-1");
+      expect(readEventLog(root)).toEqual([]);
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
