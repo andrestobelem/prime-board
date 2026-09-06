@@ -35,6 +35,12 @@ export interface AuthContext {
 /** Contexto de autorización no secreto que los dominios necesitan para límites de Team. */
 export type AuthScopeContext = Pick<AuthContext, "keyId" | "teamIds">;
 
+/** Punto interno de prueba para controlar intercalaciones sin exponerlo en GraphQL. */
+export interface PlanningAuthorizationHooks {
+  beforeAuthorization?: () => void | Promise<void>;
+  afterAuthorization?: () => void | Promise<void>;
+}
+
 /** Relee el alcance no secreto de una key dentro de una transacción SQLite. */
 export function readLocalAuthScope(
   db: Database,

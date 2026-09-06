@@ -6,7 +6,12 @@ import { getProject, listProjectTeamIds } from "./projects.ts";
 import { getTeam } from "./teams.ts";
 import { parseDateTime } from "./datetime.ts";
 import { isTeamMember } from "./team-memberships.ts";
-import { readLocalAuthScope, type ActorRow, type AuthScopeContext } from "../auth/viewer.ts";
+import {
+  readLocalAuthScope,
+  type ActorRow,
+  type AuthScopeContext,
+  type PlanningAuthorizationHooks,
+} from "../auth/viewer.ts";
 import {
   assertCanManageIssue,
   assertCanManageProject,
@@ -581,11 +586,14 @@ export function createInitiativeUpdate(
   workspaceId?: string,
   viewerRef?: ViewerRef,
   auth?: AuthScopeContext | null,
+  hooks?: PlanningAuthorizationHooks,
 ): InitiativeUpdateRow {
+  hooks?.beforeAuthorization?.();
   return db.transaction(() => {
     const initiative = getInitiative(db, initiativeId, workspaceId);
     if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
     const effectiveAuth = readLocalAuthScope(db, auth, workspaceId);
+    hooks?.afterAuthorization?.();
     if (viewerRef !== undefined) assertCanMutate(db, initiative, viewerRef, workspaceId);
     assertInitiativeStatusTeamLimit(
       effectiveAuth,
@@ -601,9 +609,11 @@ export function createInitiativeUpdate(
     db.query(
       "INSERT INTO initiative_updates (id, initiative_id, author_id, health, body, created_at, updated_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
     ).run(id, initiative.id, authorId, health, body, timestamp, workspaceId ?? null);
-    return db
-      .query("SELECT * FROM initiative_updates WHERE id = ?1")
-      .get(id) as InitiativeUpdateRow;
+    const row = db
+      .query<InitiativeUpdateRow, [string]>("SELECT * FROM initiative_updates WHERE id = ?1")
+      .get(id);
+    if (!row) throw new Error("SQLite initiative update insert returned no row");
+    return row;
   })();
 }
 
@@ -613,13 +623,16 @@ export function deleteInitiativeUpdate(
   workspaceId?: string,
   viewerRef?: ViewerRef,
   auth?: AuthScopeContext | null,
+  hooks?: PlanningAuthorizationHooks,
 ): boolean {
+  hooks?.beforeAuthorization?.();
   return db.transaction(() => {
     const row = getInitiativeUpdate(db, id, workspaceId);
     if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
     const initiative = getInitiative(db, row.initiative_id, workspaceId);
     if (!initiative) throw apiError("NOT_FOUND", "Initiative update not found");
     const effectiveAuth = readLocalAuthScope(db, auth, workspaceId);
+    hooks?.afterAuthorization?.();
     if (viewerRef !== undefined) assertCanMutate(db, initiative, viewerRef, workspaceId);
     assertInitiativeStatusTeamLimit(
       effectiveAuth,

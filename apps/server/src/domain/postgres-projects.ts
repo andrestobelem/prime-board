@@ -11,7 +11,7 @@ import {
 } from "./postgres-teams.ts";
 import { newId, now } from "../db/util.ts";
 import { PROJECT_STATES } from "./projects.ts";
-import type { ActorRow, AuthScopeContext } from "../auth/viewer.ts";
+import type { ActorRow, AuthScopeContext, PlanningAuthorizationHooks } from "../auth/viewer.ts";
 
 export interface PostgresProjectRow {
   id: string;
@@ -404,6 +404,7 @@ export async function createPostgresProjectDependency(
   workspaceId?: string,
   viewer?: ActorRow,
   auth?: AuthScopeContext | null,
+  hooks?: PlanningAuthorizationHooks,
 ): Promise<PostgresProjectDependencyRow> {
   return persistence.transaction(async (tx) => {
     await assertPostgresWorkspace(tx, workspaceId);
@@ -411,7 +412,9 @@ export async function createPostgresProjectDependency(
     if (input.projectId === input.dependsOnProjectId) {
       throw apiError("VALIDATION_FAILED", "A project cannot depend on itself");
     }
+    await hooks?.beforeAuthorization?.();
     const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
+    await hooks?.afterAuthorization?.();
 
     // Lock both Projects, their project_teams rows and every referenced Team.
     const teamIds = await lockPostgresProjectScope(tx, [input.projectId, input.dependsOnProjectId]);
@@ -449,11 +452,14 @@ export async function deletePostgresProjectDependency(
   workspaceId?: string,
   viewer?: ActorRow,
   auth?: AuthScopeContext | null,
+  hooks?: PlanningAuthorizationHooks,
 ): Promise<boolean> {
   return persistence.transaction(async (tx) => {
     const dependency = await getPostgresProjectDependencyInWorkspace(tx, id, workspaceId, true);
     if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
+    await hooks?.beforeAuthorization?.();
     const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
+    await hooks?.afterAuthorization?.();
     // The dependency and both project scopes stay locked until DELETE commits.
     const teamIds = await lockPostgresProjectScope(tx, [
       dependency.project_id,

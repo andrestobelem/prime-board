@@ -17,7 +17,7 @@ import {
   getPostgresTeam,
   isPostgresTeamMember,
 } from "./postgres-teams.ts";
-import type { ActorRow, AuthScopeContext } from "../auth/viewer.ts";
+import type { ActorRow, AuthScopeContext, PlanningAuthorizationHooks } from "../auth/viewer.ts";
 import type { InitiativeState } from "./initiatives.ts";
 
 function parseResources(value: string | null | undefined): unknown[] {
@@ -477,10 +477,13 @@ export async function createPostgresInitiativeUpdate(
   input: { health: string; body: string },
   workspaceId?: string,
   auth?: AuthScopeContext | null,
+  hooks?: PlanningAuthorizationHooks,
 ): Promise<PostgresInitiativeUpdateRow> {
   return persistence.transaction(async (tx) => {
     await assertPostgresWorkspace(tx, workspaceId);
+    await hooks?.beforeAuthorization?.();
     const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
+    await hooks?.afterAuthorization?.();
     const { initiative, teamIds } = await lockPostgresInitiativeScope(
       tx,
       initiativeId,
@@ -522,15 +525,18 @@ export async function deletePostgresInitiativeUpdate(
   id: string,
   workspaceId?: string,
   auth?: AuthScopeContext | null,
+  hooks?: PlanningAuthorizationHooks,
 ): Promise<boolean> {
   return persistence.transaction(async (tx) => {
     await assertPostgresWorkspace(tx, workspaceId);
-    const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
     const row = await tx.one<PostgresInitiativeUpdateRow>(
       "SELECT * FROM initiative_updates WHERE id = $1 FOR UPDATE",
       [id],
     );
     if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
+    await hooks?.beforeAuthorization?.();
+    const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
+    await hooks?.afterAuthorization?.();
     const { initiative, teamIds } = await lockPostgresInitiativeScope(
       tx,
       row.initiative_id,

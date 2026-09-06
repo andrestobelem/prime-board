@@ -4,7 +4,12 @@ import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { getActor } from "./actors.ts";
 import { parseDateTime } from "./datetime.ts";
-import { readLocalAuthScope, type ActorRow, type AuthScopeContext } from "../auth/viewer.ts";
+import {
+  readLocalAuthScope,
+  type ActorRow,
+  type AuthScopeContext,
+  type PlanningAuthorizationHooks,
+} from "../auth/viewer.ts";
 import { assertCanManageProject } from "../auth/permissions.ts";
 
 function workspaceClause(column: string, parameter: string): string {
@@ -434,13 +439,9 @@ export function createProjectDependency(
   workspaceId?: string,
   viewer?: ActorRow,
   auth?: AuthScopeContext | null,
-): {
-  id: string;
-  project_id: string;
-  depends_on_project_id: string;
-  type: "blocks" | "related";
-  created_at: string;
-} {
+  hooks?: PlanningAuthorizationHooks,
+): ProjectDependencyRow {
+  hooks?.beforeAuthorization?.();
   return db.transaction(() => {
     if (input.projectId === input.dependsOnProjectId)
       throw apiError("VALIDATION_FAILED", "A project cannot depend on itself");
@@ -449,6 +450,7 @@ export function createProjectDependency(
     if (!project) throw apiError("NOT_FOUND", "Project not found");
     if (!target) throw apiError("NOT_FOUND", "Dependency project not found");
     const effectiveAuth = readLocalAuthScope(db, auth, workspaceId);
+    hooks?.afterAuthorization?.();
     if (viewer) {
       assertCanManageProject(db, viewer, project.id);
       assertCanManageProject(db, viewer, target.id);
@@ -473,17 +475,13 @@ export function createProjectDependency(
     db.query(
       "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     ).run(id, project.id, target.id, type, now(), workspaceId ?? null);
-    return db
-      .query(
+    const row = db
+      .query<ProjectDependencyRow, [string]>(
         "SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE id = ?1",
       )
-      .get(id) as {
-      id: string;
-      project_id: string;
-      depends_on_project_id: string;
-      type: "blocks" | "related";
-      created_at: string;
-    };
+      .get(id);
+    if (!row) throw new Error("SQLite project dependency insert returned no row");
+    return row;
   })();
 }
 
@@ -493,30 +491,29 @@ export function deleteProjectDependency(
   workspaceId?: string,
   viewer?: ActorRow,
   auth?: AuthScopeContext | null,
+  hooks?: PlanningAuthorizationHooks,
 ): boolean {
+  hooks?.beforeAuthorization?.();
   return db.transaction(() => {
     const dependency = workspaceId
-      ? (db
-          .query(
+      ? db
+          .query<
+            Pick<ProjectDependencyRow, "id" | "project_id" | "depends_on_project_id">,
+            [string, string]
+          >(
             `SELECT id, project_id, depends_on_project_id FROM project_dependencies
              WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
           )
-          .get(id, workspaceId) as {
-          id: string;
-          project_id: string;
-          depends_on_project_id: string;
-        } | null)
-      : (db
-          .query(
-            "SELECT id, project_id, depends_on_project_id FROM project_dependencies WHERE id = ?1",
-          )
-          .get(id) as {
-          id: string;
-          project_id: string;
-          depends_on_project_id: string;
-        } | null);
+          .get(id, workspaceId)
+      : db
+          .query<
+            Pick<ProjectDependencyRow, "id" | "project_id" | "depends_on_project_id">,
+            [string]
+          >("SELECT id, project_id, depends_on_project_id FROM project_dependencies WHERE id = ?1")
+          .get(id);
     if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
     const effectiveAuth = readLocalAuthScope(db, auth, workspaceId);
+    hooks?.afterAuthorization?.();
     const project = getProject(db, dependency.project_id, workspaceId);
     const target = getProject(db, dependency.depends_on_project_id, workspaceId);
     if (!project || !target) throw apiError("NOT_FOUND", "Project dependency not found");

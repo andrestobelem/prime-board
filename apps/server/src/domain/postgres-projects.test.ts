@@ -6,7 +6,7 @@ import type {
   PersistenceTransaction,
   SqlParameters,
 } from "../db/persistence.ts";
-import type { AuthScopeContext } from "../auth/viewer.ts";
+import type { AuthScopeContext, PlanningAuthorizationHooks, ActorRow } from "../auth/viewer.ts";
 import type { PostgresProjectDependencyRow, PostgresProjectRow } from "./postgres-projects.ts";
 import {
   createPostgresProjectDependency,
@@ -240,5 +240,71 @@ describe("PostgreSQL planning auth scope", () => {
     await expect(readPostgresAuthScope(changed, auth, workspaceId)).rejects.toMatchObject({
       extensions: { code: "UNAUTHORIZED" },
     });
+  });
+
+  it("uses a fake PostgreSQL transaction barrier to reject a changed key scope", async () => {
+    const dependencies: PostgresProjectDependencyRow[] = [];
+    const state = {
+      limits: ["team-1"],
+      projectTeams: ["team-1"],
+      dependencies,
+    };
+    const source = project("source");
+    const target = project("target");
+    let release!: () => void;
+    let signalReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      signalReady = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const transaction = fromPartial<PersistenceTransaction>({
+      one: async (sql: string, params?: SqlParameters) => {
+        if (sql.includes("FROM workspace")) return fromPartial({ id: workspaceId });
+        if (sql.includes("FROM api_keys"))
+          return fromPartial({ id: "key-1", revoked_at: null, expires_at: null });
+        if (sql.includes("FROM projects")) return params?.[0] === "source" ? source : target;
+        if (sql.includes("FROM teams")) return fromPartial({ id: "team-1" });
+        if (sql.includes("FROM project_dependencies")) return null;
+        return null;
+      },
+      many: async (sql: string) => {
+        if (sql.includes("api_key_team_limits"))
+          return state.limits.map((teamId) => fromPartial({ team_id: teamId }));
+        if (sql.includes("project_teams"))
+          return state.projectTeams.map((teamId) => fromPartial({ team_id: teamId }));
+        return [];
+      },
+      execute: async () => {
+        throw new Error("dependency write must not run");
+      },
+    });
+    const persistence = fromPartial<Persistence>({
+      transaction: async <Result>(callback: (tx: PersistenceTransaction) => Promise<Result>) =>
+        callback(transaction),
+      close: async () => undefined,
+    });
+    const viewer = fromPartial<ActorRow>({ id: "admin", workspace_role: "admin" });
+    const auth = fromPartial<AuthScopeContext>({ keyId: "key-1", teamIds: ["team-1"] });
+    const hooks: PlanningAuthorizationHooks = {
+      beforeAuthorization: async () => {
+        state.limits = ["team-2"];
+        signalReady();
+        await gate;
+      },
+    };
+    const operation = createPostgresProjectDependency(
+      persistence,
+      { projectId: "source", dependsOnProjectId: "target" },
+      workspaceId,
+      viewer,
+      auth,
+      hooks,
+    );
+    await ready;
+    release();
+    await expect(operation).rejects.toMatchObject({ extensions: { code: "UNAUTHORIZED" } });
+    expect(state.dependencies).toHaveLength(0);
   });
 });
