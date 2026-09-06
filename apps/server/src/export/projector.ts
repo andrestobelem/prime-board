@@ -427,7 +427,7 @@ export type PostgresApplyEvent = (
 
 export interface PostgresReplayOptions extends ReplayOptions {
   readonly persistence: Persistence;
-  readonly checkpointStore?: PostgresCheckpointStore;
+  readonly checkpointStore?: ProjectorCheckpointStore;
 }
 
 /**

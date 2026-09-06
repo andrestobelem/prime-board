@@ -8,7 +8,13 @@ import { resolveLocalPostgresAuth, resolvePostgresAuth } from "./auth/postgres-v
 import { LOOPBACK_HOST, type Config } from "./config.ts";
 import type { Context } from "./graphql/context.ts";
 import { resolvers } from "./graphql/resolvers.ts";
-import { createRepoSync, type RepoSync, type RepoSyncOptions } from "./export/repo-sync.ts";
+import {
+  createPostgresRepoSync,
+  createRepoSync,
+  type CanonicalEventRecorder,
+  type RepoSync,
+  type RepoSyncOptions,
+} from "./export/repo-sync.ts";
 import { trackedRepoSync } from "./graphql/repo-sync-dispatch.ts";
 import { WebhookDispatcher, type DispatcherOptions } from "./webhooks/dispatcher.ts";
 import { resolveWorkspaceContext } from "./domain/workspace-context.ts";
@@ -38,10 +44,20 @@ export function createApp({
   if (config.authMode === "local" && config.host !== LOOPBACK_HOST) {
     throw new Error("Local auth mode requires the loopback host");
   }
-  const events = new WebhookDispatcher(db, webhookOptions ?? { log: console.error }, persistence);
   const repo = persistence
-    ? null
+    ? (injectedRepoSync ??
+      (config.repoRoot ? createPostgresRepoSync(persistence, config.repoRoot) : null))
     : (injectedRepoSync ?? createRepoSync(db, config.repoRoot, repoSyncOptions));
+  const canonical =
+    repo && typeof repo.recordWebhookEvent === "function"
+      ? (repo as CanonicalEventRecorder)
+      : undefined;
+  const events = new WebhookDispatcher(
+    db,
+    webhookOptions ?? { log: console.error },
+    persistence,
+    canonical,
+  );
   let baseUrl = `http://localhost:${config.port}`;
   const yoga = createYoga({
     schema: createSchema<Context>({ typeDefs, resolvers }),

@@ -33,6 +33,32 @@ export {
   type IssueEventPipelineOptions,
   type IssueEventProjector,
 } from "./issue-event-pipeline.ts";
+export {
+  PostgresRepoSync,
+  canonicalEventFromMutation,
+  canonicalEventFromWebhook,
+  createPostgresCanonicalRepo,
+  createPostgresRepoSync,
+  type CanonicalActor,
+  type CanonicalEventRecorder,
+  type CanonicalMutationInput,
+  type CanonicalWebhookEventInput,
+  type PostgresProjectionStatus,
+  type PostgresRepoSyncOptions,
+} from "./postgres-repo-sync.ts";
+export { applyCanonicalEvent, projectCanonicalEvent } from "./postgres-projector.ts";
+export {
+  rebuildProjectionsFromEventLog,
+  reduceEventLog,
+  regenerateCanonicalProjections,
+  regenerateMarkdownFromEventLog,
+} from "./canonical-projection.ts";
+export {
+  emitMarkdownEvents,
+  importMarkdownEvents,
+  importMarkdownToEventLog,
+  markdownToDomainEvents,
+} from "./markdown-event-import.ts";
 
 export interface RepoSyncOptions extends IssueEventPipelineOptions {
   /** Pipeline precargado para tests y adapters de runtime. */
@@ -45,9 +71,15 @@ export interface RepoSync {
    * Los fallos se propagan al caller para que la mutación no informe éxito
    * cuando el append, Git, projector o export falla.
    */
-  sync(): void;
+  sync(): void | PromiseLike<void>;
   /** Camino caliente: reescribe solo el issue afectado (AT-166). */
-  syncIssue(issueId: string): void;
+  syncIssue(issueId: string): void | PromiseLike<void>;
+  /** Registra un evento canónico emitido por una mutación PostgreSQL. */
+  recordEvent?(event: import("./event-log.ts").DomainEvent): void;
+  /** Registra un evento de webhook que representa una mutación compartida. */
+  recordWebhookEvent?(input: import("./postgres-repo-sync.ts").CanonicalWebhookEventInput): void;
+  /** Completa una mutación sin un evento de webhook explícito. */
+  recordMutation?(input: import("./postgres-repo-sync.ts").CanonicalMutationInput): void;
   readonly root: string;
 }
 

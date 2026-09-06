@@ -627,6 +627,10 @@ export const projectResolvers = {
           updateId: projectUpdate.id,
           health: projectUpdate.health,
           body: projectUpdate.body,
+          risks: projectUpdate.risks,
+          authorId: projectUpdate.authorId,
+          createdAt: projectUpdate.createdAt,
+          updatedAt: projectUpdate.updatedAt,
         });
         return { success: true, projectUpdate };
       }
@@ -640,6 +644,10 @@ export const projectResolvers = {
         updateId: projectUpdate.id,
         health: projectUpdate.health,
         body: projectUpdate.body,
+        risks: projectUpdate.risks,
+        authorId: projectUpdate.authorId,
+        createdAt: projectUpdate.createdAt,
+        updatedAt: projectUpdate.updatedAt,
       });
       return { success: true, projectUpdate };
     },

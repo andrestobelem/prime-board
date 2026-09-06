@@ -29,6 +29,27 @@ export const SYNC_EXCLUDED_MUTATIONS: ReadonlySet<string> = new Set([
   "inboxArchive",
 ]);
 
+/** Mutations que ya emiten un evento público durante su ejecución. */
+const EXPLICIT_CANONICAL_EVENT_MUTATIONS: ReadonlySet<string> = new Set([
+  "workspaceCreate",
+  "teamCreate",
+  "teamDelete",
+  "issueCreate",
+  "issueUpdate",
+  "issueSubscribe",
+  "issueUnsubscribe",
+  "issueArchive",
+  "issueUnarchive",
+  "issueRelationCreate",
+  "issueRelationDelete",
+  "projectCreate",
+  "projectUpdate",
+  "projectArchive",
+  "projectUnarchive",
+  "projectUpdateCreate",
+  "commentCreate",
+]);
+
 export interface TrackedRepoSync extends RepoSync {
   /** ¿Se llamó a sync()/syncIssue() desde que se reseteó el rastreo? */
   wasCalled(): boolean;
@@ -49,11 +70,20 @@ export function trackedRepoSync(repo: RepoSync): TrackedRepoSync {
     root: repo.root,
     sync() {
       called = true;
-      repo.sync();
+      return repo.sync();
     },
     syncIssue(issueId: string) {
       called = true;
-      repo.syncIssue(issueId);
+      return repo.syncIssue(issueId);
+    },
+    recordEvent(event) {
+      repo.recordEvent?.(event);
+    },
+    recordWebhookEvent(input) {
+      repo.recordWebhookEvent?.(input);
+    },
+    recordMutation(input) {
+      repo.recordMutation?.(input);
     },
     wasCalled: () => called,
     reset: () => {
@@ -84,24 +114,47 @@ export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(muta
   const wrapped: Record<string, AnyResolver> = {};
   for (const [name, resolver] of Object.entries(mutations)) {
     wrapped[name] = (...callArgs: unknown[]) => {
-      const context = callArgs[2] as { repo: TrackedRepoSync | null } | undefined;
+      const context = callArgs[2] as
+        | {
+            repo: TrackedRepoSync | null;
+            viewer?: { id: string; name: string; type: string } | null;
+            workspace?: { workspaceId: string };
+          }
+        | undefined;
       const tracker = context?.repo;
       if (!tracker || SYNC_EXCLUDED_MUTATIONS.has(name)) {
         return resolver(...callArgs);
       }
       tracker.reset();
-      const finish = () => {
-        if (!tracker.wasCalled()) tracker.sync();
+      const finish = (result: unknown): void | PromiseLike<void> => {
+        if (
+          !EXPLICIT_CANONICAL_EVENT_MUTATIONS.has(name) &&
+          tracker.recordMutation &&
+          context.viewer &&
+          context.workspace
+        ) {
+          tracker.recordMutation({
+            workspaceId: context.workspace.workspaceId,
+            actor: context.viewer,
+            name,
+            args: callArgs[1],
+            result,
+          });
+        }
+        if (!tracker.wasCalled()) return tracker.sync();
+      };
+      const settle = (result: unknown): unknown => {
+        const finished = finish(result);
+        if (finished && typeof (finished as PromiseLike<void>).then === "function") {
+          return finished.then(() => result);
+        }
+        return result;
       };
       const result = resolver(...callArgs);
       if (result && typeof (result as Promise<unknown>)?.then === "function") {
-        return (result as Promise<unknown>).then((value) => {
-          finish();
-          return value;
-        });
+        return (result as Promise<unknown>).then(settle);
       }
-      finish();
-      return result;
+      return settle(result);
     };
   }
   Object.defineProperty(wrapped, DISPATCHED, { value: true, enumerable: false });

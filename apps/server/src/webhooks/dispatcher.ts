@@ -7,6 +7,7 @@ import type { WebhookEventName } from "./events.ts";
 import { canAccessTeam, isWorkspaceAdmin } from "../auth/permissions.ts";
 import { canAccessPostgresTeam } from "../domain/postgres-teams.ts";
 import type { ActorRow } from "../auth/viewer.ts";
+import type { CanonicalEventRecorder } from "../export/postgres-repo-sync.ts";
 
 export type { WebhookEventName } from "./events.ts";
 
@@ -308,6 +309,7 @@ export class WebhookDispatcher implements WebhookEventSink {
     private readonly db: Database,
     private readonly options: DispatcherOptions = {},
     private readonly persistence?: Persistence,
+    private readonly canonical?: CanonicalEventRecorder,
   ) {}
 
   /** Emite un evento a todos los webhooks suscriptos. No bloquea al caller. */
@@ -348,6 +350,18 @@ export class WebhookDispatcher implements WebhookEventSink {
     data: Record<string, unknown>,
     changes?: Record<string, { from: unknown; to: unknown }>,
   ): void {
+    // El evento canónico se agrega antes de encolar el webhook. En PostgreSQL
+    // este append es la primera etapa visible del pipeline; el wrapper de la
+    // mutación hace después commit, replay y regeneración.
+    const workspaceId =
+      typeof data._workspaceId === "string"
+        ? data._workspaceId
+        : this.persistence
+          ? null
+          : sqliteEventWorkspaceId(this.db, event, data);
+    if (this.canonical && workspaceId) {
+      this.canonical.recordWebhookEvent({ workspaceId, event, actor, data, changes });
+    }
     const dispatch = this.dispatch(event, actor, data, changes).catch((error) => {
       this.options.log?.(`webhook dispatch failed: ${redactSecrets(String(error))}`);
     });

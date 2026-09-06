@@ -21,6 +21,12 @@ Si el proyector falla, el evento del repositorio sigue siendo válido y queda pe
 
 Repository Source contiene el estado compartido: Workspace, Teams, Workflow States, Issues, Comments, Relations, Projects, Cycles, Initiatives, Reviews y sus eventos. Favorites, Inbox Receipts, API keys y secretos de webhooks quedan fuera porque son estado personal o material sensible. El importador Markdown solo emite eventos explícitos. Nunca escribe directamente en PostgreSQL.
 
+### Eventos de importación histórica
+
+Un importador de una captura histórica puede emitir `type: snapshot_imported`. Este tipo no representa una nueva acción de negocio. Representa el estado observado de una fila que no tiene una secuencia de eventos original. Su `payload` conserva la fila y la metadata de origen; el proyector no crea una fila de `Activity` para este tipo.
+
+Las relaciones importadas pueden usar agregados auxiliares (`project_team`, `issue_label`, `issue_relation`, `initiative_project`, `initiative_team`, `issue_subscriber` y `workspace_membership`). Su clave de idempotencia es el ID de la fila o la tupla estable de sus extremos. El proyector resuelve estas relaciones después de asegurar sus agregados padre. Las mutaciones online siguen usando eventos del agregado padre con payload completo; no deben cambiar a `snapshot_imported`.
+
 ## Exclusión aceptada para PRB-440
 
 PRB-440 no implementa auditoría durable para `Initiative` ni para `Project Update`. El
