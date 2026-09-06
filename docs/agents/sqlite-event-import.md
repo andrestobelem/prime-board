@@ -34,12 +34,14 @@ el tamaño de cada append. Si el proceso se interrumpe, se puede repetir: el
   Una referencia a una tabla o fila ausente es huérfana. Una referencia a un Actor
   solo es válida cuando una Membership de Workspace demuestra su pertenencia; una
   metadata de Membership ausente, ambigua o inválida no forma un mapa parcial.
-- Una fuente con un solo Workspace mantiene compatibilidad con filas legacy
-  anteriores a `workspace_id`: el ID único se usa como alcance cuando la fuente
-  no puede asignar otro. Este fallback aplica cuando falta la metadata de Membership;
-  si la tabla existe y el Actor no tiene una fila, la referencia es huérfana. Una
-  fuente multi-Workspace requiere selector y alcance explícitos; no se infiere un
-  `NULL` ni se confía solo en `workspace_id`.
+- Una fuente sin tabla `workspace` puede inferir su topología desde filas válidas de
+  `workspace_memberships`. Un solo Workspace se usa como alcance; varios Workspaces
+  requieren `--workspace-id`. Un Actor sin Membership no se emite y una Membership
+  ambigua o inválida no autoriza ningún fallback.
+- El fallback singleton legacy solo aplica cuando no existe la tabla `workspace`, no
+  existe `workspace_memberships` y ninguna tabla compartida conserva una columna
+  `workspace_id`. Una fuente multi-Workspace requiere selector y alcance explícitos;
+  no se infiere un `NULL` ni se confía solo en `workspace_id`.
 - `api_keys`, sus grants, hashes y scopes, invitaciones, webhooks, Documents retirados,
   Favorites e Inbox Receipts se cuentan como `excluded` y no se leen como filas
   de eventos. Los nombres y campos sensibles (incluidos `hash`, `token_hash`,

@@ -148,8 +148,11 @@ interface ResolvedTable {
 
 interface SourceScope {
   readonly workspaceId: string | undefined;
+  readonly workspaceIds: ReadonlySet<string>;
   readonly multipleWorkspaces: boolean;
   readonly hasWorkspaceTable: boolean;
+  /** Indica que Workspace, Membership o una columna de alcance aporta topología. */
+  readonly hasScopedMetadata: boolean;
 }
 
 interface RawTable {
@@ -169,6 +172,10 @@ type WorkspaceMembershipMetadataState = "found" | "missing" | "ambiguous" | "inv
 
 interface WorkspaceMembershipMetadata {
   readonly state: WorkspaceMembershipMetadataState;
+  /** Distingue una tabla ausente de un esquema presente pero incompleto. */
+  readonly tablePresent: boolean;
+  /** IDs de Workspace extraídos de filas con ambas referencias de Membership. */
+  readonly workspaceIds: ReadonlySet<string>;
 }
 
 interface RowIndexes {
@@ -417,11 +424,30 @@ function excludedTableNames(db: Database): readonly ResolvedTable[] {
   return [...resolved.values()];
 }
 
-function resolveScope(db: Database, requestedWorkspaceId: string | undefined): SourceScope {
+function hasScopedWorkspaceColumns(db: Database): boolean {
+  for (const canonicalName of SQLITE_HISTORY_TABLES) {
+    if (canonicalName === "workspace") continue;
+    const table = resolveTable(db, canonicalName);
+    if (table === undefined) continue;
+    const lookup = sqliteColumnName(db, table.physicalName, "workspace_id");
+    if (lookup.kind !== "missing") return true;
+  }
+  return false;
+}
+
+function resolveScope(
+  db: Database,
+  requestedWorkspaceId: string | undefined,
+  membershipMetadata: WorkspaceMembershipMetadata,
+): SourceScope {
   validateWorkspaceId(requestedWorkspaceId);
   const workspaceTable = resolveTable(db, "workspace");
   const hasWorkspaceTable = workspaceTable !== undefined;
-  if (requestedWorkspaceId !== undefined && !hasWorkspaceTable) {
+  if (
+    requestedWorkspaceId !== undefined &&
+    !hasWorkspaceTable &&
+    !membershipMetadata.tablePresent
+  ) {
     throw new Error("SQLite history import workspaceId requires a workspace table");
   }
 
@@ -451,6 +477,10 @@ function resolveScope(db: Database, requestedWorkspaceId: string | undefined): S
       }
       workspaceIds.push(id);
     }
+  } else if (membershipMetadata.state === "found") {
+    // Una fuente sin tabla Workspace puede demostrar su topología con las
+    // referencias completas de sus Memberships.
+    workspaceIds.push(...membershipMetadata.workspaceIds);
   }
   if (hasWorkspaceTable && workspaceIds.length === 0) {
     throw new Error("SQLite history import requires at least one Workspace");
@@ -461,7 +491,11 @@ function resolveScope(db: Database, requestedWorkspaceId: string | undefined): S
       "SQLite history import requires workspaceId when the source contains multiple Workspaces",
     );
   }
-  if (requestedWorkspaceId !== undefined && !workspaceIds.includes(requestedWorkspaceId)) {
+  if (
+    requestedWorkspaceId !== undefined &&
+    (hasWorkspaceTable || membershipMetadata.state === "found") &&
+    !workspaceIds.includes(requestedWorkspaceId)
+  ) {
     throw new Error(`SQLite history import Workspace ${requestedWorkspaceId} does not exist`);
   }
   // El importador legacy de Activity ya exige estas tres columnas. Mantener el
@@ -479,7 +513,14 @@ function resolveScope(db: Database, requestedWorkspaceId: string | undefined): S
       `SQLite history import rejected ambiguous column metadata on ${ambiguousWorkspaceColumns.join(", ")}`,
     );
   }
-  if (multipleWorkspaces && workspaceColumns.some(([, lookup]) => lookup.kind === "missing")) {
+  // Una topología inferida desde Memberships todavía puede clasificar filas de
+  // forma individual. La exigencia histórica de columnas directas solo aplica
+  // cuando una tabla Workspace demuestra una fuente multi-Workspace completa.
+  if (
+    hasWorkspaceTable &&
+    multipleWorkspaces &&
+    workspaceColumns.some(([table, lookup]) => hasTable(db, table) && lookup.kind === "missing")
+  ) {
     throw new Error(
       "SQLite history import cannot scope a multi-Workspace source without workspace_id on activity, issues, and teams",
     );
@@ -487,8 +528,11 @@ function resolveScope(db: Database, requestedWorkspaceId: string | undefined): S
 
   return {
     workspaceId: requestedWorkspaceId ?? workspaceIds[0],
+    workspaceIds: new Set(workspaceIds),
     multipleWorkspaces,
     hasWorkspaceTable,
+    hasScopedMetadata:
+      hasWorkspaceTable || membershipMetadata.tablePresent || hasScopedWorkspaceColumns(db),
   };
 }
 
@@ -645,18 +689,32 @@ function workspaceMembershipMetadata(
   tables: ReadonlyMap<string, RawTable>,
 ): WorkspaceMembershipMetadata {
   const memberships = tables.get("workspace_memberships");
-  if (memberships === undefined) return { state: "missing" };
+  if (memberships === undefined) {
+    return { state: "missing", tablePresent: false, workspaceIds: new Set() };
+  }
+  const empty = (state: WorkspaceMembershipMetadataState): WorkspaceMembershipMetadata => ({
+    state,
+    tablePresent: true,
+    workspaceIds: new Set(),
+  });
   const actorLookup = sqliteColumnName(db, memberships.physicalName, "actor_id");
   const workspaceLookup = sqliteColumnName(db, memberships.physicalName, "workspace_id");
   const lookups = [actorLookup, workspaceLookup];
-  if (lookups.some((lookup) => lookup.kind === "invalid")) return { state: "invalid" };
-  if (lookups.some((lookup) => lookup.kind === "ambiguous")) return { state: "ambiguous" };
-  if (lookups.some((lookup) => lookup.kind === "missing")) return { state: "missing" };
+  if (lookups.some((lookup) => lookup.kind === "invalid")) return empty("invalid");
+  if (lookups.some((lookup) => lookup.kind === "ambiguous")) return empty("ambiguous");
+  if (lookups.some((lookup) => lookup.kind === "missing")) return empty("missing");
   // Una fila malformada impide probar a qué Actor pertenece la metadata. No
   // reconstruyas un mapa parcial con las filas restantes ni trates ese mapa
   // incompleto como una autoridad.
-  if (memberships.malformed > 0) return { state: "invalid" };
-  return { state: "found" };
+  if (memberships.malformed > 0) return empty("invalid");
+  const workspaceIds = new Set<string>();
+  for (const row of memberships.rows) {
+    const actorId = textValue(row.actor_id);
+    const workspaceId = textValue(row.workspace_id);
+    if (actorId === undefined || workspaceId === undefined) return empty("invalid");
+    workspaceIds.add(workspaceId);
+  }
+  return { state: "found", tablePresent: true, workspaceIds };
 }
 
 function workspaceIndexes(
@@ -737,6 +795,7 @@ function referencedWorkspaceIds(
   identity: RowIdentity,
   indexes: RowIndexes,
   multipleWorkspaces: boolean,
+  workspaceIds: ReadonlySet<string>,
 ): {
   candidates: Set<string>;
   missing: boolean;
@@ -754,8 +813,7 @@ function referencedWorkspaceIds(
   const direct = directWorkspace(table, row);
   if (direct.invalid) invalid = true;
   if (direct.workspaceId !== undefined) {
-    const workspaces = indexes.byTable.get("workspace");
-    if (!workspaces || !workspaces.has(direct.workspaceId)) missing = true;
+    if (!workspaceIds.has(direct.workspaceId)) missing = true;
     else candidates.add(direct.workspaceId);
   }
   const refs = REFERENCED_WORKSPACE_FIELDS[table] ?? [];
@@ -837,17 +895,23 @@ function referencedWorkspaceIds(
       unknownReferenceScope = true;
       continue;
     }
-    const workspaces = indexes.byTable.get("workspace");
-    if (!workspaces || !workspaces.has(workspace)) missing = true;
+    if (!workspaceIds.has(workspace)) missing = true;
     else candidates.add(workspace);
   }
   if (table === "issue_subscribers") {
     // El contrato actual de suscriptores también exige una membresía de Workspace.
     // No aceptes la fila en silencio si falta la tabla o la fila referenciada.
     const memberships = indexes.byTable.get("workspace_memberships");
+    const membershipState = indexes.workspaceMembershipMetadata.state;
     const actorId = textValue(row.actor_id);
     const actorWorkspaces = actorId ? indexes.actorWorkspaceIds.get(actorId) : undefined;
-    if (!memberships || !actorWorkspaces || actorWorkspaces.size === 0) {
+    if (
+      membershipState === "ambiguous" ||
+      membershipState === "invalid" ||
+      (membershipState === "missing" && indexes.workspaceMembershipMetadata.tablePresent)
+    ) {
+      ambiguous = true;
+    } else if (!memberships || !actorWorkspaces || actorWorkspaces.size === 0) {
       missing = true;
     } else if (direct.workspaceId !== undefined) {
       if (!actorWorkspaces.has(direct.workspaceId)) missing = true;
@@ -878,7 +942,12 @@ function referencedWorkspaceIds(
 }
 
 function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes): RowScope {
-  const info = referencedWorkspaceIds(identity, indexes, scope.multipleWorkspaces);
+  const info = referencedWorkspaceIds(
+    identity,
+    indexes,
+    scope.multipleWorkspaces,
+    scope.workspaceIds,
+  );
   if (info.invalid)
     return {
       workspaceId: undefined,
@@ -899,6 +968,15 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
   // La identidad del Actor es global. Se puede usar en más de un Workspace,
   // pero la importación seleccionada emite un único evento con alcance.
   const isGlobalActor = identity.table === "actors";
+  if (isGlobalActor && scope.workspaceId === undefined && scope.hasScopedMetadata) {
+    return {
+      workspaceId: undefined,
+      outOfScope: false,
+      orphaned: info.missing || info.explicitNull,
+      ambiguous: !info.missing && !info.explicitNull,
+      rejected: false,
+    };
+  }
   if (isGlobalActor && scope.workspaceId !== undefined) {
     if (info.missing || (scope.multipleWorkspaces && info.unknownReferenceScope)) {
       return {
@@ -911,7 +989,11 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
     }
     const memberships = indexes.actorWorkspaceIds.get(identity.sourceId);
     const membershipState = indexes.workspaceMembershipMetadata.state;
-    if (membershipState === "ambiguous" || membershipState === "invalid") {
+    if (
+      membershipState === "ambiguous" ||
+      membershipState === "invalid" ||
+      (membershipState === "missing" && indexes.workspaceMembershipMetadata.tablePresent)
+    ) {
       return {
         workspaceId: undefined,
         outOfScope: false,
@@ -1016,7 +1098,7 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
       };
     }
     return {
-      workspaceId: scope.hasWorkspaceTable ? candidate : undefined,
+      workspaceId: scope.workspaceIds.has(candidate) ? candidate : undefined,
       outOfScope: false,
       orphaned: info.missing,
       ambiguous: false,
@@ -1041,8 +1123,17 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
       rejected: false,
     };
   }
+  if (scope.workspaceId === undefined && scope.hasScopedMetadata) {
+    return {
+      workspaceId: undefined,
+      outOfScope: false,
+      orphaned: info.missing || info.explicitNull || info.unknownReferenceScope,
+      ambiguous: !info.missing && !info.explicitNull && !info.unknownReferenceScope,
+      rejected: false,
+    };
+  }
   return {
-    workspaceId: scope.hasWorkspaceTable ? scope.workspaceId : undefined,
+    workspaceId: scope.workspaceId,
     outOfScope: false,
     orphaned: false,
     ambiguous: false,
@@ -1243,12 +1334,12 @@ export function importSqliteHistory(
   options: SQLiteHistoryImportOptions,
 ): SQLiteHistoryImportResult {
   const batchSize = validateBatchSize(options.batchSize);
-  const scope = resolveScope(options.db, options.workspaceId);
   const reports = new Map<string, MutableTableReport>();
   const warnings: string[] = [];
   const tables = tableRows(options.db, reports);
   const byId = buildById(tables);
   const indexes = workspaceIndexes(options.db, tables, byId);
+  const scope = resolveScope(options.db, options.workspaceId, indexes.workspaceMembershipMetadata);
   const writer = new EventLogWriter({ rootDir: options.rootDir });
   // Solo una importación real puede reparar un tail truncado; el dry-run no
   // debe modificar el Log y falla cerrado si el stream no es legible.

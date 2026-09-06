@@ -857,6 +857,260 @@ describe("complete SQLite history import", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("infers the selected scope from Memberships when the Workspace table is absent", () => {
+    const db = new Database(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-inferred-scope-"));
+    try {
+      db.exec(`
+        CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT, type TEXT, created_at TEXT, updated_at TEXT);
+        CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT, created_at TEXT, updated_at TEXT);
+      `);
+      const date = "2025-01-01T00:00:00.000Z";
+      db.query(
+        "INSERT INTO actors VALUES ('a1', 'One', 'agent', ?1, ?1), ('a2', 'Two', 'agent', ?1, ?1), ('a3', 'Orphan', 'agent', ?1, ?1)",
+      ).run(date);
+      db.query(
+        "INSERT INTO workspace_memberships VALUES ('wm1', 'w1', 'a1', ?1, ?1), ('wm2', 'w2', 'a2', ?1, ?1)",
+      ).run(date);
+
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(dry).toMatchObject({ multipleWorkspaces: true, workspaceId: "w1", emitted: 2 });
+      expect(dry.tables.actors).toMatchObject({
+        scanned: 3,
+        emitted: 1,
+        outOfScope: 1,
+        orphaned: 1,
+      });
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(applied).toMatchObject({ multipleWorkspaces: true, workspaceId: "w1", written: 2 });
+      const actorEvents = readEventLog(root).filter((event) => event.aggregate === "actor");
+      expect(actorEvents.map((event) => event.eventId)).toEqual(["sqlite:actors:a1"]);
+      expect(actorEvents[0]?.workspaceId).toBe("w1");
+      expect(readEventLog(root).some((event) => event.eventId === "sqlite:actors:a2")).toBe(false);
+      expect(readEventLog(root).some((event) => event.eventId === "sqlite:actors:a3")).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("infers a singleton scope from one Membership and covers Activity plus snapshots", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-singleton-"));
+    try {
+      db.exec("DROP TABLE workspace");
+      const date = "2025-01-01T00:00:00.000Z";
+      db.query("INSERT INTO actors VALUES ('a2', 'Orphan', 'agent', ?1, ?1)").run(date);
+      db.query(
+        "INSERT INTO activity VALUES ('ac-orphan', 'w1', 'i1', 'a2', 'updated', '{}', ?1)",
+      ).run(date);
+
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        dryRun: true,
+        includeSnapshots: true,
+        includeActivity: true,
+      });
+      expect(dry).toMatchObject({ multipleWorkspaces: false, workspaceId: "w1" });
+      expect(dry.tables.actors).toMatchObject({ orphaned: 1, emitted: 1 });
+      expect(dry.tables.activity).toMatchObject({ orphaned: 1, emitted: 1 });
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        includeSnapshots: true,
+        includeActivity: true,
+      });
+      expect(applied.written).toBeGreaterThan(0);
+      const events = readEventLog(root);
+      expect(events.some((event) => event.eventId === "ac1")).toBe(true);
+      expect(events.some((event) => event.eventId === "ac-orphan")).toBe(false);
+      expect(events.some((event) => event.eventId === "sqlite:actors:a1")).toBe(true);
+      expect(events.some((event) => event.eventId === "sqlite:actors:a2")).toBe(false);
+      expect(events.every((event) => event.workspaceId === "w1")).toBe(true);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("infers scope from uppercase Membership columns without a Workspace table", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(
+      join(tmpdir(), "pb-sqlite-history-membership-uppercase-no-workspace-"),
+    );
+    try {
+      db.exec("DROP TABLE workspace");
+      db.exec(
+        'ALTER TABLE workspace_memberships RENAME COLUMN id TO "ID"; ALTER TABLE workspace_memberships RENAME COLUMN workspace_id TO "WORKSPACE_ID"; ALTER TABLE workspace_memberships RENAME COLUMN actor_id TO "ACTOR_ID";',
+      );
+      const result = importSqliteHistory({
+        db,
+        rootDir: root,
+        dryRun: true,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(result).toMatchObject({ multipleWorkspaces: false, workspaceId: "w1" });
+      expect(result.tables.actors).toMatchObject({ emitted: 1, orphaned: 0 });
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(
+        readEventLog(root).find((event) => event.eventId === "sqlite:actors:a1")?.workspaceId,
+      ).toBe("w1");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back when Membership metadata is ambiguous without a Workspace table", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(
+      join(tmpdir(), "pb-sqlite-history-membership-ambiguous-no-workspace-"),
+    );
+    try {
+      db.exec("DROP TABLE workspace");
+      db.exec(
+        'ALTER TABLE workspace_memberships ADD COLUMN "İD" TEXT; ALTER TABLE workspace_memberships ADD COLUMN "i̇d" TEXT;',
+      );
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        dryRun: true,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(dry).toMatchObject({ emitted: 0, written: 0 });
+      expect(dry.tables.actors).toMatchObject({ emitted: 0, ambiguous: 1 });
+      expect(dry.warnings).toContain("ambiguous:actors:a1");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(applied).toMatchObject({ emitted: 0, written: 0 });
+      expect(readEventLog(root)).toHaveLength(0);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back when Membership rows are invalid without a Workspace table", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-invalid-no-workspace-"));
+    try {
+      db.exec("DROP TABLE workspace");
+      db.query("UPDATE workspace_memberships SET workspace_id = NULL WHERE id = 'wm1'").run();
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        dryRun: true,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(dry).toMatchObject({ emitted: 0, written: 0 });
+      expect(dry.tables.actors).toMatchObject({ emitted: 0, ambiguous: 1 });
+      expect(dry.warnings).toContain("ambiguous:actors:a1");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(applied).toMatchObject({ emitted: 0, written: 0 });
+      expect(readEventLog(root)).toHaveLength(0);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the legacy singleton fallback only without scoped metadata", () => {
+    const db = legacySingletonDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-legacy-no-workspace-"));
+    try {
+      db.exec("DROP TABLE workspace");
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        dryRun: true,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(dry).toMatchObject({ multipleWorkspaces: false, emitted: 4, rejected: 0 });
+      expect(dry.workspaceId).toBeUndefined();
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(applied.written).toBe(4);
+      const events = readEventLog(root);
+      expect(
+        events.find((event) => event.eventId === "sqlite:actors:legacy-a1")?.workspaceId,
+      ).toBeUndefined();
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not use the legacy fallback when scoped columns remain without Workspace or Membership", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-scoped-columns-no-metadata-"));
+    try {
+      db.exec("DROP TABLE workspace");
+      db.exec("DROP TABLE workspace_memberships");
+      const result = importSqliteHistory({
+        db,
+        rootDir: root,
+        dryRun: true,
+        includeSnapshots: true,
+        includeActivity: false,
+      });
+      expect(result.emitted).toBe(0);
+      expect(result.tables.actors).toMatchObject({ emitted: 0, ambiguous: 1 });
+      expect(result.warnings).toContain("ambiguous:actors:a1");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 expect(SQLITE_HISTORY_TABLES.length).toBeGreaterThan(0);
