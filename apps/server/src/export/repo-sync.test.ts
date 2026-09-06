@@ -409,6 +409,148 @@ try {
     }
   });
 
+  it("syncIssue() directo verifica Documents antes de anexar y conserva la captura", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-direct-documents-"));
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const repo = createRepoSync(isolated.db, isolatedRoot, {
+        documentsArchivePath: archivePath,
+      });
+      expect(repo).not.toBeNull();
+      repo!.sync();
+      const documentsPath = join(isolatedRoot, ".prime-board", "meta", "documents.json");
+      const current = [{ id: "current", title: "current" }];
+      writeFileSync(documentsPath, `${JSON.stringify(current)}\n`);
+      archiveDocumentRows([{ id: "different", title: "different" }], archivePath, "replica");
+      const eventCountBefore = readEventLog({ rootDir: isolatedRoot }).length;
+
+      expect(() => repo!.syncIssue("missing-issue")).toThrow(/does not match/);
+      expect(() => repo!.sync()).toThrow(/does not match/);
+      expect(readEventLog({ rootDir: isolatedRoot })).toHaveLength(eventCountBefore);
+      expect(readFileSync(documentsPath, "utf8")).toBe(`${JSON.stringify(current)}\n`);
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("retira una captura consistente solo después de un sync exitoso", async () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-success-documents-"));
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const previousArchive = process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+    process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE = archivePath;
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const created = await gql(
+        isolated,
+        'mutation { issueCreate(input: { teamKey: "PB", title: "Retire after success" }) { success } }',
+      );
+      expect(created.errors).toBeUndefined();
+      const documentsPath = join(isolatedRoot, ".prime-board", "meta", "documents.json");
+      const capture = [{ id: "retired", title: "retire me" }];
+      writeFileSync(documentsPath, `${JSON.stringify(capture)}\n`);
+      archiveDocumentRows(capture, archivePath, "replica");
+
+      const result = await gql(
+        isolated,
+        'mutation { issueUpdate(id: "PB-1", input: { title: "updated after capture" }) { success } }',
+      );
+      expect(result.errors).toBeUndefined();
+      expect(existsSync(documentsPath)).toBe(false);
+      expect(readEventLog({ rootDir: isolatedRoot }).length).toBeGreaterThan(1);
+    } finally {
+      if (previousArchive === undefined) delete process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+      else process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE = previousArchive;
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("conserva una captura consistente cuando el resolver devuelve NOT_FOUND o UNAUTHORIZED", async () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-resolver-documents-"));
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const previousArchive = process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+    process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE = archivePath;
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const created = await gql(
+        isolated,
+        'mutation { issueCreate(input: { teamKey: "PB", title: "Protected issue" }) { success } }',
+      );
+      expect(created.errors).toBeUndefined();
+      const outsider = await gql(
+        isolated,
+        'mutation { actorCreate(input: { name: "documents-outsider", type: HUMAN }) { actor { id } } }',
+      );
+      expect(outsider.errors).toBeUndefined();
+      const outsiderId = outsider.data!.actorCreate.actor.id as string;
+      const key = await gql(
+        isolated,
+        `mutation($id: ID!) { apiKeyCreate(input: { actorId: $id, name: "documents-outsider-key" }) { key } }`,
+        { id: outsiderId },
+      );
+      expect(key.errors).toBeUndefined();
+
+      const documentsPath = join(isolatedRoot, ".prime-board", "meta", "documents.json");
+      const capture = [{ id: "retired", title: "keep me" }];
+      writeFileSync(documentsPath, `${JSON.stringify(capture)}\n`);
+      archiveDocumentRows(capture, archivePath, "replica");
+      const before = readFileSync(documentsPath, "utf8");
+      const eventCountBefore = readEventLog({ rootDir: isolatedRoot }).length;
+
+      const missing = await gql(
+        isolated,
+        'mutation { issueUpdate(id: "PB-404", input: { title: "must not persist" }) { success } }',
+      );
+      expect(missing.errors?.[0]?.extensions?.code).toBe("NOT_FOUND");
+      expect(readFileSync(documentsPath, "utf8")).toBe(before);
+      expect(readEventLog({ rootDir: isolatedRoot })).toHaveLength(eventCountBefore);
+
+      const denied = await gql(
+        isolated,
+        'mutation { issueUpdate(id: "PB-1", input: { title: "must not persist" }) { success } }',
+        {},
+        key.data!.apiKeyCreate.key as string,
+      );
+      expect(denied.errors?.[0]?.extensions?.code).toBe("UNAUTHORIZED");
+      expect(readFileSync(documentsPath, "utf8")).toBe(before);
+      expect(readEventLog({ rootDir: isolatedRoot })).toHaveLength(eventCountBefore);
+    } finally {
+      if (previousArchive === undefined) delete process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+      else process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE = previousArchive;
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("mantiene el lock desde preflight hasta abort y rechaza otra reserva concurrente", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-lease-lock-"));
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      execFileSync("git", ["-C", isolatedRoot, "init", "-q"]);
+      const repo = createRepoSync(isolated.db, isolatedRoot);
+      expect(repo).not.toBeNull();
+      const lease = repo!.preflight();
+      expect(lease).toBeDefined();
+      const indexPath = execFileSync(
+        "git",
+        ["-C", isolatedRoot, "rev-parse", "--git-path", "index"],
+        {
+          encoding: "utf8",
+        },
+      ).trim();
+      const lockPath = join(isolatedRoot, indexPath) + ".prime-board-event-log.lock";
+      expect(existsSync(lockPath)).toBe(true);
+      expect(() => repo!.preflight()).toThrow(/already holds the lock/);
+      lease!.abort();
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rechaza una mutación antes de persistir ante una captura vacía divergente", async () => {
     const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-divergent-documents-"));
     const archivePath = join(isolatedRoot, "backup", "documents.archive.json");

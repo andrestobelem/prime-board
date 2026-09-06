@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   closeSync,
   constants,
@@ -35,9 +36,20 @@ export interface CanonicalEventLog {
   recover?(): void;
 }
 
+export interface CanonicalEventLogLease {
+  /** Root cuyo lock del event log canónico posee este lease. */
+  readonly rootDir: string;
+  /** Ejecuta una operación síncrona mientras este lease está retenido. */
+  run<T>(operation: () => T): T;
+  /** Libera el lease. Se puede llamar más de una vez. */
+  release(): void;
+}
+
 export interface GitCommitInput {
   readonly rootDir: string;
   readonly eventIds: readonly string[];
+  /** Lease existente cuando el commit forma parte de una sección mayor. */
+  readonly lock?: CanonicalEventLogLease;
 }
 
 /** Seam para hacer durable el append antes de proyectarlo. */
@@ -126,10 +138,10 @@ const NOOP_PROJECTOR: IssueEventProjector = {
 
 const NOOP_COMMITTER: GitCommitter = () => undefined;
 
-// A RepoSync call can hold this lock while the committer acquires it again.
-// Keep that nested call in-process reentrant while the file lock coordinates
-// writers from separate server processes.
-const heldEventLogLocks = new Set<string>();
+// El lease puede abarcar un resolver GraphQL async. AsyncLocalStorage mantiene
+// reentrantes las llamadas síncronas anidadas (committer y tests existentes) sin
+// permitir que otro request del proceso tome prestado el lease por accidente.
+const canonicalLockContext = new AsyncLocalStorage<ReadonlySet<string>>();
 
 /**
  * Pipeline de una mutación SQLite: append durable, commit Git, projector y
@@ -191,11 +203,14 @@ export class IssueEventPipeline {
   }
 
   /** Hace commit solo de eventos nuevos después de que el append terminó. */
-  commit(eventIds: readonly string[] = [...this.pendingEventIds]): void {
+  commit(
+    eventIds: readonly string[] = [...this.pendingEventIds],
+    lock?: CanonicalEventLogLease,
+  ): void {
     this.recordPendingEventIds(eventIds);
     const pending = [...this.pendingEventIds];
     if (pending.length === 0) return;
-    this.commitGit({ rootDir: this.rootDir, eventIds: pending });
+    this.commitGit({ rootDir: this.rootDir, eventIds: pending, lock });
     const present = new Set(this.eventLog.read().map((event) => event.eventId));
     for (const eventId of pending) {
       if (present.has(eventId)) this.pendingEventIds.delete(eventId);
@@ -247,21 +262,26 @@ export class IssueEventPipeline {
  * trata como fixture de tests y no requiere commit.
  */
 export function createGitCommitter(rootDir: string): GitCommitter {
-  return ({ eventIds }) => {
+  return ({ eventIds, lock }) => {
     if (eventIds.length === 0 || !existsSync(join(rootDir, ".git"))) return;
-    withCanonicalEventLogLock(rootDir, () => {
+    if (lock && lock.rootDir !== rootDir) {
+      throw new Error("Canonical event-log lease belongs to a different repository");
+    }
+    const commit = () => {
       assertEventLogIndexIsClean(rootDir);
       const delta = validateEventLogDelta(rootDir, eventIds);
       if (delta.eventIds.size === 0) return;
       commitEventLogSnapshot(rootDir, delta.content);
-    });
+    };
+    if (lock) lock.run(commit);
+    else withCanonicalEventLogLock(rootDir, commit);
   };
 }
 
 /**
- * Commit the validated bytes through an alternate index. The real index and
- * the working tree stay untouched, so a concurrent append cannot be swept
- * into this commit by `git add`.
+ * Hace commit de bytes validados mediante un índice alternativo. El índice
+ * real y el working tree quedan intactos, así un append concurrente no entra
+ * en este commit mediante `git add`.
  */
 function commitEventLogSnapshot(rootDir: string, content: string): void {
   const originalIndexEntry = readEventLogIndexEntry(rootDir);
@@ -314,23 +334,58 @@ function commitEventLogSnapshot(rootDir: string, content: string): void {
  *
  * El lock vive junto al índice del worktree, no en el checkout, para que dos
  * worktrees del mismo repositorio no compartan accidentalmente el estado de
- * coordinación. Es reentrante dentro de un proceso porque `RepoSync` lo toma
- * alrededor de append+commit y el committer lo toma como defensa adicional.
+ * coordinación. Las llamadas anidadas usan AsyncLocalStorage o el lease
+ * explícito; otro request del proceso no puede tomarlo prestado.
+ */
+export function acquireCanonicalEventLogLease(rootDir: string): CanonicalEventLogLease {
+  if (!existsSync(join(rootDir, ".git"))) {
+    return {
+      rootDir,
+      run: <T>(operation: () => T): T => operation(),
+      release: () => undefined,
+    };
+  }
+
+  const indexPath = resolveGitIndexPath(rootDir);
+  const lockPath = `${indexPath}.prime-board-event-log.lock`;
+  const lockFd = acquireCanonicalEventLogLock(lockPath);
+  let released = false;
+  return {
+    rootDir,
+    run<T>(operation: () => T): T {
+      if (released) throw new Error("Canonical event-log lease is already released");
+      const current = canonicalLockContext.getStore();
+      if (current?.has(lockPath)) return operation();
+      const next = new Set(current ?? []);
+      next.add(lockPath);
+      return canonicalLockContext.run(next, operation);
+    },
+    release() {
+      if (released) return;
+      released = true;
+      closeSync(lockFd);
+      unlinkIfPresent(lockPath);
+    },
+  };
+}
+
+/**
+ * Serializa operaciones del Log entre writers del mismo repo.
+ *
+ * RepoSync usa `acquireCanonicalEventLogLease` cuando debe conservar el lock
+ * durante una mutación completa. Esta forma corta sigue siendo útil para una
+ * sección crítica síncrona y conserva la reentrada de sus callers existentes.
  */
 export function withCanonicalEventLogLock<T>(rootDir: string, operation: () => T): T {
   if (!existsSync(join(rootDir, ".git"))) return operation();
-
-  const lockPath = `${resolveGitIndexPath(rootDir)}.prime-board-event-log.lock`;
-  if (heldEventLogLocks.has(lockPath)) return operation();
-
-  const lockFd = acquireCanonicalEventLogLock(lockPath);
-  heldEventLogLocks.add(lockPath);
+  const indexPath = resolveGitIndexPath(rootDir);
+  const lockPath = `${indexPath}.prime-board-event-log.lock`;
+  if (canonicalLockContext.getStore()?.has(lockPath)) return operation();
+  const lease = acquireCanonicalEventLogLease(rootDir);
   try {
-    return operation();
+    return lease.run(operation);
   } finally {
-    heldEventLogLocks.delete(lockPath);
-    closeSync(lockFd);
-    unlinkIfPresent(lockPath);
+    lease.release();
   }
 }
 
@@ -363,8 +418,8 @@ function acquireCanonicalEventLogLock(lockPath: string): number {
       temporaryFd = undefined;
       let created = false;
       try {
-        // link(2) fails atomically when another writer owns the lock; rename
-        // would replace that writer's lock on POSIX.
+        // link(2) falla de forma atómica si otro writer posee el lock; rename
+        // reemplazaría el lock de ese writer en POSIX.
         linkSync(temporaryPath, lockPath);
         created = true;
       } catch (error) {
@@ -383,6 +438,14 @@ function acquireCanonicalEventLogLock(lockPath: string): number {
       // The owner can release the lock between link(2) and this read.
       continue;
     }
+    if (owner === process.pid) {
+      // La reserva síncrona no puede bloquear el event loop mientras otro
+      // resolver async conserva el lease. Fallar cerrado evita un deadlock;
+      // un follow-up debe agregar una cola async de reservas por proceso.
+      throw new Error(
+        "Cannot lock canonical event log: this process already holds the lock; reuse its lease",
+      );
+    }
     if (!isProcessAlive(owner) && tryReclaimCanonicalEventLogLock(lockPath, owner)) {
       continue;
     }
@@ -394,9 +457,9 @@ function acquireCanonicalEventLogLock(lockPath: string): number {
 }
 
 /**
- * Reclaims a stale lock without letting two reapers delete different
- * generations of the same path. The recovery marker is an atomic, exclusive
- * claim. It also blocks later reapers until the first one finishes.
+ * Recupera un lock obsoleto sin permitir que dos recolectores borren
+ * generaciones distintas de la misma ruta. El marker de recuperación es una
+ * reserva atómica y exclusiva. También bloquea a otros recolectores.
  */
 function tryReclaimCanonicalEventLogLock(lockPath: string, expectedOwner: number): boolean {
   const recoveryPath = `${lockPath}${CANONICAL_LOCK_RECOVERY_SUFFIX}`;
@@ -411,8 +474,8 @@ function tryReclaimCanonicalEventLogLock(lockPath: string, expectedOwner: number
       .toString(36)
       .slice(2)}`;
     try {
-      // The recovery marker prevents another reaper from changing the path
-      // between this identity check and the atomic rename.
+      // El marker de recuperación impide que otro recolector cambie la ruta
+      // entre esta comprobación de identidad y el rename atómico.
       renameSync(lockPath, stalePath);
     } catch (error) {
       if (isFileMissingError(error)) return true;
@@ -686,8 +749,8 @@ interface EventLogDelta {
 
 /**
  * Verify that the working-tree change is an append of only expected events.
- * The validated bytes are returned so a later Git operation cannot reread a
- * concurrently changed working tree and capture an unrelated append.
+ * Devuelve los bytes validados para que una operación Git posterior no lea
+ * de nuevo un working tree cambiado y capture un append ajeno.
  */
 function validateEventLogDelta(
   rootDir: string,

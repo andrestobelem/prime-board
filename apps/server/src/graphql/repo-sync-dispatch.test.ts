@@ -63,7 +63,9 @@ describe("withRepoSyncDispatch", () => {
     const order: string[] = [];
     const repo: RepoSync = {
       root: "/tmp/fake-repo",
-      preflight: () => order.push("preflight"),
+      preflight: () => {
+        order.push("preflight");
+      },
       sync: () => order.push("sync"),
       syncIssue: () => order.push("syncIssue"),
     };
@@ -77,6 +79,57 @@ describe("withRepoSyncDispatch", () => {
     wrapped.someMutation(null, {}, { repo: tracker });
 
     expect(order).toEqual(["preflight", "resolver", "sync"]);
+  });
+
+  it("completa el lease después del sync y lo aborta si el resolver falla", () => {
+    const order: string[] = [];
+    const lease = {
+      complete: () => order.push("complete"),
+      abort: () => order.push("abort"),
+    };
+    const repo: RepoSync = {
+      root: "/tmp/fake-repo",
+      preflight: () => {
+        order.push("preflight");
+        return lease;
+      },
+      sync: () => order.push("sync"),
+      syncIssue: () => order.push("syncIssue"),
+    };
+    const tracker = trackedRepoSync(repo);
+    const resolver = mock((_parent: unknown, _args: unknown, _context: unknown) => {
+      order.push("resolver");
+      throw new Error("not found");
+    });
+    const wrapped = withRepoSyncDispatch({ someMutation: resolver });
+
+    expect(() => wrapped.someMutation(null, {}, { repo: tracker })).toThrow("not found");
+    expect(order).toEqual(["preflight", "resolver", "abort"]);
+
+    const successOrder: string[] = [];
+    const successLease = {
+      complete: () => successOrder.push("complete"),
+      abort: () => successOrder.push("abort"),
+    };
+    const successRepo: RepoSync = {
+      root: "/tmp/fake-repo",
+      preflight: () => {
+        successOrder.push("preflight");
+        return successLease;
+      },
+      sync: () => successOrder.push("sync"),
+      syncIssue: () => successOrder.push("syncIssue"),
+    };
+    const successTracker = trackedRepoSync(successRepo);
+    const success = withRepoSyncDispatch({
+      someMutation: (_parent: unknown, _args: unknown, _context: unknown) => {
+        successOrder.push("resolver");
+        return { success: true };
+      },
+    });
+
+    success.someMutation(null, {}, { repo: successTracker });
+    expect(successOrder).toEqual(["preflight", "resolver", "sync", "complete"]);
   });
 
   it("no duplica el sync si el resolver ya sincronizó a mano (completo o dirigido)", () => {

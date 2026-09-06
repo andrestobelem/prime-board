@@ -20,10 +20,9 @@ export interface Context {
   events: WebhookEventSink;
   /**
    * Replica del board en el repo; null si PRIME_BOARD_REPO no está configurado.
-   * Es un TrackedRepoSync (AT-191): además de preflight(), sync() y
-   * syncIssue() (lo único que los resolvers necesitan saber), rastrea si se
-   * llamó a un sync, para que el despacho automático de Mutation sepa si hace
-   * falta un sync de respaldo.
+   * Es un TrackedRepoSync (AT-191): preflight() reserva el lock y sync() /
+   * syncIssue() dejan la reserva lista para completar cuando el resolver
+   * termina. El despacho rastrea si se llamó a un sync de respaldo.
    */
   repo: TrackedRepoSync | null;
   /** Persistencia async usada por los dominios ya migrados a PostgreSQL. */

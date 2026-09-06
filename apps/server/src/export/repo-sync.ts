@@ -13,20 +13,28 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { exportBoard, exportIssue, prepareRetiredDocuments } from "./exporter.ts";
+import {
+  exportBoard,
+  exportIssue,
+  prepareRetiredDocuments,
+  type RetiredDocumentsReservation,
+} from "./exporter.ts";
 import { appendActivityEvents } from "./activity-stream.ts";
 import {
+  acquireCanonicalEventLogLease,
   createGitCommitter,
   IssueEventPipeline,
-  withCanonicalEventLogLock,
+  type CanonicalEventLogLease,
   type IssueEventPipelineOptions,
 } from "./issue-event-pipeline.ts";
 
 export { appendActivityEvents, activityToDomainEvent } from "./activity-stream.ts";
 export {
+  acquireCanonicalEventLogLease,
   createGitCommitter,
   IssueEventPipeline,
   type CanonicalEventLog,
+  type CanonicalEventLogLease,
   type GitCommitInput,
   type GitCommitter,
   type IssueEventCheckpointStore,
@@ -37,23 +45,83 @@ export {
 export interface RepoSyncOptions extends IssueEventPipelineOptions {
   /** Pipeline precargado para tests y adapters de runtime. */
   readonly eventPipeline?: IssueEventPipeline;
+  /** Archivo externo usado para validar y retirar Documents históricos. */
+  readonly documentsArchivePath?: string;
+}
+
+/**
+ * Reserva que mantiene el lock del repo durante una mutación.
+ *
+ * `complete()` solo es válido después de que `sync()` o `syncIssue()` terminó
+ * el append, commit, proyección y export. `abort()` siempre conserva la
+ * captura. La interfaz permite que el despacho GraphQL cierre la reserva solo
+ * cuando el resolver también terminó con éxito.
+ */
+export interface RepoSyncLease {
+  complete(): void;
+  abort(): void;
 }
 
 export interface RepoSync {
-  /**
-   * Valida y retira capturas de Documents antes de persistir una mutación.
-   * Una divergencia falla antes de que cambien SQLite o el Log canónico.
-   */
-  preflight(): void;
+  /** Verifica y reserva Documents sin retirar su captura. */
+  preflight(): RepoSyncLease | void;
   /**
    * Regenera el repo completo (cambios de metadata, borrados).
-   * Los fallos se propagan al caller para que la mutación no informe éxito
-   * cuando el append, Git, projector o export falla.
+   * Los fallos se propagan al caller para que la mutación no informe éxito.
+   * Si se recibe una reserva, esta queda abierta para que el dispatcher la
+   * complete después del resolver.
    */
-  sync(): void;
+  sync(lease?: RepoSyncLease): void;
   /** Camino caliente: reescribe solo el issue afectado (AT-166). */
-  syncIssue(issueId: string): void;
+  syncIssue(issueId: string, lease?: RepoSyncLease): void;
   readonly root: string;
+}
+
+class RepoSyncLeaseImpl implements RepoSyncLease {
+  private ready = false;
+  private closed = false;
+
+  constructor(
+    readonly lock: CanonicalEventLogLease,
+    readonly retiredDocuments: RetiredDocumentsReservation,
+  ) {}
+
+  markReady(): void {
+    if (this.closed) throw new Error("Repo sync lease is already closed");
+    this.ready = true;
+  }
+
+  complete(): void {
+    if (this.closed) return;
+    if (!this.ready) {
+      this.abort();
+      throw new Error("Cannot complete a RepoSync lease before sync succeeds");
+    }
+    try {
+      // Conserva el lock canónico durante la comprobación final y unlink.
+      this.lock.run(() => this.retiredDocuments.retire());
+    } finally {
+      this.closed = true;
+      this.lock.release();
+    }
+  }
+
+  abort(): void {
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      this.retiredDocuments.release();
+    } finally {
+      this.lock.release();
+    }
+  }
+}
+
+function leaseFor(value: RepoSyncLease | undefined, root: string): RepoSyncLeaseImpl {
+  if (!(value instanceof RepoSyncLeaseImpl) || value.lock.rootDir !== root) {
+    throw new Error("Repo sync lease belongs to a different repository");
+  }
+  return value;
 }
 
 export function createRepoSync(
@@ -74,44 +142,69 @@ export function createRepoSync(
       rootDir: root,
       commitGit: options.commitGit ?? createGitCommitter(root),
     });
-  const sync = (exporter: () => void): void => {
-    // Append y commit forman una sola sección crítica. Si dos procesos
-    // anexan antes de tomar el lock, uno puede confundir el evento válido del
-    // otro con una mutación inesperada.
-    withCanonicalEventLogLock(root, () => {
+  const archivePath = () =>
+    options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+  const reserve = (): RepoSyncLeaseImpl => {
+    const lock = acquireCanonicalEventLogLease(root);
+    try {
+      const retiredDocuments = prepareRetiredDocuments(db, root, archivePath());
+      return new RepoSyncLeaseImpl(lock, retiredDocuments);
+    } catch (error) {
+      lock.release();
+      throw error;
+    }
+  };
+  const runSync = (
+    lease: RepoSyncLeaseImpl,
+    exporter: (documents: RetiredDocumentsReservation) => void,
+  ): void => {
+    lease.lock.run(() => {
       appendActivityEvents(db, root, eventPipeline.eventLog, (eventIds) =>
         eventPipeline.recordPendingEventIds(eventIds),
       );
-      eventPipeline.commit();
+      // Append, Git commit, projection and export are all inside the same
+      // lease. El committer predeterminado reutiliza el lease explícito en
+      // vez de intentar adquirir el lock de archivo otra vez.
+      eventPipeline.commit(undefined, lease.lock);
+      eventPipeline.project();
+      exporter(lease.retiredDocuments);
     });
-    // El evento queda durable antes de tocar cualquier proyección.
-    eventPipeline.project();
-    exporter();
+    lease.markReady();
+  };
+  const sync = (
+    exporter: (documents: RetiredDocumentsReservation) => void,
+    lease?: RepoSyncLease,
+  ): void => {
+    const current = lease ? leaseFor(lease, root) : reserve();
+    try {
+      runSync(current, exporter);
+      if (!lease) current.complete();
+    } catch (error) {
+      current.abort();
+      throw error;
+    }
   };
   return {
     root,
-    preflight() {
-      withCanonicalEventLogLock(root, () =>
-        prepareRetiredDocuments(db, root, process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE),
-      );
+    preflight: reserve,
+    sync(lease?: RepoSyncLease) {
+      sync((documents) => exportBoard(db, root, { retiredDocuments: documents }), lease);
     },
-    sync() {
-      sync(() => exportBoard(db, root));
-    },
-    syncIssue(issueId: string) {
+    syncIssue(issueId: string, lease?: RepoSyncLease) {
       // Un repo vacío o histórico sin metadata todavía no es una réplica
       // reconstruible: inicializarlo con el export completo deja también la
-      // identidad y el alcance del Workspace.
-      sync(() => {
+      // identidad y el alcance del Workspace. Una captura retirada pendiente
+      // también exige export completo para que el snapshot final sea coherente.
+      sync((documents) => {
         const metadata = join(root, ".prime-board", "meta", "export.json");
         const retiredDocuments = join(root, ".prime-board", "meta", "documents.json");
         if (
           !existsSync(metadata) ||
           existsSync(retiredDocuments) ||
-          !exportIssue(db, root, issueId)
+          !exportIssue(db, root, issueId, { retiredDocuments: documents })
         )
-          exportBoard(db, root);
-      });
+          exportBoard(db, root, { retiredDocuments: documents });
+      }, lease);
     },
   };
 }

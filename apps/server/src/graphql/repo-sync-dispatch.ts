@@ -1,20 +1,11 @@
 // Punto único de despacho de sync para las mutations (AT-191, candidato B del
 // architecture review de AT-181/AT-182..190).
 //
-// Antes de esto, 22 de las 26 mutations del schema llamaban a mano
-// `context.repo?.sync()` o `syncIssue(id)` al final de su resolver, repetido
-// en tres archivos (resolvers.ts, issue-resolvers.ts, project-resolvers.ts).
-// La garantía de ADR-0004 ("el repo queda al día") dependía de que nadie se
-// olvidara la línea — nada avisaba si una mutation nueva lo hacía.
-//
-// withRepoSyncDispatch envuelve el resolver map de Mutation: si el resolver
-// no sincronizó nada por su cuenta durante su ejecución, dispara un sync()
-// completo de respaldo al terminar — salvo que la mutation esté en la lista
-// explícita de exclusión (los secretos, que ADR-0004 dice que nunca van al
-// repo). Convive con las llamadas manuales sin duplicar trabajo: si el
-// resolver ya sincronizó (sync() o syncIssue(), completo o dirigido), el
-// despacho no hace nada más.
-import type { RepoSync } from "../export/repo-sync.ts";
+// El despacho reserva el lock del Repository Source antes del resolver. La
+// reserva vive hasta que terminan resolver, append, commit y export; solo
+// entonces retira una captura histórica de Documents. Si el resolver falla,
+// aborta la reserva y conserva la captura.
+import type { RepoSync, RepoSyncLease } from "../export/repo-sync.ts";
 
 /**
  * Mutations que a propósito nunca tocan el repo: secretos o estado personal
@@ -30,39 +21,72 @@ export const SYNC_EXCLUDED_MUTATIONS: ReadonlySet<string> = new Set([
 ]);
 
 export interface TrackedRepoSync extends RepoSync {
-  /** Valida fuentes de Documents antes de ejecutar la mutación. */
+  /** Verifica y reserva fuentes retiradas antes del resolver. */
   preflight(): void;
   /** ¿Se llamó a sync()/syncIssue() desde que se reseteó el rastreo? */
   wasCalled(): boolean;
+  /** Completa la reserva después de que resolver y sync terminaron bien. */
+  complete(): void;
+  /** Libera la reserva sin retirar una captura. */
+  abort(): void;
   /** Reinicia el rastreo — se llama antes de cada mutation top-level. */
   reset(): void;
 }
 
+function isRepoSyncLease(value: RepoSyncLease | void): value is RepoSyncLease {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof value.complete === "function" &&
+    typeof value.abort === "function",
+  );
+}
+
 /**
- * Envuelve un RepoSync para rastrear si se lo usó — delega en el repo real,
- * así que el comportamiento de escritura no cambia un bit. Se crea una
- * instancia por contexto de request (ver context.ts/server.ts): dos mutations
- * en el mismo documento no se pisan el rastreo porque GraphQL las ejecuta en
- * serie, no en paralelo (spec de Mutation).
+ * Envuelve un RepoSync para rastrear si se lo usó y conservar su reserva por
+ * request. Las implementaciones antiguas que devuelven `void` desde preflight
+ * siguen funcionando; el RepoSync real devuelve un lease.
  */
 export function trackedRepoSync(repo: RepoSync): TrackedRepoSync {
   let called = false;
+  let lease: RepoSyncLease | undefined;
+  const abortLease = () => {
+    const current = lease;
+    lease = undefined;
+    current?.abort();
+  };
   return {
     root: repo.root,
     preflight() {
-      repo.preflight();
+      abortLease();
+      const candidate = repo.preflight();
+      lease = isRepoSyncLease(candidate) ? candidate : undefined;
     },
     sync() {
       called = true;
-      repo.sync();
+      repo.sync(lease);
     },
     syncIssue(issueId: string) {
       called = true;
-      repo.syncIssue(issueId);
+      repo.syncIssue(issueId, lease);
     },
+    complete() {
+      const current = lease;
+      if (!current) return;
+      try {
+        current.complete();
+        lease = undefined;
+      } catch (error) {
+        lease = undefined;
+        current.abort();
+        throw error;
+      }
+    },
+    abort: abortLease,
     wasCalled: () => called,
     reset: () => {
       called = false;
+      abortLease();
     },
   };
 }
@@ -73,10 +97,10 @@ export function trackedRepoSync(repo: RepoSync): TrackedRepoSync {
 type AnyResolver = (...args: any[]) => unknown;
 
 /**
- * Envuelve cada resolver del Mutation map: antes de llamarlo resetea el
- * rastreo, y al terminar (sync u async) dispara un sync() de respaldo si el
- * resolver no sincronizó nada y la mutation no está excluida. El segundo
- * argumento posicional de un resolver GraphQL es siempre `context` (índice 2).
+ * Envuelve cada resolver del Mutation map. El resolver corre dentro de la
+ * reserva del Repository Source. Al terminar, dispara un sync() de respaldo
+ * si el resolver no sincronizó nada y completa la reserva. Un rechazo siempre
+ * aborta antes de devolver el error a GraphQL.
  */
 /**
  * Marca no enumerable en el objeto que devuelve withRepoSyncDispatch — así un
@@ -95,21 +119,47 @@ export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(muta
         return resolver(...callArgs);
       }
       tracker.reset();
-      // Documents retirados deben validarse antes de que el resolver escriba
-      // SQLite o emita Activity/eventos canónicos.
-      tracker.preflight();
+      try {
+        // La reserva se toma antes de que el resolver pueda escribir SQLite o
+        // emitir Activity/eventos canónicos.
+        tracker.preflight();
+      } catch (error) {
+        tracker.abort();
+        throw error;
+      }
       const finish = () => {
         if (!tracker.wasCalled()) tracker.sync();
+        tracker.complete();
       };
-      const result = resolver(...callArgs);
-      if (result && typeof (result as Promise<unknown>)?.then === "function") {
-        return (result as Promise<unknown>).then((value) => {
-          finish();
-          return value;
-        });
+      const fail = (error: unknown): never => {
+        tracker.abort();
+        throw error;
+      };
+      let result: unknown;
+      try {
+        result = resolver(...callArgs);
+      } catch (error) {
+        return fail(error);
       }
-      finish();
-      return result;
+      if (result && typeof (result as Promise<unknown>)?.then === "function") {
+        return (result as Promise<unknown>).then(
+          (value) => {
+            try {
+              finish();
+              return value;
+            } catch (error) {
+              return fail(error);
+            }
+          },
+          (error) => fail(error),
+        );
+      }
+      try {
+        finish();
+        return result;
+      } catch (error) {
+        return fail(error);
+      }
     };
   }
   Object.defineProperty(wrapped, DISPATCHED, { value: true, enumerable: false });
