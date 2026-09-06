@@ -29,6 +29,31 @@ function databaseWithMigrationsThrough(versionLimit: number): Database {
   return db;
 }
 
+function restoreLegacySavedViews(db: Database): void {
+  db.exec(`
+    CREATE TABLE saved_views (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('personal', 'team', 'workspace')),
+      team_id TEXT,
+      owner_id TEXT NOT NULL REFERENCES actors(id),
+      filter_json TEXT NOT NULL DEFAULT '{}',
+      order_by TEXT NOT NULL DEFAULT 'CREATED_DESC',
+      group_by TEXT NOT NULL DEFAULT 'state',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      workspace_id TEXT REFERENCES workspace(id) ON DELETE CASCADE,
+      CHECK ((scope = 'team' AND team_id IS NOT NULL) OR (scope != 'team' AND team_id IS NULL)),
+      FOREIGN KEY (workspace_id, team_id) REFERENCES teams(workspace_id, id)
+    );
+    CREATE UNIQUE INDEX idx_saved_views_workspace_id ON saved_views(workspace_id, id);
+    CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
+    CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
+  `);
+}
+
 function seedLegacyNotificationAndViewData(db: Database): void {
   bootstrap(db);
   const workspace = db.query("SELECT id FROM workspace LIMIT 1").get() as { id: string };
@@ -167,9 +192,11 @@ describe("colisión de migraciones SQLite", () => {
 
       expect(() => migrate(db)).toThrow(/idx_saved_views_project/);
       expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
-      expect(
-        db.query("SELECT name FROM sqlite_master WHERE name = '_prb390_saved_views'").get(),
-      ).toBeNull();
+      for (const table of ["_prb390_saved_views", "view_preferences", "view_subscriptions"]) {
+        expect(
+          db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1").get(table),
+        ).toBeNull();
+      }
       expect(db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get()).toEqual(
         beforeView,
       );
@@ -192,6 +219,182 @@ describe("colisión de migraciones SQLite", () => {
       expect(
         db.query("SELECT * FROM notification_preferences WHERE category = 'mentions'").get(),
       ).toEqual(beforeNotification);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza una base sin SavedView, conserva 0032 y permite reparar y reintentar", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.exec("DROP TABLE saved_views");
+      db.exec("PRAGMA foreign_keys = ON");
+
+      expect(() => migrate(db)).toThrow(/migration 0033.*saved_views is missing.*retry/i);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 32").get()).toEqual({
+        version: 32,
+      });
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+      expect(
+        db
+          .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'saved_views'")
+          .get(),
+      ).toBeNull();
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_preferences'",
+          )
+          .get(),
+      ).toEqual({ name: "notification_preferences" });
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+      restoreLegacySavedViews(db);
+      migrate(db);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      for (const table of ["saved_views", "view_preferences", "view_subscriptions"]) {
+        expect(
+          db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1").get(table),
+        ).toEqual({ name: table });
+      }
+
+      const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
+      migrate(db);
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(migrationCount);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza un esquema SavedView incompatible antes de reconstruirlo", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.exec("DROP TABLE saved_views");
+      db.exec("CREATE TABLE saved_views (id TEXT PRIMARY KEY)");
+      db.exec("PRAGMA foreign_keys = ON");
+
+      expect(() => migrate(db)).toThrow(
+        /migration 0033.*incompatible schema.*missing columns: name/i,
+      );
+      expect(db.query("SELECT version FROM _migrations WHERE version = 32").get()).toEqual({
+        version: 32,
+      });
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+      expect(
+        db.query("SELECT name FROM sqlite_master WHERE name = '_prb390_saved_views'").get(),
+      ).toBeNull();
+      expect(
+        db.query("SELECT count(*) AS count FROM pragma_table_info('saved_views')").get(),
+      ).toEqual({ count: 1 });
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza restricciones y filas inválidas sin escribir 0033 y permite reparar", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      db.exec(`
+        INSERT INTO workspace (id, name, url_key, created_at, updated_at)
+        VALUES
+          ('workspace-a', 'Workspace A', 'workspace-a', '2026-01-01', '2026-01-01'),
+          ('workspace-b', 'Workspace B', 'workspace-b', '2026-01-01', '2026-01-01');
+        INSERT INTO actors
+          (id, name, type, workspace_role, status, created_at, updated_at)
+        VALUES ('actor-a', 'Actor A', 'agent', 'admin', 'active', '2026-01-01', '2026-01-01');
+        INSERT INTO teams
+          (id, workspace_id, name, key, description, created_at, updated_at)
+        VALUES ('team-a', 'workspace-a', 'Team A', 'A', NULL, '2026-01-01', '2026-01-01');
+      `);
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.exec("DROP TABLE saved_views");
+      db.exec(`
+        CREATE TABLE saved_views (
+          id TEXT,
+          name TEXT,
+          scope TEXT,
+          team_id TEXT,
+          owner_id TEXT,
+          filter_json TEXT,
+          order_by TEXT,
+          group_by TEXT,
+          created_at TEXT,
+          updated_at TEXT,
+          archived_at TEXT,
+          columns_json TEXT,
+          workspace_id TEXT
+        );
+        INSERT INTO saved_views
+          (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+           created_at, updated_at, archived_at, columns_json, workspace_id)
+        VALUES
+          ('missing-refs', 'Missing refs', 'personal', NULL, 'actor-missing', '{}',
+           'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', 'workspace-missing'),
+          ('cross-workspace', 'Cross workspace', 'team', 'team-a', 'actor-a', '{}',
+           'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', 'workspace-b');
+      `);
+      db.exec("PRAGMA foreign_keys = ON");
+
+      const beforeSavedViews = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeMigrations = db.query("SELECT count(*) AS count FROM _migrations").get();
+      const runMigration = () => migrate(db);
+
+      expect(runMigration).toThrow(
+        /migration 0033.*missing foreign keys.*missing indexes.*owner_id references a missing Actor.*workspace_id references a missing Workspace.*team_id crosses the saved view Workspace/i,
+      );
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(beforeMigrations);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeSavedViews);
+      for (const table of ["_prb390_saved_views", "view_preferences", "view_subscriptions"]) {
+        expect(
+          db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1").get(table),
+        ).toBeNull();
+      }
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_preferences'",
+          )
+          .get(),
+      ).toEqual({ name: "notification_preferences" });
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+      expect(runMigration).toThrow(/migration 0033.*incompatible schema or data/i);
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(beforeMigrations);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeSavedViews);
+
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.exec("DROP TABLE saved_views");
+      restoreLegacySavedViews(db);
+      db.exec("PRAGMA foreign_keys = ON");
+      db.query(
+        `INSERT INTO saved_views
+         (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+          created_at, updated_at, archived_at, columns_json, workspace_id)
+         VALUES (?1, ?2, 'team', ?3, ?4, '{}', 'CREATED_DESC', 'state',
+                 '2026-01-01', '2026-01-01', NULL, '[]', ?5)`,
+      ).run("view-repaired", "Repaired", "team-a", "actor-a", "workspace-a");
+
+      migrate(db);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(db.query("SELECT id, workspace_id, team_id, owner_id FROM saved_views").get()).toEqual(
+        {
+          id: "view-repaired",
+          workspace_id: "workspace-a",
+          team_id: "team-a",
+          owner_id: "actor-a",
+        },
+      );
+      const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
+      migrate(db);
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(migrationCount);
     } finally {
       db.close();
     }

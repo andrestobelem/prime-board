@@ -285,6 +285,238 @@ function validateWorkspaceConstraints(db: Database): void {
   }
 }
 
+const SAVED_VIEWS_MIGRATION_COLUMNS = [
+  "id",
+  "name",
+  "scope",
+  "team_id",
+  "owner_id",
+  "filter_json",
+  "order_by",
+  "group_by",
+  "created_at",
+  "updated_at",
+  "archived_at",
+  "columns_json",
+  "workspace_id",
+];
+
+const SAVED_VIEWS_REQUIRED_FOREIGN_KEYS = [
+  { table: "actors", from: "owner_id", to: "id", onDelete: "NO ACTION" },
+  { table: "workspace", from: "workspace_id", to: "id", onDelete: "CASCADE" },
+  { table: "teams", from: "workspace_id", to: "workspace_id", onDelete: "NO ACTION" },
+  { table: "teams", from: "team_id", to: "id", onDelete: "NO ACTION" },
+];
+
+const VIEWS_MIGRATION_REQUIRED_INDEXES = [
+  { table: "saved_views", columns: ["workspace_id", "id"], unique: true },
+  { table: "saved_views", columns: ["scope", "team_id"], unique: false },
+  { table: "saved_views", columns: ["owner_id"], unique: false },
+  { table: "workspace_memberships", columns: ["workspace_id", "actor_id"], unique: true },
+  { table: "teams", columns: ["workspace_id", "id"], unique: true },
+  { table: "projects", columns: ["workspace_id", "id"], unique: true },
+  { table: "initiatives", columns: ["workspace_id", "id"], unique: true },
+];
+
+const VIEWS_MIGRATION_REQUIRED_TABLES = [
+  "actors",
+  "workspace",
+  "teams",
+  "projects",
+  "initiatives",
+  "workspace_memberships",
+];
+
+function hasTable(db: Database, table: string): boolean {
+  return Boolean(
+    db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1").get(table),
+  );
+}
+
+function hasIndexWithColumns(
+  db: Database,
+  table: string,
+  columns: string[],
+  unique: boolean,
+): boolean {
+  const columnJoins = columns
+    .map(
+      (_, position) => `
+        JOIN pragma_index_info(indexes.name) AS index_column_${position}
+          ON index_column_${position}.seqno = ${position}
+         AND index_column_${position}.name = ?${position + 3}`,
+    )
+    .join("\n");
+  const result = db
+    .query(
+      `SELECT 1
+       FROM pragma_index_list('${table}') AS indexes
+       ${columnJoins}
+       WHERE indexes."unique" = ?1
+         AND NOT EXISTS (
+           SELECT 1 FROM pragma_index_info(indexes.name) WHERE seqno >= ?2
+         )
+       LIMIT 1`,
+    )
+    .get(unique ? 1 : 0, columns.length, ...columns);
+  return Boolean(result);
+}
+
+function hasSavedViewsForeignKey(
+  db: Database,
+  foreignKey: { table: string; from: string; to: string; onDelete: string },
+): boolean {
+  return Boolean(
+    db
+      .query(
+        `SELECT 1
+         FROM pragma_foreign_key_list('saved_views')
+         WHERE "table" = ?1
+           AND "from" = ?2
+           AND "to" = ?3
+           AND on_delete = ?4
+         LIMIT 1`,
+      )
+      .get(foreignKey.table, foreignKey.from, foreignKey.to, foreignKey.onDelete),
+  );
+}
+
+function invalidSavedViewRows(db: Database): string[] {
+  const checks = [
+    {
+      description: "required columns contain NULL",
+      query: `SELECT 1 FROM saved_views
+              WHERE id IS NULL OR name IS NULL OR scope IS NULL OR owner_id IS NULL
+                 OR filter_json IS NULL OR order_by IS NULL OR group_by IS NULL
+                 OR created_at IS NULL OR updated_at IS NULL OR columns_json IS NULL
+              LIMIT 1`,
+    },
+    {
+      description: "id values are not unique",
+      query: "SELECT 1 FROM saved_views GROUP BY id HAVING count(*) > 1 LIMIT 1",
+    },
+    {
+      description: "scope and team_id are inconsistent",
+      query: `SELECT 1 FROM saved_views
+              WHERE scope NOT IN ('personal', 'team', 'workspace')
+                 OR (scope = 'team' AND team_id IS NULL)
+                 OR (scope IN ('personal', 'workspace') AND team_id IS NOT NULL)
+              LIMIT 1`,
+    },
+    {
+      description: "owner_id references a missing Actor",
+      query: `SELECT 1 FROM saved_views
+              WHERE NOT EXISTS (SELECT 1 FROM actors WHERE actors.id = saved_views.owner_id)
+              LIMIT 1`,
+    },
+    {
+      description: "workspace_id references a missing Workspace",
+      query: `SELECT 1 FROM saved_views
+              WHERE workspace_id IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM workspace WHERE workspace.id = saved_views.workspace_id
+                )
+              LIMIT 1`,
+    },
+    {
+      description: "team_id crosses the saved view Workspace",
+      query: `SELECT 1 FROM saved_views
+              WHERE team_id IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM teams
+                  WHERE teams.id = saved_views.team_id
+                    AND teams.workspace_id IS saved_views.workspace_id
+                )
+              LIMIT 1`,
+    },
+  ];
+  return checks
+    .filter((check) => Boolean(db.query(check.query).get()))
+    .map((check) => check.description);
+}
+
+function validateViewsMigrationPrerequisites(db: Database): void {
+  if (!hasTable(db, "saved_views")) {
+    throw new Error(
+      "Cannot apply migration 0033 (views_preferences): saved_views is missing. " +
+        "Restore a compatible saved_views schema or rebuild the database, then retry.",
+    );
+  }
+
+  const missingColumns = SAVED_VIEWS_MIGRATION_COLUMNS.filter(
+    (column) =>
+      !db.query("SELECT 1 FROM pragma_table_info('saved_views') WHERE name = ?1").get(column),
+  );
+  if (missingColumns.length > 0) {
+    throw new Error(
+      `Cannot apply migration 0033 (views_preferences): saved_views has an incompatible schema ` +
+        `(missing columns: ${missingColumns.join(", ")}). Restore a compatible saved_views ` +
+        "schema or rebuild the database, then retry.",
+    );
+  }
+
+  const missingTables = VIEWS_MIGRATION_REQUIRED_TABLES.filter((table) => !hasTable(db, table));
+  if (missingTables.length > 0) {
+    throw new Error(
+      `Cannot apply migration 0033 (views_preferences): required tables are missing ` +
+        `(${missingTables.join(", ")}). Restore a compatible saved_views schema and data ` +
+        "or rebuild the database, then retry.",
+    );
+  }
+
+  const missingForeignKeys = SAVED_VIEWS_REQUIRED_FOREIGN_KEYS.filter(
+    (foreignKey) => !hasSavedViewsForeignKey(db, foreignKey),
+  );
+  const missingIndexes = VIEWS_MIGRATION_REQUIRED_INDEXES.filter(
+    (index) => !hasIndexWithColumns(db, index.table, index.columns, index.unique),
+  );
+  const missingPrimaryKey = !db
+    .query("SELECT 1 FROM pragma_table_info('saved_views') WHERE name = 'id' AND pk = 1")
+    .get();
+  const invalidRows = invalidSavedViewRows(db);
+  const problems = [
+    ...(missingPrimaryKey ? ["saved_views.id is not a primary key"] : []),
+    ...(missingForeignKeys.length > 0
+      ? [
+          `missing foreign keys: ${missingForeignKeys
+            .map((foreignKey) => `${foreignKey.from} -> ${foreignKey.table}.${foreignKey.to}`)
+            .join(", ")}`,
+        ]
+      : []),
+    ...(missingIndexes.length > 0
+      ? [
+          `missing indexes: ${missingIndexes
+            .map(
+              (index) =>
+                `${index.unique ? "UNIQUE " : ""}${index.table}(${index.columns.join(", ")})`,
+            )
+            .join(", ")}`,
+        ]
+      : []),
+    ...(invalidRows.length > 0 ? [`invalid rows: ${invalidRows.join(", ")}`] : []),
+  ];
+  if (problems.length > 0) {
+    throw new Error(
+      `Cannot apply migration 0033 (views_preferences): saved_views has an incompatible ` +
+        `schema or data (${problems.join("; ")}). Restore a compatible saved_views schema ` +
+        "and data or rebuild the database, then retry.",
+    );
+  }
+}
+
+function validateViewsMigrationResult(db: Database): void {
+  try {
+    validateWorkspaceConstraints(db);
+  } catch (error) {
+    throw new Error(
+      "Cannot apply migration 0033 (views_preferences): rebuilt schema or data is incompatible. " +
+        `${error instanceof Error ? error.message : String(error)} Restore a compatible ` +
+        "saved_views schema and data or rebuild the database, then retry.",
+    );
+  }
+}
+
 export function migrate(db: Database, options: MigrationOptions = {}): void {
   db.exec(
     "CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
@@ -297,14 +529,10 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
   );
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue;
-    // PRB-390 solo se aplica después del esquema de SavedView. Algunas
-    // fixtures de migración de Documents omiten de forma intencional esa tabla.
-    if (
-      migration.version === 33 &&
-      !db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'saved_views'").get()
-    ) {
-      continue;
-    }
+    // PRB-390 reconstruye SavedViews y no puede continuar sin su esquema legacy.
+    // El preflight ocurre antes de desactivar las FKs o abrir la transacción para
+    // que una base incompatible falle sin escrituras parciales y pueda repararse.
+    if (migration.version === 33) validateViewsMigrationPrerequisites(db);
     // PRB-472 y PRB-390 reconstruyen el grafo de tablas para reemplazar FKs
     // simples por FKs compuestas. SQLite no permite cambiar foreign_keys dentro
     // de una transacción activa. El runner desactiva las comprobaciones solo
@@ -322,6 +550,9 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
           validateWorkspaceMigration(db, "after");
         }
         if (migration.version === 25) validateWorkspaceConstraints(db);
+        // 0033 valida el esquema reconstruido antes de registrar su marker, dentro
+        // de la misma transacción que copió los datos y cambió las tablas.
+        if (migration.version === 33) validateViewsMigrationResult(db);
         if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "after");
         db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
           migration.version,

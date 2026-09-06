@@ -35,8 +35,32 @@ function preRetirementDatabase(): Database {
     CREATE TABLE workspace_memberships (
       id TEXT PRIMARY KEY,
       workspace_id TEXT,
-      actor_id TEXT
+      actor_id TEXT,
+      UNIQUE (workspace_id, actor_id)
     );
+    CREATE TABLE saved_views (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('personal', 'team', 'workspace')),
+      team_id TEXT,
+      owner_id TEXT NOT NULL REFERENCES actors(id),
+      filter_json TEXT NOT NULL DEFAULT '{}',
+      order_by TEXT NOT NULL DEFAULT 'CREATED_DESC',
+      group_by TEXT NOT NULL DEFAULT 'state',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      workspace_id TEXT REFERENCES workspace(id) ON DELETE CASCADE,
+      CHECK ((scope = 'team' AND team_id IS NOT NULL) OR (scope != 'team' AND team_id IS NULL)),
+      FOREIGN KEY (workspace_id, team_id) REFERENCES teams(workspace_id, id)
+    );
+    CREATE UNIQUE INDEX idx_saved_views_workspace_id ON saved_views(workspace_id, id);
+    CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
+    CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
+    CREATE UNIQUE INDEX idx_teams_workspace_id ON teams(workspace_id, id);
+    CREATE UNIQUE INDEX idx_projects_workspace_id ON projects(workspace_id, id);
+    CREATE UNIQUE INDEX idx_initiatives_workspace_id ON initiatives(workspace_id, id);
     CREATE TABLE team_memberships (
       id TEXT PRIMARY KEY,
       team_id TEXT,
@@ -196,7 +220,7 @@ describe("openDatabase", () => {
       expect(
         db.query("SELECT name FROM sqlite_master WHERE name = 'retired_documents'").get(),
       ).toBeNull();
-      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 31 });
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 32 });
     } finally {
       db.close();
     }
