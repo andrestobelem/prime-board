@@ -68,6 +68,7 @@ describe("PostgreSQL board export", () => {
   test("archives legacy PostgreSQL Documents before projecting the board", async () => {
     const source = openDatabase(":memory:");
     const root = mkdtempSync(join(tmpdir(), "prime-board-postgres-documents-export-"));
+    const archiveRoot = mkdtempSync(join(tmpdir(), "prime-board-postgres-documents-archive-"));
     try {
       seedWorkspace(source, {
         name: "Export workspace",
@@ -84,7 +85,7 @@ describe("PostgreSQL board export", () => {
         INSERT INTO documents (id, title, content)
         VALUES ('legacy-doc', 'Legacy runbook', 'Do not lose this content');
       `);
-      const archivePath = join(root, "backup", "documents.archive.json");
+      const archivePath = join(archiveRoot, "documents.archive.json");
       const replicaSnapshot = join(root, ".prime-board", "meta", "documents.json");
       mkdirSync(join(root, ".prime-board", "meta"), { recursive: true });
       writeFileSync(replicaSnapshot, '[{"title":"Replica runbook","content":"old snapshot"}]\n');
@@ -112,6 +113,7 @@ describe("PostgreSQL board export", () => {
     } finally {
       source.close();
       rmSync(root, { recursive: true, force: true });
+      rmSync(archiveRoot, { recursive: true, force: true });
     }
   });
 

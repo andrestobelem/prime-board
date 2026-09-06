@@ -21,7 +21,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const DOCUMENT_ARCHIVE_FORMAT = "prime-board.documents-archive" as const;
 export const DOCUMENT_ARCHIVE_VERSION = 1 as const;
@@ -121,6 +121,42 @@ function isMissingPath(error: unknown): boolean {
   return errorCode(error) === "ENOENT";
 }
 
+function nearestExistingPath(path: string): string {
+  let candidate = resolve(path);
+  while (true) {
+    try {
+      lstatSync(candidate);
+      return candidate;
+    } catch (error) {
+      if (!isMissingPath(error)) throw error;
+      const parent = dirname(candidate);
+      if (parent === candidate) return candidate;
+      candidate = parent;
+    }
+  }
+}
+
+function assertNoSymlinkComponents(path: string, boundary?: string): void {
+  const absolute = resolve(path);
+  const candidateBoundary = boundary ? resolve(boundary) : nearestExistingPath(absolute);
+  const start = pathInside(candidateBoundary, absolute)
+    ? candidateBoundary
+    : nearestExistingPath(absolute);
+  const components = relative(start, absolute).split(sep).filter(Boolean);
+  let current = start;
+  for (const component of ["", ...components]) {
+    if (component) current = join(current, component);
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        throw new Error(`Path must not contain a symbolic link: ${current}`);
+      }
+    } catch (error) {
+      if (isMissingPath(error)) return;
+      throw error;
+    }
+  }
+}
+
 function existingPath(path: string): string {
   let candidate = path;
   while (!existsSync(candidate)) {
@@ -167,6 +203,9 @@ function validateArchiveDestination(outputPath: string, repoRoot?: string): stri
       throw new Error("Document archive must be outside the repository");
     }
   }
+  // La comprobación de realpath no basta: un padre symlinked puede apuntar fuera
+  // del repositorio y redirigir la escritura o el rename posterior.
+  assertNoSymlinkComponents(dirname(path), repository);
   let outputStat: ReturnType<typeof lstatSync> | null = null;
   try {
     outputStat = lstatSync(path);
@@ -370,9 +409,10 @@ export function archiveDocumentRows(
 }
 
 /** Valida una captura JSON de la réplica sin modificarla. */
-export function readDocumentSnapshot(path: string): DocumentArchiveRecord[] {
+export function readDocumentSnapshot(path: string, boundary?: string): DocumentArchiveRecord[] {
   let value: unknown;
   try {
+    assertNoSymlinkComponents(path, boundary);
     const stat = lstatSync(path);
     if (stat.isSymbolicLink()) {
       throw new Error("Documents snapshot must not be a symbolic link");
@@ -406,11 +446,29 @@ export function readDocumentSnapshot(path: string): DocumentArchiveRecord[] {
 }
 
 /** Archiva el snapshot histórico sin borrarlo del repositorio. */
+export function assertSafeDocumentSnapshotPath(path: string, boundary?: string): void {
+  assertNoSymlinkComponents(path, boundary);
+}
+
+export function removeDocumentSnapshot(path: string, boundary?: string): void {
+  assertNoSymlinkComponents(path, boundary);
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("Documents snapshot must be a regular file");
+  }
+  unlinkSync(path);
+}
+
 export function archiveDocumentSnapshot(
   snapshotPath: string,
   outputPath: string,
   source: DocumentArchiveSource | string = "replica",
   repoRoot?: string,
 ): DocumentArchiveResult {
-  return archiveDocumentRows(readDocumentSnapshot(snapshotPath), outputPath, source, repoRoot);
+  return archiveDocumentRows(
+    readDocumentSnapshot(snapshotPath, repoRoot),
+    outputPath,
+    source,
+    repoRoot,
+  );
 }

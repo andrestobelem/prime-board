@@ -12,7 +12,12 @@ import { translateActivityRefs, type RefTable } from "../domain/activity-schema.
 import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
 import { getWorkspace } from "../domain/workspaces.ts";
 import { createReplicaMetadata, getReplicaWorkspaceId } from "./replica-metadata.ts";
-import { archiveDocumentRows, archiveDocumentSnapshot } from "./documents-archive.ts";
+import {
+  archiveDocumentRows,
+  archiveDocumentSnapshot,
+  assertSafeDocumentSnapshotPath,
+  removeDocumentSnapshot,
+} from "./documents-archive.ts";
 
 /** JSON con claves ordenadas: sin esto, el diff cambia por reordenamientos casuales. */
 /**
@@ -494,6 +499,7 @@ export function exportBoard(
   const archivePath = options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
   archiveRetiredSqliteDocuments(db, archivePath, rootDir);
   const documentsSnapshot = join(base, "meta", "documents.json");
+  assertSafeDocumentSnapshotPath(documentsSnapshot, rootDir);
   if (existsSync(documentsSnapshot)) {
     const trimmedArchivePath = archivePath?.trim();
     if (!trimmedArchivePath) {
@@ -504,7 +510,7 @@ export function exportBoard(
     // The source is removed only after the external archive is written and
     // verified. Without this explicit option, export and RepoSync fail closed.
     archiveDocumentSnapshot(documentsSnapshot, trimmedArchivePath, "replica", rootDir);
-    unlinkSync(documentsSnapshot);
+    removeDocumentSnapshot(documentsSnapshot, rootDir);
   }
   // No se borra todo de entrada: se escribe lo que cambió y al final se barren
   // los archivos que ya no corresponden (AT-166). Así un sync completo con datos

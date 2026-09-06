@@ -3,10 +3,12 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -292,6 +294,35 @@ describe("rebuildFromRepo", () => {
       fresh.close();
       rmSync(snapshot, { recursive: true, force: true });
       rmSync(archive, { force: true });
+    }
+  });
+
+  it("rechaza padres symlinked antes de borrar el snapshot externo", () => {
+    const root = mkdtempSync(join(tmpdir(), "pb-retired-documents-parent-link-"));
+    const external = mkdtempSync(join(tmpdir(), "pb-retired-documents-external-"));
+    const archiveRoot = mkdtempSync(join(tmpdir(), "pb-retired-documents-archive-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, root);
+      const metaPath = join(root, ".prime-board", "meta");
+      const externalMeta = join(external, "meta");
+      const externalSnapshot = join(externalMeta, "documents.json");
+      rmSync(metaPath, { recursive: true, force: true });
+      mkdirSync(externalMeta, { recursive: true });
+      writeFileSync(externalSnapshot, '[{"title":"outside"}]\n');
+      symlinkSync(externalMeta, metaPath, "dir");
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+
+      expect(() =>
+        preflightRetiredDocuments(root, join(archiveRoot, "documents.archive.json")),
+      ).toThrow(/symbolic link/);
+      expect(existsSync(externalSnapshot)).toBe(true);
+    } finally {
+      fresh.close();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(external, { recursive: true, force: true });
+      rmSync(archiveRoot, { recursive: true, force: true });
     }
   });
 

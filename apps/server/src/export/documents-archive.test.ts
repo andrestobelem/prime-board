@@ -110,6 +110,32 @@ describe("retired Documents archive", () => {
     }
   });
 
+  it("rechaza capturas cuyo directorio padre es un enlace simbólico", () => {
+    const root = tempDirectory();
+    try {
+      const repositoryRoot = join(root, "repository");
+      const externalBoard = join(root, "external-board");
+      const snapshot = join(repositoryRoot, ".prime-board", "meta", "documents.json");
+      const externalSnapshot = join(externalBoard, "meta", "documents.json");
+      mkdirSync(join(repositoryRoot, ".prime-board"), { recursive: true });
+      mkdirSync(join(externalBoard, "meta"), { recursive: true });
+      writeFileSync(externalSnapshot, '[{"title":"SECRET"}]\n');
+      symlinkSync(join(externalBoard, "meta"), join(repositoryRoot, ".prime-board", "meta"), "dir");
+
+      expect(() =>
+        archiveDocumentSnapshot(
+          snapshot,
+          join(root, "documents.archive.json"),
+          "replica",
+          repositoryRoot,
+        ),
+      ).toThrow(/symbolic link/);
+      expect(readFileSync(externalSnapshot, "utf8")).toContain("SECRET");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rechaza un directorio padre symlinked y archivos de archivo no privados", () => {
     const root = tempDirectory();
     try {

@@ -14,6 +14,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { exportBoard, exportIssue } from "./exporter.ts";
+import { assertSafeDocumentSnapshotPath } from "./documents-archive.ts";
 import { appendActivityEvents } from "./activity-stream.ts";
 import {
   createGitCommitter,
@@ -95,6 +96,7 @@ export function createRepoSync(
       sync(() => {
         const metadata = join(root, ".prime-board", "meta", "export.json");
         const retiredDocuments = join(root, ".prime-board", "meta", "documents.json");
+        assertSafeDocumentSnapshotPath(retiredDocuments, root);
         if (
           !existsSync(metadata) ||
           existsSync(retiredDocuments) ||

@@ -5,7 +5,7 @@
 // (API keys y secrets de webhooks), así que se preservan re-vinculándolas
 // por nombre de actor — de lo contrario un rebuild dejaría a todos afuera.
 import type { Database } from "bun:sqlite";
-import { readFileSync, readdirSync, existsSync, unlinkSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_URL_KEY } from "../db/defaults.ts";
@@ -14,7 +14,11 @@ import { translateActivityRefs, type RefTable } from "../domain/activity-schema.
 import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
 import { readReplicaMetadata, type ReadReplicaMetadata } from "./replica-metadata.ts";
 import { readEventLog } from "./event-log.ts";
-import { archiveDocumentSnapshot } from "./documents-archive.ts";
+import {
+  archiveDocumentSnapshot,
+  assertSafeDocumentSnapshotPath,
+  removeDocumentSnapshot,
+} from "./documents-archive.ts";
 import { normalizeAvatarUrl } from "../domain/actors.ts";
 
 export interface RebuildResult {
@@ -41,6 +45,7 @@ const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
  */
 export function preflightRetiredDocuments(rootDir: string, documentsArchivePath?: string): void {
   const snapshotPath = join(rootDir, ".prime-board", "meta", "documents.json");
+  assertSafeDocumentSnapshotPath(snapshotPath, rootDir);
   if (!existsSync(snapshotPath)) return;
   const configured = documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
   const trimmed = configured?.trim();
@@ -52,7 +57,7 @@ export function preflightRetiredDocuments(rootDir: string, documentsArchivePath?
   // This is an explicit operator opt-in. Remove the source only after the
   // external bundle has been written and parsed back with its checksum.
   archiveDocumentSnapshot(snapshotPath, trimmed, "replica", rootDir);
-  unlinkSync(snapshotPath);
+  removeDocumentSnapshot(snapshotPath, rootDir);
 }
 
 /**

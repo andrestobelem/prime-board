@@ -23,12 +23,6 @@ const { values } = parseArgs({
 const usage =
   "Usage: bun run --cwd apps/server archive:documents --out <external-file> [--from-repo <repo>]";
 
-function repositoryRoot(): string {
-  const git = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"]);
-  const path = git.stdout.toString().trim();
-  return git.exitCode === 0 && path ? path : process.cwd();
-}
-
 if (values.help) {
   console.log(usage);
   process.exit(0);
@@ -48,7 +42,7 @@ if (values["from-repo"]) {
 }
 
 const config = loadConfig();
-const currentRepositoryRoot = repositoryRoot();
+const configuredRepositoryRoot = config.repoRoot ?? undefined;
 if (config.persistenceBackend === "postgres") {
   if (!config.postgresUrl) {
     throw new Error("PRIME_BOARD_POSTGRES_URL is required when PRIME_BOARD_PERSISTENCE=postgres");
@@ -68,7 +62,7 @@ if (config.persistenceBackend === "postgres") {
       );
     }
     const rows = await sql.unsafe<Record<string, unknown>[]>("SELECT * FROM documents ORDER BY id");
-    const result = archiveDocumentRows(rows, values.out, "postgres", currentRepositoryRoot);
+    const result = archiveDocumentRows(rows, values.out, "postgres", configuredRepositoryRoot);
     console.log(
       `Archived ${result.sourceCount} retired Documents from PostgreSQL to ${result.path}`,
     );
@@ -92,7 +86,7 @@ try {
   const rows = db.query("SELECT * FROM documents ORDER BY id").all() as Array<
     Record<string, unknown>
   >;
-  const result = archiveDocumentRows(rows, values.out, "sqlite", currentRepositoryRoot);
+  const result = archiveDocumentRows(rows, values.out, "sqlite", configuredRepositoryRoot);
   console.log(`Archived ${result.sourceCount} retired Documents from SQLite to ${result.path}`);
   console.log(`Manifest: count=${result.count} sha256=${result.sha256}`);
 } finally {
