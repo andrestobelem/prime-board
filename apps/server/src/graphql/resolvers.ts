@@ -538,6 +538,8 @@ export const resolvers = {
   },
 
   Team: {
+    workspaceId: (_team: unknown, _args: unknown, context: Context) =>
+      context.workspace.workspaceId,
     states: async (team: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
@@ -648,6 +650,11 @@ export const resolvers = {
           )
         : [];
     },
+  },
+
+  Label: {
+    workspaceId: (_label: unknown, _args: unknown, context: Context) =>
+      context.workspace.workspaceId,
   },
 
   TeamMembership: {
@@ -884,6 +891,8 @@ export const resolvers = {
   },
 
   ApiKey: {
+    workspaceId: (_apiKey: unknown, _args: unknown, context: Context) =>
+      context.workspace.workspaceId,
     actor: async (apiKey: { actorId: string }, _args: unknown, context: Context) => {
       if (context.persistence) {
         const actor = await getPostgresActor(context.persistence, apiKey.actorId);
@@ -894,6 +903,8 @@ export const resolvers = {
   },
 
   Actor: {
+    workspaceId: (_actor: unknown, _args: unknown, context: Context) =>
+      context.workspace.workspaceId,
     apiKeys: async (actor: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
       if (!isWorkspaceAdmin(viewer) && viewer.id !== actor.id) return [];
@@ -932,6 +943,8 @@ export const resolvers = {
   },
 
   ActorInvitation: {
+    workspaceId: (_invitation: unknown, _args: unknown, context: Context) =>
+      context.workspace.workspaceId,
     invitedBy: async (invitation: { invitedById: string }, _args: unknown, context: Context) => {
       if (context.persistence) {
         const actor = await getPostgresActor(context.persistence, invitation.invitedById);

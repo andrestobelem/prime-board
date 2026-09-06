@@ -44,6 +44,7 @@ export const typeDefs = /* GraphQL */ `
     Absolute HTTP(S) URL for the profile avatar.
     """
     avatarUrl: String
+    workspaceId: ID!
     type: ActorType!
     workspaceRole: ActorWorkspaceRole!
     status: ActorStatus!
@@ -104,6 +105,7 @@ export const typeDefs = /* GraphQL */ `
     description: String
     visibility: TeamVisibility!
     accessPolicy: TeamAccessPolicy!
+    workspaceId: ID!
     states: [WorkflowState!]!
     """
     The default destination for issues created without an explicit state. Editable through teamUpdate.
@@ -121,6 +123,7 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     name: String!
     color: String!
+    workspaceId: ID!
     """
     NULL for Workspace labels.
     """
@@ -168,6 +171,7 @@ export const typeDefs = /* GraphQL */ `
     revokedAt: DateTime
     expiresAt: DateTime
     rotatedFromId: ID
+    workspaceId: ID!
     scopes: [ApiKeyScope!]!
     """
     Team IDs allowed by this key; empty means every Team.
@@ -181,6 +185,7 @@ export const typeDefs = /* GraphQL */ `
     name: String
     type: ActorType
     status: ActorInvitationStatus!
+    workspaceId: ID!
     invitedBy: Actor!
     actor: Actor
     actorId: ID
