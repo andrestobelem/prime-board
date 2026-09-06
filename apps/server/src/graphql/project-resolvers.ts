@@ -10,7 +10,6 @@ import {
   createPostgresProjectDependency,
   deletePostgresProjectDependency,
   getPostgresProject,
-  getPostgresProjectDependency,
   listPostgresProjectTeamIds,
   listPostgresProjectMemberIds,
   listPostgresProjectDependencyRows,
@@ -47,7 +46,6 @@ import {
   listProjectTeamIds,
   listProjectMemberIds,
   listProjectDependencyRows,
-  getProjectDependency,
   createProjectDependency,
   deleteProjectDependency,
   mapProject,
@@ -88,7 +86,6 @@ import {
   assertCanManageProject,
   assertCanManageProjectTeams,
   apiKeyTeamsWithinLimit,
-  assertApiKeyTeams,
   canAccessTeam,
   accessibleTeamIds,
 } from "../auth/permissions.ts";
@@ -116,11 +113,6 @@ function projectAllowed(context: Context, projectId: string): boolean {
     (directMember || visibleByTeams || viewer.workspace_role === "admin") &&
     apiKeyTeamsWithinLimit(context.auth, teamIds)
   );
-}
-
-function assertProjectDependencyKeyLimit(context: Context, teamIds: readonly string[]): void {
-  // A Team-limited key cannot authorize a planning resource with no Team scope.
-  assertApiKeyTeams(context, teamIds.length > 0 ? teamIds : ["__workspace__"]);
 }
 
 async function postgresProjectTeamsAllowed(context: Context, projectId: string): Promise<boolean> {
@@ -731,20 +723,12 @@ export const projectResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const source = await getPostgresProject(context.persistence, args.input.projectId);
-        if (!source) throw apiError("NOT_FOUND", "Project not found");
-        const target = await getPostgresProject(context.persistence, args.input.dependsOnProjectId);
-        if (!target) throw apiError("NOT_FOUND", "Dependency project not found");
-        const sourceTeams = await listPostgresProjectTeamIds(context.persistence, source.id);
-        const targetTeams = await listPostgresProjectTeamIds(context.persistence, target.id);
-        await assertPostgresProjectKeyLimit(context, [
-          ...new Set([...sourceTeams, ...targetTeams]),
-        ]);
         const dependency = await createPostgresProjectDependency(
           context.persistence,
           args.input,
           context.workspace.workspaceId,
           viewer,
+          context.auth,
         );
         return {
           success: true,
@@ -757,20 +741,12 @@ export const projectResolvers = {
           },
         };
       }
-      const source = requireProject(context, args.input.projectId);
-      const target = requireProject(context, args.input.dependsOnProjectId);
-      assertCanManageProject(context.db, viewer, source.id);
-      assertCanManageProject(context.db, viewer, target.id);
-      assertProjectDependencyKeyLimit(context, [
-        ...new Set([
-          ...listProjectTeamIds(context.db, source.id, context.workspace.workspaceId),
-          ...listProjectTeamIds(context.db, target.id, context.workspace.workspaceId),
-        ]),
-      ]);
       const dependency = createProjectDependency(
         context.db,
         args.input,
         context.workspace.workspaceId,
+        viewer,
+        context.auth,
       );
       return {
         success: true,
@@ -786,48 +762,27 @@ export const projectResolvers = {
     projectDependencyDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const dependency = await getPostgresProjectDependency(
-          context.persistence,
-          args.id,
-          context.workspace.workspaceId,
-        );
-        if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
-        const source = await getPostgresProject(context.persistence, dependency.project_id);
-        const target = await getPostgresProject(
-          context.persistence,
-          dependency.depends_on_project_id,
-        );
-        if (!source || !target) throw apiError("NOT_FOUND", "Project dependency not found");
-        const sourceTeams = await listPostgresProjectTeamIds(context.persistence, source.id);
-        const targetTeams = await listPostgresProjectTeamIds(context.persistence, target.id);
-        await assertPostgresProjectKeyLimit(context, [
-          ...new Set([...sourceTeams, ...targetTeams]),
-        ]);
         return {
           success: await deletePostgresProjectDependency(
             context.persistence,
             args.id,
             context.workspace.workspaceId,
             viewer,
+            context.auth,
           ),
         };
       }
-      const dependency = getProjectDependency(context.db, args.id, context.workspace.workspaceId);
-      if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
-      const source = requireProject(context, dependency.project_id);
-      const target = requireProject(context, dependency.depends_on_project_id);
-      assertCanManageProject(context.db, viewer, source.id);
-      assertCanManageProject(context.db, viewer, target.id);
-      assertProjectDependencyKeyLimit(context, [
-        ...new Set([
-          ...listProjectTeamIds(context.db, source.id, context.workspace.workspaceId),
-          ...listProjectTeamIds(context.db, target.id, context.workspace.workspaceId),
-        ]),
-      ]);
       return {
-        success: deleteProjectDependency(context.db, args.id, context.workspace.workspaceId),
+        success: deleteProjectDependency(
+          context.db,
+          args.id,
+          context.workspace.workspaceId,
+          viewer,
+          context.auth,
+        ),
       };
     },
+
     projectUpdateCreate: async (
       _parent: unknown,
       args: {

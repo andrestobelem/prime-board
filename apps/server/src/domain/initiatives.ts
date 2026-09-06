@@ -6,7 +6,7 @@ import { getProject, listProjectTeamIds } from "./projects.ts";
 import { getTeam } from "./teams.ts";
 import { parseDateTime } from "./datetime.ts";
 import { isTeamMember } from "./team-memberships.ts";
-import type { ActorRow } from "../auth/viewer.ts";
+import { readLocalAuthScope, type ActorRow, type AuthScopeContext } from "../auth/viewer.ts";
 import {
   assertCanManageIssue,
   assertCanManageProject,
@@ -562,6 +562,17 @@ export function listInitiativeUpdateRows(
   ) as InitiativeUpdateRow[];
 }
 
+function assertInitiativeStatusTeamLimit(
+  auth: AuthScopeContext | null | undefined,
+  teamIds: readonly string[],
+): void {
+  if (!auth?.teamIds) return;
+  const allowed = new Set(auth.teamIds);
+  if (teamIds.length === 0 || teamIds.some((teamId) => !allowed.has(teamId))) {
+    throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+  }
+}
+
 export function createInitiativeUpdate(
   db: Database,
   initiativeId: string,
@@ -569,21 +580,31 @@ export function createInitiativeUpdate(
   input: { body: string; health?: string | null },
   workspaceId?: string,
   viewerRef?: ViewerRef,
+  auth?: AuthScopeContext | null,
 ): InitiativeUpdateRow {
-  const initiative = getInitiative(db, initiativeId, workspaceId);
-  if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
-  if (viewerRef !== undefined) assertCanMutate(db, initiative, viewerRef, workspaceId);
-  const body = input.body.trim();
-  if (!body) throw apiError("VALIDATION_FAILED", "Initiative update body cannot be empty");
-  const health = input.health ?? "on_track";
-  if (!["on_track", "at_risk", "off_track"].includes(health))
-    throw apiError("VALIDATION_FAILED", `Invalid initiative update health: ${health}`);
-  const id = newId();
-  const timestamp = now();
-  db.query(
-    "INSERT INTO initiative_updates (id, initiative_id, author_id, health, body, created_at, updated_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
-  ).run(id, initiativeId, authorId, health, body, timestamp, workspaceId ?? null);
-  return db.query("SELECT * FROM initiative_updates WHERE id = ?1").get(id) as InitiativeUpdateRow;
+  return db.transaction(() => {
+    const initiative = getInitiative(db, initiativeId, workspaceId);
+    if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
+    const effectiveAuth = readLocalAuthScope(db, auth, workspaceId);
+    if (viewerRef !== undefined) assertCanMutate(db, initiative, viewerRef, workspaceId);
+    assertInitiativeStatusTeamLimit(
+      effectiveAuth,
+      listInitiativeScopeTeamIds(db, initiative.id, workspaceId),
+    );
+    const body = input.body.trim();
+    if (!body) throw apiError("VALIDATION_FAILED", "Initiative update body cannot be empty");
+    const health = input.health ?? "on_track";
+    if (!["on_track", "at_risk", "off_track"].includes(health))
+      throw apiError("VALIDATION_FAILED", `Invalid initiative update health: ${health}`);
+    const id = newId();
+    const timestamp = now();
+    db.query(
+      "INSERT INTO initiative_updates (id, initiative_id, author_id, health, body, created_at, updated_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
+    ).run(id, initiative.id, authorId, health, body, timestamp, workspaceId ?? null);
+    return db
+      .query("SELECT * FROM initiative_updates WHERE id = ?1")
+      .get(id) as InitiativeUpdateRow;
+  })();
 }
 
 export function deleteInitiativeUpdate(
@@ -591,23 +612,29 @@ export function deleteInitiativeUpdate(
   id: string,
   workspaceId?: string,
   viewerRef?: ViewerRef,
+  auth?: AuthScopeContext | null,
 ): boolean {
-  if (viewerRef !== undefined) {
+  return db.transaction(() => {
     const row = getInitiativeUpdate(db, id, workspaceId);
     if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
     const initiative = getInitiative(db, row.initiative_id, workspaceId);
     if (!initiative) throw apiError("NOT_FOUND", "Initiative update not found");
-    assertCanMutate(db, initiative, viewerRef, workspaceId);
-  }
-  const result = workspaceId
-    ? db
-        .query(
-          `DELETE FROM initiative_updates WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
-        )
-        .run(id, workspaceId)
-    : db.query("DELETE FROM initiative_updates WHERE id = ?1").run(id);
-  if (!result.changes) throw apiError("NOT_FOUND", "Initiative update not found");
-  return true;
+    const effectiveAuth = readLocalAuthScope(db, auth, workspaceId);
+    if (viewerRef !== undefined) assertCanMutate(db, initiative, viewerRef, workspaceId);
+    assertInitiativeStatusTeamLimit(
+      effectiveAuth,
+      listInitiativeScopeTeamIds(db, initiative.id, workspaceId),
+    );
+    const result = workspaceId
+      ? db
+          .query(
+            `DELETE FROM initiative_updates WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+          )
+          .run(id, workspaceId)
+      : db.query("DELETE FROM initiative_updates WHERE id = ?1").run(id);
+    if (!result.changes) throw apiError("NOT_FOUND", "Initiative update not found");
+    return true;
+  })();
 }
 
 export function initiativeProgress(

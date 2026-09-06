@@ -19,6 +19,7 @@
     "build:runtime": "bun scripts/build-runtime.ts"
   },
   "devDependencies": {
+    "@total-typescript/shoehorn": "^0.1.2",
     "@types/bun": "^1.3.14",
     "husky": "^9.1.7",
     "lint-staged": "^17.3.0",

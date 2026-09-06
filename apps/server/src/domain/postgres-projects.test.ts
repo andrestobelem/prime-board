@@ -1,14 +1,17 @@
 import { describe, expect, it } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
 import type {
   Persistence,
   PersistenceResult,
   PersistenceTransaction,
   SqlParameters,
 } from "../db/persistence.ts";
+import type { AuthScopeContext } from "../auth/viewer.ts";
 import type { PostgresProjectDependencyRow, PostgresProjectRow } from "./postgres-projects.ts";
 import {
   createPostgresProjectDependency,
   deletePostgresProjectDependency,
+  readPostgresAuthScope,
 } from "./postgres-projects.ts";
 
 const workspaceId = "workspace-1";
@@ -215,5 +218,27 @@ describe("PostgreSQL project dependencies", () => {
     await expect(
       deletePostgresProjectDependency(fake.persistence, "dependency-1", workspaceId),
     ).rejects.toMatchObject({ extensions: { code: "NOT_FOUND" } });
+  });
+});
+
+describe("PostgreSQL planning auth scope", () => {
+  it("rejects a Team-limit change after authentication without a write", async () => {
+    const auth = fromPartial<AuthScopeContext>({ keyId: "key-1", teamIds: ["team-1"] });
+    const stable = fromPartial<PersistenceTransaction>({
+      one: async () => fromPartial({ id: "key-1", revoked_at: null, expires_at: null }),
+      many: async () => [fromPartial({ team_id: "team-1" })],
+    });
+    await expect(readPostgresAuthScope(stable, auth, workspaceId)).resolves.toEqual({
+      keyId: "key-1",
+      teamIds: ["team-1"],
+    });
+
+    const changed = fromPartial<PersistenceTransaction>({
+      one: async () => fromPartial({ id: "key-1", revoked_at: null, expires_at: null }),
+      many: async () => [fromPartial({ team_id: "team-2" })],
+    });
+    await expect(readPostgresAuthScope(changed, auth, workspaceId)).rejects.toMatchObject({
+      extensions: { code: "UNAUTHORIZED" },
+    });
   });
 });

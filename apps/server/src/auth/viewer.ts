@@ -32,6 +32,50 @@ export interface AuthContext {
   expiresAt: string | null;
 }
 
+/** Contexto de autorización no secreto que los dominios necesitan para límites de Team. */
+export type AuthScopeContext = Pick<AuthContext, "keyId" | "teamIds">;
+
+/** Relee el alcance no secreto de una key dentro de una transacción SQLite. */
+export function readLocalAuthScope(
+  db: Database,
+  auth: AuthScopeContext | null | undefined,
+  workspaceId?: string,
+): AuthScopeContext | null | undefined {
+  if (!auth || auth.keyId === "local") return auth;
+  const key = db
+    .query<{ id: string; revoked_at: string | null; expires_at: string | null }, [string]>(
+      "SELECT id, revoked_at, expires_at FROM api_keys WHERE id = ?1",
+    )
+    .get(auth.keyId);
+  if (!key || key.revoked_at || (key.expires_at && Date.parse(key.expires_at) <= Date.now())) {
+    throw apiError("UNAUTHORIZED", "API key authorization changed");
+  }
+  const rows = workspaceId
+    ? db
+        .query<{ team_id: string }, [string, string]>(
+          "SELECT team_id FROM api_key_team_limits WHERE api_key_id = ?1 AND workspace_id = ?2 ORDER BY team_id",
+        )
+        .all(auth.keyId, workspaceId)
+    : db
+        .query<{ team_id: string }, [string]>(
+          "SELECT team_id FROM api_key_team_limits WHERE api_key_id = ?1 ORDER BY team_id",
+        )
+        .all(auth.keyId);
+  const currentTeamIds = rows.length ? rows.map((row) => row.team_id) : null;
+  const capturedTeamIds = auth.teamIds ? [...auth.teamIds].sort() : null;
+  const currentSorted = currentTeamIds ? [...currentTeamIds].sort() : null;
+  if (
+    capturedTeamIds === null
+      ? currentSorted !== null
+      : currentSorted === null ||
+        capturedTeamIds.length !== currentSorted.length ||
+        capturedTeamIds.some((teamId, index) => teamId !== currentSorted[index])
+  ) {
+    throw apiError("UNAUTHORIZED", "API key authorization changed");
+  }
+  return { keyId: auth.keyId, teamIds: currentTeamIds };
+}
+
 function listScopes(db: Database, keyId: string): ApiKeyScope[] {
   const rows = db
     .query(

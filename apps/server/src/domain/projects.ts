@@ -4,6 +4,8 @@ import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { getActor } from "./actors.ts";
 import { parseDateTime } from "./datetime.ts";
+import { readLocalAuthScope, type ActorRow, type AuthScopeContext } from "../auth/viewer.ts";
+import { assertCanManageProject } from "../auth/permissions.ts";
 
 function workspaceClause(column: string, parameter: string): string {
   return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
@@ -415,10 +417,23 @@ function setProjectDependencies(
     ).run(newId(), projectId, dependsOnProjectId, now(), workspaceId ?? null);
 }
 
+function assertProjectDependencyTeamLimit(
+  auth: AuthScopeContext | null | undefined,
+  teamIds: readonly string[],
+): void {
+  if (!auth?.teamIds) return;
+  const allowed = new Set(auth.teamIds);
+  if (teamIds.length === 0 || teamIds.some((teamId) => !allowed.has(teamId))) {
+    throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+  }
+}
+
 export function createProjectDependency(
   db: Database,
   input: { projectId: string; dependsOnProjectId: string; type?: string | null },
   workspaceId?: string,
+  viewer?: ActorRow,
+  auth?: AuthScopeContext | null,
 ): {
   id: string;
   project_id: string;
@@ -426,44 +441,104 @@ export function createProjectDependency(
   type: "blocks" | "related";
   created_at: string;
 } {
-  if (input.projectId === input.dependsOnProjectId)
-    throw apiError("VALIDATION_FAILED", "A project cannot depend on itself");
-  const project = getProject(db, input.projectId, workspaceId);
-  const target = getProject(db, input.dependsOnProjectId, workspaceId);
-  if (!project || !target) throw apiError("NOT_FOUND", "Dependency project not found");
-  const normalizedType = input.type?.toLowerCase();
-  const type =
-    normalizedType === "related"
-      ? "related"
-      : normalizedType === "blocks" || normalizedType == null
-        ? "blocks"
-        : null;
-  if (!type) throw apiError("VALIDATION_FAILED", `Invalid project dependency type: ${input.type}`);
-  const id = newId();
-  db.query(
-    "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-  ).run(id, input.projectId, input.dependsOnProjectId, type, now(), workspaceId ?? null);
-  return db
-    .query(
-      "SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE id = ?1",
-    )
-    .get(id) as {
-    id: string;
-    project_id: string;
-    depends_on_project_id: string;
-    type: "blocks" | "related";
-    created_at: string;
-  };
+  return db.transaction(() => {
+    if (input.projectId === input.dependsOnProjectId)
+      throw apiError("VALIDATION_FAILED", "A project cannot depend on itself");
+    const project = getProject(db, input.projectId, workspaceId);
+    const target = getProject(db, input.dependsOnProjectId, workspaceId);
+    if (!project) throw apiError("NOT_FOUND", "Project not found");
+    if (!target) throw apiError("NOT_FOUND", "Dependency project not found");
+    const effectiveAuth = readLocalAuthScope(db, auth, workspaceId);
+    if (viewer) {
+      assertCanManageProject(db, viewer, project.id);
+      assertCanManageProject(db, viewer, target.id);
+    }
+    const teamIds = [
+      ...new Set([
+        ...listProjectTeamIds(db, project.id, workspaceId),
+        ...listProjectTeamIds(db, target.id, workspaceId),
+      ]),
+    ];
+    assertProjectDependencyTeamLimit(effectiveAuth, teamIds);
+    const normalizedType = input.type?.toLowerCase();
+    const type =
+      normalizedType === "related"
+        ? "related"
+        : normalizedType === "blocks" || normalizedType == null
+          ? "blocks"
+          : null;
+    if (!type)
+      throw apiError("VALIDATION_FAILED", `Invalid project dependency type: ${input.type}`);
+    const id = newId();
+    db.query(
+      "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    ).run(id, project.id, target.id, type, now(), workspaceId ?? null);
+    return db
+      .query(
+        "SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE id = ?1",
+      )
+      .get(id) as {
+      id: string;
+      project_id: string;
+      depends_on_project_id: string;
+      type: "blocks" | "related";
+      created_at: string;
+    };
+  })();
 }
 
-export function deleteProjectDependency(db: Database, id: string, workspaceId?: string): boolean {
-  const result = workspaceId
-    ? db
-        .query(
-          `DELETE FROM project_dependencies WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
-        )
-        .run(id, workspaceId)
-    : db.query("DELETE FROM project_dependencies WHERE id = ?1").run(id);
-  if (!result.changes) throw apiError("NOT_FOUND", "Project dependency not found");
-  return true;
+export function deleteProjectDependency(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+  viewer?: ActorRow,
+  auth?: AuthScopeContext | null,
+): boolean {
+  return db.transaction(() => {
+    const dependency = workspaceId
+      ? (db
+          .query(
+            `SELECT id, project_id, depends_on_project_id FROM project_dependencies
+             WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+          )
+          .get(id, workspaceId) as {
+          id: string;
+          project_id: string;
+          depends_on_project_id: string;
+        } | null)
+      : (db
+          .query(
+            "SELECT id, project_id, depends_on_project_id FROM project_dependencies WHERE id = ?1",
+          )
+          .get(id) as {
+          id: string;
+          project_id: string;
+          depends_on_project_id: string;
+        } | null);
+    if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
+    const effectiveAuth = readLocalAuthScope(db, auth, workspaceId);
+    const project = getProject(db, dependency.project_id, workspaceId);
+    const target = getProject(db, dependency.depends_on_project_id, workspaceId);
+    if (!project || !target) throw apiError("NOT_FOUND", "Project dependency not found");
+    if (viewer) {
+      assertCanManageProject(db, viewer, project.id);
+      assertCanManageProject(db, viewer, target.id);
+    }
+    const teamIds = [
+      ...new Set([
+        ...listProjectTeamIds(db, project.id, workspaceId),
+        ...listProjectTeamIds(db, target.id, workspaceId),
+      ]),
+    ];
+    assertProjectDependencyTeamLimit(effectiveAuth, teamIds);
+    const result = workspaceId
+      ? db
+          .query(
+            `DELETE FROM project_dependencies WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+          )
+          .run(id, workspaceId)
+      : db.query("DELETE FROM project_dependencies WHERE id = ?1").run(id);
+    if (!result.changes) throw apiError("NOT_FOUND", "Project dependency not found");
+    return true;
+  })();
 }

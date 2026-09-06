@@ -7,6 +7,9 @@ import {
   assertPostgresWorkspace,
   canAccessPostgresProject,
   listPostgresProjectTeamIds,
+  lockPostgresProjectScope,
+  lockPostgresTeamIds,
+  readPostgresAuthScope,
 } from "./postgres-projects.ts";
 import {
   assertPostgresTeamActive,
@@ -14,7 +17,7 @@ import {
   getPostgresTeam,
   isPostgresTeamMember,
 } from "./postgres-teams.ts";
-import type { ActorRow } from "../auth/viewer.ts";
+import type { ActorRow, AuthScopeContext } from "../auth/viewer.ts";
 import type { InitiativeState } from "./initiatives.ts";
 
 function parseResources(value: string | null | undefined): unknown[] {
@@ -143,6 +146,53 @@ export async function listPostgresInitiativeScopeTeamIds(
     projectTeams.push(...(await listPostgresProjectTeamIds(persistence, projectId)));
   }
   return [...new Set([...direct, ...projectTeams])];
+}
+
+/**
+ * Bloquea una Initiative, sus relaciones, Projects y Teams antes de autorizar
+ * un status update. Las mutaciones de relaciones bloquean primero la raíz.
+ */
+async function lockPostgresInitiativeScope(
+  tx: PersistenceTransaction,
+  initiativeId: string,
+  workspaceId?: string,
+): Promise<{ initiative: PostgresInitiativeRow; teamIds: string[] }> {
+  await assertPostgresWorkspace(tx, workspaceId);
+  const initiative = await tx.one<PostgresInitiativeRow>(
+    "SELECT * FROM initiatives WHERE id = $1 FOR UPDATE",
+    [initiativeId],
+  );
+  if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
+
+  const directRows = await tx.many<{ team_id: string }>(
+    "SELECT team_id FROM initiative_teams WHERE initiative_id = $1 ORDER BY team_id FOR UPDATE",
+    [initiativeId],
+  );
+  const projectRows = await tx.many<{ project_id: string }>(
+    "SELECT project_id FROM initiative_projects WHERE initiative_id = $1 ORDER BY project_id FOR UPDATE",
+    [initiativeId],
+  );
+  const directTeamIds = directRows.map((row) => row.team_id);
+  const projectTeamIds = await lockPostgresProjectScope(
+    tx,
+    projectRows.map((row) => row.project_id),
+  );
+  await lockPostgresTeamIds(tx, directTeamIds);
+  return {
+    initiative,
+    teamIds: [...new Set([...directTeamIds, ...projectTeamIds])].sort(),
+  };
+}
+
+function assertPostgresInitiativeTeamLimit(
+  auth: AuthScopeContext | null | undefined,
+  teamIds: readonly string[],
+): void {
+  if (!auth?.teamIds) return;
+  const allowed = new Set(auth.teamIds);
+  if (teamIds.length === 0 || teamIds.some((teamId) => !allowed.has(teamId))) {
+    throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+  }
 }
 
 export async function canAccessPostgresInitiative(
@@ -373,6 +423,12 @@ export async function updatePostgresInitiative(
     (input.teamIds !== undefined && input.teamIds !== null) ||
     labelIds !== null;
   await persistence.transaction(async (tx) => {
+    // Status transactions lock this root before reading initiative relations.
+    const locked = await tx.one<{ id: string }>(
+      "SELECT id FROM initiatives WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+    if (!locked) throw apiError("NOT_FOUND", "Initiative not found");
     if (sets.length || relationsChanged) {
       if (sets.length) {
         push("updated_at", now());
@@ -420,12 +476,18 @@ export async function createPostgresInitiativeUpdate(
   initiativeId: string,
   input: { health: string; body: string },
   workspaceId?: string,
+  auth?: AuthScopeContext | null,
 ): Promise<PostgresInitiativeUpdateRow> {
   return persistence.transaction(async (tx) => {
     await assertPostgresWorkspace(tx, workspaceId);
-    const initiative = await getPostgresInitiative(tx, initiativeId);
-    if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
+    const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
+    const { initiative, teamIds } = await lockPostgresInitiativeScope(
+      tx,
+      initiativeId,
+      workspaceId,
+    );
     await assertCanMutatePostgresInitiative(tx, viewer, initiative, workspaceId);
+    assertPostgresInitiativeTeamLimit(effectiveAuth, teamIds);
     const health = input.health.toLowerCase();
     const allowedHealth = ["on_track", "at_risk", "off_track"];
     if (!allowedHealth.includes(health))
@@ -459,17 +521,23 @@ export async function deletePostgresInitiativeUpdate(
   viewer: ActorRow,
   id: string,
   workspaceId?: string,
+  auth?: AuthScopeContext | null,
 ): Promise<boolean> {
   return persistence.transaction(async (tx) => {
     await assertPostgresWorkspace(tx, workspaceId);
+    const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
     const row = await tx.one<PostgresInitiativeUpdateRow>(
       "SELECT * FROM initiative_updates WHERE id = $1 FOR UPDATE",
       [id],
     );
     if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
-    const initiative = await getPostgresInitiative(tx, row.initiative_id);
-    if (!initiative) throw apiError("NOT_FOUND", "Initiative update not found");
+    const { initiative, teamIds } = await lockPostgresInitiativeScope(
+      tx,
+      row.initiative_id,
+      workspaceId,
+    );
     await assertCanMutatePostgresInitiative(tx, viewer, initiative, workspaceId);
+    assertPostgresInitiativeTeamLimit(effectiveAuth, teamIds);
     const result = await tx.execute<PostgresInitiativeUpdateRow>(
       "DELETE FROM initiative_updates WHERE id = $1 RETURNING *",
       [id],
