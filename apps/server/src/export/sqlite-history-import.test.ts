@@ -484,7 +484,7 @@ describe("complete SQLite history import", () => {
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-table-resolution-"));
     try {
       db.exec(`
-        CREATE TABLE "WORKSPACE" (id TEXT PRIMARY KEY, name TEXT, created_at TEXT);
+        CREATE TABLE "WORKSPACE" ("ID" TEXT PRIMARY KEY, name TEXT, created_at TEXT);
         CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT, created_at TEXT);
         CREATE TABLE "GRANTS;not-a-query" (id TEXT, token TEXT);
       `);
@@ -545,6 +545,33 @@ describe("complete SQLite history import", () => {
       expect(readEventLog(root).some((event) => event.eventId === "sqlite:projects:p2")).toBe(
         false,
       );
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a malformed case-fold collision in the global rejected total", () => {
+    const db = new Database(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-malformed-global-"));
+    try {
+      db.exec(`
+        CREATE TABLE "WORKSPACE" ("ID" TEXT PRIMARY KEY, created_at TEXT);
+        CREATE TABLE actors ("İD" TEXT, "i̇d" TEXT, created_at TEXT);
+      `);
+      db.query('INSERT INTO "WORKSPACE" ("ID", created_at) VALUES (?1, ?2)').run(
+        "w1",
+        "2025-01-01T00:00:00.000Z",
+      );
+      db.query("INSERT INTO actors VALUES (?1, ?2, ?3)").run(
+        "actor-a",
+        "actor-b",
+        "2025-01-01T00:00:00.000Z",
+      );
+
+      const result = importSqliteHistory({ db, rootDir: root, dryRun: true });
+      expect(result).toMatchObject({ scanned: 2, emitted: 1, rejected: 1 });
+      expect(result.tables.actors).toMatchObject({ scanned: 1, emitted: 0, rejected: 1 });
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

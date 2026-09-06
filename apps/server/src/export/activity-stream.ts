@@ -10,15 +10,16 @@ import {
   validateDomainEvent,
 } from "./event-log.ts";
 import type { CanonicalEventLog } from "./issue-event-pipeline.ts";
+import { normalizeSqliteResultRow, sqliteColumnNames } from "./sqlite-row.ts";
 
 export interface ActivityEventRow {
   readonly id: string;
   /** Referencia de presentación mutable que se conserva para lectores legacy. */
   readonly issue_identifier: string;
   /** ID estable del Issue. Los callers legacy pueden omitirlo. */
-  readonly issue_id?: string;
+  readonly issue_id?: string | null;
   /** Stable Actor ID. Legacy fixtures may provide only `actor`. */
-  readonly actor_id?: string;
+  readonly actor_id?: string | null;
   readonly actor: string;
   readonly type: string;
   readonly payload: string;
@@ -31,9 +32,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function assertUnambiguousTableColumns(db: Database, table: string): void {
+  if (sqliteColumnNames(db, table) === undefined) {
+    throw new Error(`${table} table has ambiguous column names`);
+  }
+}
+
 function hasActivityWorkspaceColumn(db: Database): boolean {
-  const columns = db.query("PRAGMA table_info(activity)").all() as Array<{ name: string }>;
-  return columns.some((column) => column.name === "workspace_id");
+  const columns = sqliteColumnNames(db, "activity");
+  if (columns === undefined) {
+    throw new Error("Activity table has ambiguous column names");
+  }
+  return columns.some((column) => column.toLowerCase() === "workspace_id");
 }
 
 export function isSharedActivityType(type: string): boolean {
@@ -42,6 +52,52 @@ export function isSharedActivityType(type: string): boolean {
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function textValue(value: unknown): string | undefined {
+  if (typeof value === "string") return value.length > 0 ? value : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function normalizedActivityEventRow(value: unknown): ActivityEventRow | undefined {
+  const row = normalizeSqliteResultRow(value);
+  if (row === undefined) return undefined;
+  const id = textValue(row.id);
+  const issueIdentifier = textValue(row.issue_identifier);
+  const issueId = textValue(row.issue_id);
+  const actorId = textValue(row.actor_id);
+  const actor = textValue(row.actor);
+  const type = typeof row.type === "string" ? row.type : undefined;
+  const payload = typeof row.payload === "string" ? row.payload : undefined;
+  const occurredAt = typeof row.occurred_at === "string" ? row.occurred_at : undefined;
+  let workspaceId: string | null | undefined;
+  if (row.workspace_id === null || row.workspace_id === undefined) workspaceId = row.workspace_id;
+  else workspaceId = textValue(row.workspace_id);
+  if (
+    id === undefined ||
+    issueIdentifier === undefined ||
+    issueId === undefined ||
+    actorId === undefined ||
+    actor === undefined ||
+    type === undefined ||
+    payload === undefined ||
+    occurredAt === undefined ||
+    (row.workspace_id !== null && row.workspace_id !== undefined && workspaceId === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    id,
+    issue_identifier: issueIdentifier,
+    issue_id: issueId,
+    actor_id: actorId,
+    actor,
+    type,
+    payload,
+    workspace_id: workspaceId,
+    occurred_at: occurredAt,
+  };
 }
 
 function withStableIssueReference(
@@ -103,7 +159,24 @@ export function areActivityEventsEquivalent(left: DomainEvent, right: DomainEven
  * bridge in this slice. Per-issue historical log files are not read here.
  */
 export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | undefined {
+  if (
+    typeof row.id !== "string" ||
+    typeof row.issue_identifier !== "string" ||
+    typeof row.actor !== "string" ||
+    typeof row.type !== "string" ||
+    typeof row.payload !== "string" ||
+    typeof row.occurred_at !== "string" ||
+    (row.issue_id !== undefined && row.issue_id !== null && typeof row.issue_id !== "string") ||
+    (row.actor_id !== undefined && row.actor_id !== null && typeof row.actor_id !== "string") ||
+    (row.workspace_id !== undefined &&
+      row.workspace_id !== null &&
+      typeof row.workspace_id !== "string")
+  ) {
+    return undefined;
+  }
   if (!isSharedActivityType(row.type)) return undefined;
+  const issueId = typeof row.issue_id === "string" ? row.issue_id : undefined;
+  const actorId = typeof row.actor_id === "string" ? row.actor_id : undefined;
   let payload: unknown;
   try {
     payload = JSON.parse(row.payload) as unknown;
@@ -111,7 +184,7 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
     return undefined;
   }
   if (!isPlainObject(payload)) return undefined;
-  const stablePayload = withStableIssueReference(payload, row.issue_id);
+  const stablePayload = withStableIssueReference(payload, issueId);
   if (!stablePayload) return undefined;
   try {
     const event: Record<string, unknown> = {
@@ -124,7 +197,7 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
       // referencia durable que usan los nuevos projectors.
       aggregateKey: row.issue_identifier,
       type: row.type,
-      actor: row.actor_id ?? row.actor,
+      actor: actorId ?? row.actor,
       occurredAt: row.occurred_at,
       payload: stablePayload,
     };
@@ -149,16 +222,19 @@ export function appendActivityEvents(
   }),
   onEventIds?: (eventIds: readonly string[]) => void,
 ): number {
+  for (const table of ["activity", "issues", "teams", "actors"]) {
+    assertUnambiguousTableColumns(db, table);
+  }
   const workspaceColumn = hasActivityWorkspaceColumn(db) ? "activity.workspace_id" : "NULL";
   const rows = db
     .query(
-      `SELECT activity.id,
+      `SELECT activity.id AS id,
               teams.key || '-' || issues.number AS issue_identifier,
               activity.issue_id AS issue_id,
               activity.actor_id AS actor_id,
               actors.name AS actor,
-              activity.type,
-              activity.payload,
+              activity.type AS type,
+              activity.payload AS payload,
               ${workspaceColumn} AS workspace_id,
               activity.created_at AS occurred_at
        FROM activity
@@ -167,9 +243,11 @@ export function appendActivityEvents(
        JOIN actors ON actors.id = activity.actor_id
        ORDER BY activity.created_at, activity.id`,
     )
-    .all() as ActivityEventRow[];
+    .all() as unknown[];
+  const normalizedRows = rows.map(normalizedActivityEventRow);
   eventLog.recover?.();
-  const events = rows.flatMap((row) => {
+  const events = normalizedRows.flatMap((row) => {
+    if (row === undefined) return [];
     const event = activityToDomainEvent(row);
     return event ? [event] : [];
   });

@@ -5,6 +5,12 @@ import {
   activityToDomainEvent,
   type ActivityEventRow,
 } from "./activity-stream.ts";
+import {
+  normalizeSqliteResultRow,
+  quoteSqliteIdentifier,
+  sqliteColumnName,
+  sqliteColumnNames,
+} from "./sqlite-row.ts";
 
 export interface SQLiteEventImportOptions {
   readonly db: Database;
@@ -64,16 +70,14 @@ function warning(warnings: string[], kind: string, id: string): void {
   if (warnings.length < 100) warnings.push(`${kind}:${id}`);
 }
 
-function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replace(/"/gu, '""')}"`;
-}
-
 function resolveTable(db: Database, canonicalName: string): ResolvedTable | undefined {
-  const row = db
-    .query(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name COLLATE NOCASE = ?1 LIMIT 1",
-    )
-    .get(canonicalName) as { name?: unknown } | null;
+  const row = normalizeSqliteResultRow(
+    db
+      .query(
+        "SELECT name AS name FROM sqlite_master WHERE type = 'table' AND name COLLATE NOCASE = ?1 LIMIT 1",
+      )
+      .get(canonicalName),
+  );
   return typeof row?.name === "string" ? { canonicalName, physicalName: row.name } : undefined;
 }
 
@@ -88,36 +92,93 @@ function physicalNameFor(db: Database, table: string | ResolvedTable): string | 
 function hasColumn(db: Database, table: string | ResolvedTable, column: string): boolean {
   const physicalName = physicalNameFor(db, table);
   if (physicalName === undefined) return false;
+  const columns = sqliteColumnNames(db, physicalName);
+  if (columns === undefined) return false;
   const normalizedColumn = column.toLowerCase();
-  return (
-    db.query(`PRAGMA table_info(${quoteIdentifier(physicalName)})`).all() as Array<{
-      name: string;
-    }>
-  ).some((entry) => entry.name.toLowerCase() === normalizedColumn);
+  return columns.some((name) => name.toLowerCase() === normalizedColumn);
 }
-
 function textValue(value: unknown): string | undefined {
   if (typeof value === "string") return value.length > 0 ? value : undefined;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return undefined;
 }
 
+function nullableTextValue(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (value === undefined) return undefined;
+  return textValue(value);
+}
+
+function normalizedActivityRow(value: unknown): ActivityRow | undefined {
+  const row = normalizeSqliteResultRow(value);
+  if (row === undefined) return undefined;
+  const id = textValue(row.id);
+  const type = typeof row.type === "string" ? row.type : undefined;
+  const payload = typeof row.payload === "string" ? row.payload : undefined;
+  const occurredAt = typeof row.occurred_at === "string" ? row.occurred_at : undefined;
+  const issueIdentifier = nullableTextValue(row.issue_identifier);
+  const actorId = nullableTextValue(row.actor_id);
+  const actor = nullableTextValue(row.actor);
+  const issueId = nullableTextValue(row.issue_id);
+  const teamId = nullableTextValue(row.team_id);
+  const activityWorkspaceId = nullableTextValue(row.activity_workspace_id);
+  const issueWorkspaceId = nullableTextValue(row.issue_workspace_id);
+  const teamWorkspaceId = nullableTextValue(row.team_workspace_id);
+  if (
+    id === undefined ||
+    type === undefined ||
+    payload === undefined ||
+    occurredAt === undefined ||
+    issueIdentifier === undefined ||
+    actorId === undefined ||
+    actor === undefined ||
+    issueId === undefined ||
+    teamId === undefined ||
+    activityWorkspaceId === undefined ||
+    issueWorkspaceId === undefined ||
+    teamWorkspaceId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    id,
+    issue_identifier: issueIdentifier,
+    actor_id: actorId,
+    actor,
+    issue_id: issueId,
+    team_id: teamId,
+    activity_workspace_id: activityWorkspaceId,
+    issue_workspace_id: issueWorkspaceId,
+    team_workspace_id: teamWorkspaceId,
+    type,
+    payload,
+    occurred_at: occurredAt,
+  };
+}
+
 function actorWorkspaceIndexes(
   db: Database,
   membershipsTable: ResolvedTable | undefined,
 ): ReadonlyMap<string, ReadonlySet<string>> {
-  if (
-    membershipsTable === undefined ||
-    !hasColumn(db, membershipsTable, "actor_id") ||
-    !hasColumn(db, membershipsTable, "workspace_id")
-  ) {
-    return new Map();
+  if (membershipsTable === undefined) return new Map();
+  const columns = sqliteColumnNames(db, membershipsTable.physicalName);
+  if (columns === undefined) {
+    throw new Error("SQLite event import rejected ambiguous workspace membership columns");
   }
+  const actorColumn = sqliteColumnName(db, membershipsTable.physicalName, "actor_id");
+  const workspaceColumn = sqliteColumnName(db, membershipsTable.physicalName, "workspace_id");
+  if (actorColumn === undefined || workspaceColumn === undefined) return new Map();
   const rows = db
-    .query(`SELECT actor_id, workspace_id FROM ${quoteIdentifier(membershipsTable.physicalName)}`)
-    .all() as Array<{ actor_id?: unknown; workspace_id?: unknown }>;
+    .query(
+      `SELECT ${quoteSqliteIdentifier(actorColumn)} AS actor_id, ${quoteSqliteIdentifier(workspaceColumn)} AS workspace_id FROM ${quoteSqliteIdentifier(membershipsTable.physicalName)}`,
+    )
+    .all() as unknown[];
   const result = new Map<string, Set<string>>();
-  for (const row of rows) {
+  for (const value of rows) {
+    const row = normalizeSqliteResultRow(value);
+    if (row === undefined) {
+      throw new Error("SQLite event import rejected a malformed workspace membership row");
+    }
     const actorId = textValue(row.actor_id);
     const workspaceId = textValue(row.workspace_id);
     if (actorId === undefined || workspaceId === undefined) continue;
@@ -149,13 +210,26 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
     throw new Error("SQLite event import workspaceId requires a workspace table");
   }
 
-  const workspaceIds = workspaceTable
-    ? (
-        db
-          .query(`SELECT id FROM ${quoteIdentifier(workspaceTable.physicalName)} ORDER BY id`)
-          .all() as Array<{ id: string }>
-      ).map((row) => row.id)
-    : [];
+  const workspaceIds: string[] = [];
+  if (workspaceTable !== undefined) {
+    const idColumn = sqliteColumnName(db, workspaceTable.physicalName, "id");
+    if (idColumn === undefined) {
+      throw new Error("SQLite event import rejected an ambiguous Workspace ID column");
+    }
+    const values = db
+      .query(
+        `SELECT ${quoteSqliteIdentifier(idColumn)} AS id FROM ${quoteSqliteIdentifier(workspaceTable.physicalName)} ORDER BY ${quoteSqliteIdentifier(idColumn)}`,
+      )
+      .all() as unknown[];
+    for (const value of values) {
+      const row = normalizeSqliteResultRow(value);
+      const id = textValue(row?.id);
+      if (row === undefined || id === undefined) {
+        throw new Error("SQLite event import rejected a malformed Workspace row");
+      }
+      workspaceIds.push(id);
+    }
+  }
   if (workspaceTable !== undefined && workspaceIds.length === 0) {
     throw new Error("SQLite event import requires at least one Workspace");
   }
@@ -202,10 +276,10 @@ function activityQuery(scope: ImportScope): string {
   ) {
     throw new Error("SQLite event import requires Activity, Issue, Team, and Actor tables");
   }
-  const activityTable = quoteIdentifier(scope.activityTable.physicalName);
-  const issueTable = quoteIdentifier(scope.issueTable.physicalName);
-  const teamTable = quoteIdentifier(scope.teamTable.physicalName);
-  const actorTable = quoteIdentifier(scope.actorTable.physicalName);
+  const activityTable = quoteSqliteIdentifier(scope.activityTable.physicalName);
+  const issueTable = quoteSqliteIdentifier(scope.issueTable.physicalName);
+  const teamTable = quoteSqliteIdentifier(scope.teamTable.physicalName);
+  const actorTable = quoteSqliteIdentifier(scope.actorTable.physicalName);
   const activityWorkspace = scope.activityHasWorkspace
     ? "activity.workspace_id AS activity_workspace_id"
     : "NULL AS activity_workspace_id";
@@ -227,7 +301,7 @@ function activityQuery(scope: ImportScope): string {
         ? `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id AND issues.workspace_id IS NOT NULL AND teams.workspace_id = issues.workspace_id`
         : `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id AND (issues.workspace_id IS NULL OR teams.workspace_id = issues.workspace_id)`
       : `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id`;
-  return `SELECT activity.id,
+  return `SELECT activity.id AS id,
                  teams.key || '-' || issues.number AS issue_identifier,
                  actors.id AS actor_id,
                  actors.name AS actor,
@@ -236,8 +310,8 @@ function activityQuery(scope: ImportScope): string {
                  ${activityWorkspace},
                  ${issueWorkspace},
                  ${teamWorkspace},
-                 activity.type,
-                 activity.payload,
+                 activity.type AS type,
+                 activity.payload AS payload,
                  activity.created_at AS occurred_at
           FROM ${activityTable} AS activity
           ${issueJoin}
@@ -272,22 +346,27 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
   if (missingTables.length > 0) {
     const activityTable = scope.activityTable;
     if (activityTable === undefined) throw new Error("SQLite event import requires Activity table");
-    const rows = options.db
-      .query(`SELECT id FROM ${quoteIdentifier(activityTable.physicalName)}`)
-      .all() as Array<{ id: string }>;
+    const values = options.db
+      .query(`SELECT "id" AS id FROM ${quoteSqliteIdentifier(activityTable.physicalName)}`)
+      .all() as unknown[];
+    const ids = values.map((value) => {
+      const row = normalizeSqliteResultRow(value);
+      return textValue(row?.id) ?? "unknown";
+    });
     return {
       status: "completed",
-      scanned: rows.length,
+      scanned: values.length,
       emitted: 0,
       duplicates: 0,
-      orphaned: rows.length,
+      orphaned: values.length,
       outOfScope: 0,
       rejected: 0,
       ambiguous: 0,
-      warnings: rows.slice(0, 100).map((row) => `orphaned:activity:${row.id}`),
+      warnings: ids.slice(0, 100).map((id) => `orphaned:activity:${id}`),
     };
   }
-  const rows = options.db.query(activityQuery(scope)).all() as ActivityRow[];
+  const values = options.db.query(activityQuery(scope)).all() as unknown[];
+  const rows = values.map(normalizedActivityRow);
 
   const writer = new EventLogWriter({ rootDir: options.rootDir });
   const warnings: string[] = [];
@@ -306,6 +385,11 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
   let duplicates = 0;
 
   for (const row of rows) {
+    if (row === undefined) {
+      rejected += 1;
+      warning(warnings, "rejected", "unknown");
+      continue;
+    }
     const rowWorkspaceId =
       row.activity_workspace_id ?? row.issue_workspace_id ?? row.team_workspace_id;
     if (rowWorkspaceId !== undefined && rowWorkspaceId !== null) {

@@ -24,6 +24,35 @@ function database(): Database {
   return db;
 }
 
+function uppercaseActivityDatabase(): Database {
+  const db = new Database(":memory:");
+  db.exec(`
+    CREATE TABLE "WORKSPACE" ("ID" TEXT PRIMARY KEY, name TEXT);
+    CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE teams (id TEXT PRIMARY KEY, key TEXT NOT NULL);
+    CREATE TABLE issues (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, number INTEGER NOT NULL);
+    CREATE TABLE activity (
+      "ID" TEXT PRIMARY KEY, issue_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+      "TYPE" TEXT NOT NULL, "PAYLOAD" TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+  `);
+  db.query('INSERT INTO "WORKSPACE" ("ID", name) VALUES (?1, ?2)').run("workspace-1", "Workspace");
+  db.query("INSERT INTO actors VALUES (?1, ?2)").run("actor-1", "agent");
+  db.query("INSERT INTO teams VALUES (?1, ?2)").run("team-1", "PB");
+  db.query("INSERT INTO issues VALUES (?1, ?2, ?3)").run("issue-1", "team-1", 7);
+  db.query(
+    'INSERT INTO activity ("ID", issue_id, actor_id, "TYPE", "PAYLOAD", created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+  ).run(
+    "activity-uppercase",
+    "issue-1",
+    "actor-1",
+    "created",
+    JSON.stringify({ title: "Uppercase Activity" }),
+    "2025-01-01T00:00:00.000Z",
+  );
+  return db;
+}
+
 function workspaceDatabase(workspaceCount = 2): Database {
   const db = new Database(":memory:");
   db.exec(`
@@ -130,6 +159,45 @@ function addActivity(
 }
 
 describe("SQLite history import", () => {
+  it("normalizes case-variant membership columns before enforcing Activity scope", () => {
+    const db = workspaceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-case-membership-"));
+    try {
+      db.exec(
+        'CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, "ACTOR_ID" TEXT, "WORKSPACE_ID" TEXT)',
+      );
+      db.query(
+        'INSERT INTO workspace_memberships (id, "ACTOR_ID", "WORKSPACE_ID") VALUES (?1, ?2, ?3)',
+      ).run("membership-2", "actor-1", "workspace-2");
+      addWorkspaceActivity(db, "workspace-1", "cross-workspace-actor", "issue-1");
+
+      const result = importSqliteActivity({ db, rootDir: root, workspaceId: "workspace-1" });
+      expect(result).toMatchObject({ scanned: 1, emitted: 0, orphaned: 1, outOfScope: 0 });
+      expect(result.warnings).toContain("orphaned:cross-workspace-actor");
+      expect(readEventLog(root)).toEqual([]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("imports Activity and singleton Workspace rows with uppercase physical columns", () => {
+    const db = uppercaseActivityDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-uppercase-columns-"));
+    try {
+      const result = importSqliteActivity({ db, rootDir: root });
+      expect(result).toMatchObject({ scanned: 1, emitted: 1, orphaned: 0, rejected: 0 });
+      expect(readEventLog(root)[0]).toMatchObject({
+        eventId: "activity-uppercase",
+        workspaceId: "workspace-1",
+        payload: { title: "Uppercase Activity", issue_id: "issue-1" },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("supports dry-run and imports idempotently", () => {
     const db = database();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));

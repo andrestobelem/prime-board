@@ -14,6 +14,12 @@ import {
   activityToDomainEvent,
   type ActivityEventRow,
 } from "./activity-stream.ts";
+import {
+  normalizeSqliteResultRow,
+  quoteSqliteIdentifier,
+  sqliteColumnName,
+  sqliteColumnNames,
+} from "./sqlite-row.ts";
 
 /** Tablas SQLite compartidas que se pueden representar en el Repository Source. */
 export const SQLITE_HISTORY_TABLES = [
@@ -335,21 +341,19 @@ function validateBatchSize(batchSize: number | undefined): number {
   return batchSize;
 }
 
-function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replace(/"/gu, '""')}"`;
-}
-
 /**
  * Resuelve una tabla lógica desde sqlite_master sin interpolar el nombre
  * solicitado. SQLite compara nombres sin distinguir mayúsculas, pero la forma
  * física sirve para diagnósticos y consultas citadas de forma segura.
  */
 function resolveTable(db: Database, canonicalName: string): ResolvedTable | undefined {
-  const row = db
-    .query(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name COLLATE NOCASE = ?1 LIMIT 1",
-    )
-    .get(canonicalName) as { name?: unknown } | null;
+  const row = normalizeSqliteResultRow(
+    db
+      .query(
+        "SELECT name AS name FROM sqlite_master WHERE type = 'table' AND name COLLATE NOCASE = ?1 LIMIT 1",
+      )
+      .get(canonicalName),
+  );
   return typeof row?.name === "string" ? { canonicalName, physicalName: row.name } : undefined;
 }
 
@@ -364,14 +368,11 @@ function physicalNameFor(db: Database, table: string | ResolvedTable): string | 
 function hasColumn(db: Database, table: string | ResolvedTable, column: string): boolean {
   const physicalName = physicalNameFor(db, table);
   if (physicalName === undefined) return false;
+  const columns = sqliteColumnNames(db, physicalName);
+  if (columns === undefined) return false;
   const normalizedColumn = column.toLowerCase();
-  return (
-    db.query(`PRAGMA table_info(${quoteIdentifier(physicalName)})`).all() as Array<{
-      name: string;
-    }>
-  ).some((entry) => entry.name.toLowerCase() === normalizedColumn);
+  return columns.some((name) => name.toLowerCase() === normalizedColumn);
 }
-
 function isSensitiveTableName(table: string): boolean {
   const compact = table.toLowerCase().replace(/[^a-z0-9]+/gu, "");
   return compact.includes("document") || isSensitiveEventName(table);
@@ -390,10 +391,14 @@ function excludedTableNames(db: Database): readonly ResolvedTable[] {
     const table = resolveTable(db, canonicalName);
     if (table !== undefined) resolved.set(canonicalName.toLowerCase(), table);
   }
-  const rows = db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
-    name: string;
-  }>;
-  for (const row of rows) {
+  const rows = db
+    .query("SELECT name AS name FROM sqlite_master WHERE type = 'table'")
+    .all() as unknown[];
+  for (const value of rows) {
+    const row = normalizeSqliteResultRow(value);
+    if (typeof row?.name !== "string") {
+      throw new Error("SQLite history import rejected malformed table metadata");
+    }
     if (!isSensitiveTableName(row.name)) continue;
     const canonicalName = canonicalExcludedTableName(row.name) ?? row.name;
     const key = canonicalName.toLowerCase();
@@ -412,13 +417,26 @@ function resolveScope(db: Database, requestedWorkspaceId: string | undefined): S
     throw new Error("SQLite history import workspaceId requires a workspace table");
   }
 
-  const workspaceIds = workspaceTable
-    ? (
-        db
-          .query(`SELECT id FROM ${quoteIdentifier(workspaceTable.physicalName)} ORDER BY id`)
-          .all() as Array<{ id: string }>
-      ).map((row) => row.id)
-    : [];
+  const workspaceIds: string[] = [];
+  if (workspaceTable !== undefined) {
+    const idColumn = sqliteColumnName(db, workspaceTable.physicalName, "id");
+    if (idColumn === undefined) {
+      throw new Error("SQLite history import rejected an ambiguous Workspace ID column");
+    }
+    const values = db
+      .query(
+        `SELECT ${quoteSqliteIdentifier(idColumn)} AS id FROM ${quoteSqliteIdentifier(workspaceTable.physicalName)} ORDER BY ${quoteSqliteIdentifier(idColumn)}`,
+      )
+      .all() as unknown[];
+    for (const value of values) {
+      const row = normalizeSqliteResultRow(value);
+      const id = textValue(row?.id);
+      if (row === undefined || id === undefined) {
+        throw new Error("SQLite history import rejected a malformed Workspace row");
+      }
+      workspaceIds.push(id);
+    }
+  }
   if (hasWorkspaceTable && workspaceIds.length === 0) {
     throw new Error("SQLite history import requires at least one Workspace");
   }
@@ -451,19 +469,9 @@ function resolveScope(db: Database, requestedWorkspaceId: string | undefined): S
   };
 }
 
-function normalizeSourceRow(row: SourceRow): SourceRow | undefined {
-  const normalized: SourceRow = {};
-  for (const [key, value] of Object.entries(row)) {
-    const normalizedKey = key.toLowerCase();
-    if (hasOwn(normalized, normalizedKey)) return undefined;
-    normalized[normalizedKey] = value;
-  }
-  return normalized;
-}
-
 function readTable(db: Database, table: ResolvedTable): RawTable {
   const values = db
-    .query(`SELECT * FROM ${quoteIdentifier(table.physicalName)}`)
+    .query(`SELECT * FROM ${quoteSqliteIdentifier(table.physicalName)}`)
     .all() as unknown[];
   const rows: SourceRow[] = [];
   let malformed = 0;
@@ -472,7 +480,7 @@ function readTable(db: Database, table: ResolvedTable): RawTable {
       malformed += 1;
       continue;
     }
-    const normalized = normalizeSourceRow(value);
+    const normalized = normalizeSqliteResultRow(value);
     if (normalized === undefined) malformed += 1;
     else rows.push(normalized);
   }
@@ -546,10 +554,13 @@ function tableRows(db: Database, reports: Map<string, MutableTableReport>): Map<
   }
   for (const table of excludedTableNames(db)) {
     if (tables.has(table.canonicalName)) continue;
-    const result = db
-      .query(`SELECT count(*) AS count FROM ${quoteIdentifier(table.physicalName)}`)
-      .get() as { count: number };
-    const count = Number(result.count);
+    const result = normalizeSqliteResultRow(
+      db.query(`SELECT count(*) AS count FROM ${quoteSqliteIdentifier(table.physicalName)}`).get(),
+    );
+    const count = typeof result?.count === "number" ? result.count : Number.NaN;
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new Error("SQLite history import rejected malformed table count");
+    }
     const report = reports.get(table.canonicalName) ?? mutableReport();
     report.canonicalName = table.canonicalName;
     report.physicalName = table.physicalName;
@@ -1136,7 +1147,7 @@ export function importSqliteHistory(
   const pending = new Map<string, DomainEvent>();
   let orphaned = 0;
   let outOfScope = 0;
-  let rejected = 0;
+  let rejected = [...tables.values()].reduce((total, raw) => total + raw.malformed, 0);
   let ambiguous = 0;
   let duplicates = 0;
   const includeActivity = options.includeActivity !== false;

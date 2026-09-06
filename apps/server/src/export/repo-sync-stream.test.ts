@@ -8,7 +8,41 @@ import {
   areActivityEventsEquivalent,
   activityToDomainEvent,
 } from "./activity-stream.ts";
-import { EventLogConflictError, EventLogWriter, type DomainEvent } from "./event-log.ts";
+import {
+  EventLogConflictError,
+  EventLogWriter,
+  readEventLog,
+  type DomainEvent,
+} from "./event-log.ts";
+
+function uppercaseActivityDatabase(): Database {
+  const db = new Database(":memory:");
+  db.exec(`
+    CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE teams (id TEXT PRIMARY KEY, key TEXT NOT NULL);
+    CREATE TABLE issues (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, number INTEGER NOT NULL);
+    CREATE TABLE activity (
+      "ID" TEXT PRIMARY KEY, issue_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+      "TYPE" TEXT NOT NULL, "PAYLOAD" TEXT NOT NULL, "WORKSPACE_ID" TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.query("INSERT INTO actors VALUES (?1, ?2)").run("actor-1", "agent");
+  db.query("INSERT INTO teams VALUES (?1, ?2)").run("team-1", "PB");
+  db.query("INSERT INTO issues VALUES (?1, ?2, ?3)").run("issue-1", "team-1", 7);
+  db.query(
+    'INSERT INTO activity ("ID", issue_id, actor_id, "TYPE", "PAYLOAD", "WORKSPACE_ID", created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)',
+  ).run(
+    "activity-uppercase",
+    "issue-1",
+    "actor-1",
+    "created",
+    JSON.stringify({ title: "Uppercase Activity" }),
+    "workspace-1",
+    "2025-01-01T00:00:00.000Z",
+  );
+  return db;
+}
 
 function database(): Database {
   const db = new Database(":memory:");
@@ -25,6 +59,22 @@ function database(): Database {
 }
 
 describe("canonical Activity stream bridge", () => {
+  it("normalizes uppercase Activity columns before appending the bridge event", () => {
+    const db = uppercaseActivityDatabase();
+    const root = mkdtempSync(join(tmpdir(), "prb-repo-stream-uppercase-columns-"));
+    try {
+      expect(appendActivityEvents(db, root)).toBe(1);
+      expect(readEventLog(root)[0]).toMatchObject({
+        eventId: "activity-uppercase",
+        workspaceId: "workspace-1",
+        payload: { title: "Uppercase Activity", issue_id: "issue-1" },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("appends stable issue events idempotently without reading historical logs", () => {
     const db = database();
     const root = mkdtempSync(join(tmpdir(), "prb-repo-stream-"));
