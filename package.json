@@ -16,7 +16,8 @@
     "rebuild": "bun run --cwd apps/server rebuild",
     "prepare": "husky",
     "import:linear": "bun run --cwd apps/server import:linear",
-    "build:runtime": "bun scripts/build-runtime.ts"
+    "build:runtime": "bun scripts/build-runtime.ts",
+    "import:sqlite-events": "bun run --cwd apps/server import:sqlite-events"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

@@ -8,7 +8,8 @@
     "export": "bun src/scripts/export.ts",
     "archive:documents": "bun src/scripts/archive-documents.ts",
     "rebuild": "bun src/scripts/rebuild.ts",
-    "import:linear": "bun src/scripts/import-linear.ts"
+    "import:linear": "bun src/scripts/import-linear.ts",
+    "import:sqlite-events": "bun src/scripts/import-sqlite-events.ts"
   },
   "dependencies": {
     "@prime-board/schema": "workspace:*",

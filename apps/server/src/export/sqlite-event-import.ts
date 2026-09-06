@@ -247,3 +247,17 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
     warnings,
   };
 }
+// El importador completo vive en otro módulo para mantener compatible esta API
+// de Activity con RepoSync y los callers existentes.
+export {
+  importSqliteCanonicalEvents,
+  importSqliteEventLog,
+  importSqliteHistory,
+  SQLITE_HISTORY_EXCLUDED_TABLES,
+  SQLITE_HISTORY_TABLES,
+} from "./sqlite-history-import.ts";
+export type {
+  SQLiteHistoryImportOptions,
+  SQLiteHistoryImportResult,
+  SQLiteHistoryTableReport,
+} from "./sqlite-history-import.ts";
