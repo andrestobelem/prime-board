@@ -2,7 +2,14 @@ import type { Persistence, PersistenceTransaction, SqlValue } from "../db/persis
 import { DEFAULT_WORKFLOW } from "../db/defaults.ts";
 import { newId, now } from "../db/util.ts";
 import { apiError } from "../graphql/errors.ts";
-import type { TeamRow, WorkflowStateRow } from "./teams.ts";
+import {
+  estimateScaleValues,
+  mapTeamPlanningSettings,
+  normalizePlanningSettings,
+  type TeamPlanningSettingsInput,
+  type TeamRow,
+  type WorkflowStateRow,
+} from "./teams.ts";
 
 const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"] as const;
 type StateType = (typeof STATE_TYPES)[number];
@@ -17,6 +24,7 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 export function mapPostgresTeam(row: TeamRow) {
+  const settings = mapTeamPlanningSettings(row);
   return {
     id: row.id,
     key: row.key,
@@ -24,6 +32,38 @@ export function mapPostgresTeam(row: TeamRow) {
     description: row.description,
     visibility: row.visibility,
     accessPolicy: row.access_policy,
+    timezone: settings.timezone,
+    estimatesEnabled: settings.estimatesEnabled,
+    estimateScale: settings.estimateScale,
+    estimateExtendedScale: settings.estimateExtendedScale,
+    estimateAllowZero: settings.estimateAllowZero,
+    cyclesEnabled: settings.cyclesEnabled,
+    cycleDurationWeeks: settings.cycleDurationWeeks,
+    cycleStartDay: settings.cycleStartDay,
+    cycleCooldownDays: settings.cycleCooldownDays,
+    cycleUpcomingCount: settings.cycleUpcomingCount,
+    cycleRolloverEnabled: settings.cycleRolloverEnabled,
+    cycleAutoAddEnabled: settings.cycleAutoAddEnabled,
+    estimateSettings: {
+      enabled: settings.estimatesEnabled,
+      scale: settings.estimateScale,
+      extendedScale: settings.estimateExtendedScale,
+      allowZero: settings.estimateAllowZero,
+      values: estimateScaleValues(
+        settings.estimateScale,
+        settings.estimateExtendedScale,
+        settings.estimateAllowZero,
+      ),
+    },
+    cycleSettings: {
+      enabled: settings.cyclesEnabled,
+      durationWeeks: settings.cycleDurationWeeks,
+      startDay: settings.cycleStartDay,
+      cooldownDays: settings.cycleCooldownDays,
+      upcomingCount: settings.cycleUpcomingCount,
+      rolloverEnabled: settings.cycleRolloverEnabled,
+      autoAddEnabled: settings.cycleAutoAddEnabled,
+    },
     createdAt: row.created_at,
     archivedAt: row.archived_at,
     _row: row,
@@ -145,10 +185,11 @@ export async function createPostgresTeam(
     description?: string | null;
     visibility?: "public" | "private" | null;
     accessPolicy?: "workspace_members" | "team_members" | null;
-  },
+  } & TeamPlanningSettingsInput,
   ownerId?: string,
 ): Promise<TeamRow> {
   const values = validateTeamInput(input);
+  const settings = normalizePlanningSettings(input);
   if (await getPostgresTeam(persistence, { key: values.key })) {
     throw apiError("VALIDATION_FAILED", `Team key ${values.key} is already in use`);
   }
@@ -158,8 +199,11 @@ export async function createPostgresTeam(
       const timestamp = now();
       await tx.execute(
         `INSERT INTO teams
-         (id, name, key, description, visibility, access_policy, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+         (id, name, key, description, visibility, access_policy,
+          timezone, estimates_enabled, estimate_scale, estimate_extended_scale, estimate_allow_zero,
+          cycles_enabled, cycle_duration_weeks, cycle_start_day, cycle_cooldown_days,
+          cycle_upcoming_count, cycle_rollover_enabled, cycle_auto_add_enabled, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19)`,
         [
           id,
           values.name,
@@ -167,6 +211,18 @@ export async function createPostgresTeam(
           input.description ?? null,
           values.visibility,
           values.accessPolicy,
+          settings.timezone,
+          settings.estimatesEnabled,
+          settings.estimateScale,
+          settings.estimateExtendedScale,
+          settings.estimateAllowZero,
+          settings.cyclesEnabled,
+          settings.cycleDurationWeeks,
+          settings.cycleStartDay,
+          settings.cycleCooldownDays,
+          settings.cycleUpcomingCount,
+          settings.cycleRolloverEnabled,
+          settings.cycleAutoAddEnabled,
           timestamp,
         ],
       );
@@ -188,7 +244,7 @@ export async function createPostgresTeam(
   return row;
 }
 
-export interface PostgresTeamUpdateInput {
+export interface PostgresTeamUpdateInput extends TeamPlanningSettingsInput {
   name?: string | null;
   description?: string | null;
   defaultStateId?: string | null;
@@ -197,12 +253,13 @@ export interface PostgresTeamUpdateInput {
 }
 
 export async function updatePostgresTeam(
-  persistence: Persistence,
+  persistence: Persistence | PersistenceTransaction,
   id: string,
   input: PostgresTeamUpdateInput,
 ): Promise<TeamRow> {
   const team = await getPostgresTeam(persistence, { id });
   if (!team) throw apiError("NOT_FOUND", "Team not found");
+  const settings = normalizePlanningSettings(input, team);
   const sets: string[] = [];
   const params: SqlValue[] = [];
   const push = (column: string, value: SqlValue) => {
@@ -236,7 +293,36 @@ export async function updatePostgresTeam(
   }
   if (input.visibility != null) push("visibility", visibility);
   if (input.accessPolicy != null) push("access_policy", accessPolicy);
-  if (sets.length === 0) return team;
+
+  const settingColumns: Array<[string, SqlValue, SqlValue]> = [
+    ["timezone", settings.timezone, team.timezone],
+    ["estimates_enabled", settings.estimatesEnabled, team.estimates_enabled],
+    ["estimate_scale", settings.estimateScale, team.estimate_scale],
+    ["estimate_extended_scale", settings.estimateExtendedScale, team.estimate_extended_scale],
+    ["estimate_allow_zero", settings.estimateAllowZero, team.estimate_allow_zero],
+    ["cycles_enabled", settings.cyclesEnabled, team.cycles_enabled],
+    ["cycle_duration_weeks", settings.cycleDurationWeeks, team.cycle_duration_weeks],
+    ["cycle_start_day", settings.cycleStartDay, team.cycle_start_day],
+    ["cycle_cooldown_days", settings.cycleCooldownDays, team.cycle_cooldown_days],
+    ["cycle_upcoming_count", settings.cycleUpcomingCount, team.cycle_upcoming_count],
+    ["cycle_rollover_enabled", settings.cycleRolloverEnabled, team.cycle_rollover_enabled],
+    ["cycle_auto_add_enabled", settings.cycleAutoAddEnabled, team.cycle_auto_add_enabled],
+  ];
+  for (const [column, value, previous] of settingColumns) {
+    if (value !== previous) push(column, value);
+  }
+  if (!settings.cyclesEnabled && (team.cycles_enabled === true || team.cycles_enabled === 1)) {
+    const timestamp = now();
+    await persistence.execute(
+      "UPDATE cycles SET state = 'completed', updated_at = $1 WHERE team_id = $2 AND state = 'active'",
+      [timestamp, team.id],
+    );
+    await persistence.execute(
+      "UPDATE cycles SET archived_at = $1, updated_at = $1 WHERE team_id = $2 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL",
+      [timestamp, team.id],
+    );
+  }
+  if (!sets.length) return team;
   push("updated_at", now());
   params.push(id);
   const row = await persistence.one<TeamRow>(

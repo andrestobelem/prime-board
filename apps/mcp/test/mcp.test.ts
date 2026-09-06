@@ -74,6 +74,7 @@ describe("mcp tools", () => {
     const names = tools.tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
       "accept_invitation",
+      "advance_cycle",
       "archive_inbox",
       "archive_issue",
       "archive_project",

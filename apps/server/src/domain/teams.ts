@@ -5,6 +5,14 @@ import { seedTeamWorkflow } from "../db/seed.ts";
 import { newId, now } from "../db/util.ts";
 import { recordActivity } from "./activity.ts";
 
+export type EstimateScale = "exponential" | "fibonacci" | "linear" | "t_shirt";
+export type CycleStartDay =
+  "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+export type CycleCadenceSource = "cadence" | "manual";
+
+/** SQLite returns 0/1 while PostgreSQL returns booleans for these columns. */
+type DatabaseBoolean = boolean | number;
+
 export interface TeamRow {
   id: string;
   workspace_id: string | null;
@@ -18,6 +26,107 @@ export interface TeamRow {
   archived_at: string | null;
   visibility: "public" | "private";
   access_policy: "workspace_members" | "team_members";
+  timezone: string;
+  estimates_enabled: DatabaseBoolean;
+  estimate_scale: EstimateScale;
+  estimate_extended_scale: DatabaseBoolean;
+  estimate_allow_zero: DatabaseBoolean;
+  cycles_enabled: DatabaseBoolean;
+  cycle_duration_weeks: number;
+  cycle_start_day: number;
+  cycle_cooldown_days: number;
+  cycle_upcoming_count: number;
+  cycle_rollover_enabled: DatabaseBoolean;
+  cycle_auto_add_enabled: DatabaseBoolean;
+}
+
+const CYCLE_START_DAYS: readonly CycleStartDay[] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
+const ESTIMATE_SCALES: readonly EstimateScale[] = ["exponential", "fibonacci", "linear", "t_shirt"];
+
+function toBoolean(value: DatabaseBoolean): boolean {
+  return value === true || value === 1;
+}
+
+function cycleStartDayName(value: number): CycleStartDay {
+  return CYCLE_START_DAYS[value - 1] ?? "monday";
+}
+
+function cycleStartDayNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 7) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    const index = CYCLE_START_DAYS.indexOf(normalized as CycleStartDay);
+    if (index >= 0) return index + 1;
+  }
+  throw apiError("VALIDATION_FAILED", "cycleStartDay must be a weekday from monday to sunday");
+}
+
+function validateTimezone(value: string): string {
+  const timezone = value.trim();
+  if (!timezone) throw apiError("VALIDATION_FAILED", "Team timezone cannot be empty");
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
+  } catch {
+    throw apiError("VALIDATION_FAILED", `Invalid Team timezone: ${timezone}`);
+  }
+  return timezone;
+}
+
+export interface TeamPlanningSettings {
+  timezone: string;
+  estimatesEnabled: boolean;
+  estimateScale: EstimateScale;
+  estimateExtendedScale: boolean;
+  estimateAllowZero: boolean;
+  cyclesEnabled: boolean;
+  cycleDurationWeeks: number;
+  cycleStartDay: CycleStartDay;
+  cycleCooldownDays: number;
+  cycleUpcomingCount: number;
+  cycleRolloverEnabled: boolean;
+  cycleAutoAddEnabled: boolean;
+}
+
+export function mapTeamPlanningSettings(row: TeamRow): TeamPlanningSettings {
+  return {
+    timezone: row.timezone,
+    estimatesEnabled: toBoolean(row.estimates_enabled),
+    estimateScale: row.estimate_scale,
+    estimateExtendedScale: toBoolean(row.estimate_extended_scale),
+    estimateAllowZero: toBoolean(row.estimate_allow_zero),
+    cyclesEnabled: toBoolean(row.cycles_enabled),
+    cycleDurationWeeks: row.cycle_duration_weeks,
+    cycleStartDay: cycleStartDayName(row.cycle_start_day),
+    cycleCooldownDays: row.cycle_cooldown_days,
+    cycleUpcomingCount: row.cycle_upcoming_count,
+    cycleRolloverEnabled: toBoolean(row.cycle_rollover_enabled),
+    cycleAutoAddEnabled: toBoolean(row.cycle_auto_add_enabled),
+  };
+}
+
+export function estimateScaleValues(
+  scale: EstimateScale,
+  extended: boolean,
+  allowZero = false,
+): readonly (number | string)[] {
+  const values: Record<EstimateScale, readonly (number | string)[]> = {
+    exponential: [1, 2, 4, 8, 16, ...(extended ? [32, 64] : [])],
+    fibonacci: [1, 2, 3, 5, 8, ...(extended ? [13, 21] : [])],
+    linear: [1, 2, 3, 4, 5, ...(extended ? [6, 7] : [])],
+    t_shirt: ["XS", "S", "M", "L", "XL", ...(extended ? ["XXL", "XXXL"] : [])],
+  };
+  const result = values[scale];
+  return allowZero ? [0, ...result] : result;
 }
 
 export interface WorkflowStateRow {
@@ -31,6 +140,7 @@ export interface WorkflowStateRow {
 }
 
 export function mapTeam(row: TeamRow) {
+  const settings = mapTeamPlanningSettings(row);
   return {
     id: row.id,
     key: row.key,
@@ -38,6 +148,38 @@ export function mapTeam(row: TeamRow) {
     description: row.description,
     visibility: row.visibility,
     accessPolicy: row.access_policy,
+    timezone: settings.timezone,
+    estimatesEnabled: settings.estimatesEnabled,
+    estimateScale: settings.estimateScale,
+    estimateExtendedScale: settings.estimateExtendedScale,
+    estimateAllowZero: settings.estimateAllowZero,
+    cyclesEnabled: settings.cyclesEnabled,
+    cycleDurationWeeks: settings.cycleDurationWeeks,
+    cycleStartDay: settings.cycleStartDay,
+    cycleCooldownDays: settings.cycleCooldownDays,
+    cycleUpcomingCount: settings.cycleUpcomingCount,
+    cycleRolloverEnabled: settings.cycleRolloverEnabled,
+    cycleAutoAddEnabled: settings.cycleAutoAddEnabled,
+    estimateSettings: {
+      enabled: settings.estimatesEnabled,
+      scale: settings.estimateScale,
+      extendedScale: settings.estimateExtendedScale,
+      allowZero: settings.estimateAllowZero,
+      values: estimateScaleValues(
+        settings.estimateScale,
+        settings.estimateExtendedScale,
+        settings.estimateAllowZero,
+      ),
+    },
+    cycleSettings: {
+      enabled: settings.cyclesEnabled,
+      durationWeeks: settings.cycleDurationWeeks,
+      startDay: settings.cycleStartDay,
+      cooldownDays: settings.cycleCooldownDays,
+      upcomingCount: settings.cycleUpcomingCount,
+      rolloverEnabled: settings.cycleRolloverEnabled,
+      autoAddEnabled: settings.cycleAutoAddEnabled,
+    },
     createdAt: row.created_at,
     archivedAt: row.archived_at,
     _row: row,
@@ -195,6 +337,178 @@ export function listTeamStates(
   ) as WorkflowStateRow[];
 }
 
+export interface TeamPlanningSettingsInput {
+  timezone?: string | null;
+  estimatesEnabled?: boolean | null;
+  estimateScale?: string | null;
+  estimateExtendedScale?: boolean | null;
+  estimateExtended?: boolean | null;
+  estimateAllowZero?: boolean | null;
+  estimateZero?: boolean | null;
+  cyclesEnabled?: boolean | null;
+  cycleDurationWeeks?: number | null;
+  cycleDuration?: number | null;
+  cycleStartDay?: string | number | null;
+  cycleCooldownDays?: number | null;
+  cycleCooldown?: number | null;
+  cycleUpcomingCount?: number | null;
+  upcomingCycles?: number | null;
+  cycleRolloverEnabled?: boolean | null;
+  cycleRollover?: boolean | null;
+  cycleAutoAddEnabled?: boolean | null;
+  cycleAutoAdd?: boolean | null;
+}
+
+export interface NormalizedPlanningSettings {
+  timezone: string;
+  estimatesEnabled: boolean;
+  estimateScale: EstimateScale;
+  estimateExtendedScale: boolean;
+  estimateAllowZero: boolean;
+  cyclesEnabled: boolean;
+  cycleDurationWeeks: number;
+  cycleStartDay: number;
+  cycleCooldownDays: number;
+  cycleUpcomingCount: number;
+  cycleRolloverEnabled: boolean;
+  cycleAutoAddEnabled: boolean;
+}
+
+function chooseSetting<T>(field: string, values: readonly (T | null | undefined)[]): T | undefined {
+  let found: T | undefined;
+  let hasValue = false;
+  for (const value of values) {
+    if (value == null) continue;
+    if (hasValue && value !== found) {
+      throw apiError("VALIDATION_FAILED", `${field} aliases must have the same value`);
+    }
+    found = value;
+    hasValue = true;
+  }
+  return found;
+}
+
+function booleanSetting(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw apiError("VALIDATION_FAILED", `${field} must be a boolean`);
+  }
+  return value;
+}
+
+function scaleSetting(value: unknown): EstimateScale {
+  if (typeof value !== "string") {
+    throw apiError("VALIDATION_FAILED", "estimateScale is invalid");
+  }
+  const scale = ESTIMATE_SCALES.find((candidate) => candidate === value.trim().toLowerCase());
+  if (!scale) throw apiError("VALIDATION_FAILED", `Invalid estimate scale: ${value}`);
+  return scale;
+}
+
+function integerSetting(value: unknown, field: string, minimum: number, maximum: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > maximum) {
+    throw apiError(
+      "VALIDATION_FAILED",
+      `${field} must be an integer between ${minimum} and ${maximum}`,
+    );
+  }
+  return value;
+}
+
+export function normalizePlanningSettings(
+  input: TeamPlanningSettingsInput,
+  current?: TeamRow,
+): NormalizedPlanningSettings {
+  const existing = current ? mapTeamPlanningSettings(current) : null;
+  const timezone = chooseSetting("timezone", [input.timezone]);
+  const estimatesEnabled = chooseSetting("estimatesEnabled", [input.estimatesEnabled]);
+  const estimateScale = chooseSetting("estimateScale", [input.estimateScale]);
+  const estimateExtendedScale = chooseSetting("estimateExtendedScale", [
+    input.estimateExtendedScale,
+    input.estimateExtended,
+  ]);
+  const estimateAllowZero = chooseSetting("estimateAllowZero", [
+    input.estimateAllowZero,
+    input.estimateZero,
+  ]);
+  const cyclesEnabled = chooseSetting("cyclesEnabled", [input.cyclesEnabled]);
+  const cycleDurationWeeks = chooseSetting("cycleDurationWeeks", [
+    input.cycleDurationWeeks,
+    input.cycleDuration,
+  ]);
+  const cycleStartDay = chooseSetting("cycleStartDay", [input.cycleStartDay]);
+  const cycleCooldownDays = chooseSetting("cycleCooldownDays", [
+    input.cycleCooldownDays,
+    input.cycleCooldown,
+  ]);
+  const cycleUpcomingCount = chooseSetting("cycleUpcomingCount", [
+    input.cycleUpcomingCount,
+    input.upcomingCycles,
+  ]);
+  const cycleRolloverEnabled = chooseSetting("cycleRolloverEnabled", [
+    input.cycleRolloverEnabled,
+    input.cycleRollover,
+  ]);
+  const cycleAutoAddEnabled = chooseSetting("cycleAutoAddEnabled", [
+    input.cycleAutoAddEnabled,
+    input.cycleAutoAdd,
+  ]);
+
+  const normalized: NormalizedPlanningSettings = {
+    timezone: timezone === undefined ? (existing?.timezone ?? "UTC") : validateTimezone(timezone),
+    estimatesEnabled:
+      estimatesEnabled === undefined
+        ? (existing?.estimatesEnabled ?? false)
+        : booleanSetting(estimatesEnabled, "estimatesEnabled"),
+    estimateScale:
+      estimateScale === undefined
+        ? (existing?.estimateScale ?? "fibonacci")
+        : scaleSetting(estimateScale),
+    estimateExtendedScale:
+      estimateExtendedScale === undefined
+        ? (existing?.estimateExtendedScale ?? false)
+        : booleanSetting(estimateExtendedScale, "estimateExtendedScale"),
+    estimateAllowZero:
+      estimateAllowZero === undefined
+        ? (existing?.estimateAllowZero ?? false)
+        : booleanSetting(estimateAllowZero, "estimateAllowZero"),
+    cyclesEnabled:
+      cyclesEnabled === undefined
+        ? (existing?.cyclesEnabled ?? true)
+        : booleanSetting(cyclesEnabled, "cyclesEnabled"),
+    cycleDurationWeeks:
+      cycleDurationWeeks === undefined
+        ? (existing?.cycleDurationWeeks ?? 2)
+        : integerSetting(cycleDurationWeeks, "cycleDurationWeeks", 1, 8),
+    cycleStartDay:
+      cycleStartDay === undefined
+        ? existing
+          ? CYCLE_START_DAYS.indexOf(existing.cycleStartDay) + 1
+          : 1
+        : cycleStartDayNumber(cycleStartDay),
+    cycleCooldownDays:
+      cycleCooldownDays === undefined
+        ? (existing?.cycleCooldownDays ?? 0)
+        : integerSetting(cycleCooldownDays, "cycleCooldownDays", 0, 366),
+    cycleUpcomingCount:
+      cycleUpcomingCount === undefined
+        ? (existing?.cycleUpcomingCount ?? 3)
+        : integerSetting(cycleUpcomingCount, "cycleUpcomingCount", 0, 15),
+    cycleRolloverEnabled:
+      cycleRolloverEnabled === undefined
+        ? (existing?.cycleRolloverEnabled ?? true)
+        : booleanSetting(cycleRolloverEnabled, "cycleRolloverEnabled"),
+    cycleAutoAddEnabled:
+      cycleAutoAddEnabled === undefined
+        ? (existing?.cycleAutoAddEnabled ?? false)
+        : booleanSetting(cycleAutoAddEnabled, "cycleAutoAddEnabled"),
+  };
+  // Validate the full setting object even when values came from a persisted row.
+  if (normalized.timezone !== validateTimezone(normalized.timezone)) {
+    throw apiError("VALIDATION_FAILED", "Team timezone is invalid");
+  }
+  return normalized;
+}
+
 export function createTeam(
   db: Database,
   input: {
@@ -203,7 +517,7 @@ export function createTeam(
     description?: string | null;
     visibility?: "public" | "private" | null;
     accessPolicy?: "workspace_members" | "team_members" | null;
-  },
+  } & TeamPlanningSettingsInput,
   ownerId: string | undefined,
   workspaceId: string,
 ): TeamRow {
@@ -232,14 +546,18 @@ export function createTeam(
   if (visibility === "private" && accessPolicy !== "team_members") {
     throw apiError("VALIDATION_FAILED", "Private Teams must restrict access to Team members");
   }
+  const settings = normalizePlanningSettings(input);
 
   const id = newId();
   db.transaction(() => {
     const timestamp = now();
     db.query(
       `INSERT INTO teams
-       (id, workspace_id, name, key, description, visibility, access_policy, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)`,
+       (id, workspace_id, name, key, description, visibility, access_policy,
+        timezone, estimates_enabled, estimate_scale, estimate_extended_scale, estimate_allow_zero,
+        cycles_enabled, cycle_duration_weeks, cycle_start_day, cycle_cooldown_days,
+        cycle_upcoming_count, cycle_rollover_enabled, cycle_auto_add_enabled, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20)`,
     ).run(
       id,
       workspaceId,
@@ -248,6 +566,18 @@ export function createTeam(
       input.description ?? null,
       visibility,
       accessPolicy,
+      settings.timezone,
+      settings.estimatesEnabled ? 1 : 0,
+      settings.estimateScale,
+      settings.estimateExtendedScale ? 1 : 0,
+      settings.estimateAllowZero ? 1 : 0,
+      settings.cyclesEnabled ? 1 : 0,
+      settings.cycleDurationWeeks,
+      settings.cycleStartDay,
+      settings.cycleCooldownDays,
+      settings.cycleUpcomingCount,
+      settings.cycleRolloverEnabled ? 1 : 0,
+      settings.cycleAutoAddEnabled ? 1 : 0,
       timestamp,
     );
     seedTeamWorkflow(db, id, workspaceId);
@@ -276,7 +606,7 @@ export function getDefaultState(db: Database, team: TeamRow): WorkflowStateRow {
   return state;
 }
 
-export interface TeamUpdateInput {
+export interface TeamUpdateInput extends TeamPlanningSettingsInput {
   name?: string | null;
   description?: string | null;
   defaultStateId?: string | null;
@@ -289,50 +619,108 @@ export function updateTeam(
   id: string,
   input: TeamUpdateInput,
   workspaceId?: string,
+  afterUpdate?: (team: TeamRow) => void,
 ): TeamRow {
-  const team = getTeam(db, { id }, workspaceId);
-  if (!team) throw apiError("NOT_FOUND", "Team not found");
+  let updated: TeamRow;
+  db.transaction(() => {
+    // Derive settings from the row inside the write transaction. This keeps a
+    // concurrent Team update from applying a stale alias/default comparison.
+    const team = getTeam(db, { id }, workspaceId);
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
+    const settings = normalizePlanningSettings(input, team);
 
-  const sets: string[] = [];
-  const params: unknown[] = [];
-  const push = (column: string, value: unknown) => {
-    sets.push(`${column} = ?${params.length + 1}`);
-    params.push(value);
-  };
-  if (input.name != null) {
-    const name = input.name.trim();
-    if (!name) throw apiError("VALIDATION_FAILED", "Team name cannot be empty");
-    push("name", name);
-  }
-  if (input.description !== undefined) push("description", input.description);
-  if (input.defaultStateId != null) {
-    const state = db
-      .query("SELECT id FROM workflow_states WHERE id = ?1 AND team_id = ?2")
-      .get(input.defaultStateId, team.id);
-    if (!state) throw apiError("VALIDATION_FAILED", "Default state must belong to the team");
-    push("default_state_id", input.defaultStateId);
-  }
-  const visibility = input.visibility ?? team.visibility;
-  const accessPolicy = input.accessPolicy ?? team.access_policy;
-  if (visibility !== "public" && visibility !== "private") {
-    throw apiError("VALIDATION_FAILED", "Team visibility must be public or private");
-  }
-  if (accessPolicy !== "workspace_members" && accessPolicy !== "team_members") {
-    throw apiError("VALIDATION_FAILED", "Team access policy is invalid");
-  }
-  if (visibility === "private" && accessPolicy !== "team_members") {
-    throw apiError("VALIDATION_FAILED", "Private Teams must restrict access to Team members");
-  }
-  if (input.visibility != null) push("visibility", visibility);
-  if (input.accessPolicy != null) push("access_policy", accessPolicy);
-  if (sets.length > 0) {
-    push("updated_at", now());
-    params.push(team.id);
-    db.query(`UPDATE teams SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
-      ...(params as never[]),
-    );
-  }
-  return getTeam(db, { id }, workspaceId)!;
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    const push = (column: string, value: unknown) => {
+      sets.push(`${column} = ?${params.length + 1}`);
+      params.push(value);
+    };
+    if (input.name != null) {
+      const name = input.name.trim();
+      if (!name) throw apiError("VALIDATION_FAILED", "Team name cannot be empty");
+      push("name", name);
+    }
+    if (input.description !== undefined) push("description", input.description);
+    if (input.defaultStateId != null) {
+      const state = db
+        .query("SELECT id FROM workflow_states WHERE id = ?1 AND team_id = ?2")
+        .get(input.defaultStateId, team.id);
+      if (!state) throw apiError("VALIDATION_FAILED", "Default state must belong to the team");
+      push("default_state_id", input.defaultStateId);
+    }
+    const visibility = input.visibility ?? team.visibility;
+    const accessPolicy = input.accessPolicy ?? team.access_policy;
+    if (visibility !== "public" && visibility !== "private") {
+      throw apiError("VALIDATION_FAILED", "Team visibility must be public or private");
+    }
+    if (accessPolicy !== "workspace_members" && accessPolicy !== "team_members") {
+      throw apiError("VALIDATION_FAILED", "Team access policy is invalid");
+    }
+    if (visibility === "private" && accessPolicy !== "team_members") {
+      throw apiError("VALIDATION_FAILED", "Private Teams must restrict access to Team members");
+    }
+    if (input.visibility != null) push("visibility", visibility);
+    if (input.accessPolicy != null) push("access_policy", accessPolicy);
+
+    const settingColumns: Array<[string, unknown, unknown]> = [
+      ["timezone", settings.timezone, team.timezone],
+      [
+        "estimates_enabled",
+        settings.estimatesEnabled ? 1 : 0,
+        toBoolean(team.estimates_enabled) ? 1 : 0,
+      ],
+      ["estimate_scale", settings.estimateScale, team.estimate_scale],
+      [
+        "estimate_extended_scale",
+        settings.estimateExtendedScale ? 1 : 0,
+        toBoolean(team.estimate_extended_scale) ? 1 : 0,
+      ],
+      [
+        "estimate_allow_zero",
+        settings.estimateAllowZero ? 1 : 0,
+        toBoolean(team.estimate_allow_zero) ? 1 : 0,
+      ],
+      ["cycles_enabled", settings.cyclesEnabled ? 1 : 0, toBoolean(team.cycles_enabled) ? 1 : 0],
+      ["cycle_duration_weeks", settings.cycleDurationWeeks, team.cycle_duration_weeks],
+      ["cycle_start_day", settings.cycleStartDay, team.cycle_start_day],
+      ["cycle_cooldown_days", settings.cycleCooldownDays, team.cycle_cooldown_days],
+      ["cycle_upcoming_count", settings.cycleUpcomingCount, team.cycle_upcoming_count],
+      [
+        "cycle_rollover_enabled",
+        settings.cycleRolloverEnabled ? 1 : 0,
+        toBoolean(team.cycle_rollover_enabled) ? 1 : 0,
+      ],
+      [
+        "cycle_auto_add_enabled",
+        settings.cycleAutoAddEnabled ? 1 : 0,
+        toBoolean(team.cycle_auto_add_enabled) ? 1 : 0,
+      ],
+    ];
+    for (const [column, value, previous] of settingColumns) {
+      if (value !== previous) push(column, value);
+    }
+
+    if (!settings.cyclesEnabled && toBoolean(team.cycles_enabled)) {
+      const timestamp = now();
+      db.query(
+        "UPDATE cycles SET state = 'completed', updated_at = ?1 WHERE team_id = ?2 AND state = 'active'",
+      ).run(timestamp, team.id);
+      db.query(
+        "UPDATE cycles SET archived_at = ?1, updated_at = ?1 WHERE team_id = ?2 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL",
+      ).run(timestamp, team.id);
+    }
+
+    if (sets.length > 0) {
+      push("updated_at", now());
+      params.push(team.id);
+      db.query(`UPDATE teams SET ${sets.join(", ")} WHERE id = ?${params.length}`).run(
+        ...(params as never[]),
+      );
+    }
+    updated = getTeam(db, { id }, workspaceId)!;
+    afterUpdate?.(updated);
+  })();
+  return updated!;
 }
 
 const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"];

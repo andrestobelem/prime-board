@@ -188,8 +188,11 @@ import {
 import { mapActivity } from "../domain/activity.ts";
 import { mapIssue } from "../domain/issues.ts";
 import {
+  advanceCycle,
   carryOverCycle,
   createCycle,
+  createCycleFromCadence,
+  ensureUpcomingCadenceCycles,
   cycleProgress,
   deleteCycle,
   getCycle,
@@ -198,8 +201,11 @@ import {
   updateCycle,
 } from "../domain/cycles.ts";
 import {
+  advancePostgresCycle,
   carryOverPostgresCycle,
   createPostgresCycle,
+  createPostgresCycleFromCadence,
+  ensureUpcomingPostgresCadenceCyclesInTransaction,
   cycleProgress as postgresCycleProgress,
   deletePostgresCycle,
   getPostgresCycle,
@@ -469,6 +475,26 @@ async function visiblePostgresReview(
   );
 }
 
+const CYCLE_PLANNING_INPUT_FIELDS = new Set([
+  "timezone",
+  "cyclesEnabled",
+  "cycleDurationWeeks",
+  "cycleDuration",
+  "cycleStartDay",
+  "cycleCooldownDays",
+  "cycleCooldown",
+  "cycleUpcomingCount",
+  "upcomingCycles",
+  "cycleRolloverEnabled",
+  "cycleRollover",
+  "cycleAutoAddEnabled",
+  "cycleAutoAdd",
+]);
+
+function hasCyclePlanningInput(input: Record<string, unknown>): boolean {
+  return Object.keys(input).some((field) => CYCLE_PLANNING_INPUT_FIELDS.has(field));
+}
+
 export const resolvers = {
   DateTime,
   JSON: JSONScalar,
@@ -480,6 +506,22 @@ export const resolvers = {
     WORKSPACE_MEMBERS: "workspace_members",
     TEAM_MEMBERS: "team_members",
   },
+  EstimateScale: {
+    EXPONENTIAL: "exponential",
+    FIBONACCI: "fibonacci",
+    LINEAR: "linear",
+    T_SHIRT: "t_shirt",
+  },
+  CycleStartDay: {
+    MONDAY: "monday",
+    TUESDAY: "tuesday",
+    WEDNESDAY: "wednesday",
+    THURSDAY: "thursday",
+    FRIDAY: "friday",
+    SATURDAY: "saturday",
+    SUNDAY: "sunday",
+  },
+  CycleCadenceSource: { CADENCE: "cadence", MANUAL: "manual" },
   ApiKeyScope: { READ: "read", WRITE: "write", ADMIN: "admin" },
   ActorInvitationStatus: {
     PENDING: "pending",
@@ -1741,6 +1783,25 @@ export const resolvers = {
               description?: string | null;
               visibility?: "public" | "private" | null;
               accessPolicy?: "workspace_members" | "team_members" | null;
+              timezone?: string | null;
+              estimatesEnabled?: boolean | null;
+              estimateScale?: string | null;
+              estimateExtendedScale?: boolean | null;
+              estimateExtended?: boolean | null;
+              estimateAllowZero?: boolean | null;
+              estimateZero?: boolean | null;
+              cyclesEnabled?: boolean | null;
+              cycleDurationWeeks?: number | null;
+              cycleDuration?: number | null;
+              cycleStartDay?: string | number | null;
+              cycleCooldownDays?: number | null;
+              cycleCooldown?: number | null;
+              cycleUpcomingCount?: number | null;
+              upcomingCycles?: number | null;
+              cycleRolloverEnabled?: boolean | null;
+              cycleRollover?: boolean | null;
+              cycleAutoAddEnabled?: boolean | null;
+              cycleAutoAdd?: boolean | null;
             };
           },
           context: Context,
@@ -1789,17 +1850,44 @@ export const resolvers = {
               throw apiError("UNAUTHORIZED", "Team owner permission is required");
             }
             await assertPostgresTeamActive(context.persistence, team.id);
-            return {
-              success: true,
-              team: mapPostgresTeam(
-                await updatePostgresTeam(context.persistence, team.id, args.input),
-              ),
-            };
+            const updated = await context.persistence.transaction(async (tx) => {
+              const locked = await tx.one<{ id: string }>(
+                "SELECT id FROM teams WHERE id = $1 FOR UPDATE",
+                [team.id],
+              );
+              if (!locked) throw apiError("NOT_FOUND", "Team not found");
+              const changed = await updatePostgresTeam(tx, team.id, args.input);
+              if (
+                hasCyclePlanningInput(args.input as unknown as Record<string, unknown>) &&
+                (changed.cycles_enabled === true || changed.cycles_enabled === 1)
+              ) {
+                await ensureUpcomingPostgresCadenceCyclesInTransaction(tx, changed);
+              }
+              return changed;
+            });
+            return { success: true, team: mapPostgresTeam(updated) };
           }
           const scopedTeam = requireTeam(context, { id: args.id });
           assertCanManageTeam(context.db, viewer, scopedTeam.id);
           const team = mapTeam(
-            updateTeam(context.db, args.id, args.input, context.workspace.workspaceId),
+            updateTeam(
+              context.db,
+              args.id,
+              args.input,
+              context.workspace.workspaceId,
+              (updated) => {
+                if (
+                  hasCyclePlanningInput(args.input as unknown as Record<string, unknown>) &&
+                  (updated.cycles_enabled === true || updated.cycles_enabled === 1)
+                ) {
+                  ensureUpcomingCadenceCycles(
+                    context.db,
+                    updated.id,
+                    context.workspace.workspaceId,
+                  );
+                }
+              },
+            ),
           );
           return { success: true, team };
         },
@@ -2758,9 +2846,10 @@ export const resolvers = {
             input: {
               teamId: string;
               name: string;
-              startsAt: string;
-              endsAt: string;
+              startsAt?: string | null;
+              endsAt?: string | null;
               state?: string | null;
+              fromCadence?: boolean | null;
             };
           },
           context: Context,
@@ -2784,6 +2873,38 @@ export const resolvers = {
             cycle: mapCycle(createCycle(context.db, args.input, context.workspace.workspaceId)),
           };
         },
+        cycleCreateFromCadence: async (
+          _parent: unknown,
+          args: {
+            input: {
+              teamId: string;
+              name?: string | null;
+              startsAt?: string | null;
+              state?: string | null;
+            };
+          },
+          context: Context,
+        ) => {
+          const viewer = requireViewer(context);
+          if (context.persistence) {
+            if (!apiKeyTeamsWithinLimit(context.auth, [args.input.teamId])) {
+              throw apiError("NOT_FOUND", "Team resource not found");
+            }
+            return {
+              success: true,
+              cycle: mapPostgresCycle(
+                await createPostgresCycleFromCadence(context.persistence, viewer, args.input),
+              ),
+            };
+          }
+          assertCanManageTeam(context.db, viewer, args.input.teamId);
+          return {
+            success: true,
+            cycle: mapCycle(
+              createCycleFromCadence(context.db, args.input, context.workspace.workspaceId),
+            ),
+          };
+        },
         cycleUpdate: async (
           _parent: unknown,
           args: {
@@ -2794,6 +2915,7 @@ export const resolvers = {
               endsAt?: string | null;
               state?: string | null;
               archived?: boolean | null;
+              cadenceSource?: string | null;
             };
           },
           context: Context,
@@ -2816,8 +2938,44 @@ export const resolvers = {
           return {
             success: true,
             cycle: mapCycle(
-              updateCycle(context.db, args.id, args.input, context.workspace.workspaceId),
+              updateCycle(
+                context.db,
+                args.id,
+                args.input,
+                context.workspace.workspaceId,
+                viewer.id,
+              ),
             ),
+          };
+        },
+        cycleAdvance: async (_parent: unknown, args: { id: string }, context: Context) => {
+          const viewer = requireViewer(context);
+          if (context.persistence) {
+            const existing = await getPostgresCycle(context.persistence, args.id);
+            if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
+              throw apiError("NOT_FOUND", "Cycle resource not found");
+            }
+            const result = await advancePostgresCycle(context.persistence, viewer, args.id);
+            return {
+              success: true,
+              cycle: mapPostgresCycle(result.cycle),
+              nextCycle: result.nextCycle ? mapPostgresCycle(result.nextCycle) : null,
+              movedIssues: result.movedIssues,
+            };
+          }
+          const existing = getCycle(context.db, args.id, context.workspace.workspaceId);
+          if (existing) assertCanManageTeam(context.db, viewer, existing.team_id);
+          const result = advanceCycle(
+            context.db,
+            viewer.id,
+            args.id,
+            context.workspace.workspaceId,
+          );
+          return {
+            success: true,
+            cycle: mapCycle(result.cycle),
+            nextCycle: result.nextCycle ? mapCycle(result.nextCycle) : null,
+            movedIssues: result.movedIssues,
           };
         },
         cycleDelete: async (_parent: unknown, args: { id: string }, context: Context) => {

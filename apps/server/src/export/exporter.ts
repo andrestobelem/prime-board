@@ -619,7 +619,11 @@ export function exportBoard(
 
   const teams = db
     .query(
-      `SELECT id, key, name, description, default_state_id, visibility, access_policy, archived_at FROM teams ${teamFilter ? "WHERE id = ?1" : ""} ORDER BY key`,
+      `SELECT id, key, name, description, default_state_id, visibility, access_policy, archived_at,
+              timezone, estimates_enabled, estimate_scale, estimate_extended_scale, estimate_allow_zero,
+              cycles_enabled, cycle_duration_weeks, cycle_start_day, cycle_cooldown_days,
+              cycle_upcoming_count, cycle_rollover_enabled, cycle_auto_add_enabled
+       FROM teams ${teamFilter ? "WHERE id = ?1" : ""} ORDER BY key`,
     )
     .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<{
     id: string;
@@ -630,6 +634,18 @@ export function exportBoard(
     visibility: "public" | "private";
     access_policy: "workspace_members" | "team_members";
     archived_at: string | null;
+    timezone: string;
+    estimates_enabled: boolean | number;
+    estimate_scale: string;
+    estimate_extended_scale: boolean | number;
+    estimate_allow_zero: boolean | number;
+    cycles_enabled: boolean | number;
+    cycle_duration_weeks: number;
+    cycle_start_day: number;
+    cycle_cooldown_days: number;
+    cycle_upcoming_count: number;
+    cycle_rollover_enabled: boolean | number;
+    cycle_auto_add_enabled: boolean | number;
   }>;
   write(
     join(base, "meta", "teams.json"),
@@ -641,6 +657,21 @@ export function exportBoard(
         visibility: team.visibility,
         accessPolicy: team.access_policy,
         archived: Boolean(team.archived_at),
+        timezone: team.timezone ?? "UTC",
+        estimatesEnabled: Boolean(team.estimates_enabled),
+        estimateScale: team.estimate_scale ?? "fibonacci",
+        estimateExtendedScale: Boolean(team.estimate_extended_scale),
+        estimateAllowZero: Boolean(team.estimate_allow_zero),
+        cyclesEnabled: Boolean(team.cycles_enabled),
+        cycleDurationWeeks: team.cycle_duration_weeks ?? 2,
+        cycleStartDay:
+          ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"][
+            (team.cycle_start_day ?? 1) - 1
+          ] ?? "monday",
+        cycleCooldownDays: team.cycle_cooldown_days ?? 0,
+        cycleUpcomingCount: team.cycle_upcoming_count ?? 3,
+        cycleRolloverEnabled: Boolean(team.cycle_rollover_enabled),
+        cycleAutoAddEnabled: Boolean(team.cycle_auto_add_enabled),
         defaultState: team.default_state_id
           ? (lookups.states.get(team.default_state_id) ?? null)
           : null,
@@ -832,6 +863,7 @@ export function exportBoard(
         startsAt: cycle.starts_at,
         endsAt: cycle.ends_at,
         state: cycle.state,
+        cadenceSource: cycle.cadence_source ?? "manual",
         archived: Boolean(cycle.archived_at),
       })),
     ),

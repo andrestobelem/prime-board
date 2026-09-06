@@ -34,6 +34,84 @@ export interface RebuildOptions {
 
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 
+const CYCLE_START_DAYS = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+] as const;
+const ESTIMATE_SCALES = ["exponential", "fibonacci", "linear", "t_shirt"] as const;
+
+function invalidImportedSetting(field: string, value: unknown): never {
+  throw new Error(`Invalid Team planning setting ${field}: ${String(value)}`);
+}
+
+function importedBoolean(value: unknown, fallback: boolean, field: string): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (value === true || value === false) return value;
+  if (value === 0 || value === 1) return value === 1;
+  invalidImportedSetting(field, value);
+}
+
+function importedInteger(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  field: string,
+): number {
+  if (value === undefined || value === null) return fallback;
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum) return parsed;
+  invalidImportedSetting(field, value);
+}
+
+function importedTimezone(value: unknown): string {
+  if (value === undefined || value === null) return "UTC";
+  if (typeof value !== "string" || !value.trim()) invalidImportedSetting("timezone", value);
+  const timezone = value.trim();
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
+    return timezone;
+  } catch {
+    invalidImportedSetting("timezone", value);
+  }
+}
+
+function importedScale(value: unknown): (typeof ESTIMATE_SCALES)[number] {
+  if (value === undefined || value === null) return "fibonacci";
+  if (typeof value === "string") {
+    const scale = value.trim().toLowerCase();
+    if (ESTIMATE_SCALES.includes(scale as (typeof ESTIMATE_SCALES)[number]))
+      return scale as (typeof ESTIMATE_SCALES)[number];
+  }
+  invalidImportedSetting("estimateScale", value);
+}
+
+function importedCycleCadenceSource(value: unknown): "cadence" | "manual" {
+  if (value === undefined || value === null) return "manual";
+  if (value === "cadence" || value === "manual") return value;
+  invalidImportedSetting("cadenceSource", value);
+}
+
+function importedStartDay(value: unknown): number {
+  if (value === undefined || value === null) return 1;
+  if (typeof value === "number" || (typeof value === "string" && /^\d+$/.test(value))) {
+    return importedInteger(value, 1, 1, 7, "cycleStartDay");
+  }
+  if (typeof value === "string") {
+    const index = CYCLE_START_DAYS.indexOf(
+      value.trim().toLowerCase() as (typeof CYCLE_START_DAYS)[number],
+    );
+    if (index >= 0) return index + 1;
+  }
+  invalidImportedSetting("cycleStartDay", value);
+}
+
 /**
  * Puerta de seguridad de la fuente de rebuild. Una captura histórica no es una
  * entrada vigente del índice: se conserva en el repositorio, pero el operador
@@ -475,8 +553,12 @@ export function rebuildFromRepo(
           : "team_members";
       db.query(
         `INSERT INTO teams
-         (id, name, key, description, visibility, access_policy, created_at, updated_at, archived_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
+         (id, name, key, description, visibility, access_policy,
+          timezone, estimates_enabled, estimate_scale, estimate_extended_scale, estimate_allow_zero,
+          cycles_enabled, cycle_duration_weeks, cycle_start_day, cycle_cooldown_days,
+          cycle_upcoming_count, cycle_rollover_enabled, cycle_auto_add_enabled,
+          created_at, updated_at, archived_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?19, ?20)`,
       ).run(
         teamId,
         team.name,
@@ -484,6 +566,18 @@ export function rebuildFromRepo(
         team.description ?? null,
         visibility,
         visibility === "private" ? "team_members" : accessPolicy,
+        importedTimezone(team.timezone),
+        importedBoolean(team.estimatesEnabled, false, "estimatesEnabled") ? 1 : 0,
+        importedScale(team.estimateScale),
+        importedBoolean(team.estimateExtendedScale, false, "estimateExtendedScale") ? 1 : 0,
+        importedBoolean(team.estimateAllowZero, false, "estimateAllowZero") ? 1 : 0,
+        importedBoolean(team.cyclesEnabled, true, "cyclesEnabled") ? 1 : 0,
+        importedInteger(team.cycleDurationWeeks, 2, 1, 8, "cycleDurationWeeks"),
+        importedStartDay(team.cycleStartDay),
+        importedInteger(team.cycleCooldownDays, 0, 0, 366, "cycleCooldownDays"),
+        importedInteger(team.cycleUpcomingCount, 3, 0, 15, "cycleUpcomingCount"),
+        importedBoolean(team.cycleRolloverEnabled, true, "cycleRolloverEnabled") ? 1 : 0,
+        importedBoolean(team.cycleAutoAddEnabled, false, "cycleAutoAddEnabled") ? 1 : 0,
         timestamp,
         team.archived ? timestamp : null,
       );
@@ -597,8 +691,8 @@ export function rebuildFromRepo(
         cycleIds.set(`${cycle.team}/${cycle.number}`, id);
         db.query(
           `INSERT INTO cycles
-            (id, team_id, number, name, starts_at, ends_at, state, created_at, updated_at, archived_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)`,
+            (id, team_id, number, name, starts_at, ends_at, state, cadence_source, created_at, updated_at, archived_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)`,
         ).run(
           id,
           teamId,
@@ -607,6 +701,7 @@ export function rebuildFromRepo(
           cycle.startsAt,
           cycle.endsAt,
           cycle.state,
+          importedCycleCadenceSource(cycle.cadenceSource),
           timestamp,
           cycle.archived ? timestamp : null,
         );

@@ -7,6 +7,8 @@ import {
   canDiscoverPostgresTeam,
   getPostgresTeam,
 } from "./postgres-teams.ts";
+import { mapTeamPlanningSettings, type CycleCadenceSource, type TeamRow } from "./teams.ts";
+import { cadenceDates as computeCadenceDates, type CycleCadenceSettings } from "./cycle-cadence.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 
 export type PostgresCycleState = "upcoming" | "active" | "completed";
@@ -22,6 +24,7 @@ export interface PostgresCycleRow {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  cadence_source: CycleCadenceSource;
 }
 
 export function mapPostgresCycle(row: PostgresCycleRow) {
@@ -33,6 +36,8 @@ export function mapPostgresCycle(row: PostgresCycleRow) {
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     state: row.state,
+    cadenceSource: row.cadence_source,
+    manuallyAdjusted: row.cadence_source === "manual",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
@@ -69,6 +74,35 @@ function validateDates(startsAt: string, endsAt: string): void {
   if (parseDateTime(startsAt, "Cycle startsAt") > parseDateTime(endsAt, "Cycle endsAt")) {
     throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
   }
+}
+
+function assertCyclesEnabled(team: TeamRow): void {
+  if (team.cycles_enabled !== true && team.cycles_enabled !== 1) {
+    throw apiError("VALIDATION_FAILED", "Cycles are disabled for this Team");
+  }
+}
+
+function cadenceSettings(team: TeamRow): CycleCadenceSettings {
+  const settings = mapTeamPlanningSettings(team);
+  return {
+    timezone: settings.timezone,
+    durationWeeks: settings.cycleDurationWeeks,
+    startDay: settings.cycleStartDay,
+    cooldownDays: settings.cycleCooldownDays,
+  };
+}
+
+function cadenceDates(
+  team: TeamRow,
+  startsAt: string | undefined,
+  previousEndsAt: string | undefined,
+): { startsAt: string; endsAt: string } {
+  return computeCadenceDates(
+    cadenceSettings(team),
+    new Date().toISOString(),
+    startsAt,
+    previousEndsAt,
+  );
 }
 
 async function assertPostgresCycleAccess(
@@ -116,39 +150,112 @@ export async function createPostgresCycle(
   input: {
     teamId: string;
     name: string;
-    startsAt: string;
-    endsAt: string;
+    startsAt?: string | null;
+    endsAt?: string | null;
     state?: string | null;
+    fromCadence?: boolean | null;
+    cadenceSource?: string | null;
   },
 ): Promise<PostgresCycleRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
-  validateDates(input.startsAt, input.endsAt);
+  const team = await getPostgresTeam(persistence, { id: input.teamId });
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
+  assertCyclesEnabled(team);
+  const requestedCadence = input.fromCadence === true || input.cadenceSource === "cadence";
+  if (requestedCadence && input.startsAt == null && input.endsAt != null) {
+    throw apiError(
+      "VALIDATION_FAILED",
+      "Cycle endsAt cannot be supplied without startsAt when fromCadence is enabled",
+    );
+  }
+  const latest =
+    requestedCadence && input.endsAt == null
+      ? await persistence.one<{ ends_at: string }>(
+          "SELECT ends_at FROM cycles WHERE team_id = $1 AND archived_at IS NULL ORDER BY number DESC LIMIT 1",
+          [input.teamId],
+        )
+      : null;
+  const generated =
+    requestedCadence && input.endsAt == null
+      ? cadenceDates(team, input.startsAt ?? undefined, latest?.ends_at)
+      : null;
+  const cadenceSource: CycleCadenceSource =
+    requestedCadence &&
+    input.startsAt == null &&
+    input.endsAt == null &&
+    Number(team.cycle_upcoming_count ?? 0) > 0
+      ? "cadence"
+      : "manual";
+  const startsAt = generated?.startsAt ?? input.startsAt;
+  const endsAt = generated?.endsAt ?? input.endsAt;
+  if (!startsAt || !endsAt) {
+    throw apiError(
+      "VALIDATION_FAILED",
+      "Cycle startsAt and endsAt are required unless fromCadence is enabled",
+    );
+  }
+  validateDates(startsAt, endsAt);
+  if (input.cadenceSource && input.cadenceSource !== cadenceSource) {
+    throw apiError("VALIDATION_FAILED", "cadenceSource does not match the cycle creation mode");
+  }
   await assertPostgresCycleAccess(persistence, viewer, input.teamId);
+  const state = input.state ? resolveState(input.state) : "upcoming";
   const id = newId();
   const timestamp = now();
-  await persistence.transaction(async (tx) => {
-    await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [input.teamId]);
-    const number = await nextPostgresCycleNumber(tx, input.teamId);
+  return persistence.transaction(async (tx) => {
+    const lockedTeam = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
+      input.teamId,
+    ]);
+    if (!lockedTeam) throw apiError("NOT_FOUND", "Team not found");
+    if (state === "active") {
+      const active = await tx.one<{ id: string }>(
+        "SELECT id FROM cycles WHERE team_id = $1 AND state = 'active' AND archived_at IS NULL LIMIT 1 FOR UPDATE",
+        [input.teamId],
+      );
+      if (active) throw apiError("VALIDATION_FAILED", "A team can have only one active cycle");
+    }
     await tx.execute(
       `INSERT INTO cycles
-       (id, team_id, number, name, starts_at, ends_at, state, created_at, updated_at, archived_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, NULL)`,
+       (id, team_id, number, name, starts_at, ends_at, state, cadence_source, created_at, updated_at, archived_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, NULL)`,
       [
         id,
         input.teamId,
-        number,
+        await nextPostgresCycleNumber(tx, input.teamId),
         name,
-        input.startsAt,
-        input.endsAt,
-        input.state ? resolveState(input.state) : "upcoming",
+        startsAt,
+        endsAt,
+        state,
+        cadenceSource,
         timestamp,
       ],
     );
+    if (
+      (lockedTeam.cycles_enabled === true || lockedTeam.cycles_enabled === 1) &&
+      (requestedCadence || state !== "upcoming") &&
+      (Number(lockedTeam.cycle_upcoming_count ?? 0) > 0 || state !== "upcoming")
+    ) {
+      await ensureUpcomingPostgresCadenceCyclesInTransaction(tx, lockedTeam);
+    }
+    const row = await getPostgresCycle(tx, id);
+    if (!row) throw new Error("PostgreSQL cycle insert returned no row");
+    return row;
   });
-  const row = await getPostgresCycle(persistence, id);
-  if (!row) throw new Error("PostgreSQL cycle insert returned no row");
-  return row;
+}
+
+export async function createPostgresCycleFromCadence(
+  persistence: Persistence,
+  viewer: ActorRow,
+  input: { teamId: string; name?: string | null; startsAt?: string | null; state?: string | null },
+): Promise<PostgresCycleRow> {
+  return createPostgresCycle(persistence, viewer, {
+    teamId: input.teamId,
+    name: input.name?.trim() || "Cycle",
+    startsAt: input.startsAt,
+    state: input.state,
+    fromCadence: true,
+  });
 }
 
 export async function updatePostgresCycle(
@@ -161,40 +268,391 @@ export async function updatePostgresCycle(
     endsAt?: string | null;
     state?: string | null;
     archived?: boolean | null;
+    cadenceSource?: string | null;
   },
 ): Promise<PostgresCycleRow> {
   const existing = await getPostgresCycle(persistence, id);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
   await assertPostgresCycleAccess(persistence, viewer, existing.team_id);
-  const startsAt = input.startsAt ?? existing.starts_at;
-  const endsAt = input.endsAt ?? existing.ends_at;
-  validateDates(startsAt, endsAt);
-  const sets: string[] = [];
-  const params: SqlValue[] = [];
-  const push = (column: string, value: SqlValue) => {
-    sets.push(`${column} = $${params.length + 1}`);
-    params.push(value);
-  };
-  if (input.name !== undefined && input.name !== null) {
-    const name = input.name.trim();
-    if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
-    push("name", name);
-  }
-  if (input.startsAt !== undefined && input.startsAt !== null) push("starts_at", input.startsAt);
-  if (input.endsAt !== undefined && input.endsAt !== null) push("ends_at", input.endsAt);
-  if (input.state !== undefined && input.state !== null) push("state", resolveState(input.state));
-  if (input.archived === true) push("archived_at", now());
-  if (input.archived === false) push("archived_at", null);
-  if (sets.length) {
-    push("updated_at", now());
-    params.push(id);
-    const row = await persistence.one<PostgresCycleRow>(
-      `UPDATE cycles SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
-      params,
+
+  return persistence.transaction(async (tx) => {
+    // Lock the cycle and Team before deriving validation, dates, and planner
+    // effects. This prevents a concurrent update from being applied to stale
+    // state and keeps the mutation atomic with horizon maintenance.
+    const current = await tx.one<PostgresCycleRow>(
+      "SELECT * FROM cycles WHERE id = $1 FOR UPDATE",
+      [id],
     );
-    if (!row) throw apiError("NOT_FOUND", "Cycle not found");
+    if (!current) throw apiError("NOT_FOUND", "Cycle not found");
+    const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
+      current.team_id,
+    ]);
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
+
+    if (
+      input.cadenceSource != null &&
+      input.cadenceSource !== "cadence" &&
+      input.cadenceSource !== "manual"
+    ) {
+      throw apiError("VALIDATION_FAILED", `Invalid cycle cadenceSource: ${input.cadenceSource}`);
+    }
+    if (input.cadenceSource != null && input.cadenceSource !== current.cadence_source) {
+      throw apiError(
+        "VALIDATION_FAILED",
+        "cycle cadenceSource is read-only; adjust future dates to mark a cycle manual",
+      );
+    }
+
+    const startsAt = input.startsAt ?? current.starts_at;
+    const endsAt = input.endsAt ?? current.ends_at;
+    if ((input.startsAt != null || input.endsAt != null) && current.state !== "upcoming") {
+      throw apiError("VALIDATION_FAILED", "Only future cycle dates can be adjusted");
+    }
+    validateDates(startsAt, endsAt);
+    const nextState = input.state != null ? resolveState(input.state) : current.state;
+    if (nextState === "active" && current.state !== "active") {
+      const other = await tx.one<{ id: string }>(
+        "SELECT id FROM cycles WHERE team_id = $1 AND id <> $2 AND state = 'active' AND archived_at IS NULL LIMIT 1 FOR UPDATE",
+        [current.team_id, id],
+      );
+      if (other) throw apiError("VALIDATION_FAILED", "A team can have only one active cycle");
+    }
+
+    const sets: string[] = [];
+    const params: SqlValue[] = [];
+    const push = (column: string, value: SqlValue) => {
+      sets.push(`${column} = $${params.length + 1}`);
+      params.push(value);
+    };
+    if (input.name !== undefined && input.name !== null) {
+      const name = input.name.trim();
+      if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
+      push("name", name);
+    }
+    if (input.startsAt !== undefined && input.startsAt !== null) push("starts_at", input.startsAt);
+    if (input.endsAt !== undefined && input.endsAt !== null) push("ends_at", input.endsAt);
+    if (input.startsAt != null || input.endsAt != null) push("cadence_source", "manual");
+    if (input.state !== undefined && input.state !== null) push("state", nextState);
+    if (input.archived === true) push("archived_at", now());
+    if (input.archived === false) push("archived_at", null);
+
+    let updated = current;
+    if (sets.length) {
+      push("updated_at", now());
+      params.push(id);
+      const row = await tx.one<PostgresCycleRow>(
+        `UPDATE cycles SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+        params,
+      );
+      if (!row) throw apiError("NOT_FOUND", "Cycle not found");
+      updated = row;
+    }
+    if (nextState === "completed" && current.state !== "completed") {
+      if (team.cycle_rollover_enabled === true || team.cycle_rollover_enabled === 1) {
+        const next = await nextPostgresUpcomingCycle(tx, updated.team_id, updated.number);
+        if (next) await rolloverPostgresCycleIssues(tx, viewer.id, updated, next);
+      }
+    }
+    if (nextState === "active" && current.state !== "active") {
+      if (team.cycle_auto_add_enabled === true || team.cycle_auto_add_enabled === 1) {
+        await autoAddPostgresActiveIssues(tx, viewer.id, updated);
+      }
+    }
+    if (
+      (team.cycles_enabled === true || team.cycles_enabled === 1) &&
+      (current.cadence_source === "cadence" ||
+        input.startsAt != null ||
+        input.endsAt != null ||
+        input.archived != null ||
+        input.state != null)
+    ) {
+      await ensureUpcomingPostgresCadenceCyclesInTransaction(tx, team);
+    }
+    const result = await getPostgresCycle(tx, id);
+    if (!result) throw apiError("NOT_FOUND", "Cycle not found");
+    return result;
+  });
+}
+
+async function nextPostgresUpcomingCycle(
+  tx: Persistence | PersistenceTransaction,
+  teamId: string,
+  number: number,
+): Promise<PostgresCycleRow | null> {
+  return tx.one<PostgresCycleRow>(
+    `SELECT * FROM cycles
+     WHERE team_id = $1 AND number > $2 AND state = 'upcoming' AND archived_at IS NULL
+     ORDER BY number LIMIT 1`,
+    [teamId, number],
+  );
+}
+
+async function insertPostgresCadenceCycle(
+  tx: PersistenceTransaction,
+  team: TeamRow,
+  previousEndsAt?: string,
+  explicitDates?: { startsAt: string; endsAt: string },
+): Promise<PostgresCycleRow> {
+  const number = await nextPostgresCycleNumber(tx, team.id);
+  const dates = explicitDates ?? cadenceDates(team, undefined, previousEndsAt);
+  const id = newId();
+  const timestamp = now();
+  const row = await tx.one<PostgresCycleRow>(
+    `INSERT INTO cycles
+      (id, team_id, number, name, starts_at, ends_at, state, cadence_source, created_at, updated_at, archived_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'upcoming', 'cadence', $7, $7, NULL)
+     RETURNING *`,
+    [id, team.id, number, `Cycle ${number}`, dates.startsAt, dates.endsAt, timestamp],
+  );
+  if (!row) throw new Error("PostgreSQL cadence cycle insert returned no row");
+  return row;
+}
+
+export async function ensureUpcomingPostgresCadenceCyclesInTransaction(
+  tx: PersistenceTransaction,
+  team: TeamRow,
+): Promise<readonly PostgresCycleRow[]> {
+  assertCyclesEnabled(team);
+  const all = [
+    ...(await tx.many<PostgresCycleRow>(
+      "SELECT * FROM cycles WHERE team_id = $1 AND archived_at IS NULL",
+      [team.id],
+    )),
+  ];
+  const upcoming = all
+    .filter((cycle) => cycle.state === "upcoming")
+    .sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at) || a.number - b.number);
+  const manual = upcoming.filter((cycle) => cycle.cadence_source === "manual");
+  const cadence = upcoming.filter((cycle) => cycle.cadence_source === "cadence");
+  const settingsForCadence = cadenceSettings(team);
+  const referenceAt = new Date().toISOString();
+  const manualIntervals = manual.map((cycle) => ({
+    startsAt: Date.parse(cycle.starts_at),
+    endsAt: Date.parse(cycle.ends_at),
+  }));
+  const overlapsManual = (startsAt: string, endsAt: string): boolean => {
+    const start = Date.parse(startsAt);
+    const end = Date.parse(endsAt);
+    return manualIntervals.some((interval) => start < interval.endsAt && end > interval.startsAt);
+  };
+  const anchor = all
+    .filter((cycle) => cycle.state !== "upcoming")
+    .sort((a, b) => Date.parse(b.ends_at) - Date.parse(a.ends_at))[0];
+  let previousEndsAt = anchor?.ends_at;
+  const plannedIntervals: Array<{ startsAt: number; endsAt: number }> = [];
+  for (const cycle of [...upcoming]) {
+    if (cycle.cadence_source === "manual") {
+      if (!previousEndsAt || Date.parse(cycle.ends_at) > Date.parse(previousEndsAt)) {
+        previousEndsAt = cycle.ends_at;
+      }
+      continue;
+    }
+    let dates = computeCadenceDates(settingsForCadence, referenceAt, undefined, previousEndsAt);
+    while (
+      overlapsManual(dates.startsAt, dates.endsAt) ||
+      plannedIntervals.some((interval) => {
+        const start = Date.parse(dates.startsAt);
+        const end = Date.parse(dates.endsAt);
+        return start < interval.endsAt && end > interval.startsAt;
+      })
+    ) {
+      dates = computeCadenceDates(settingsForCadence, referenceAt, undefined, dates.endsAt);
+    }
+    if (cycle.starts_at !== dates.startsAt || cycle.ends_at !== dates.endsAt) {
+      await tx.execute(
+        "UPDATE cycles SET starts_at = $1, ends_at = $2, updated_at = $3 WHERE id = $4",
+        [dates.startsAt, dates.endsAt, now(), cycle.id],
+      );
+      cycle.starts_at = dates.startsAt;
+      cycle.ends_at = dates.endsAt;
+    }
+    plannedIntervals.push({
+      startsAt: Date.parse(dates.startsAt),
+      endsAt: Date.parse(dates.endsAt),
+    });
+    previousEndsAt = dates.endsAt;
   }
-  return (await getPostgresCycle(persistence, id))!;
+
+  const updatedUpcoming = upcoming.sort(
+    (a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at) || a.number - b.number,
+  );
+  const updatedCadence = updatedUpcoming.filter((cycle) => cycle.cadence_source === "cadence");
+  const settings = mapTeamPlanningSettings(team);
+  const keepCadence = Math.max(0, settings.cycleUpcomingCount - manual.length);
+  const timestamp = now();
+  for (const cycle of updatedCadence.slice(keepCadence)) {
+    await tx.execute("UPDATE cycles SET archived_at = $1, updated_at = $1 WHERE id = $2", [
+      timestamp,
+      cycle.id,
+    ]);
+  }
+  const kept = updatedCadence.slice(0, keepCadence);
+  previousEndsAt = [...all]
+    .filter((cycle) => cycle.state !== "upcoming" || cycle.cadence_source === "manual")
+    .sort((a, b) => Date.parse(b.ends_at) - Date.parse(a.ends_at))[0]?.ends_at;
+  if (!previousEndsAt && kept.length) previousEndsAt = kept[kept.length - 1]!.ends_at;
+  const existingStarts = new Set(updatedUpcoming.map((cycle) => Date.parse(cycle.starts_at)));
+  while (kept.length < keepCadence) {
+    let dates = computeCadenceDates(settingsForCadence, referenceAt, undefined, previousEndsAt);
+    while (
+      existingStarts.has(Date.parse(dates.startsAt)) ||
+      overlapsManual(dates.startsAt, dates.endsAt)
+    ) {
+      dates = computeCadenceDates(settingsForCadence, referenceAt, undefined, dates.endsAt);
+    }
+    const row = await insertPostgresCadenceCycle(tx, team, previousEndsAt, dates);
+    kept.push(row);
+    existingStarts.add(Date.parse(row.starts_at));
+    previousEndsAt = row.ends_at;
+  }
+  return tx.many<PostgresCycleRow>(
+    "SELECT * FROM cycles WHERE team_id = $1 AND state = 'upcoming' AND archived_at IS NULL ORDER BY number",
+    [team.id],
+  );
+}
+
+export async function ensureUpcomingPostgresCadenceCycles(
+  persistence: Persistence,
+  teamId: string,
+): Promise<readonly PostgresCycleRow[]> {
+  const team = await getPostgresTeam(persistence, { id: teamId });
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
+  return persistence.transaction(async (tx) => {
+    const locked = await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [
+      team.id,
+    ]);
+    if (!locked) throw apiError("NOT_FOUND", "Team not found");
+    const current = await getPostgresTeam(tx, { id: team.id });
+    if (!current) throw apiError("NOT_FOUND", "Team not found");
+    return ensureUpcomingPostgresCadenceCyclesInTransaction(tx, current);
+  });
+}
+
+async function rolloverPostgresCycleIssues(
+  tx: PersistenceTransaction,
+  actorId: string,
+  from: PostgresCycleRow,
+  to: PostgresCycleRow,
+): Promise<number> {
+  const timestamp = now();
+  const issues = await tx.many<{ id: string }>(
+    `UPDATE issues SET cycle_id = $1, updated_at = $2
+     WHERE cycle_id = $3 AND archived_at IS NULL
+       AND state_id IN (SELECT id FROM workflow_states WHERE type IN ('unstarted', 'started'))
+     RETURNING id`,
+    [to.id, timestamp, from.id],
+  );
+  for (const issue of issues) {
+    await recordCycleActivity(
+      tx,
+      issue.id,
+      actorId,
+      {
+        from: from.id,
+        to: to.id,
+        reason: "cycle_rollover",
+      },
+      timestamp,
+    );
+  }
+  return issues.length;
+}
+
+async function autoAddPostgresActiveIssues(
+  tx: PersistenceTransaction,
+  actorId: string,
+  cycle: PostgresCycleRow,
+): Promise<number> {
+  const timestamp = now();
+  const issues = await tx.many<{ id: string }>(
+    `UPDATE issues SET cycle_id = $1, updated_at = $2
+     WHERE team_id = $3 AND cycle_id IS NULL AND archived_at IS NULL
+       AND state_id IN (
+         SELECT id FROM workflow_states WHERE team_id = $3 AND type IN ('unstarted', 'started')
+       )
+     RETURNING id`,
+    [cycle.id, timestamp, cycle.team_id],
+  );
+  for (const issue of issues) {
+    await recordCycleActivity(
+      tx,
+      issue.id,
+      actorId,
+      {
+        from: null,
+        to: cycle.id,
+        reason: "cycle_auto_add",
+      },
+      timestamp,
+    );
+  }
+  return issues.length;
+}
+
+export async function advancePostgresCycle(
+  persistence: Persistence,
+  viewer: ActorRow,
+  id: string,
+): Promise<{ cycle: PostgresCycleRow; nextCycle: PostgresCycleRow | null; movedIssues: number }> {
+  const existing = await getPostgresCycle(persistence, id);
+  if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
+  await assertPostgresCycleAccess(persistence, viewer, existing.team_id);
+  const result = await persistence.transaction(async (tx) => {
+    const current = await tx.one<PostgresCycleRow>(
+      "SELECT * FROM cycles WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+    if (!current) throw apiError("NOT_FOUND", "Cycle not found");
+    const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
+      current.team_id,
+    ]);
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
+    assertCyclesEnabled(team);
+    const active = await tx.one<PostgresCycleRow>(
+      `SELECT * FROM cycles
+       WHERE team_id = $1 AND state = 'active' AND archived_at IS NULL AND id <> $2
+       ORDER BY number DESC LIMIT 1 FOR UPDATE`,
+      [current.team_id, id],
+    );
+    let target: PostgresCycleRow | null = current;
+    let movedIssues = 0;
+    if (current.state === "active") {
+      await tx.execute("UPDATE cycles SET state = 'completed', updated_at = $1 WHERE id = $2", [
+        now(),
+        current.id,
+      ]);
+      target = await nextPostgresUpcomingCycle(tx, current.team_id, current.number);
+      if (!target) target = await insertPostgresCadenceCycle(tx, team, current.ends_at);
+      if (team.cycle_rollover_enabled === true || team.cycle_rollover_enabled === 1) {
+        movedIssues = await rolloverPostgresCycleIssues(tx, viewer.id, current, target);
+      }
+    } else if (current.state === "upcoming") {
+      if (active) {
+        await tx.execute("UPDATE cycles SET state = 'completed', updated_at = $1 WHERE id = $2", [
+          now(),
+          active.id,
+        ]);
+        if (team.cycle_rollover_enabled === true || team.cycle_rollover_enabled === 1) {
+          movedIssues = await rolloverPostgresCycleIssues(tx, viewer.id, active, current);
+        }
+      }
+    } else {
+      throw apiError("VALIDATION_FAILED", "Completed cycles cannot be advanced");
+    }
+    if (!target) throw new Error("Cycle advance did not select a target");
+    const promoted = await tx.one<PostgresCycleRow>(
+      "UPDATE cycles SET state = 'active', updated_at = $1 WHERE id = $2 RETURNING *",
+      [now(), target.id],
+    );
+    if (!promoted) throw apiError("NOT_FOUND", "Cycle not found");
+    if (team.cycle_auto_add_enabled === true || team.cycle_auto_add_enabled === 1) {
+      movedIssues += await autoAddPostgresActiveIssues(tx, viewer.id, promoted);
+    }
+    await ensureUpcomingPostgresCadenceCyclesInTransaction(tx, team);
+    const nextCycle = await nextPostgresUpcomingCycle(tx, team.id, promoted.number);
+    return { cycle: promoted, nextCycle, movedIssues };
+  });
+  return result;
 }
 
 async function preserveCycleActivityReferences(
@@ -253,6 +711,10 @@ export async function deletePostgresCycle(
   const team = await getPostgresTeam(persistence, { id: existing.team_id });
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   const reference = `${team.key}/${existing.number}`;
+  const cadenceBeforeDelete = await persistence.one<{ count: number }>(
+    "SELECT count(*)::int AS count FROM cycles WHERE team_id = $1 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL",
+    [existing.team_id],
+  );
   await persistence.transaction(async (tx) => {
     await preserveCycleActivityReferences(tx, id, reference);
     const timestamp = now();
@@ -267,6 +729,18 @@ export async function deletePostgresCycle(
     }
 
     await tx.execute("DELETE FROM cycles WHERE id = $1", [id]);
+    const locked = await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [
+      existing.team_id,
+    ]);
+    if (!locked) throw apiError("NOT_FOUND", "Team not found");
+    const currentTeam = await getPostgresTeam(tx, { id: existing.team_id });
+    if (
+      (existing.cadence_source === "cadence" || Number(cadenceBeforeDelete?.count ?? 0) > 0) &&
+      currentTeam &&
+      (currentTeam.cycles_enabled === true || currentTeam.cycles_enabled === 1)
+    ) {
+      await ensureUpcomingPostgresCadenceCyclesInTransaction(tx, currentTeam);
+    }
   });
   return true;
 }

@@ -24,6 +24,13 @@ const ISSUE_FIELDS = `id identifier title description priority
   subscribers { id name type }
   url branchName createdAt updatedAt archivedAt`;
 
+const TEAM_FIELDS = `id key name description visibility accessPolicy timezone estimatesEnabled estimateScale
+  estimateExtendedScale estimateAllowZero cyclesEnabled cycleDurationWeeks cycleStartDay
+  cycleCooldownDays cycleUpcomingCount cycleRolloverEnabled cycleAutoAddEnabled
+  createdAt archivedAt states { id name type color position }`;
+const CYCLE_FIELDS = `id number name startsAt endsAt state cadenceSource manuallyAdjusted progress
+  completedIssues totalIssues archivedAt createdAt updatedAt team { id key name }`;
+
 function json(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
 }
@@ -82,7 +89,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         (
           await gqlRequest(
             sessionConfig,
-            "query($includeArchived: Boolean) { teams(includeArchived: $includeArchived) { id key name description visibility accessPolicy archivedAt } }",
+            `query($includeArchived: Boolean) { teams(includeArchived: $includeArchived) { ${TEAM_FIELDS} } }`,
             { includeArchived: Boolean(includeArchived) },
           )
         ).teams,
@@ -160,6 +167,20 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         defaultState: z.string().optional().describe("Workflow state ID"),
         visibility: z.enum(["public", "private"]).optional(),
         accessPolicy: z.enum(["workspace_members", "team_members"]).optional(),
+        timezone: z.string().optional(),
+        estimatesEnabled: z.boolean().optional(),
+        estimateScale: z.enum(["exponential", "fibonacci", "linear", "t_shirt"]).optional(),
+        estimateExtendedScale: z.boolean().optional(),
+        estimateAllowZero: z.boolean().optional(),
+        cyclesEnabled: z.boolean().optional(),
+        cycleDurationWeeks: z.number().int().min(1).max(8).optional(),
+        cycleStartDay: z
+          .enum(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"])
+          .optional(),
+        cycleCooldownDays: z.number().int().min(0).max(366).optional(),
+        cycleUpcomingCount: z.number().int().min(0).max(15).optional(),
+        cycleRolloverEnabled: z.boolean().optional(),
+        cycleAutoAddEnabled: z.boolean().optional(),
       },
     },
     async (args) => {
@@ -173,10 +194,32 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         if (args.defaultState !== undefined) input.defaultStateId = args.defaultState;
         if (args.visibility !== undefined) input.visibility = args.visibility.toUpperCase();
         if (args.accessPolicy !== undefined) input.accessPolicy = args.accessPolicy.toUpperCase();
+        const teamArgs = args as Record<string, unknown>;
+        for (const field of [
+          "timezone",
+          "estimatesEnabled",
+          "estimateScale",
+          "estimateExtendedScale",
+          "estimateAllowZero",
+          "cyclesEnabled",
+          "cycleDurationWeeks",
+          "cycleStartDay",
+          "cycleCooldownDays",
+          "cycleUpcomingCount",
+          "cycleRolloverEnabled",
+          "cycleAutoAddEnabled",
+        ]) {
+          if (teamArgs[field] !== undefined)
+            input[field] =
+              typeof teamArgs[field] === "string" &&
+              ["estimateScale", "cycleStartDay"].includes(field)
+                ? teamArgs[field].toUpperCase()
+                : teamArgs[field];
+        }
         const data = await gqlRequest(
           sessionConfig,
           `mutation($id: ID!, $input: TeamUpdateInput!) {
-        teamUpdate(id: $id, input: $input) { team { id key name description visibility accessPolicy createdAt archivedAt states { id name type color position } } }
+        teamUpdate(id: $id, input: $input) { team { ${TEAM_FIELDS} } }
       }`,
           { id: args.id, input },
         );
@@ -187,7 +230,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       const data = await gqlRequest(
         sessionConfig,
         `mutation($input: TeamCreateInput!) {
-      teamCreate(input: $input) { team { id key name description visibility accessPolicy createdAt archivedAt states { id name type color position } } }
+      teamCreate(input: $input) { team { ${TEAM_FIELDS} } }
     }`,
         {
           input: {
@@ -198,6 +241,38 @@ export function createServer(config: McpConfig | McpSession): McpServer {
             ...(args.accessPolicy === undefined
               ? {}
               : { accessPolicy: args.accessPolicy.toUpperCase() }),
+            ...(args.timezone === undefined ? {} : { timezone: args.timezone }),
+            ...(args.estimatesEnabled === undefined
+              ? {}
+              : { estimatesEnabled: args.estimatesEnabled }),
+            ...(args.estimateScale === undefined
+              ? {}
+              : { estimateScale: args.estimateScale.toUpperCase() }),
+            ...(args.estimateExtendedScale === undefined
+              ? {}
+              : { estimateExtendedScale: args.estimateExtendedScale }),
+            ...(args.estimateAllowZero === undefined
+              ? {}
+              : { estimateAllowZero: args.estimateAllowZero }),
+            ...(args.cyclesEnabled === undefined ? {} : { cyclesEnabled: args.cyclesEnabled }),
+            ...(args.cycleDurationWeeks === undefined
+              ? {}
+              : { cycleDurationWeeks: args.cycleDurationWeeks }),
+            ...(args.cycleStartDay === undefined
+              ? {}
+              : { cycleStartDay: args.cycleStartDay.toUpperCase() }),
+            ...(args.cycleCooldownDays === undefined
+              ? {}
+              : { cycleCooldownDays: args.cycleCooldownDays }),
+            ...(args.cycleUpcomingCount === undefined
+              ? {}
+              : { cycleUpcomingCount: args.cycleUpcomingCount }),
+            ...(args.cycleRolloverEnabled === undefined
+              ? {}
+              : { cycleRolloverEnabled: args.cycleRolloverEnabled }),
+            ...(args.cycleAutoAddEnabled === undefined
+              ? {}
+              : { cycleAutoAddEnabled: args.cycleAutoAddEnabled }),
           },
         },
       );
@@ -1065,10 +1140,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       const data = await gqlRequest(
         sessionConfig,
         `query($teamId: ID!, $includeArchived: Boolean) {
-      cycles(teamId: $teamId, includeArchived: $includeArchived) {
-        id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt
-        team { id key name }
-      }
+      cycles(teamId: $teamId, includeArchived: $includeArchived) { ${CYCLE_FIELDS} }
     }`,
         { teamId, includeArchived: Boolean(includeArchived) },
       );
@@ -1082,10 +1154,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
     async ({ id }) => {
       const data = await gqlRequest(
         sessionConfig,
-        `query($id: ID!) { cycle(id: $id) {
-          id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt
-          team { id key name }
-        } }`,
+        `query($id: ID!) { cycle(id: $id) { ${CYCLE_FIELDS} } }`,
         { id },
       );
       if (!data.cycle) throw new Error(`NOT_FOUND: Cycle not found: ${id}`);
@@ -1104,46 +1173,88 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         startsAt: z.string().optional(),
         endsAt: z.string().optional(),
         state: z.enum(["upcoming", "active", "completed"]).optional(),
+        fromCadence: z.boolean().optional(),
         archived: z.boolean().optional(),
       },
     },
     async (args) => {
       if (args.id) {
+        if (args.fromCadence !== undefined) {
+          throw new Error("VALIDATION_FAILED: `fromCadence` can only be set when creating a cycle");
+        }
         const input: Record<string, unknown> = {};
         if (args.name !== undefined) input.name = args.name;
         if (args.startsAt !== undefined) input.startsAt = args.startsAt;
         if (args.endsAt !== undefined) input.endsAt = args.endsAt;
         if (args.state !== undefined) input.state = args.state.toUpperCase();
         if (args.archived !== undefined) input.archived = args.archived;
+        if (!Object.keys(input).length) {
+          throw new Error("VALIDATION_FAILED: provide at least one field to update");
+        }
         const data = await gqlRequest(
           sessionConfig,
           `mutation($id: ID!, $input: CycleUpdateInput!) { cycleUpdate(id: $id, input: $input) {
-            cycle { id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt team { id key name } }
+            cycle { ${CYCLE_FIELDS} }
           } }`,
           { id: args.id, input },
         );
         return json(data.cycleUpdate.cycle);
       }
-      if (!args.team || !args.name || !args.startsAt || !args.endsAt) {
-        throw new Error(
-          "VALIDATION_FAILED: `team`, `name`, `startsAt` and `endsAt` are required to create a cycle",
-        );
+      if (!args.team || !args.name) {
+        throw new Error("VALIDATION_FAILED: `team` and `name` are required to create a cycle");
       }
       const input: Record<string, unknown> = {
         teamId: (await resolveTeam(sessionConfig, args.team)).id,
         name: args.name,
-        startsAt: args.startsAt,
-        endsAt: args.endsAt,
       };
       if (args.state !== undefined) input.state = args.state.toUpperCase();
+      if (args.fromCadence) {
+        if (args.endsAt !== undefined) {
+          throw new Error("VALIDATION_FAILED: `endsAt` cannot be supplied with fromCadence");
+        }
+        if (args.startsAt !== undefined) input.startsAt = args.startsAt;
+        const data = await gqlRequest(
+          sessionConfig,
+          `mutation($input: CycleCadenceCreateInput!) { cycleCreateFromCadence(input: $input) {
+            cycle { ${CYCLE_FIELDS} }
+          } }`,
+          { input },
+        );
+        return json(data.cycleCreateFromCadence.cycle);
+      }
+      if (!args.startsAt || !args.endsAt) {
+        throw new Error(
+          "VALIDATION_FAILED: `startsAt` and `endsAt` are required unless fromCadence is enabled",
+        );
+      }
+      input.startsAt = args.startsAt;
+      input.endsAt = args.endsAt;
       const data = await gqlRequest(
         sessionConfig,
         `mutation($input: CycleCreateInput!) { cycleCreate(input: $input) {
-          cycle { id number name startsAt endsAt state progress completedIssues totalIssues archivedAt createdAt updatedAt team { id key name } }
+          cycle { ${CYCLE_FIELDS} }
         } }`,
         { input },
       );
       return json(data.cycleCreate.cycle);
+    },
+  );
+
+  server.registerTool(
+    "advance_cycle",
+    {
+      description: "Complete the active cycle and promote the next cycle.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const data = await gqlRequest(
+        sessionConfig,
+        `mutation($id: ID!) { cycleAdvance(id: $id) {
+          success movedIssues cycle { ${CYCLE_FIELDS} } nextCycle { ${CYCLE_FIELDS} }
+        } }`,
+        { id },
+      );
+      return json(data.cycleAdvance);
     },
   );
 

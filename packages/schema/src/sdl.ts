@@ -98,6 +98,46 @@ export const typeDefs = /* GraphQL */ `
     TEAM_MEMBERS
   }
 
+  enum EstimateScale {
+    EXPONENTIAL
+    FIBONACCI
+    LINEAR
+    T_SHIRT
+  }
+
+  enum CycleStartDay {
+    MONDAY
+    TUESDAY
+    WEDNESDAY
+    THURSDAY
+    FRIDAY
+    SATURDAY
+    SUNDAY
+  }
+
+  enum CycleCadenceSource {
+    CADENCE
+    MANUAL
+  }
+
+  type TeamEstimateSettings {
+    enabled: Boolean!
+    scale: EstimateScale!
+    extendedScale: Boolean!
+    allowZero: Boolean!
+    values: [JSON!]!
+  }
+
+  type TeamCycleSettings {
+    enabled: Boolean!
+    durationWeeks: Int!
+    startDay: CycleStartDay!
+    cooldownDays: Int!
+    upcomingCount: Int!
+    rolloverEnabled: Boolean!
+    autoAddEnabled: Boolean!
+  }
+
   type Team {
     id: ID!
     key: String!
@@ -106,6 +146,20 @@ export const typeDefs = /* GraphQL */ `
     visibility: TeamVisibility!
     accessPolicy: TeamAccessPolicy!
     workspaceId: ID!
+    timezone: String!
+    estimatesEnabled: Boolean!
+    estimateScale: EstimateScale!
+    estimateExtendedScale: Boolean!
+    estimateAllowZero: Boolean!
+    estimateSettings: TeamEstimateSettings!
+    cyclesEnabled: Boolean!
+    cycleDurationWeeks: Int!
+    cycleStartDay: CycleStartDay!
+    cycleCooldownDays: Int!
+    cycleUpcomingCount: Int!
+    cycleRolloverEnabled: Boolean!
+    cycleAutoAddEnabled: Boolean!
+    cycleSettings: TeamCycleSettings!
     states: [WorkflowState!]!
     """
     The default destination for issues created without an explicit state. Editable through teamUpdate.
@@ -390,6 +444,8 @@ export const typeDefs = /* GraphQL */ `
     startsAt: DateTime!
     endsAt: DateTime!
     state: CycleState!
+    cadenceSource: CycleCadenceSource!
+    manuallyAdjusted: Boolean!
     """
     Completed / total issues (excluding archived issues).
     """
@@ -404,9 +460,10 @@ export const typeDefs = /* GraphQL */ `
   input CycleCreateInput {
     teamId: ID!
     name: String!
-    startsAt: DateTime!
-    endsAt: DateTime!
+    startsAt: DateTime
+    endsAt: DateTime
     state: CycleState
+    fromCadence: Boolean = false
   }
 
   input CycleUpdateInput {
@@ -415,11 +472,26 @@ export const typeDefs = /* GraphQL */ `
     endsAt: DateTime
     state: CycleState
     archived: Boolean
+    cadenceSource: CycleCadenceSource
+  }
+
+  input CycleCadenceCreateInput {
+    teamId: ID!
+    name: String
+    startsAt: DateTime
+    state: CycleState
   }
 
   type CyclePayload {
     success: Boolean!
     cycle: Cycle!
+  }
+
+  type CycleAdvancePayload {
+    success: Boolean!
+    cycle: Cycle!
+    nextCycle: Cycle
+    movedIssues: Int!
   }
 
   type CycleCarryOverPayload {
@@ -612,6 +684,25 @@ export const typeDefs = /* GraphQL */ `
     description: String
     visibility: TeamVisibility
     accessPolicy: TeamAccessPolicy
+    timezone: String
+    estimatesEnabled: Boolean
+    estimateScale: EstimateScale
+    estimateExtendedScale: Boolean
+    estimateExtended: Boolean
+    estimateAllowZero: Boolean
+    estimateZero: Boolean
+    cyclesEnabled: Boolean
+    cycleDurationWeeks: Int
+    cycleDuration: Int
+    cycleStartDay: CycleStartDay
+    cycleCooldownDays: Int
+    cycleCooldown: Int
+    cycleUpcomingCount: Int
+    upcomingCycles: Int
+    cycleRolloverEnabled: Boolean
+    cycleRollover: Boolean
+    cycleAutoAddEnabled: Boolean
+    cycleAutoAdd: Boolean
   }
 
   input TeamUpdateInput {
@@ -619,6 +710,25 @@ export const typeDefs = /* GraphQL */ `
     description: String
     visibility: TeamVisibility
     accessPolicy: TeamAccessPolicy
+    timezone: String
+    estimatesEnabled: Boolean
+    estimateScale: EstimateScale
+    estimateExtendedScale: Boolean
+    estimateExtended: Boolean
+    estimateAllowZero: Boolean
+    estimateZero: Boolean
+    cyclesEnabled: Boolean
+    cycleDurationWeeks: Int
+    cycleDuration: Int
+    cycleStartDay: CycleStartDay
+    cycleCooldownDays: Int
+    cycleCooldown: Int
+    cycleUpcomingCount: Int
+    upcomingCycles: Int
+    cycleRolloverEnabled: Boolean
+    cycleRollover: Boolean
+    cycleAutoAddEnabled: Boolean
+    cycleAutoAdd: Boolean
     """
     Must be a state in the Team.
     """
@@ -1178,7 +1288,9 @@ export const typeDefs = /* GraphQL */ `
     favoriteDelete(id: ID!): DeletePayload!
     favoriteReorder(id: ID!, position: Int!): FavoritePayload!
     cycleCreate(input: CycleCreateInput!): CyclePayload!
+    cycleCreateFromCadence(input: CycleCadenceCreateInput!): CyclePayload!
     cycleUpdate(id: ID!, input: CycleUpdateInput!): CyclePayload!
+    cycleAdvance(id: ID!): CycleAdvancePayload!
     cycleDelete(id: ID!): DeletePayload!
     """
     Moves open issues from the source cycle to the destination cycle.

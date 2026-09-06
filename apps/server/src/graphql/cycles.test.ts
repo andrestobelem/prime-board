@@ -232,4 +232,59 @@ describe("cycles", () => {
       endsAt: "2026-11-14",
     });
   });
+
+  it("serializa la creación concurrente de ciclos activos y conserva count=0", async () => {
+    const activeTeam = await gql(
+      app,
+      `mutation {
+        teamCreate(input: { name: "Active invariant", key: "ACT" }) { team { id } }
+      }`,
+    );
+    const activeTeamId = activeTeam.data!.teamCreate.team.id;
+    const createActive = (name: string) =>
+      gql(
+        app,
+        `mutation($teamId: ID!, $name: String!) {
+          cycleCreate(input: {
+            teamId: $teamId, name: $name, state: ACTIVE,
+            startsAt: "2031-01-01", endsAt: "2031-01-14"
+          }) { success cycle { id state } }
+        }`,
+        { teamId: activeTeamId, name },
+      );
+    const activeResults = await Promise.all([createActive("Active A"), createActive("Active B")]);
+    expect(activeResults.filter((result) => !result.errors).length).toBe(1);
+    expect(
+      activeResults
+        .filter((result) => result.errors)
+        .map((result) => result.errors?.[0]?.extensions?.code),
+    ).toEqual(["VALIDATION_FAILED"]);
+
+    const zeroTeam = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "No generated cycles", key: "ZERO", cyclesEnabled: true,
+          cycleUpcomingCount: 0
+        }) { team { id cycleUpcomingCount } }
+      }`,
+    );
+    const zeroTeamId = zeroTeam.data!.teamCreate.team.id;
+    const requested = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreateFromCadence(input: { teamId: $teamId, name: "Explicit zero" }) {
+          cycle { name state cadenceSource archivedAt }
+        }
+      }`,
+      { teamId: zeroTeamId },
+    );
+    expect(requested.errors).toBeUndefined();
+    expect(requested.data!.cycleCreateFromCadence.cycle).toMatchObject({
+      name: "Explicit zero",
+      state: "UPCOMING",
+      cadenceSource: "MANUAL",
+      archivedAt: null,
+    });
+  });
 });

@@ -12,6 +12,9 @@ const QUERY = `query($key: String) {
   viewer { id workspaceRole }
   team(key: $key, includeArchived: true) {
     id key name archivedAt visibility accessPolicy
+    timezone estimatesEnabled estimateScale estimateExtendedScale estimateAllowZero
+    cyclesEnabled cycleDurationWeeks cycleStartDay cycleCooldownDays cycleUpcomingCount
+    cycleRolloverEnabled cycleAutoAddEnabled
     defaultState { id }
     states { id name type color position }
     labels { id name color teamId }
@@ -87,6 +90,24 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
       );
       if (!response.teamUpdate.success) throw new Error("Could not update team access settings.");
     });
+  }
+
+  async function updateTeamPlanning(input: Record<string, unknown>): Promise<void> {
+    if (!canManage) return;
+    await runMutation("team-planning", async () => {
+      const response = await mutate<{ teamUpdate: { success: boolean } }>(
+        `mutation($id: ID!, $input: TeamUpdateInput!) {
+          teamUpdate(id: $id, input: $input) { success }
+        }`,
+        { id: team.id, input },
+      );
+      if (!response.teamUpdate.success) throw new Error("Could not update team planning settings.");
+    });
+  }
+
+  function planningNumber(value: string, field: string): void {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed)) void updateTeamPlanning({ [field]: parsed });
   }
 
   async function runLifecycleAction(): Promise<void> {
@@ -362,6 +383,207 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                 </option>
                 <option value="TEAM_MEMBERS">Team members</option>
               </select>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-panel" aria-labelledby="team-planning-title">
+        <div className="settings-panel-header">
+          <div>
+            <h2 id="team-planning-title">Planning</h2>
+            <p>Configure estimates and the recurring Cycle cadence for this Team.</p>
+          </div>
+        </div>
+        <div className="settings-list">
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Timezone</strong>
+              <span className="settings-row-meta">Cycle boundaries use this IANA timezone.</span>
+            </div>
+            <input
+              aria-label="Team timezone"
+              defaultValue={team.timezone}
+              disabled={!canManage || saving === "team-planning"}
+              onBlur={(event) => {
+                const value = event.target.value.trim();
+                if (value && value !== team.timezone) void updateTeamPlanning({ timezone: value });
+              }}
+            />
+          </div>
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Estimates</strong>
+              <span className="settings-row-meta">Enable estimates on issues in this Team.</span>
+            </div>
+            <input
+              type="checkbox"
+              aria-label="Enable estimates"
+              checked={Boolean(team.estimatesEnabled)}
+              disabled={!canManage || saving === "team-planning"}
+              onChange={(event) =>
+                void updateTeamPlanning({ estimatesEnabled: event.target.checked })
+              }
+            />
+          </div>
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Estimate scale</strong>
+              <span className="settings-row-meta">
+                Choose the values available to issue estimates.
+              </span>
+            </div>
+            <select
+              aria-label="Estimate scale"
+              value={String(team.estimateScale).toUpperCase()}
+              disabled={!canManage || saving === "team-planning"}
+              onChange={(event) => void updateTeamPlanning({ estimateScale: event.target.value })}
+            >
+              <option value="EXPONENTIAL">Exponential</option>
+              <option value="FIBONACCI">Fibonacci</option>
+              <option value="LINEAR">Linear</option>
+              <option value="T_SHIRT">T-shirt</option>
+            </select>
+          </div>
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Extended and zero estimates</strong>
+            </div>
+            <div className="team-setting-controls">
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label="Enable extended estimate scale"
+                  checked={Boolean(team.estimateExtendedScale)}
+                  disabled={!canManage || saving === "team-planning"}
+                  onChange={(event) =>
+                    void updateTeamPlanning({ estimateExtendedScale: event.target.checked })
+                  }
+                />{" "}
+                Extended scale
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label="Allow zero estimates"
+                  checked={Boolean(team.estimateAllowZero)}
+                  disabled={!canManage || saving === "team-planning"}
+                  onChange={(event) =>
+                    void updateTeamPlanning({ estimateAllowZero: event.target.checked })
+                  }
+                />{" "}
+                Allow zero
+              </label>
+            </div>
+          </div>
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Cycles</strong>
+              <span className="settings-row-meta">
+                Generate and maintain future cycles from cadence.
+              </span>
+            </div>
+            <input
+              type="checkbox"
+              aria-label="Enable cycles"
+              checked={Boolean(team.cyclesEnabled)}
+              disabled={!canManage || saving === "team-planning"}
+              onChange={(event) => void updateTeamPlanning({ cyclesEnabled: event.target.checked })}
+            />
+          </div>
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Cycle duration</strong>
+            </div>
+            <input
+              type="number"
+              min={1}
+              max={8}
+              aria-label="Cycle duration in weeks"
+              defaultValue={team.cycleDurationWeeks}
+              disabled={!canManage || !team.cyclesEnabled || saving === "team-planning"}
+              onBlur={(event) => planningNumber(event.target.value, "cycleDurationWeeks")}
+            />
+            <span className="settings-row-meta">weeks</span>
+          </div>
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Cycle start day</strong>
+            </div>
+            <select
+              aria-label="Cycle start day"
+              value={String(team.cycleStartDay).toUpperCase()}
+              disabled={!canManage || !team.cyclesEnabled || saving === "team-planning"}
+              onChange={(event) => void updateTeamPlanning({ cycleStartDay: event.target.value })}
+            >
+              <option value="MONDAY">Monday</option>
+              <option value="TUESDAY">Tuesday</option>
+              <option value="WEDNESDAY">Wednesday</option>
+              <option value="THURSDAY">Thursday</option>
+              <option value="FRIDAY">Friday</option>
+              <option value="SATURDAY">Saturday</option>
+              <option value="SUNDAY">Sunday</option>
+            </select>
+          </div>
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Cooldown</strong>
+            </div>
+            <input
+              type="number"
+              min={0}
+              max={366}
+              aria-label="Cycle cooldown days"
+              defaultValue={team.cycleCooldownDays}
+              disabled={!canManage || !team.cyclesEnabled || saving === "team-planning"}
+              onBlur={(event) => planningNumber(event.target.value, "cycleCooldownDays")}
+            />
+            <span className="settings-row-meta">days</span>
+          </div>
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Future cycles</strong>
+            </div>
+            <input
+              type="number"
+              min={0}
+              max={15}
+              aria-label="Number of future cycles"
+              defaultValue={team.cycleUpcomingCount}
+              disabled={!canManage || !team.cyclesEnabled || saving === "team-planning"}
+              onBlur={(event) => planningNumber(event.target.value, "cycleUpcomingCount")}
+            />
+            <span className="settings-row-meta">0–15 cycles</span>
+          </div>
+          <div className="team-setting-row">
+            <div className="team-setting-identity">
+              <strong>Cycle automation</strong>
+            </div>
+            <div className="team-setting-controls">
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label="Enable cycle rollover"
+                  checked={Boolean(team.cycleRolloverEnabled)}
+                  disabled={!canManage || saving === "team-planning"}
+                  onChange={(event) =>
+                    void updateTeamPlanning({ cycleRolloverEnabled: event.target.checked })
+                  }
+                />{" "}
+                Rollover
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label="Enable cycle auto-add"
+                  checked={Boolean(team.cycleAutoAddEnabled)}
+                  disabled={!canManage || saving === "team-planning"}
+                  onChange={(event) =>
+                    void updateTeamPlanning({ cycleAutoAddEnabled: event.target.checked })
+                  }
+                />{" "}
+                Auto-add
+              </label>
             </div>
           </div>
         </div>

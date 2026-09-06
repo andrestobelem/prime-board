@@ -102,6 +102,38 @@ afterAll(() => {
 });
 
 describe("rebuildFromRepo", () => {
+  it("rechaza un cadenceSource de cycle desconocido en un snapshot", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-invalid-cycle-source-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      writeFileSync(
+        join(snapshot, ".prime-board", "meta", "cycles.json"),
+        JSON.stringify([
+          {
+            team: "PB",
+            number: 1,
+            name: "Malformed source",
+            startsAt: "2026-01-01T00:00:00.000Z",
+            endsAt: "2026-01-14T00:00:00.000Z",
+            state: "upcoming",
+            cadenceSource: "bogus",
+            archived: false,
+          },
+        ]),
+      );
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(
+        "Invalid Team planning setting cadenceSource: bogus",
+      );
+      expect(fresh.query("SELECT count(*) AS count FROM cycles").get()).toEqual({ count: 0 });
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
   it("reconstruye una DB vacía desde el repo con round-trip idéntico", () => {
     exportBoard(app.db, dir);
     const original = snapshotFiles(dir);

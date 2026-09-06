@@ -24,6 +24,7 @@ interface SidebarProps {
     id: string;
     key: string;
     name: string;
+    cyclesEnabled?: boolean;
     projects: Array<{ id: string; name: string; state: string }>;
     cycles?: Array<{ id: string; name: string; number: number; state: string }>;
     views?: Array<{
@@ -439,7 +440,7 @@ export function Sidebar({
               {(team.views ?? []).map(renderView)}
               <div className="section" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ flex: 1 }}>Cycles</span>
-                {onCreateCycle && (
+                {onCreateCycle && team.cyclesEnabled !== false && (
                   <button
                     className="icon-button"
                     title="New cycle"

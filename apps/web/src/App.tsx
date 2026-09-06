@@ -62,7 +62,7 @@ const SHELL_QUERY = `{
   viewer { id name type }
   workspace { id name urlKey }
   teams {
-    id key name accessPolicy
+    id key name accessPolicy cyclesEnabled
     projects { id name state }
     cycles { id name number state }
   }
@@ -93,6 +93,7 @@ export interface ShellData {
     key: string;
     name: string;
     accessPolicy: string;
+    cyclesEnabled?: boolean;
     projects: Array<{ id: string; name: string; state: string }>;
     cycles: Array<{ id: string; name: string; number: number; state: string }>;
   }>;
@@ -536,7 +537,7 @@ export function App() {
           <span className="crumb">{param}</span>
         </Link>
         <Icon name="chevron-right" size={14} className="crumb-sep" />
-        <span className="title">States & labels</span>
+        <span className="title">Team settings</span>
       </>
     );
     content = <TeamSettingsView teamKey={param} />;

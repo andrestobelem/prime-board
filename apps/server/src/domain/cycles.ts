@@ -4,6 +4,8 @@ import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { parseDateTime } from "./datetime.ts";
 import { recordActivity } from "./activity.ts";
+import { mapTeamPlanningSettings, type CycleCadenceSource } from "./teams.ts";
+import { cadenceDates as computeCadenceDates, type CycleCadenceSettings } from "./cycle-cadence.ts";
 
 export type CycleState = "upcoming" | "active" | "completed";
 
@@ -22,6 +24,7 @@ export interface CycleRow {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  cadence_source: CycleCadenceSource;
   workspace_id?: string | null;
 }
 
@@ -34,6 +37,8 @@ export function mapCycle(row: CycleRow) {
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     state: row.state,
+    cadenceSource: row.cadence_source,
+    manuallyAdjusted: row.cadence_source === "manual",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
@@ -94,6 +99,65 @@ function nextNumber(db: Database, teamId: string, workspaceId?: string): number 
   return highest + 1;
 }
 
+function databaseBoolean(value: unknown): boolean {
+  return value === true || value === 1;
+}
+
+function addCalendarDays(value: string, days: number, field: string): string {
+  const date = new Date(parseDateTime(value, field));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString();
+}
+
+function cadenceSettings(team: import("./teams.ts").TeamRow): CycleCadenceSettings {
+  const settings = mapTeamPlanningSettings(team);
+  return {
+    timezone: settings.timezone,
+    durationWeeks: settings.cycleDurationWeeks,
+    startDay: settings.cycleStartDay,
+    cooldownDays: settings.cycleCooldownDays,
+  };
+}
+
+function cadenceDates(
+  db: Database,
+  teamId: string,
+  name: string | undefined,
+  startsAt: string | undefined,
+  workspaceId?: string,
+): { name: string | undefined; startsAt: string; endsAt: string } {
+  const team = getTeamSettings(db, teamId, workspaceId);
+  const settings = cadenceSettings(team);
+  const latest = db
+    .query(
+      `SELECT ends_at FROM cycles WHERE team_id = ?1 AND archived_at IS NULL ${workspaceId ? `AND ${workspaceClause("workspace_id", "?2")}` : ""} ORDER BY number DESC LIMIT 1`,
+    )
+    .get(...(workspaceId ? [teamId, workspaceId] : [teamId])) as { ends_at: string } | null;
+  const dates = computeCadenceDates(settings, new Date().toISOString(), startsAt, latest?.ends_at);
+  return { name, ...dates };
+}
+
+function getTeamSettings(
+  db: Database,
+  teamId: string,
+  workspaceId?: string,
+): import("./teams.ts").TeamRow {
+  const query = workspaceId
+    ? `SELECT * FROM teams WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT * FROM teams WHERE id = ?1";
+  const team = (
+    workspaceId ? db.query(query).get(teamId, workspaceId) : db.query(query).get(teamId)
+  ) as import("./teams.ts").TeamRow | null;
+  if (!team) throw apiError("NOT_FOUND", "Team not found");
+  return team;
+}
+
+function assertCyclesEnabled(team: import("./teams.ts").TeamRow): void {
+  if (!databaseBoolean(team.cycles_enabled)) {
+    throw apiError("VALIDATION_FAILED", "Cycles are disabled for this Team");
+  }
+}
+
 function resolveState(state: string): CycleState {
   const normalized = state.toLowerCase() as CycleState;
   if (normalized !== "upcoming" && normalized !== "active" && normalized !== "completed") {
@@ -107,45 +171,128 @@ export function createCycle(
   input: {
     teamId: string;
     name: string;
-    startsAt: string;
-    endsAt: string;
+    startsAt?: string | null;
+    endsAt?: string | null;
     state?: string | null;
+    fromCadence?: boolean | null;
+    cadenceSource?: string | null;
   },
   workspaceId?: string,
 ): CycleRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
-  const team = workspaceId
-    ? db
-        .query(`SELECT id FROM teams WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`)
-        .get(input.teamId, workspaceId)
-    : db.query("SELECT id FROM teams WHERE id = ?1").get(input.teamId);
-  if (!team) throw apiError("NOT_FOUND", "Team not found");
-  const startsAt = parseDateTime(input.startsAt, "Cycle startsAt");
-  const endsAt = parseDateTime(input.endsAt, "Cycle endsAt");
-  if (startsAt > endsAt) {
+  const team = getTeamSettings(db, input.teamId, workspaceId);
+  assertCyclesEnabled(team);
+  const requestedCadence = input.fromCadence === true || input.cadenceSource === "cadence";
+  if (requestedCadence && input.startsAt == null && input.endsAt != null) {
+    throw apiError(
+      "VALIDATION_FAILED",
+      "Cycle endsAt cannot be supplied without startsAt when fromCadence is enabled",
+    );
+  }
+  const generated =
+    requestedCadence && input.endsAt == null
+      ? cadenceDates(db, input.teamId, input.name, input.startsAt ?? undefined, workspaceId)
+      : null;
+  // Las fechas explícitas son una modificación deliberada. Conserva la fila
+  // como manual para que el planner no la reescriba al cambiar la configuración.
+  const cadenceSource: CycleCadenceSource =
+    requestedCadence &&
+    input.startsAt == null &&
+    input.endsAt == null &&
+    team.cycle_upcoming_count > 0
+      ? "cadence"
+      : "manual";
+  const startsAt = generated?.startsAt ?? input.startsAt;
+  const endsAt = generated?.endsAt ?? input.endsAt;
+  if (!startsAt || !endsAt) {
+    throw apiError(
+      "VALIDATION_FAILED",
+      "Cycle startsAt and endsAt are required unless fromCadence is enabled",
+    );
+  }
+  const startsTimestamp = parseDateTime(startsAt, "Cycle startsAt");
+  const endsTimestamp = parseDateTime(endsAt, "Cycle endsAt");
+  if (startsTimestamp > endsTimestamp) {
     throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
+  }
+  if (input.cadenceSource && input.cadenceSource !== cadenceSource) {
+    throw apiError("VALIDATION_FAILED", "cadenceSource does not match the cycle creation mode");
   }
   const state = input.state ? resolveState(input.state) : "upcoming";
   const id = newId();
   const timestamp = now();
-  const number = nextNumber(db, input.teamId, workspaceId);
-  db.query(
-    `INSERT INTO cycles
-      (id, team_id, number, name, starts_at, ends_at, state, created_at, updated_at, archived_at, workspace_id)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, NULL, ?9)`,
-  ).run(
-    id,
-    input.teamId,
-    number,
-    name,
-    input.startsAt,
-    input.endsAt,
-    state,
-    timestamp,
-    workspaceId ?? null,
+  let result: CycleRow;
+  db.transaction(() => {
+    if (state === "active") {
+      const active = workspaceId
+        ? db
+            .query(
+              `SELECT id FROM cycles
+               WHERE team_id = ?1 AND id <> ?2 AND state = 'active' AND archived_at IS NULL
+                 AND ${workspaceClause("workspace_id", "?3")}
+               LIMIT 1`,
+            )
+            .get(input.teamId, id, workspaceId)
+        : db
+            .query(
+              `SELECT id FROM cycles
+               WHERE team_id = ?1 AND id <> ?2 AND state = 'active' AND archived_at IS NULL
+               LIMIT 1`,
+            )
+            .get(input.teamId, id);
+      if (active) throw apiError("VALIDATION_FAILED", "A team can have only one active cycle");
+    }
+    const number = nextNumber(db, input.teamId, workspaceId);
+    db.query(
+      `INSERT INTO cycles
+        (id, team_id, number, name, starts_at, ends_at, state, cadence_source, created_at, updated_at, archived_at, workspace_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, NULL, ?10)`,
+    ).run(
+      id,
+      input.teamId,
+      number,
+      generated?.name?.trim() || name,
+      startsAt,
+      endsAt,
+      state,
+      cadenceSource,
+      timestamp,
+      workspaceId ?? null,
+    );
+    if (
+      databaseBoolean(team.cycles_enabled) &&
+      (requestedCadence || state !== "upcoming") &&
+      (team.cycle_upcoming_count > 0 || state !== "upcoming")
+    ) {
+      ensureUpcomingCadenceCycles(db, input.teamId, workspaceId);
+    }
+    result = getCycle(db, id, workspaceId)!;
+  })();
+  return result!;
+}
+
+export function createCycleFromCadence(
+  db: Database,
+  input: {
+    teamId: string;
+    name?: string | null;
+    startsAt?: string | null;
+    state?: string | null;
+  },
+  workspaceId?: string,
+): CycleRow {
+  return createCycle(
+    db,
+    {
+      teamId: input.teamId,
+      name: input.name?.trim() || "Cycle",
+      startsAt: input.startsAt,
+      state: input.state,
+      fromCadence: true,
+    },
+    workspaceId,
   );
-  return getCycle(db, id, workspaceId)!;
 }
 
 export function updateCycle(
@@ -157,47 +304,516 @@ export function updateCycle(
     endsAt?: string | null;
     state?: string | null;
     archived?: boolean | null;
+    cadenceSource?: string | null;
   },
   workspaceId?: string,
+  actorId?: string,
 ): CycleRow {
-  const existing = getCycle(db, id, workspaceId);
-  if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
+  let updated: CycleRow;
+  db.transaction(() => {
+    // Read and validate the cycle inside the write transaction. SQLite does not
+    // expose row locks, so this serializes the read/derive/write sequence with
+    // concurrent updates instead of applying a stale snapshot.
+    const existing = getCycle(db, id, workspaceId);
+    if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
+    const team = getTeamSettings(db, existing.team_id, workspaceId);
+    if (
+      input.cadenceSource != null &&
+      input.cadenceSource !== "cadence" &&
+      input.cadenceSource !== "manual"
+    ) {
+      throw apiError("VALIDATION_FAILED", `Invalid cycle cadenceSource: ${input.cadenceSource}`);
+    }
+    if (input.cadenceSource != null && input.cadenceSource !== existing.cadence_source) {
+      throw apiError(
+        "VALIDATION_FAILED",
+        "cycle cadenceSource is read-only; adjust future dates to mark a cycle manual",
+      );
+    }
 
-  const sets: string[] = [];
-  const params: unknown[] = [];
-  const push = (column: string, value: unknown) => {
-    sets.push(`${column} = ?${params.length + 1}`);
-    params.push(value);
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    const push = (column: string, value: unknown) => {
+      sets.push(`${column} = ?${params.length + 1}`);
+      params.push(value);
+    };
+
+    if (input.name !== undefined && input.name !== null) {
+      const name = input.name.trim();
+      if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
+      push("name", name);
+    }
+    const startsAt = input.startsAt ?? existing.starts_at;
+    const endsAt = input.endsAt ?? existing.ends_at;
+    if (input.startsAt != null || input.endsAt != null) {
+      if (existing.state !== "upcoming") {
+        throw apiError("VALIDATION_FAILED", "Only future cycle dates can be adjusted");
+      }
+      parseDateTime(startsAt, "Cycle startsAt");
+      parseDateTime(endsAt, "Cycle endsAt");
+    }
+    if (parseDateTime(startsAt, "Cycle startsAt") > parseDateTime(endsAt, "Cycle endsAt")) {
+      throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
+    }
+    if (input.startsAt != null) push("starts_at", input.startsAt);
+    if (input.endsAt != null) push("ends_at", input.endsAt);
+    if (input.startsAt != null || input.endsAt != null) push("cadence_source", "manual");
+    // cadenceSource is read-only; date edits above mark the cycle as manual.
+    const nextState = input.state != null ? resolveState(input.state) : existing.state;
+    if (nextState === "active" && existing.state !== "active") {
+      const workspace = workspaceId ? ` AND ${workspaceClause("workspace_id", "?3")}` : "";
+      const other = workspaceId
+        ? db
+            .query(
+              `SELECT id FROM cycles WHERE team_id = ?1 AND id <> ?2 AND state = 'active' AND archived_at IS NULL${workspace}`,
+            )
+            .get(team.id, id, workspaceId)
+        : db
+            .query(
+              "SELECT id FROM cycles WHERE team_id = ?1 AND id <> ?2 AND state = 'active' AND archived_at IS NULL",
+            )
+            .get(team.id, id);
+      if (other) throw apiError("VALIDATION_FAILED", "A team can have only one active cycle");
+    }
+    if (input.state != null) push("state", nextState);
+    if (input.archived === true) push("archived_at", now());
+    if (input.archived === false) push("archived_at", null);
+
+    if (sets.length > 0) {
+      push("updated_at", now());
+      params.push(id);
+      const workspaceFilter = workspaceId
+        ? ` AND ${workspaceClause("workspace_id", `?${params.length + 1}`)}`
+        : "";
+      if (workspaceId) params.push(workspaceId);
+      db.query(
+        `UPDATE cycles SET ${sets.join(", ")} WHERE id = ?${params.length - (workspaceId ? 1 : 0)}${workspaceFilter}`,
+      ).run(...(params as never[]));
+    }
+    updated = getCycle(db, id, workspaceId)!;
+    if (actorId && nextState === "completed" && existing.state !== "completed") {
+      if (databaseBoolean(team.cycle_rollover_enabled)) {
+        const next = nextUpcomingCycle(db, updated, workspaceId);
+        if (next) rolloverCycleIssues(db, actorId, updated, next, workspaceId);
+      }
+    }
+    if (actorId && nextState === "active" && existing.state !== "active") {
+      if (databaseBoolean(team.cycle_auto_add_enabled)) {
+        autoAddActiveIssues(db, actorId, updated, workspaceId);
+      }
+    }
+    if (
+      databaseBoolean(team.cycles_enabled) &&
+      (existing.cadence_source === "cadence" ||
+        input.startsAt != null ||
+        input.endsAt != null ||
+        input.archived != null ||
+        input.state != null)
+    ) {
+      ensureUpcomingCadenceCycles(db, team.id, workspaceId);
+    }
+    // The planner may rewrite generated dates or archive the row. Return the
+    // persisted row after all side effects.
+    updated = getCycle(db, id, workspaceId)!;
+  })();
+  return updated!;
+}
+
+function nextUpcomingCycle(db: Database, from: CycleRow, workspaceId?: string): CycleRow | null {
+  const workspace = workspaceId ? ` AND ${workspaceClause("workspace_id", "?3")}` : "";
+  const query = `SELECT * FROM cycles
+    WHERE team_id = ?1 AND number > ?2 AND state = 'upcoming' AND archived_at IS NULL${workspace}
+    ORDER BY number LIMIT 1`;
+  return (
+    workspaceId
+      ? db.query(query).get(from.team_id, from.number, workspaceId)
+      : db.query(query).get(from.team_id, from.number)
+  ) as CycleRow | null;
+}
+
+function rolloverCycleIssues(
+  db: Database,
+  actorId: string,
+  from: CycleRow,
+  to: CycleRow,
+  workspaceId?: string,
+): number {
+  const workspace = workspaceId ? ` AND ${workspaceClause("issues.workspace_id", "?2")}` : "";
+  const rows = db
+    .query(
+      `SELECT id, workspace_id FROM issues
+       WHERE cycle_id = ?1${workspace} AND archived_at IS NULL
+         AND state_id IN (SELECT id FROM workflow_states WHERE type IN ('unstarted', 'started'))`,
+    )
+    .all(...(workspaceId ? [from.id, workspaceId] : [from.id])) as Array<{
+    id: string;
+    workspace_id?: string | null;
+  }>;
+  const timestamp = now();
+  db.query(
+    `UPDATE issues SET cycle_id = ?1, updated_at = ?2
+     WHERE cycle_id = ?3${workspaceId ? ` AND ${workspaceClause("workspace_id", "?4")}` : ""}
+       AND archived_at IS NULL
+       AND state_id IN (SELECT id FROM workflow_states WHERE type IN ('unstarted', 'started'))`,
+  ).run(...(workspaceId ? [to.id, timestamp, from.id, workspaceId] : [to.id, timestamp, from.id]));
+  for (const issue of rows) {
+    recordActivity(
+      db,
+      issue.id,
+      actorId,
+      "cycle_changed",
+      { from: from.id, to: to.id, reason: "cycle_rollover" },
+      undefined,
+      issue.workspace_id ?? undefined,
+    );
+  }
+  return rows.length;
+}
+
+function autoAddActiveIssues(
+  db: Database,
+  actorId: string,
+  cycle: CycleRow,
+  workspaceId?: string,
+): number {
+  const workspace = workspaceId ? ` AND ${workspaceClause("issues.workspace_id", "?2")}` : "";
+  const rows = db
+    .query(
+      `SELECT id, workspace_id FROM issues
+       WHERE team_id = ?1 AND cycle_id IS NULL${workspace}
+         AND archived_at IS NULL
+         AND state_id IN (SELECT id FROM workflow_states WHERE team_id = ?1 AND type IN ('unstarted', 'started'))`,
+    )
+    .all(...(workspaceId ? [cycle.team_id, workspaceId] : [cycle.team_id])) as Array<{
+    id: string;
+    workspace_id?: string | null;
+  }>;
+  const timestamp = now();
+  db.query(
+    `UPDATE issues SET cycle_id = ?1, updated_at = ?2
+     WHERE team_id = ?3 AND cycle_id IS NULL${workspaceId ? ` AND ${workspaceClause("workspace_id", "?4")}` : ""}
+       AND archived_at IS NULL
+       AND state_id IN (SELECT id FROM workflow_states WHERE team_id = ?3 AND type IN ('unstarted', 'started'))`,
+  ).run(
+    ...(workspaceId
+      ? [cycle.id, timestamp, cycle.team_id, workspaceId]
+      : [cycle.id, timestamp, cycle.team_id]),
+  );
+  for (const issue of rows) {
+    recordActivity(
+      db,
+      issue.id,
+      actorId,
+      "cycle_changed",
+      { from: null, to: cycle.id, reason: "cycle_auto_add" },
+      undefined,
+      issue.workspace_id ?? undefined,
+    );
+  }
+  return rows.length;
+}
+
+/**
+ * Mantiene el número configurado de Cycles futuros generados por cadencia.
+ * Los Cycles ajustados manualmente nunca se archivan por esta operación.
+ */
+export function ensureUpcomingCadenceCycles(
+  db: Database,
+  teamId: string,
+  workspaceId?: string,
+): CycleRow[] {
+  const team = getTeamSettings(db, teamId, workspaceId);
+  assertCyclesEnabled(team);
+  const settings = mapTeamPlanningSettings(team);
+  const workspace = workspaceId ? ` AND ${workspaceClause("workspace_id", "?2")}` : "";
+  const all = (
+    workspaceId
+      ? db
+          .query(`SELECT * FROM cycles WHERE team_id = ?1${workspace} AND archived_at IS NULL`)
+          .all(teamId, workspaceId)
+      : db.query("SELECT * FROM cycles WHERE team_id = ?1 AND archived_at IS NULL").all(teamId)
+  ) as CycleRow[];
+  const upcoming = all
+    .filter((cycle) => cycle.state === "upcoming")
+    .sort(
+      (a, b) =>
+        parseDateTime(a.starts_at, "Cycle startsAt") -
+          parseDateTime(b.starts_at, "Cycle startsAt") || a.number - b.number,
+    );
+  const manual = upcoming.filter((cycle) => cycle.cadence_source === "manual");
+  const cadence = upcoming.filter((cycle) => cycle.cadence_source === "cadence");
+  const settingsForCadence = cadenceSettings(team);
+  const referenceAt = new Date().toISOString();
+  const manualIntervals = manual.map((cycle) => ({
+    startsAt: parseDateTime(cycle.starts_at, "Cycle startsAt"),
+    endsAt: parseDateTime(cycle.ends_at, "Cycle endsAt"),
+  }));
+  const overlapsManual = (startsAt: string, endsAt: string): boolean => {
+    const start = parseDateTime(startsAt, "Cycle startsAt");
+    const end = parseDateTime(endsAt, "Cycle endsAt");
+    return manualIntervals.some((interval) => start < interval.endsAt && end > interval.startsAt);
   };
+  const anchor = all
+    .filter((cycle) => cycle.state !== "upcoming")
+    .sort(
+      (a, b) => parseDateTime(b.ends_at, "Cycle endsAt") - parseDateTime(a.ends_at, "Cycle endsAt"),
+    )[0];
+  let previousEndsAt = anchor?.ends_at;
+  const plannedIntervals: Array<{ startsAt: number; endsAt: number }> = [];
+  // Recompute unadjusted future cycles from the current Team settings. Manual
+  // future cycles remain byte-for-byte unchanged and become the next anchor.
+  for (const cycle of [...upcoming]) {
+    if (cycle.cadence_source === "manual") {
+      if (
+        !previousEndsAt ||
+        parseDateTime(cycle.ends_at, "Cycle endsAt") > parseDateTime(previousEndsAt, "Cycle endsAt")
+      ) {
+        previousEndsAt = cycle.ends_at;
+      }
+      continue;
+    }
+    let dates = computeCadenceDates(settingsForCadence, referenceAt, undefined, previousEndsAt);
+    while (
+      overlapsManual(dates.startsAt, dates.endsAt) ||
+      plannedIntervals.some((interval) => {
+        const start = parseDateTime(dates.startsAt, "Cycle startsAt");
+        const end = parseDateTime(dates.endsAt, "Cycle endsAt");
+        return start < interval.endsAt && end > interval.startsAt;
+      })
+    ) {
+      dates = computeCadenceDates(settingsForCadence, referenceAt, undefined, dates.endsAt);
+    }
+    if (cycle.starts_at !== dates.startsAt || cycle.ends_at !== dates.endsAt) {
+      const update = workspaceId
+        ? `UPDATE cycles SET starts_at = ?1, ends_at = ?2, updated_at = ?3 WHERE id = ?4 AND ${workspaceClause("workspace_id", "?5")}`
+        : "UPDATE cycles SET starts_at = ?1, ends_at = ?2, updated_at = ?3 WHERE id = ?4";
+      if (workspaceId)
+        db.query(update).run(dates.startsAt, dates.endsAt, now(), cycle.id, workspaceId);
+      else db.query(update).run(dates.startsAt, dates.endsAt, now(), cycle.id);
+      cycle.starts_at = dates.startsAt;
+      cycle.ends_at = dates.endsAt;
+    }
+    plannedIntervals.push({
+      startsAt: parseDateTime(dates.startsAt, "Cycle startsAt"),
+      endsAt: parseDateTime(dates.endsAt, "Cycle endsAt"),
+    });
+    previousEndsAt = dates.endsAt;
+  }
 
-  if (input.name !== undefined && input.name !== null) {
-    const name = input.name.trim();
-    if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
-    push("name", name);
+  const updatedUpcoming = upcoming.sort(
+    (a, b) =>
+      parseDateTime(a.starts_at, "Cycle startsAt") - parseDateTime(b.starts_at, "Cycle startsAt") ||
+      a.number - b.number,
+  );
+  const updatedCadence = updatedUpcoming.filter((cycle) => cycle.cadence_source === "cadence");
+  const keepCadence = Math.max(0, settings.cycleUpcomingCount - manual.length);
+  const timestamp = now();
+  for (const cycle of updatedCadence.slice(keepCadence)) {
+    const query = workspaceId
+      ? `UPDATE cycles SET archived_at = ?1, updated_at = ?1 WHERE id = ?2 AND ${workspaceClause("workspace_id", "?3")}`
+      : "UPDATE cycles SET archived_at = ?1, updated_at = ?1 WHERE id = ?2";
+    if (workspaceId) db.query(query).run(timestamp, cycle.id, workspaceId);
+    else db.query(query).run(timestamp, cycle.id);
   }
-  const startsAt = input.startsAt ?? existing.starts_at;
-  const endsAt = input.endsAt ?? existing.ends_at;
-  if (parseDateTime(startsAt, "Cycle startsAt") > parseDateTime(endsAt, "Cycle endsAt")) {
-    throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
-  }
-  if (input.startsAt != null) push("starts_at", input.startsAt);
-  if (input.endsAt != null) push("ends_at", input.endsAt);
-  if (input.state != null) push("state", resolveState(input.state));
-  if (input.archived === true) push("archived_at", now());
-  if (input.archived === false) push("archived_at", null);
 
-  if (sets.length > 0) {
-    push("updated_at", now());
-    params.push(id);
-    const workspaceFilter = workspaceId
-      ? ` AND ${workspaceClause("workspace_id", `?${params.length + 1}`)}`
-      : "";
-    if (workspaceId) params.push(workspaceId);
-    db.query(
-      `UPDATE cycles SET ${sets.join(", ")} WHERE id = ?${params.length - (workspaceId ? 1 : 0)}${workspaceFilter}`,
-    ).run(...(params as never[]));
+  const kept = updatedCadence.slice(0, keepCadence);
+  // When there is no completed/active anchor, append after the latest existing
+  // future boundary. This also handles a manually adjusted final cycle.
+  previousEndsAt = [...all]
+    .filter((cycle) => cycle.state !== "upcoming" || cycle.cadence_source === "manual")
+    .sort(
+      (a, b) => parseDateTime(b.ends_at, "Cycle endsAt") - parseDateTime(a.ends_at, "Cycle endsAt"),
+    )[0]?.ends_at;
+  if (!previousEndsAt && kept.length) previousEndsAt = kept[kept.length - 1]!.ends_at;
+  const existingStarts = new Set(
+    updatedUpcoming.map((cycle) => parseDateTime(cycle.starts_at, "Cycle startsAt")),
+  );
+  while (kept.length < keepCadence) {
+    let dates = computeCadenceDates(settingsForCadence, referenceAt, undefined, previousEndsAt);
+    while (
+      existingStarts.has(parseDateTime(dates.startsAt, "Cycle startsAt")) ||
+      overlapsManual(dates.startsAt, dates.endsAt)
+    ) {
+      dates = computeCadenceDates(settingsForCadence, referenceAt, undefined, dates.endsAt);
+    }
+    const number = nextNumber(db, teamId, workspaceId);
+    const id = newId();
+    const name = `Cycle ${number}`;
+    const query = workspaceId
+      ? `INSERT INTO cycles
+          (id, team_id, number, name, starts_at, ends_at, state, cadence_source, created_at, updated_at, archived_at, workspace_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'upcoming', 'cadence', ?7, ?7, NULL, ?8)`
+      : `INSERT INTO cycles
+          (id, team_id, number, name, starts_at, ends_at, state, cadence_source, created_at, updated_at, archived_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'upcoming', 'cadence', ?7, ?7, NULL)`;
+    if (workspaceId)
+      db.query(query).run(
+        id,
+        teamId,
+        number,
+        name,
+        dates.startsAt,
+        dates.endsAt,
+        timestamp,
+        workspaceId,
+      );
+    else db.query(query).run(id, teamId, number, name, dates.startsAt, dates.endsAt, timestamp);
+    const created = getCycle(db, id, workspaceId);
+    if (!created) throw new Error("Cadence cycle insert returned no row");
+    kept.push(created);
+    existingStarts.add(parseDateTime(dates.startsAt, "Cycle startsAt"));
+    previousEndsAt = dates.endsAt;
   }
-  return getCycle(db, id, workspaceId)!;
+  return (
+    workspaceId
+      ? db
+          .query(
+            `SELECT * FROM cycles WHERE team_id = ?1${workspace} AND state = 'upcoming' AND archived_at IS NULL ORDER BY number`,
+          )
+          .all(teamId, workspaceId)
+      : db
+          .query(
+            "SELECT * FROM cycles WHERE team_id = ?1 AND state = 'upcoming' AND archived_at IS NULL ORDER BY number",
+          )
+          .all(teamId)
+  ) as CycleRow[];
+}
+
+export function advanceCycle(
+  db: Database,
+  actorId: string,
+  id: string,
+  workspaceId?: string,
+): { cycle: CycleRow; nextCycle: CycleRow | null; movedIssues: number } {
+  const initial = getCycle(db, id, workspaceId);
+  if (!initial) throw apiError("NOT_FOUND", "Cycle not found");
+  let result: { cycle: CycleRow; nextCycle: CycleRow | null; movedIssues: number };
+  db.transaction(() => {
+    const current = getCycle(db, id, workspaceId);
+    if (!current) throw apiError("NOT_FOUND", "Cycle not found");
+    const team = getTeamSettings(db, current.team_id, workspaceId);
+    assertCyclesEnabled(team);
+    let movedIssues = 0;
+    let target: CycleRow | null = current;
+    const active = (
+      workspaceId
+        ? db
+            .query(
+              `SELECT * FROM cycles WHERE team_id = ?1 AND state = 'active' AND archived_at IS NULL AND id <> ?2 AND ${workspaceClause("workspace_id", "?3")} ORDER BY number DESC LIMIT 1`,
+            )
+            .get(current.team_id, id, workspaceId)
+        : db
+            .query(
+              "SELECT * FROM cycles WHERE team_id = ?1 AND state = 'active' AND archived_at IS NULL AND id <> ?2 ORDER BY number DESC LIMIT 1",
+            )
+            .get(current.team_id, id)
+    ) as CycleRow | null;
+
+    if (current.state === "active") {
+      const timestamp = now();
+      if (workspaceId) {
+        db.query(
+          `UPDATE cycles SET state = 'completed', updated_at = ?1 WHERE id = ?2 AND ${workspaceClause("workspace_id", "?3")}`,
+        ).run(timestamp, id, workspaceId);
+      } else {
+        db.query("UPDATE cycles SET state = 'completed', updated_at = ?1 WHERE id = ?2").run(
+          timestamp,
+          id,
+        );
+      }
+      target = nextUpcomingCycle(db, current, workspaceId);
+      if (!target) {
+        const dates = cadenceDates(
+          db,
+          current.team_id,
+          `Cycle ${current.number + 1}`,
+          undefined,
+          workspaceId,
+        );
+        const targetId = newId();
+        const number = nextNumber(db, current.team_id, workspaceId);
+        if (workspaceId) {
+          db.query(
+            `INSERT INTO cycles
+              (id, team_id, number, name, starts_at, ends_at, state, cadence_source, created_at, updated_at, archived_at, workspace_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'upcoming', 'cadence', ?7, ?7, NULL, ?8)`,
+          ).run(
+            targetId,
+            current.team_id,
+            number,
+            dates.name?.trim() || `Cycle ${number}`,
+            dates.startsAt,
+            dates.endsAt,
+            now(),
+            workspaceId,
+          );
+        } else {
+          db.query(
+            `INSERT INTO cycles
+              (id, team_id, number, name, starts_at, ends_at, state, cadence_source, created_at, updated_at, archived_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'upcoming', 'cadence', ?7, ?7, NULL)`,
+          ).run(
+            targetId,
+            current.team_id,
+            number,
+            dates.name?.trim() || `Cycle ${number}`,
+            dates.startsAt,
+            dates.endsAt,
+            now(),
+          );
+        }
+        target = getCycle(db, targetId, workspaceId);
+      }
+      if (!target) throw new Error("Cycle advance did not create a target");
+      if (databaseBoolean(team.cycle_rollover_enabled)) {
+        movedIssues = rolloverCycleIssues(db, actorId, current, target, workspaceId);
+      }
+    } else if (current.state === "upcoming") {
+      if (active) {
+        const timestamp = now();
+        if (workspaceId) {
+          db.query(
+            `UPDATE cycles SET state = 'completed', updated_at = ?1 WHERE id = ?2 AND ${workspaceClause("workspace_id", "?3")}`,
+          ).run(timestamp, active.id, workspaceId);
+        } else {
+          db.query("UPDATE cycles SET state = 'completed', updated_at = ?1 WHERE id = ?2").run(
+            timestamp,
+            active.id,
+          );
+        }
+        if (databaseBoolean(team.cycle_rollover_enabled)) {
+          movedIssues = rolloverCycleIssues(db, actorId, active, current, workspaceId);
+        }
+      }
+    } else {
+      throw apiError("VALIDATION_FAILED", "Completed cycles cannot be advanced");
+    }
+
+    if (!target) throw new Error("Cycle advance did not select a target");
+    const timestamp = now();
+    const workspace = workspaceId ? ` AND ${workspaceClause("workspace_id", "?3")}` : "";
+    if (workspaceId) {
+      db.query(`UPDATE cycles SET state = 'active', updated_at = ?1 WHERE id = ?2${workspace}`).run(
+        timestamp,
+        target.id,
+        workspaceId,
+      );
+    } else {
+      db.query("UPDATE cycles SET state = 'active', updated_at = ?1 WHERE id = ?2").run(
+        timestamp,
+        target.id,
+      );
+    }
+    target = getCycle(db, target.id, workspaceId)!;
+    if (databaseBoolean(team.cycle_auto_add_enabled)) {
+      movedIssues += autoAddActiveIssues(db, actorId, target, workspaceId);
+    }
+    // Promover un ciclo futuro consume un lugar. Repón el horizonte sin tocar
+    // los ciclos ajustados manualmente.
+    ensureUpcomingCadenceCycles(db, current.team_id, workspaceId);
+    result = { cycle: target, nextCycle: nextUpcomingCycle(db, target, workspaceId), movedIssues };
+  })();
+  return result!;
 }
 
 function cycleReference(db: Database, cycle: CycleRow): string {
@@ -260,6 +876,15 @@ export function deleteCycle(
     workspace_id?: string | null;
   }>;
   const reference = cycleReference(db, existing);
+  const cadenceBeforeDelete = db
+    .query(
+      `SELECT count(*) AS count FROM cycles
+       WHERE team_id = ?1 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL
+       ${workspaceId ? `AND ${workspaceClause("workspace_id", "?2")}` : ""}`,
+    )
+    .get(...(workspaceId ? [existing.team_id, workspaceId] : [existing.team_id])) as {
+    count: number;
+  };
   db.transaction(() => {
     // También canoniza eventos anteriores: una vez borrado el cycle, su UUID
     // ya no puede resolverse durante el export.
@@ -295,6 +920,12 @@ export function deleteCycle(
       );
     } else {
       db.query("DELETE FROM cycles WHERE id = ?1").run(id);
+    }
+    if (
+      (existing.cadence_source === "cadence" || cadenceBeforeDelete.count > 0) &&
+      databaseBoolean(getTeamSettings(db, existing.team_id, workspaceId).cycles_enabled)
+    ) {
+      ensureUpcomingCadenceCycles(db, existing.team_id, workspaceId);
     }
   })();
   return true;

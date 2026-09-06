@@ -13,7 +13,10 @@ export async function resolveTeam(
     config,
     `query($id: ID, $key: String, $includeArchived: Boolean) {
     team(id: $id, key: $key, includeArchived: $includeArchived) {
-      id key name visibility accessPolicy archivedAt states { id name type color position }
+      id key name visibility accessPolicy archivedAt timezone estimatesEnabled estimateScale
+      estimateExtendedScale estimateAllowZero cyclesEnabled cycleDurationWeeks cycleStartDay
+      cycleCooldownDays cycleUpcomingCount cycleRolloverEnabled cycleAutoAddEnabled
+      states { id name type color position }
     }
   }`,
     byId ? { id: ref, includeArchived } : { key: ref, includeArchived },

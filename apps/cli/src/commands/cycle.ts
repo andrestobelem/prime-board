@@ -6,14 +6,15 @@ import { ApiError, UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
 import { resolveTeam } from "../resolve.ts";
 
-const CYCLE_FIELDS = `id number name startsAt endsAt state progress completedIssues totalIssues
+const CYCLE_FIELDS = `id number name startsAt endsAt state cadenceSource manuallyAdjusted progress completedIssues totalIssues
   archivedAt createdAt updatedAt team { id key name }`;
 const USAGE = `Usage:
   pb cycle list --team KEY [--include-archived] [--json]
   pb cycle view <ID> [--json]
-  pb cycle create --team KEY --name TEXT --starts-at DATE --ends-at DATE [--state STATE] [--json]
+  pb cycle create --team KEY --name TEXT [--starts-at DATE --ends-at DATE] [--from-cadence] [--state STATE] [--json]
   pb cycle update <ID> [--name TEXT] [--starts-at DATE] [--ends-at DATE]
                     [--state STATE] [--archived true|false] [--json]
+  pb cycle advance <ID> [--json]
   pb cycle delete <ID> [--json]
   pb cycle carry-over --from ID --to ID [--json]`;
 
@@ -68,13 +69,35 @@ export async function cycleCommand(argv: string[]): Promise<void> {
         "starts-at": { type: "string" },
         "ends-at": { type: "string" },
         state: { type: "string" },
+        "from-cadence": { type: "boolean" },
         json: { type: "boolean" },
       },
     });
-    if (!values.team || !values.name || !values["starts-at"] || !values["ends-at"])
-      throw new UsageError(USAGE);
+    if (!values.team || !values.name) throw new UsageError(USAGE);
+    const teamId = (await resolveTeam(config, values.team)).id;
+    if (values["from-cadence"]) {
+      if (values["ends-at"] !== undefined) {
+        throw new UsageError("--ends-at cannot be combined with --from-cadence");
+      }
+      const input: Record<string, unknown> = { teamId, name: values.name };
+      if (values["starts-at"] !== undefined) input.startsAt = values["starts-at"];
+      if (values.state) input.state = values.state.toUpperCase();
+      const data = await gqlRequest(
+        config,
+        `mutation($input: CycleCadenceCreateInput!) {
+        cycleCreateFromCadence(input: $input) { cycle { ${CYCLE_FIELDS} } }
+      }`,
+        { input },
+      );
+      if (values.json) return printJson(data.cycleCreateFromCadence.cycle);
+      console.log(
+        `Created cycle: ${data.cycleCreateFromCadence.cycle.name} (${data.cycleCreateFromCadence.cycle.id})`,
+      );
+      return;
+    }
+    if (!values["starts-at"] || !values["ends-at"]) throw new UsageError(USAGE);
     const input: Record<string, unknown> = {
-      teamId: (await resolveTeam(config, values.team)).id,
+      teamId,
       name: values.name,
       startsAt: values["starts-at"],
       endsAt: values["ends-at"],
@@ -121,6 +144,23 @@ export async function cycleCommand(argv: string[]): Promise<void> {
     );
     if (values.json) return printJson(data.cycleUpdate.cycle);
     console.log(`Updated cycle ${id}`);
+    return;
+  }
+  if (action === "advance") {
+    const id = argv[1];
+    if (!id) throw new UsageError(USAGE);
+    const { values } = parseArgs({ args: argv.slice(2), options: { json: { type: "boolean" } } });
+    const data = await gqlRequest(
+      config,
+      `mutation($id: ID!) {
+        cycleAdvance(id: $id) { success movedIssues cycle { ${CYCLE_FIELDS} } nextCycle { ${CYCLE_FIELDS} } }
+      }`,
+      { id },
+    );
+    if (values.json) return printJson(data.cycleAdvance);
+    console.log(
+      `Advanced cycle: ${data.cycleAdvance.cycle.name} (${data.cycleAdvance.movedIssues} issues moved)`,
+    );
     return;
   }
   if (action === "delete") {
