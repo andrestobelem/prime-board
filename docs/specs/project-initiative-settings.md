@@ -25,6 +25,8 @@ Los miembros directos pueden leer y administrar la configuración del Project. L
 
 Los UUID internos de relaciones se regeneran. No se exportan secretos ni canales de notificación.
 
+En un export parcial por Team, `dependsOnProject`, `leadTeam`, labels de Team, Teams y Projects de una Initiative deben pertenecer al alcance seleccionado. El export falla cerrado antes de producir un snapshot con referencias externas. El rebuild repite estas validaciones como defensa secundaria. Las referencias internas al Team se exportan normalmente.
+
 ## Plan gates
 
 - Initiatives asociadas a Teams requieren Business o Enterprise en Linear. Prime-board conserva la relación en el modelo local-first y no simula billing.
