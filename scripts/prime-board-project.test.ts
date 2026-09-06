@@ -647,8 +647,10 @@ describe("project instance lock", () => {
       writeFileSync(identity.metadataPath, `${JSON.stringify({ ...record, port: server.port })}\n`);
 
       const status = await resolveInstanceStatus(identity);
+      const repeatedStatus = await resolveInstanceStatus(identity);
 
       expect(status.state).toBe("blocked");
+      expect(repeatedStatus.state).toBe("blocked");
       expect(status.record).toMatchObject({
         pid: process.pid,
         instanceId,

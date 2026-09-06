@@ -766,6 +766,13 @@ export async function resolveInstanceStatus(
   identity: ProjectInstanceIdentity,
 ): Promise<InstanceStatus> {
   const status = classifyInstance(identity);
+  if (
+    status.state === "running" &&
+    status.record?.serverPid !== undefined &&
+    !databaseReservationsMatchInstance(identity, status.record, processIsAlive)
+  ) {
+    return { state: "blocked", record: status.record };
+  }
   if (status.state !== "stale" || !status.record) return status;
   const health = await readInstanceHealth(status.record);
   if (health === "healthy") return { state: "running", record: status.record };
@@ -1159,6 +1166,48 @@ function readDatabaseReservation(path: string): DatabaseReservationRecord | "inv
   } catch {
     return "invalid";
   }
+}
+
+function databaseReservationsMatchInstance(
+  identity: ProjectInstanceIdentity,
+  instance: InstanceRecord,
+  probe: ProcessProbe,
+): boolean {
+  const paths = [identity.databaseLockPath, identity.databasePhysicalLockPath];
+  // Los launchers anteriores no creaban la reserva de inode cuando la DB aún
+  // no existía. Valídala si está presente, pero no conviertas esa ventana de
+  // migración en un bloqueo permanente de un server saludable.
+  if (identity.databaseInodeLockPath && existsSync(identity.databaseInodeLockPath)) {
+    paths.push(identity.databaseInodeLockPath);
+  }
+  const reservations = paths.map((path) => readDatabaseReservation(path));
+  let databaseLeaseToken: string | undefined;
+  let sawLegacyReservation = false;
+  for (const reservation of reservations) {
+    if (
+      reservation === null ||
+      reservation === "invalid" ||
+      reservation.projectRoot !== identity.projectRoot ||
+      reservation.databasePath !== identity.databasePath ||
+      reservation.instanceId !== instance.instanceId ||
+      !processOwnerIsAlive(reservation, probe)
+    ) {
+      return false;
+    }
+    // El lease token de la reserva DB es distinto del token del lock de la
+    // instancia. Solo exige que todas las reservas DB compartan su token.
+    if (reservation.leaseToken === undefined) {
+      if (databaseLeaseToken !== undefined) return false;
+      sawLegacyReservation = true;
+    } else {
+      if (sawLegacyReservation) return false;
+      if (databaseLeaseToken !== undefined && databaseLeaseToken !== reservation.leaseToken) {
+        return false;
+      }
+      databaseLeaseToken = reservation.leaseToken;
+    }
+  }
+  return true;
 }
 
 function retireIncompleteDatabaseReservation(path: string, recoveredTransition: boolean): boolean {
