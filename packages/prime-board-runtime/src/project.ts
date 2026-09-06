@@ -258,6 +258,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
 function leaseIdentityMatches(
   current: { instanceId?: string; leaseToken?: string },
   expected: { instanceId?: string; leaseToken?: string },
@@ -1232,7 +1237,7 @@ function databaseInodeReservationBlockedByProjectOwner(
   try {
     projectLocks = readdirSync(projectsPath);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    return errorCode(error) !== "ENOENT";
   }
   for (const projectLock of projectLocks) {
     if (!projectLock.endsWith(".lock")) continue;
@@ -1854,7 +1859,7 @@ export function acquireDatabaseReservation(
         // No se puede limpiar un path cuyo token ya no se puede verificar.
         removeOwnedDatabaseReservation(path, ownedRecord);
       }
-      if ((error as NodeJS.ErrnoException).code === "EAGAIN") {
+      if (errorCode(error) === "EAGAIN") {
         paths = databaseReservationPathsForIdentity(identity);
         continue;
       }

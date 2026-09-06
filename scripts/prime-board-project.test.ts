@@ -19,6 +19,7 @@ import {
   deriveProjectIdentity,
   chooseAvailablePort,
   reserveAvailablePort,
+  type DatabaseReservationRecord,
   resolveInstanceStatus,
   retireInstanceLock,
 } from "./prime-board-project-lib.ts";
@@ -447,13 +448,13 @@ describe("atomic project database reservations", () => {
     const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
     const instanceId = "legacy-live-child";
     const ownerRecord = {
-      version: 1 as const,
+      version: 1,
       projectRoot: ownerIdentity.projectRoot,
       databasePath: ownerIdentity.databasePath,
       pid: 999999,
       instanceId,
       reservedAt: "2026-01-01T00:00:00.000Z",
-    };
+    } satisfies DatabaseReservationRecord;
     const child = Bun.serve({ port: 0, fetch: () => Response.json({ status: "ok" }) });
     try {
       for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
@@ -511,14 +512,14 @@ describe("atomic project database reservations", () => {
     const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
     const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
     const staleRecord = {
-      version: 1 as const,
+      version: 1,
       projectRoot: ownerIdentity.projectRoot,
       databasePath: ownerIdentity.databasePath,
       pid: 999999,
       serverPid: 999999,
       instanceId: "stale-owner",
       reservedAt: "2026-01-01T00:00:00.000Z",
-    };
+    } satisfies DatabaseReservationRecord;
     try {
       for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
         mkdirSync(path, { recursive: true });
@@ -579,13 +580,13 @@ describe("atomic project database reservations", () => {
     const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
     const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
     const legacyRecord = {
-      version: 1 as const,
+      version: 1,
       projectRoot: ownerIdentity.projectRoot,
       databasePath: ownerIdentity.databasePath,
       pid: 999999,
       instanceId: "legacy-owner",
       reservedAt: "2026-01-01T00:00:00.000Z",
-    };
+    } satisfies DatabaseReservationRecord;
     try {
       for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
         mkdirSync(path, { recursive: true });
@@ -663,13 +664,13 @@ describe("atomic project database reservations", () => {
     const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
     const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
     const legacyRecord = {
-      version: 1 as const,
+      version: 1,
       projectRoot: ownerIdentity.projectRoot,
       databasePath: ownerIdentity.databasePath,
       pid: 999999,
       instanceId: "legacy-owner",
       reservedAt: "2026-01-01T00:00:00.000Z",
-    };
+    } satisfies DatabaseReservationRecord;
     try {
       for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
         mkdirSync(path, { recursive: true });
@@ -708,13 +709,13 @@ describe("atomic project database reservations", () => {
     const identity = deriveProjectIdentity(projectRoot, home, databasePath);
     const instanceId = "preexisting-db-owner";
     const record = {
-      version: 1 as const,
+      version: 1,
       projectRoot: identity.projectRoot,
       databasePath: identity.databasePath,
       pid: process.pid,
       instanceId,
       reservedAt: "2026-01-01T00:00:00.000Z",
-    };
+    } satisfies DatabaseReservationRecord;
     let release: ReturnType<typeof acquireDatabaseReservation> | null = null;
     let paths: string[] = [];
     try {
@@ -755,14 +756,14 @@ describe("atomic project database reservations", () => {
     });
     const stalePid = 999999;
     const legacyRecord = {
-      version: 1 as const,
+      version: 1,
       projectRoot: ownerIdentity.projectRoot,
       databasePath: ownerIdentity.databasePath,
       pid: stalePid,
       serverPid: stalePid,
       instanceId: "health-owner",
       reservedAt: "2026-01-01T00:00:00.000Z",
-    };
+    } satisfies DatabaseReservationRecord;
     try {
       for (const path of databaseReservationPaths(source, home).slice(0, 2)) {
         mkdirSync(path, { recursive: true });
@@ -1154,11 +1155,16 @@ describe("project instance lock", () => {
           leaseToken: instanceLeaseToken,
         }),
     });
+    const serverPort = server.port;
+    if (serverPort === undefined) {
+      server.stop(true);
+      throw new Error("Test server did not expose a port");
+    }
     const instanceRecord = {
       version: 1 as const,
       projectRoot: identity.projectRoot,
       databasePath: identity.databasePath,
-      port: server.port!,
+      port: serverPort,
       pid: 999999,
       launcherPid: 999998,
       instanceId,
@@ -1180,7 +1186,7 @@ describe("project instance lock", () => {
     let releaseDatabase: (() => void) | null = null;
     try {
       const portReservation = await reserveAvailablePort(
-        server.port!,
+        serverPort,
         true,
         home,
         async () => true,
