@@ -167,7 +167,8 @@ describe("PostgreSQL labels and relations", () => {
       `mutation { webhookCreate(input: { url: "https://example.test/prb-581", events: ["issue.updated"] }) { webhook { id } } }`,
     );
     expect(webhook.errors).toBeUndefined();
-    const webhookId = webhook.data!.webhookCreate.webhook.id as string;
+    const webhookId = webhook.data?.webhookCreate?.webhook?.id;
+    if (typeof webhookId !== "string") throw new Error("Webhook creation returned no ID");
     deliveries.length = 0;
     const blocker = await createIssue("PRB-437 blocker");
     const third = await createIssue("PRB-437 third");
@@ -347,7 +348,9 @@ describe("PostgreSQL labels and relations", () => {
     expect(labelDeleted.data!.labelDelete).toEqual({ success: true, affectedIssues: 1 });
     await app.events.idle();
     expect(deliveries).toHaveLength(1);
-    const labelDeletePayload = JSON.parse(deliveries[0]!);
+    const [delivery] = deliveries;
+    if (delivery === undefined) throw new Error("Expected one webhook delivery");
+    const labelDeletePayload = JSON.parse(delivery);
     expect(labelDeletePayload.data.identifier).toBe(blocked.identifier);
     expect(labelDeletePayload.data.identifier).not.toContain("undefined-");
     const afterLabelDelete = await request(
