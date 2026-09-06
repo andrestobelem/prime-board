@@ -103,6 +103,24 @@ function seedLegacyViewsMigrationMarker(db: Database): void {
   db.exec("PRAGMA foreign_keys = OFF");
   db.exec(readFileSync(join(import.meta.dir, "migrations", "0033_views_preferences.sql"), "utf8"));
   db.exec("PRAGMA foreign_keys = ON");
+  db.exec(`
+    INSERT INTO view_preferences
+      (id, workspace_id, view_id, actor_id, view_type, scope, layout, order_by, group_by,
+       columns_json, created_at, updated_at)
+    SELECT 'view-preference-legacy', workspace.id, 'view-legacy', actors.id, 'issue', 'actor',
+           'list', 'UPDATED_DESC', 'state', '[]', '2026-01-01T00:00:00.000Z',
+           '2026-01-01T00:00:00.000Z'
+      FROM workspace
+      JOIN actors ON actors.name = 'admin'
+     LIMIT 1;
+    INSERT INTO view_subscriptions
+      (id, workspace_id, view_id, actor_id, issue_changes, slack, created_at, updated_at)
+    SELECT 'view-subscription-legacy', workspace.id, 'view-legacy', actors.id, 1, 0,
+           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+      FROM workspace
+      JOIN actors ON actors.name = 'admin'
+     LIMIT 1;
+  `);
   db.query(
     "INSERT INTO _migrations (version, name, applied_at) VALUES (32, 'views_preferences', ?1)",
   ).run("2026-01-01T00:00:00.000Z");
@@ -271,6 +289,10 @@ describe("colisión de migraciones SQLite", () => {
       const beforeViewSubscription = db
         .query("SELECT * FROM view_subscriptions WHERE id = 'view-subscription-legacy'")
         .get();
+      expect(beforeView).not.toBeNull();
+      expect(beforeFavorite).not.toBeNull();
+      expect(beforeViewPreference).not.toBeNull();
+      expect(beforeViewSubscription).not.toBeNull();
 
       expect(
         db
@@ -295,6 +317,12 @@ describe("colisión de migraciones SQLite", () => {
       expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
         beforeFavorite,
       );
+      expect(
+        db.query("SELECT * FROM view_preferences WHERE id = 'view-preference-legacy'").get(),
+      ).toEqual(beforeViewPreference);
+      expect(
+        db.query("SELECT * FROM view_subscriptions WHERE id = 'view-subscription-legacy'").get(),
+      ).toEqual(beforeViewSubscription);
       expect(
         db
           .query(
@@ -350,9 +378,17 @@ describe("colisión de migraciones SQLite", () => {
       seedLegacyViewsMigrationMarker(db);
       db.exec("CREATE INDEX idx_notification_preferences_actor_workspace ON actors(name)");
       const beforeView = db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get();
+      const beforeFavorite = db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get();
       const beforeViewPreference = db
         .query("SELECT * FROM view_preferences WHERE id = 'view-preference-legacy'")
         .get();
+      const beforeViewSubscription = db
+        .query("SELECT * FROM view_subscriptions WHERE id = 'view-subscription-legacy'")
+        .get();
+      expect(beforeView).not.toBeNull();
+      expect(beforeFavorite).not.toBeNull();
+      expect(beforeViewPreference).not.toBeNull();
+      expect(beforeViewSubscription).not.toBeNull();
       const beforeMarkers = db
         .query("SELECT version, name FROM _migrations ORDER BY version")
         .all();
@@ -368,9 +404,15 @@ describe("colisión de migraciones SQLite", () => {
       expect(db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get()).toEqual(
         beforeView,
       );
+      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
+        beforeFavorite,
+      );
       expect(
         db.query("SELECT * FROM view_preferences WHERE id = 'view-preference-legacy'").get(),
       ).toEqual(beforeViewPreference);
+      expect(
+        db.query("SELECT * FROM view_subscriptions WHERE id = 'view-subscription-legacy'").get(),
+      ).toEqual(beforeViewSubscription);
       expect(db.query("SELECT version, name FROM _migrations ORDER BY version").all()).toEqual(
         beforeMarkers,
       );
@@ -381,6 +423,16 @@ describe("colisión de migraciones SQLite", () => {
       expect(db.query("SELECT name FROM _migrations WHERE version = 33").get()).toEqual({
         name: "views_preferences",
       });
+      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
+        beforeFavorite,
+      );
+      expect(
+        db.query("SELECT * FROM view_preferences WHERE id = 'view-preference-legacy'").get(),
+      ).toEqual(beforeViewPreference);
+      expect(
+        db.query("SELECT * FROM view_subscriptions WHERE id = 'view-subscription-legacy'").get(),
+      ).toEqual(beforeViewSubscription);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();
     }
