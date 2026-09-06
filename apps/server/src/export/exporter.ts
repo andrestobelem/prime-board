@@ -681,6 +681,30 @@ export function exportBoard(
        ORDER BY projects.name, projects.id`,
     )
     .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
+  const exportedProjectIds = new Set(projects.map((project) => String(project.id)));
+  if (teamFilter && projects.length) {
+    const scopedProjectIds = [...exportedProjectIds];
+    const placeholders = scopedProjectIds.map(() => "?").join(", ");
+    const outOfScopeDependency = db
+      .query(
+        `SELECT source.name AS source_name, target.name AS target_name
+         FROM project_dependencies dependencies
+         JOIN projects source ON source.id = dependencies.project_id
+         JOIN projects target ON target.id = dependencies.depends_on_project_id
+         WHERE dependencies.project_id IN (${placeholders})
+           AND dependencies.depends_on_project_id NOT IN (${placeholders})
+         LIMIT 1`,
+      )
+      .get(...([...scopedProjectIds, ...scopedProjectIds] as never[])) as {
+      source_name: string;
+      target_name: string;
+    } | null;
+    if (outOfScopeDependency) {
+      throw new Error(
+        `Cannot export team ${options.teamKey}: project dependency target is out of scope (${outOfScopeDependency.source_name} -> ${outOfScopeDependency.target_name})`,
+      );
+    }
+  }
   write(
     join(base, "meta", "projects.json"),
     stableStringify(
@@ -891,6 +915,47 @@ export function exportBoard(
        ORDER BY i.created_at, i.id`,
     )
     .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
+  if (teamFilter) {
+    for (const initiative of initiatives) {
+      if (initiative.lead_team_id && initiative.lead_team_id !== teamFilter.id) {
+        throw new Error(
+          `Cannot export team ${options.teamKey}: initiative lead team is out of scope (${initiative.name})`,
+        );
+      }
+      const outOfScopeTeam = db
+        .query(
+          "SELECT teams.key FROM initiative_teams JOIN teams ON teams.id = initiative_teams.team_id WHERE initiative_teams.initiative_id = ?1 AND initiative_teams.team_id <> ?2 LIMIT 1",
+        )
+        .get(initiative.id, teamFilter.id) as { key: string } | null;
+      if (outOfScopeTeam) {
+        throw new Error(
+          `Cannot export team ${options.teamKey}: initiative team is out of scope (${initiative.name} -> ${outOfScopeTeam.key})`,
+        );
+      }
+      const outOfScopeLabel = db
+        .query(
+          "SELECT labels.name, teams.key FROM initiative_labels JOIN labels ON labels.id = initiative_labels.label_id JOIN teams ON teams.id = labels.team_id WHERE initiative_labels.initiative_id = ?1 AND labels.team_id <> ?2 LIMIT 1",
+        )
+        .get(initiative.id, teamFilter.id) as { name: string; key: string } | null;
+      if (outOfScopeLabel) {
+        throw new Error(
+          `Cannot export team ${options.teamKey}: initiative label is out of scope (${initiative.name} -> ${outOfScopeLabel.key}/${outOfScopeLabel.name})`,
+        );
+      }
+      const outOfScopeProject = db
+        .query(
+          "SELECT projects.name FROM initiative_projects JOIN projects ON projects.id = initiative_projects.project_id WHERE initiative_projects.initiative_id = ?1 AND initiative_projects.project_id NOT IN (" +
+            [...exportedProjectIds].map(() => "?").join(", ") +
+            ") LIMIT 1",
+        )
+        .get(initiative.id, ...([...exportedProjectIds] as never[])) as { name: string } | null;
+      if (outOfScopeProject) {
+        throw new Error(
+          `Cannot export team ${options.teamKey}: initiative project is out of scope (${initiative.name} -> ${outOfScopeProject.name})`,
+        );
+      }
+    }
+  }
   write(
     join(base, "meta", "initiatives.json"),
     stableStringify(

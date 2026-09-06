@@ -205,6 +205,67 @@ describe("exportBoard", () => {
     }
   });
 
+  it("rechaza referencias fuera del alcance Team y acepta relaciones internas", async () => {
+    const team = (await gql(app, `{ team(key: "PB") { id } }`)).data!.team.id as string;
+    const otherTeam = (
+      await gql(
+        app,
+        `mutation { teamCreate(input: { name: "Other export team", key: "OX" }) { team { id } } }`,
+      )
+    ).data!.teamCreate.team.id as string;
+    const createProject = async (name: string, teamId: string) =>
+      (
+        await gql(
+          app,
+          `mutation($name: String!, $team: ID!) { projectCreate(input: { name: $name, teamIds: [$team] }) { project { id } } }`,
+          { name, team: teamId },
+        )
+      ).data!.projectCreate.project.id as string;
+    const validSource = await createProject("Scoped dependency source", team);
+    const validTarget = await createProject("Scoped dependency target", team);
+    const outsideTarget = await createProject("Outside dependency target", otherTeam);
+    await gql(
+      app,
+      `mutation($source: ID!, $target: ID!) { projectDependencyCreate(input: { projectId: $source, dependsOnProjectId: $target }) { success } }`,
+      { source: validSource, target: validTarget },
+    );
+    const validRoot = mkdtempSync(join(tmpdir(), "pb-export-scoped-valid-"));
+    try {
+      expect(() => exportBoard(app.db, validRoot, { teamKey: "PB" })).not.toThrow();
+    } finally {
+      rmSync(validRoot, { recursive: true, force: true });
+    }
+    const outsideLead = (
+      await gql(
+        app,
+        `mutation($team: ID!, $lead: ID!) { initiativeCreate(input: { name: "Outside lead initiative", teamIds: [$team], leadTeamId: $lead }) { success } }`,
+        { team, lead: otherTeam },
+      )
+    ).data!.initiativeCreate.success;
+    expect(outsideLead).toBe(true);
+    const invalidLeadRoot = mkdtempSync(join(tmpdir(), "pb-export-scoped-lead-"));
+    try {
+      expect(() => exportBoard(app.db, invalidLeadRoot, { teamKey: "PB" })).toThrow(
+        /initiative lead team is out of scope/,
+      );
+    } finally {
+      rmSync(invalidLeadRoot, { recursive: true, force: true });
+    }
+    await gql(
+      app,
+      `mutation($source: ID!, $target: ID!) { projectDependencyCreate(input: { projectId: $source, dependsOnProjectId: $target }) { success } }`,
+      { source: validSource, target: outsideTarget },
+    );
+    const invalidRoot = mkdtempSync(join(tmpdir(), "pb-export-scoped-invalid-"));
+    try {
+      expect(() => exportBoard(app.db, invalidRoot, { teamKey: "PB" })).toThrow(
+        /project dependency target is out of scope/,
+      );
+    } finally {
+      rmSync(invalidRoot, { recursive: true, force: true });
+    }
+  });
+
   it("preserva el mapa de origen de una migración", () => {
     const map = createSourceMap("linear-workspace");
     writeSourceMap(dir, map);

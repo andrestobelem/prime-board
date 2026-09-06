@@ -284,7 +284,7 @@ export const projectResolvers = {
     project: async (dependency: { projectId: string }, _args: unknown, context: Context) => {
       if (context.persistence) {
         const project = await getPostgresProject(context.persistence, dependency.projectId);
-        return project && (await postgresProjectTeamsAllowed(context, project.id))
+        return project && (await postgresProjectAllowed(context, project.id))
           ? mapPostgresProject(project)
           : null;
       }
@@ -301,7 +301,7 @@ export const projectResolvers = {
           context.persistence,
           dependency.dependsOnProjectId,
         );
-        return project && (await postgresProjectTeamsAllowed(context, project.id))
+        return project && (await postgresProjectAllowed(context, project.id))
           ? mapPostgresProject(project)
           : null;
       }

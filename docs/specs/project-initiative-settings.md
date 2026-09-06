@@ -146,6 +146,7 @@ Los secretos de API keys y Webhooks no se exportan. No se inventan campos para T
 notificaciones o Views. Saved Views siguen siendo una capacidad separada y se exportan en
 `meta/saved-views.json`.
 
+
 ## Plan gates y diferencias con Linear
 
 Linear limita las Initiatives asociadas a Teams y las Initiative Views según el plan. Prime-board
