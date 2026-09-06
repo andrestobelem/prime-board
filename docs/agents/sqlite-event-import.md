@@ -31,11 +31,15 @@ el tamaño de cada append. Si el proceso se interrumpe, se puede repetir: el
   projector futuro puede reconstruirla sin consultar SQLite.
 - `workspace_id` y las referencias se validan antes de escribir. El reporte
   separa filas fuera de alcance, huérfanas, ambiguas, rechazadas y duplicadas.
-  Una referencia a una tabla o fila ausente es huérfana.
+  Una referencia a una tabla o fila ausente es huérfana. Una referencia a un Actor
+  solo es válida cuando una Membership de Workspace demuestra su pertenencia; una
+  metadata de Membership ausente, ambigua o inválida no forma un mapa parcial.
 - Una fuente con un solo Workspace mantiene compatibilidad con filas legacy
   anteriores a `workspace_id`: el ID único se usa como alcance cuando la fuente
-  no puede asignar otro. Una fuente multi-Workspace requiere selector y alcance
-  explícitos; no se infiere un `NULL`.
+  no puede asignar otro. Este fallback aplica cuando falta la metadata de Membership;
+  si la tabla existe y el Actor no tiene una fila, la referencia es huérfana. Una
+  fuente multi-Workspace requiere selector y alcance explícitos; no se infiere un
+  `NULL` ni se confía solo en `workspace_id`.
 - `api_keys`, sus grants, hashes y scopes, invitaciones, webhooks, Documents retirados,
   Favorites e Inbox Receipts se cuentan como `excluded` y no se leen como filas
   de eventos. Los nombres y campos sensibles (incluidos `hash`, `token_hash`,

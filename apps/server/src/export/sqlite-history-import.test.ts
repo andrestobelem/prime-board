@@ -706,6 +706,82 @@ describe("complete SQLite history import", () => {
     }
   });
 
+  it("rejects every Actor-dependent history family when the Actor has no Membership", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-actor-absent-"));
+    try {
+      db.query(
+        "INSERT INTO workspace VALUES ('w2', 'Other', 'other', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
+      db.query(
+        "INSERT INTO actors VALUES ('a2', 'Unmapped', 'agent', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
+      db.exec("ALTER TABLE actors ADD COLUMN suspended_by TEXT");
+      db.exec("ALTER TABLE actors ADD COLUMN workspace_id TEXT");
+      db.exec("ALTER TABLE projects ADD COLUMN lead_id TEXT");
+      db.exec("ALTER TABLE initiatives ADD COLUMN owner_id TEXT");
+      db.query("UPDATE actors SET suspended_by = 'a1', workspace_id = 'w1' WHERE id = 'a2'").run();
+      db.query("UPDATE projects SET lead_id = 'a2' WHERE id = 'p1'").run();
+      db.query("UPDATE issues SET creator_id = 'a2' WHERE id = 'i1'").run();
+      db.query("UPDATE comments SET actor_id = 'a2' WHERE id = 'cm1'").run();
+      db.query("UPDATE activity SET actor_id = 'a2' WHERE id = 'ac1'").run();
+      db.query("UPDATE team_memberships SET actor_id = 'a2' WHERE id = 'tm1'").run();
+      db.query("UPDATE initiatives SET owner_id = 'a2' WHERE id = 'n1'").run();
+      db.query("UPDATE project_updates SET author_id = 'a2' WHERE id = 'u1'").run();
+      db.query("UPDATE reviews SET requester_id = 'a2', reviewer_id = 'a2' WHERE id = 'rv1'").run();
+      db.query("UPDATE issue_subscribers SET actor_id = 'a2' WHERE issue_id = 'i1'").run();
+      db.query("UPDATE saved_views SET owner_id = 'a2' WHERE id = 'v1'").run();
+
+      const missingActorRows = [
+        ["activity", "ac1"],
+        ["actors", "a2"],
+        ["projects", "p1"],
+        ["issues", "i1"],
+        ["comments", "cm1"],
+        ["team_memberships", "tm1"],
+        ["initiatives", "n1"],
+        ["project_updates", "u1"],
+        ["reviews", "rv1"],
+        ["issue_subscribers", JSON.stringify(["i1", "a2"])],
+        ["saved_views", "v1"],
+      ] as const;
+
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+        includeSnapshots: true,
+      });
+      expect(dry.multipleWorkspaces).toBe(true);
+      expect(dry.emitted).toBeGreaterThan(0);
+      for (const [table] of missingActorRows) {
+        expect(dry.tables[table]?.orphaned).toBeGreaterThanOrEqual(1);
+      }
+      expect(dry.warnings).toContain("orphaned:activity:ac1");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: true,
+      });
+      expect(applied.written).toBeGreaterThan(0);
+      for (const [table] of missingActorRows) {
+        expect(applied.tables[table]?.orphaned).toBeGreaterThanOrEqual(1);
+      }
+      const eventIds = readEventLog(root).map((event) => event.eventId);
+      for (const [table, id] of missingActorRows) {
+        const eventId = table === "activity" ? id : `sqlite:${table}:${id}`;
+        expect(eventIds).not.toContain(eventId);
+      }
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects Activity Actor when Membership metadata is missing in a multi-Workspace source", () => {
     const db = sourceDatabase();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-multi-missing-"));

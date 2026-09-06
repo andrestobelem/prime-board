@@ -796,10 +796,17 @@ function referencedWorkspaceIds(
         continue;
       }
       const actorWorkspaces = indexes.actorWorkspaceIds.get(value);
-      if (direct.workspaceId !== undefined) {
-        if (actorWorkspaces && !actorWorkspaces.has(direct.workspaceId)) missing = true;
-      } else if (actorWorkspaces !== undefined) {
-        for (const workspace of actorWorkspaces) candidates.add(workspace);
+      // Una tabla de Membership encontrada solo prueba Actors con al menos
+      // una Membership válida. workspace_id directo no prueba la pertenencia
+      // del Actor ni puede autorizar por sí solo una fila dependiente.
+      if (indexes.workspaceMembershipMetadata.state === "found") {
+        if (actorWorkspaces === undefined || actorWorkspaces.size === 0) {
+          missing = true;
+        } else if (direct.workspaceId !== undefined) {
+          if (!actorWorkspaces.has(direct.workspaceId)) missing = true;
+        } else {
+          for (const workspace of actorWorkspaces) candidates.add(workspace);
+        }
       }
       continue;
     }
@@ -903,6 +910,41 @@ function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes
       };
     }
     const memberships = indexes.actorWorkspaceIds.get(identity.sourceId);
+    const membershipState = indexes.workspaceMembershipMetadata.state;
+    if (membershipState === "ambiguous" || membershipState === "invalid") {
+      return {
+        workspaceId: undefined,
+        outOfScope: false,
+        orphaned: false,
+        ambiguous: true,
+        rejected: false,
+      };
+    }
+    // Cuando existe metadata de Membership, la ausencia del Actor en el mapa
+    // es una evidencia positiva de que no pertenece al Workspace. No uses una
+    // referencia secundaria, como suspended_by, para emitir su identidad.
+    if (memberships === undefined || memberships.size === 0) {
+      if (membershipState === "found") {
+        return {
+          workspaceId: undefined,
+          outOfScope: false,
+          orphaned: true,
+          ambiguous: false,
+          rejected: false,
+        };
+      }
+      // En multi-Workspace, metadata ausente no puede autorizar el Actor por
+      // su workspace_id directo. El fallback legacy solo aplica a singleton.
+      if (scope.multipleWorkspaces) {
+        return {
+          workspaceId: undefined,
+          outOfScope: false,
+          orphaned: false,
+          ambiguous: true,
+          rejected: false,
+        };
+      }
+    }
     if (memberships && memberships.size > 0 && !memberships.has(scope.workspaceId)) {
       return {
         workspaceId: undefined,
