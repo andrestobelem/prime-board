@@ -41,6 +41,11 @@ interface ActivityRow {
   readonly occurred_at: string;
 }
 
+interface ResolvedTable {
+  readonly canonicalName: string;
+  readonly physicalName: string;
+}
+
 interface ImportScope {
   readonly workspaceId: string | undefined;
   readonly workspaceIds: ReadonlySet<string>;
@@ -48,23 +53,79 @@ interface ImportScope {
   readonly activityHasWorkspace: boolean;
   readonly issueHasWorkspace: boolean;
   readonly teamHasWorkspace: boolean;
+  readonly activityTable: ResolvedTable | undefined;
+  readonly issueTable: ResolvedTable | undefined;
+  readonly teamTable: ResolvedTable | undefined;
+  readonly actorTable: ResolvedTable | undefined;
+  readonly actorWorkspaceIds: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 function warning(warnings: string[], kind: string, id: string): void {
   if (warnings.length < 100) warnings.push(`${kind}:${id}`);
 }
 
-function hasTable(db: Database, table: string): boolean {
-  return (
-    db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1").get(table) !=
-    null
-  );
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/gu, '""')}"`;
 }
 
-function hasColumn(db: Database, table: string, column: string): boolean {
-  return (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
-    (entry) => entry.name === column,
-  );
+function resolveTable(db: Database, canonicalName: string): ResolvedTable | undefined {
+  const row = db
+    .query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name COLLATE NOCASE = ?1 LIMIT 1",
+    )
+    .get(canonicalName) as { name?: unknown } | null;
+  return typeof row?.name === "string" ? { canonicalName, physicalName: row.name } : undefined;
+}
+
+function hasTable(db: Database, table: string): boolean {
+  return resolveTable(db, table) !== undefined;
+}
+
+function physicalNameFor(db: Database, table: string | ResolvedTable): string | undefined {
+  return typeof table === "string" ? resolveTable(db, table)?.physicalName : table.physicalName;
+}
+
+function hasColumn(db: Database, table: string | ResolvedTable, column: string): boolean {
+  const physicalName = physicalNameFor(db, table);
+  if (physicalName === undefined) return false;
+  const normalizedColumn = column.toLowerCase();
+  return (
+    db.query(`PRAGMA table_info(${quoteIdentifier(physicalName)})`).all() as Array<{
+      name: string;
+    }>
+  ).some((entry) => entry.name.toLowerCase() === normalizedColumn);
+}
+
+function textValue(value: unknown): string | undefined {
+  if (typeof value === "string") return value.length > 0 ? value : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function actorWorkspaceIndexes(
+  db: Database,
+  membershipsTable: ResolvedTable | undefined,
+): ReadonlyMap<string, ReadonlySet<string>> {
+  if (
+    membershipsTable === undefined ||
+    !hasColumn(db, membershipsTable, "actor_id") ||
+    !hasColumn(db, membershipsTable, "workspace_id")
+  ) {
+    return new Map();
+  }
+  const rows = db
+    .query(`SELECT actor_id, workspace_id FROM ${quoteIdentifier(membershipsTable.physicalName)}`)
+    .all() as Array<{ actor_id?: unknown; workspace_id?: unknown }>;
+  const result = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const actorId = textValue(row.actor_id);
+    const workspaceId = textValue(row.workspace_id);
+    if (actorId === undefined || workspaceId === undefined) continue;
+    const workspaces = result.get(actorId) ?? new Set<string>();
+    workspaces.add(workspaceId);
+    result.set(actorId, workspaces);
+  }
+  return result;
 }
 
 function validateRequestedWorkspace(workspaceId: string | undefined): void {
@@ -78,17 +139,24 @@ function validateRequestedWorkspace(workspaceId: string | undefined): void {
 
 function resolveImportScope(db: Database, requestedWorkspaceId: string | undefined): ImportScope {
   validateRequestedWorkspace(requestedWorkspaceId);
-  const workspaceTable = hasTable(db, "workspace");
-  if (requestedWorkspaceId !== undefined && !workspaceTable) {
+  const workspaceTable = resolveTable(db, "workspace");
+  const activityTable = resolveTable(db, "activity");
+  const issueTable = resolveTable(db, "issues");
+  const teamTable = resolveTable(db, "teams");
+  const actorTable = resolveTable(db, "actors");
+  const membershipsTable = resolveTable(db, "workspace_memberships");
+  if (requestedWorkspaceId !== undefined && workspaceTable === undefined) {
     throw new Error("SQLite event import workspaceId requires a workspace table");
   }
 
   const workspaceIds = workspaceTable
-    ? (db.query("SELECT id FROM workspace ORDER BY id").all() as Array<{ id: string }>).map(
-        (row) => row.id,
-      )
+    ? (
+        db
+          .query(`SELECT id FROM ${quoteIdentifier(workspaceTable.physicalName)} ORDER BY id`)
+          .all() as Array<{ id: string }>
+      ).map((row) => row.id)
     : [];
-  if (workspaceTable && workspaceIds.length === 0) {
+  if (workspaceTable !== undefined && workspaceIds.length === 0) {
     throw new Error("SQLite event import requires at least one Workspace");
   }
   const multipleWorkspaces = workspaceIds.length > 1;
@@ -101,9 +169,9 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
     throw new Error(`SQLite event import Workspace ${requestedWorkspaceId} does not exist`);
   }
 
-  const activityHasWorkspace = hasColumn(db, "activity", "workspace_id");
-  const issueHasWorkspace = hasColumn(db, "issues", "workspace_id");
-  const teamHasWorkspace = hasColumn(db, "teams", "workspace_id");
+  const activityHasWorkspace = hasColumn(db, activityTable ?? "activity", "workspace_id");
+  const issueHasWorkspace = hasColumn(db, issueTable ?? "issues", "workspace_id");
+  const teamHasWorkspace = hasColumn(db, teamTable ?? "teams", "workspace_id");
   if (multipleWorkspaces && (!activityHasWorkspace || !issueHasWorkspace || !teamHasWorkspace)) {
     throw new Error(
       "SQLite event import cannot scope a multi-Workspace source without workspace_id on activity, issues, and teams",
@@ -117,10 +185,27 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
     activityHasWorkspace,
     issueHasWorkspace,
     teamHasWorkspace,
+    activityTable,
+    issueTable,
+    teamTable,
+    actorTable,
+    actorWorkspaceIds: actorWorkspaceIndexes(db, membershipsTable),
   };
 }
 
 function activityQuery(scope: ImportScope): string {
+  if (
+    scope.activityTable === undefined ||
+    scope.issueTable === undefined ||
+    scope.teamTable === undefined ||
+    scope.actorTable === undefined
+  ) {
+    throw new Error("SQLite event import requires Activity, Issue, Team, and Actor tables");
+  }
+  const activityTable = quoteIdentifier(scope.activityTable.physicalName);
+  const issueTable = quoteIdentifier(scope.issueTable.physicalName);
+  const teamTable = quoteIdentifier(scope.teamTable.physicalName);
+  const actorTable = quoteIdentifier(scope.actorTable.physicalName);
   const activityWorkspace = scope.activityHasWorkspace
     ? "activity.workspace_id AS activity_workspace_id"
     : "NULL AS activity_workspace_id";
@@ -133,15 +218,15 @@ function activityQuery(scope: ImportScope): string {
   const issueJoin =
     scope.activityHasWorkspace && scope.issueHasWorkspace
       ? scope.multipleWorkspaces
-        ? "LEFT JOIN issues ON issues.id = activity.issue_id AND activity.workspace_id IS NOT NULL AND issues.workspace_id = activity.workspace_id"
-        : "LEFT JOIN issues ON issues.id = activity.issue_id AND (activity.workspace_id IS NULL OR issues.workspace_id = activity.workspace_id)"
-      : "LEFT JOIN issues ON issues.id = activity.issue_id";
+        ? `LEFT JOIN ${issueTable} AS issues ON issues.id = activity.issue_id AND activity.workspace_id IS NOT NULL AND issues.workspace_id = activity.workspace_id`
+        : `LEFT JOIN ${issueTable} AS issues ON issues.id = activity.issue_id AND (activity.workspace_id IS NULL OR issues.workspace_id = activity.workspace_id)`
+      : `LEFT JOIN ${issueTable} AS issues ON issues.id = activity.issue_id`;
   const teamJoin =
     scope.issueHasWorkspace && scope.teamHasWorkspace
       ? scope.multipleWorkspaces
-        ? "LEFT JOIN teams ON teams.id = issues.team_id AND issues.workspace_id IS NOT NULL AND teams.workspace_id = issues.workspace_id"
-        : "LEFT JOIN teams ON teams.id = issues.team_id AND (issues.workspace_id IS NULL OR teams.workspace_id = issues.workspace_id)"
-      : "LEFT JOIN teams ON teams.id = issues.team_id";
+        ? `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id AND issues.workspace_id IS NOT NULL AND teams.workspace_id = issues.workspace_id`
+        : `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id AND (issues.workspace_id IS NULL OR teams.workspace_id = issues.workspace_id)`
+      : `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id`;
   return `SELECT activity.id,
                  teams.key || '-' || issues.number AS issue_identifier,
                  actors.id AS actor_id,
@@ -154,10 +239,10 @@ function activityQuery(scope: ImportScope): string {
                  activity.type,
                  activity.payload,
                  activity.created_at AS occurred_at
-          FROM activity
+          FROM ${activityTable} AS activity
           ${issueJoin}
           ${teamJoin}
-          LEFT JOIN actors ON actors.id = activity.actor_id
+          LEFT JOIN ${actorTable} AS actors ON actors.id = activity.actor_id
           ORDER BY activity.created_at, activity.id`;
 }
 
@@ -185,7 +270,11 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
     (table) => !hasTable(options.db, table),
   );
   if (missingTables.length > 0) {
-    const rows = options.db.query("SELECT id FROM activity").all() as Array<{ id: string }>;
+    const activityTable = scope.activityTable;
+    if (activityTable === undefined) throw new Error("SQLite event import requires Activity table");
+    const rows = options.db
+      .query(`SELECT id FROM ${quoteIdentifier(activityTable.physicalName)}`)
+      .all() as Array<{ id: string }>;
     return {
       status: "completed",
       scanned: rows.length,
@@ -237,12 +326,48 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
       continue;
     }
 
+    const actorWorkspaces = row.actor_id ? scope.actorWorkspaceIds.get(row.actor_id) : undefined;
+    if (actorWorkspaces !== undefined && actorWorkspaces.size > 0) {
+      const directActivityWorkspace = row.activity_workspace_id !== null;
+      const derivedWorkspace =
+        rowWorkspaceId !== null && rowWorkspaceId !== undefined && !directActivityWorkspace;
+      // El importador completo trata el scope directo de Activity como autoridad,
+      // pero combina Membership con el scope heredado de un padre o de un esquema
+      // legacy. Conserva esa distinción para impedir un cruce entre Workspaces.
+      if (directActivityWorkspace) {
+        if (rowWorkspaceId === null || !actorWorkspaces.has(rowWorkspaceId)) {
+          orphaned += 1;
+          warning(warnings, "orphaned", row.id);
+          continue;
+        }
+      } else if (derivedWorkspace) {
+        if (actorWorkspaces.size > 1 || !actorWorkspaces.has(rowWorkspaceId)) {
+          ambiguous += 1;
+          warning(warnings, "ambiguous", row.id);
+          continue;
+        }
+      } else if (actorWorkspaces.size > 1) {
+        ambiguous += 1;
+        warning(warnings, "ambiguous", row.id);
+        continue;
+      } else if (scope.workspaceId !== undefined && !actorWorkspaces.has(scope.workspaceId)) {
+        outOfScope += 1;
+        warning(warnings, "out_of_scope", row.id);
+        continue;
+      }
+    }
+
     const actor = row.actor_id ?? row.actor;
     if (!row.issue_identifier || !actor || !row.issue_id || !row.team_id) {
       orphaned += 1;
       warning(warnings, "orphaned", row.id);
       continue;
     }
+    // Un schema legacy singleton tiene un Workspace inequívoco aunque sus filas
+    // sean anteriores a workspace_id. Esto alinea el importador completo sin
+    // inferir un scope en una fuente multi-Workspace.
+    const eventWorkspaceId =
+      rowWorkspaceId ?? (scope.multipleWorkspaces ? undefined : scope.workspaceId);
     const event = activityToDomainEvent({
       id: row.id,
       issue_identifier: row.issue_identifier,
@@ -251,7 +376,7 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
       actor,
       type: row.type,
       payload: row.payload,
-      workspace_id: rowWorkspaceId,
+      workspace_id: eventWorkspaceId,
       occurred_at: row.occurred_at,
     } satisfies ActivityEventRow);
     if (!event) {

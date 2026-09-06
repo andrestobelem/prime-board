@@ -70,6 +70,28 @@ function workspaceDatabase(workspaceCount = 2): Database {
   return db;
 }
 
+function legacySingletonDatabase(): Database {
+  const db = new Database(":memory:");
+  db.exec(`
+    CREATE TABLE "WORKSPACE" (id TEXT PRIMARY KEY, name TEXT);
+    CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE teams (id TEXT PRIMARY KEY, key TEXT NOT NULL);
+    CREATE TABLE issues (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, number INTEGER NOT NULL);
+    CREATE TABLE activity (
+      id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+      type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+  `);
+  db.query("INSERT INTO WORKSPACE VALUES ('legacy-workspace', 'Legacy')").run();
+  db.query("INSERT INTO actors VALUES ('legacy-actor', 'agent')").run();
+  db.query("INSERT INTO teams VALUES ('legacy-team', 'LEG')").run();
+  db.query("INSERT INTO issues VALUES ('legacy-issue', 'legacy-team', 1)").run();
+  db.query(
+    "INSERT INTO activity VALUES ('legacy-activity', 'legacy-issue', 'legacy-actor', 'created', '{\"title\":\"Legacy\"}', '2025-01-01T00:00:00.000Z')",
+  ).run();
+  return db;
+}
+
 function addWorkspaceActivity(
   db: Database,
   workspaceId: string | null,
@@ -246,6 +268,28 @@ describe("SQLite history import", () => {
     }
   });
 
+  it("rejects an Activity Actor that belongs only to another Workspace", () => {
+    const db = workspaceDatabase(2);
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-cross-actor-"));
+    try {
+      db.exec(
+        "CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT, status TEXT)",
+      );
+      db.query(
+        "INSERT INTO workspace_memberships VALUES ('membership-2', 'workspace-2', 'actor-1', 'active')",
+      ).run();
+      addWorkspaceActivity(db, "workspace-1", "cross-workspace-actor", "issue-1");
+
+      const result = importSqliteActivity({ db, rootDir: root, workspaceId: "workspace-1" });
+      expect(result).toMatchObject({ scanned: 1, emitted: 0, orphaned: 1, outOfScope: 0 });
+      expect(result.warnings).toContain("orphaned:cross-workspace-actor");
+      expect(readEventLog(root)).toEqual([]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("requires an explicit Workspace and imports only the selected scope", () => {
     const db = workspaceDatabase();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));
@@ -336,6 +380,28 @@ describe("SQLite history import", () => {
         "requires at least one Workspace",
       );
       expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the singleton Workspace for legacy rows without workspace_id", () => {
+    const db = legacySingletonDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-legacy-singleton-"));
+    try {
+      const result = importSqliteActivity({ db, rootDir: root });
+      expect(result).toMatchObject({
+        scanned: 1,
+        emitted: 1,
+        orphaned: 0,
+        outOfScope: 0,
+      });
+      expect(readEventLog(root)[0]).toMatchObject({
+        eventId: "legacy-activity",
+        workspaceId: "legacy-workspace",
+        payload: { issue_id: "legacy-issue" },
+      });
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

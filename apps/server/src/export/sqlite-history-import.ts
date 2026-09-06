@@ -67,6 +67,10 @@ type SourceRow = Record<string, unknown>;
 type ImportFinding = "emitted" | "duplicate" | "orphaned" | "outOfScope" | "rejected" | "ambiguous";
 
 export interface SQLiteHistoryTableReport {
+  /** Nombre canónico usado por el importador y por los metadatos del evento. */
+  readonly canonicalName?: string;
+  /** Nombre de sqlite_master. Puede cambiar en mayúsculas o contener puntuación. */
+  readonly physicalName?: string;
   readonly scanned: number;
   readonly emitted: number;
   readonly duplicates: number;
@@ -119,6 +123,8 @@ export interface SQLiteHistoryImportResult {
 }
 
 interface MutableTableReport {
+  canonicalName?: string;
+  physicalName?: string;
   scanned: number;
   emitted: number;
   duplicates: number;
@@ -129,6 +135,11 @@ interface MutableTableReport {
   excluded: number;
 }
 
+interface ResolvedTable {
+  readonly canonicalName: string;
+  readonly physicalName: string;
+}
+
 interface SourceScope {
   readonly workspaceId: string | undefined;
   readonly multipleWorkspaces: boolean;
@@ -136,6 +147,7 @@ interface SourceScope {
 }
 
 interface RawTable {
+  readonly physicalName: string;
   readonly values: readonly unknown[];
   readonly rows: readonly SourceRow[];
   readonly malformed: number;
@@ -323,21 +335,41 @@ function validateBatchSize(batchSize: number | undefined): number {
   return batchSize;
 }
 
-function hasTable(db: Database, table: string): boolean {
-  return (
-    db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1").get(table) !=
-    null
-  );
-}
-
-function hasColumn(db: Database, table: string, column: string): boolean {
-  return (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
-    (entry) => entry.name === column,
-  );
-}
-
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replace(/"/gu, '""')}"`;
+}
+
+/**
+ * Resuelve una tabla lógica desde sqlite_master sin interpolar el nombre
+ * solicitado. SQLite compara nombres sin distinguir mayúsculas, pero la forma
+ * física sirve para diagnósticos y consultas citadas de forma segura.
+ */
+function resolveTable(db: Database, canonicalName: string): ResolvedTable | undefined {
+  const row = db
+    .query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name COLLATE NOCASE = ?1 LIMIT 1",
+    )
+    .get(canonicalName) as { name?: unknown } | null;
+  return typeof row?.name === "string" ? { canonicalName, physicalName: row.name } : undefined;
+}
+
+function hasTable(db: Database, table: string): boolean {
+  return resolveTable(db, table) !== undefined;
+}
+
+function physicalNameFor(db: Database, table: string | ResolvedTable): string | undefined {
+  return typeof table === "string" ? resolveTable(db, table)?.physicalName : table.physicalName;
+}
+
+function hasColumn(db: Database, table: string | ResolvedTable, column: string): boolean {
+  const physicalName = physicalNameFor(db, table);
+  if (physicalName === undefined) return false;
+  const normalizedColumn = column.toLowerCase();
+  return (
+    db.query(`PRAGMA table_info(${quoteIdentifier(physicalName)})`).all() as Array<{
+      name: string;
+    }>
+  ).some((entry) => entry.name.toLowerCase() === normalizedColumn);
 }
 
 function isSensitiveTableName(table: string): boolean {
@@ -345,34 +377,47 @@ function isSensitiveTableName(table: string): boolean {
   return compact.includes("document") || isSensitiveEventName(table);
 }
 
-function excludedTableNames(db: Database): readonly string[] {
-  // SQLite table lookup is case-insensitive. Keep one report per physical
-  // table when a legacy source uses a different case than our known names.
-  const names = new Map<string, string>();
-  for (const table of SQLITE_HISTORY_EXCLUDED_TABLES) names.set(table.toLowerCase(), table);
+function canonicalExcludedTableName(table: string): string | undefined {
+  const normalized = table.toLowerCase();
+  return SQLITE_HISTORY_EXCLUDED_TABLES.find((known) => known.toLowerCase() === normalized);
+}
+
+function excludedTableNames(db: Database): readonly ResolvedTable[] {
+  // Conserva el nombre canónico de tablas conocidas y el nombre físico de una
+  // variante sensible desconocida. Cada consulta usa el nombre físico citado.
+  const resolved = new Map<string, ResolvedTable>();
+  for (const canonicalName of SQLITE_HISTORY_EXCLUDED_TABLES) {
+    const table = resolveTable(db, canonicalName);
+    if (table !== undefined) resolved.set(canonicalName.toLowerCase(), table);
+  }
   const rows = db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
     name: string;
   }>;
   for (const row of rows) {
-    if (isSensitiveTableName(row.name)) {
-      const key = row.name.toLowerCase();
-      if (!names.has(key)) names.set(key, row.name);
+    if (!isSensitiveTableName(row.name)) continue;
+    const canonicalName = canonicalExcludedTableName(row.name) ?? row.name;
+    const key = canonicalName.toLowerCase();
+    if (!resolved.has(key)) {
+      resolved.set(key, { canonicalName, physicalName: row.name });
     }
   }
-  return [...names.values()];
+  return [...resolved.values()];
 }
 
 function resolveScope(db: Database, requestedWorkspaceId: string | undefined): SourceScope {
   validateWorkspaceId(requestedWorkspaceId);
-  const hasWorkspaceTable = hasTable(db, "workspace");
+  const workspaceTable = resolveTable(db, "workspace");
+  const hasWorkspaceTable = workspaceTable !== undefined;
   if (requestedWorkspaceId !== undefined && !hasWorkspaceTable) {
     throw new Error("SQLite history import workspaceId requires a workspace table");
   }
 
-  const workspaceIds = hasWorkspaceTable
-    ? (db.query("SELECT id FROM workspace ORDER BY id").all() as Array<{ id: string }>).map(
-        (row) => row.id,
-      )
+  const workspaceIds = workspaceTable
+    ? (
+        db
+          .query(`SELECT id FROM ${quoteIdentifier(workspaceTable.physicalName)} ORDER BY id`)
+          .all() as Array<{ id: string }>
+      ).map((row) => row.id)
     : [];
   if (hasWorkspaceTable && workspaceIds.length === 0) {
     throw new Error("SQLite history import requires at least one Workspace");
@@ -406,15 +451,32 @@ function resolveScope(db: Database, requestedWorkspaceId: string | undefined): S
   };
 }
 
-function readTable(db: Database, table: string): RawTable {
-  const values = db.query(`SELECT * FROM ${table}`).all() as unknown[];
+function normalizeSourceRow(row: SourceRow): SourceRow | undefined {
+  const normalized: SourceRow = {};
+  for (const [key, value] of Object.entries(row)) {
+    const normalizedKey = key.toLowerCase();
+    if (hasOwn(normalized, normalizedKey)) return undefined;
+    normalized[normalizedKey] = value;
+  }
+  return normalized;
+}
+
+function readTable(db: Database, table: ResolvedTable): RawTable {
+  const values = db
+    .query(`SELECT * FROM ${quoteIdentifier(table.physicalName)}`)
+    .all() as unknown[];
   const rows: SourceRow[] = [];
   let malformed = 0;
   for (const value of values) {
-    if (isRecord(value)) rows.push(value);
-    else malformed += 1;
+    if (!isRecord(value)) {
+      malformed += 1;
+      continue;
+    }
+    const normalized = normalizeSourceRow(value);
+    if (normalized === undefined) malformed += 1;
+    else rows.push(normalized);
   }
-  return { values, rows, malformed };
+  return { physicalName: table.physicalName, values, rows, malformed };
 }
 
 function sourceId(table: HistoryTable, row: SourceRow): string | undefined {
@@ -470,25 +532,30 @@ function warn(warnings: string[], kind: string, table: string, id?: string): voi
 
 function tableRows(db: Database, reports: Map<string, MutableTableReport>): Map<string, RawTable> {
   const tables = new Map<string, RawTable>();
-  for (const table of SQLITE_HISTORY_TABLES) {
-    if (!hasTable(db, table)) continue;
+  for (const canonicalName of SQLITE_HISTORY_TABLES) {
+    const table = resolveTable(db, canonicalName);
+    if (table === undefined) continue;
     const raw = readTable(db, table);
-    const report = reports.get(table) ?? mutableReport();
+    const report = reports.get(canonicalName) ?? mutableReport();
+    report.canonicalName = canonicalName;
+    report.physicalName = table.physicalName;
     report.scanned += raw.values.length;
     report.rejected += raw.malformed;
-    reports.set(table, report);
-    tables.set(table, raw);
+    reports.set(canonicalName, report);
+    tables.set(canonicalName, raw);
   }
   for (const table of excludedTableNames(db)) {
-    if (!hasTable(db, table) || tables.has(table)) continue;
-    const result = db.query(`SELECT count(*) AS count FROM ${quoteIdentifier(table)}`).get() as {
-      count: number;
-    };
+    if (tables.has(table.canonicalName)) continue;
+    const result = db
+      .query(`SELECT count(*) AS count FROM ${quoteIdentifier(table.physicalName)}`)
+      .get() as { count: number };
     const count = Number(result.count);
-    const report = reports.get(table) ?? mutableReport();
+    const report = reports.get(table.canonicalName) ?? mutableReport();
+    report.canonicalName = table.canonicalName;
+    report.physicalName = table.physicalName;
     report.scanned += count;
     report.excluded += count;
-    reports.set(table, report);
+    reports.set(table.canonicalName, report);
   }
   return tables;
 }
@@ -573,9 +640,12 @@ function workspaceIndexes(
       actorWorkspaceIds.set(actorId, values);
     }
   }
-  // Deriva alcances desde recursos padre. Unas pocas pasadas cubren el grafo
-  // completo de FK sin depender de rowid ni del orden de inserción de SQLite.
-  for (let pass = 0; pass < 4; pass += 1) {
+  // Deriva alcances hasta alcanzar un punto fijo. Cada fila se agrega como
+  // máximo una vez, por lo que el ciclo termina y no pierde scope por la
+  // profundidad ni por el orden de inserción del snapshot SQLite.
+  let changed = true;
+  while (changed) {
+    changed = false;
     for (const [table, raw] of tables) {
       const refs = REFERENCED_WORKSPACE_FIELDS[table as HistoryTable] ?? [];
       const target = direct.get(table) ?? new Map<string, string>();
@@ -587,7 +657,10 @@ function workspaceIndexes(
           const reference = textValue(row[field]);
           addWorkspaceCandidate(candidates, targetTable, reference, direct, { value: false });
         }
-        if (candidates.size === 1) target.set(id, [...candidates][0]!);
+        if (candidates.size === 1) {
+          target.set(id, [...candidates][0]!);
+          changed = true;
+        }
       }
       direct.set(table, target);
     }

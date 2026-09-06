@@ -241,6 +241,32 @@ describe("complete SQLite history import", () => {
     }
   });
 
+  it("rejects an Activity Actor that belongs only to another Workspace", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-cross-actor-"));
+    try {
+      db.query(
+        "INSERT INTO workspace VALUES ('w2', 'Other', 'other', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
+      db.query(
+        "INSERT INTO actors VALUES ('a2', 'Other', 'agent', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
+      db.query(
+        "INSERT INTO workspace_memberships VALUES ('wm2', 'w2', 'a2', 'member', 'active', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
+      db.query(
+        "INSERT INTO activity(id, workspace_id, issue_id, actor_id, type, payload, created_at) VALUES ('cross-actor', 'w1', 'i1', 'a2', 'updated', '{}', '2025-01-01T00:00:00.000Z')",
+      ).run();
+
+      const result = importSqliteHistory({ db, rootDir: root, workspaceId: "w1" });
+      expect(result.warnings).toContain("orphaned:activity:cross-actor");
+      expect(readEventLog(root).some((event) => event.eventId === "cross-actor")).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects ambiguous event conflicts without rewriting the first record", () => {
     const db = sourceDatabase();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-conflict-"));
@@ -278,6 +304,57 @@ describe("complete SQLite history import", () => {
         workspaceId: "legacy-w1",
         payload: { issue_id: "legacy-i1" },
       });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves deep parent scopes independently of row insertion order", () => {
+    const db = new Database(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-deep-scope-"));
+    try {
+      db.exec(`
+        CREATE TABLE workspace (id TEXT PRIMARY KEY, created_at TEXT);
+        CREATE TABLE teams (id TEXT PRIMARY KEY, default_state_id TEXT, key TEXT, name TEXT, created_at TEXT);
+        CREATE TABLE workflow_states (id TEXT PRIMARY KEY, workspace_id TEXT, team_id TEXT, name TEXT, type TEXT, created_at TEXT);
+      `);
+      db.query("INSERT INTO workspace VALUES ('w1', ?1)").run("2025-01-01T00:00:00.000Z");
+      db.query(
+        "INSERT INTO workflow_states VALUES ('state-0', 'w1', 'team-0', 'Root', 'unstarted', ?1)",
+      ).run("2025-01-01T00:00:00.000Z");
+      db.query("INSERT INTO teams VALUES ('team-0', 'state-0', 'D0', 'Deep 0', ?1)").run(
+        "2025-01-01T00:00:00.000Z",
+      );
+      const depth = 6;
+      for (let index = depth; index >= 1; index -= 1) {
+        db.query("INSERT INTO teams VALUES (?1, ?2, ?3, ?4, ?5)").run(
+          `team-${index}`,
+          `state-${index - 1}`,
+          `D${index}`,
+          `Deep ${index}`,
+          "2025-01-01T00:00:00.000Z",
+        );
+        db.query("INSERT INTO workflow_states VALUES (?1, NULL, ?2, ?3, 'unstarted', ?4)").run(
+          `state-${index}`,
+          `team-${index}`,
+          `State ${index}`,
+          "2025-01-01T00:00:00.000Z",
+        );
+      }
+
+      const result = importSqliteHistory({ db, rootDir: root });
+      expect(result).toMatchObject({ multipleWorkspaces: false, orphaned: 0, rejected: 0 });
+      expect(result.tables.teams).toMatchObject({ scanned: depth + 1, emitted: depth + 1 });
+      expect(result.tables.workflow_states).toMatchObject({
+        scanned: depth + 1,
+        emitted: depth + 1,
+      });
+      expect(
+        readEventLog(root)
+          .filter((event) => event.aggregate === "team" || event.aggregate === "workflow_state")
+          .every((event) => event.workspaceId === "w1"),
+      ).toBe(true);
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
@@ -402,16 +479,93 @@ describe("complete SQLite history import", () => {
     }
   });
 
+  it("resolves case variants and quotes physical sensitive table names", () => {
+    const db = new Database(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-table-resolution-"));
+    try {
+      db.exec(`
+        CREATE TABLE "WORKSPACE" (id TEXT PRIMARY KEY, name TEXT, created_at TEXT);
+        CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT, created_at TEXT);
+        CREATE TABLE "GRANTS;not-a-query" (id TEXT, token TEXT);
+      `);
+      db.query("INSERT INTO WORKSPACE VALUES ('w1', 'Workspace', ?1)").run(
+        "2025-01-01T00:00:00.000Z",
+      );
+      db.query("INSERT INTO actors VALUES ('a1', 'Actor', ?1)").run("2025-01-01T00:00:00.000Z");
+      db.query("INSERT INTO \"GRANTS;not-a-query\" VALUES ('grant-unsafe', 'fixture-value')").run();
+
+      const result = importSqliteHistory({ db, rootDir: root });
+      expect(result.tables.workspace).toMatchObject({
+        canonicalName: "workspace",
+        physicalName: "WORKSPACE",
+      });
+      expect(result.tables["GRANTS;not-a-query"]).toMatchObject({
+        canonicalName: "GRANTS;not-a-query",
+        physicalName: "GRANTS;not-a-query",
+        scanned: 1,
+        excluded: 1,
+      });
+      expect(
+        readEventLog(root).find((event) => event.eventId === "sqlite:workspace:w1")?.payload,
+      ).toMatchObject({ sourceTable: "workspace" });
+      expect(readFileSync(join(root, ".prime-board/log/events.jsonl"), "utf8")).not.toContain(
+        "fixture-value",
+      );
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes case-insensitive scope columns before validating references", () => {
+    const db = new Database(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-column-resolution-"));
+    try {
+      db.exec(`
+        CREATE TABLE workspace (id TEXT PRIMARY KEY, created_at TEXT);
+        CREATE TABLE actors (id TEXT PRIMARY KEY, created_at TEXT);
+        CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT);
+        CREATE TABLE teams (id TEXT, "WORKSPACE_ID" TEXT);
+        CREATE TABLE issues (id TEXT, "WORKSPACE_ID" TEXT);
+        CREATE TABLE activity (id TEXT, "WORKSPACE_ID" TEXT);
+        CREATE TABLE projects (id TEXT PRIMARY KEY, "WORKSPACE_ID" TEXT, lead_id TEXT, created_at TEXT);
+      `);
+      db.query("INSERT INTO workspace VALUES ('w1', ?1), ('w2', ?1)").run(
+        "2025-01-01T00:00:00.000Z",
+      );
+      db.query("INSERT INTO actors VALUES ('a1', ?1)").run("2025-01-01T00:00:00.000Z");
+      db.query("INSERT INTO workspace_memberships VALUES ('membership-1', 'w1', 'a1')").run();
+      db.query("INSERT INTO projects VALUES ('p2', 'w2', 'a1', ?1)").run(
+        "2025-01-01T00:00:00.000Z",
+      );
+
+      const result = importSqliteHistory({ db, rootDir: root, workspaceId: "w1" });
+      expect(result.tables.projects).toMatchObject({ scanned: 1, orphaned: 1, emitted: 0 });
+      expect(result.warnings).toContain("orphaned:projects:p2");
+      expect(readEventLog(root).some((event) => event.eventId === "sqlite:projects:p2")).toBe(
+        false,
+      );
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("counts sensitive table variants without reading them into the Log", () => {
     const db = sourceDatabase();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-sensitive-"));
     try {
-      db.exec("CREATE TABLE grants (id TEXT PRIMARY KEY, token_hash TEXT, created_at TEXT)");
-      db.query("INSERT INTO grants VALUES ('grant-1', 'fixture-value', ?1)").run(
+      db.exec('CREATE TABLE "GRANTS" (id TEXT PRIMARY KEY, token_hash TEXT, created_at TEXT)');
+      db.query("INSERT INTO GRANTS VALUES ('grant-1', 'fixture-value', ?1)").run(
         "2025-01-01T00:00:00.000Z",
       );
       const result = importSqliteHistory({ db, rootDir: root, dryRun: true });
-      expect(result.tables.grants).toMatchObject({ scanned: 1, excluded: 1 });
+      expect(result.tables.grants).toMatchObject({
+        canonicalName: "grants",
+        physicalName: "GRANTS",
+        scanned: 1,
+        excluded: 1,
+      });
       expect(result.warnings.some((warning) => warning.includes("fixture-value"))).toBe(false);
       expect(result.emitted).toBeGreaterThan(0);
     } finally {
