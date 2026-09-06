@@ -8,8 +8,10 @@ let workspaceAKey: string;
 let workspaceAId: string;
 let teamAId: string;
 let issueAId: string;
+let projectAId: string;
 let viewerId: string;
 let workspaceBKey: string;
+let workspaceBId: string;
 
 const delivered: string[] = [];
 const bodies: string[] = [];
@@ -26,11 +28,15 @@ function makeFetch(): typeof fetch {
   return Object.assign(fetchFn, { preconnect: fetch.preconnect });
 }
 
-async function createWebhook(url: string, selector: string): Promise<void> {
+async function createWebhook(
+  url: string,
+  selector: string,
+  events: string[] = ["issue.created"],
+): Promise<void> {
   const result = await gql(
     app,
-    `mutation($url: String!) { webhookCreate(input: { url: $url, events: ["issue.created"] }) { webhook { id } } }`,
-    { url },
+    `mutation($url: String!, $events: [String!]) { webhookCreate(input: { url: $url, events: $events }) { webhook { id } } }`,
+    { url, events },
     app.apiKey,
     selector,
   );
@@ -58,14 +64,25 @@ describe("workspace scope for webhook dispatch", () => {
     );
     expect(issue.errors).toBeUndefined();
     issueAId = issue.data!.issueCreate.issue.id;
+    const project = await gql(
+      app,
+      `mutation($teamId: ID!) { projectCreate(input: { name: "A project", teamIds: [$teamId] }) { project { id } } }`,
+      { teamId: teamAId },
+      app.apiKey,
+      workspaceAKey,
+    );
+    expect(project.errors).toBeUndefined();
+    projectAId = project.data!.projectCreate.project.id;
 
     const workspace = await gql(
       app,
-      `mutation { workspaceCreate(input: { name: "Webhook B", urlKey: "webhook-b" }) { workspace { urlKey } } }`,
+      `mutation { workspaceCreate(input: { name: "Webhook B", urlKey: "webhook-b" }) { workspace { id urlKey } } }`,
     );
     expect(workspace.errors).toBeUndefined();
+    workspaceBId = workspace.data!.workspaceCreate.workspace.id;
     workspaceBKey = workspace.data!.workspaceCreate.workspace.urlKey;
     await createWebhook("https://hooks.example/b", workspaceBKey);
+    await createWebhook("https://hooks.example/b-all", workspaceBKey, ["*"]);
     await createWebhook("https://hooks.example/a", workspaceAKey);
   });
 
@@ -92,6 +109,54 @@ describe("workspace scope for webhook dispatch", () => {
 
     expect(delivered).toEqual(["https://hooks.example/a"]);
     expect(JSON.parse(bodies[0]!).workspaceId).toBe(workspaceAId);
+  });
+
+  it("falla cerrado si el recurso no pertenece al Workspace explícito", async () => {
+    delivered.length = 0;
+    bodies.length = 0;
+    const dispatcher = new WebhookDispatcher(app.db, {
+      retryDelays: [],
+      fetchFn: makeFetch(),
+    });
+
+    // El Team y la Issue son de A, pero el envelope afirma que el evento es
+    // de B. Un Team lookup vacío no debe convertirse en un broadcast a B.
+    dispatcher.emitForWorkspace(
+      workspaceBId,
+      "issue.created",
+      { id: viewerId, name: "admin", type: "HUMAN" },
+      { id: issueAId, issueId: issueAId, teamId: teamAId },
+    );
+    await dispatcher.idle();
+
+    expect(delivered).toHaveLength(0);
+    expect(bodies).toHaveLength(0);
+  });
+
+  it("falla cerrado para Teams y Projects de otro Workspace", async () => {
+    delivered.length = 0;
+    bodies.length = 0;
+    const dispatcher = new WebhookDispatcher(app.db, {
+      retryDelays: [],
+      fetchFn: makeFetch(),
+    });
+
+    dispatcher.emitForWorkspace(
+      workspaceBId,
+      "team.created",
+      { id: viewerId, name: "admin", type: "HUMAN" },
+      { id: teamAId, teamId: teamAId, key: "PB", name: "A team" },
+    );
+    dispatcher.emitForWorkspace(
+      workspaceBId,
+      "project.updated",
+      { id: viewerId, name: "admin", type: "HUMAN" },
+      { id: projectAId },
+    );
+    await dispatcher.idle();
+
+    expect(delivered).toHaveLength(0);
+    expect(bodies).toHaveLength(0);
   });
 
   it("detiene un retry cuando el owner queda suspendido", async () => {

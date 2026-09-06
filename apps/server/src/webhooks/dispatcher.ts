@@ -156,6 +156,77 @@ function sqliteEventWorkspaceId(
   return sqliteSingleWorkspaceId(db);
 }
 
+/**
+ * Checks that an event's explicit Workspace agrees with every resource in its
+ * data. A scoped sink is an internal boundary, but a wrong resource ID must
+ * still fail closed instead of turning an empty Team lookup into a broadcast
+ * to Workspace hooks.
+ */
+function sqliteEventMatchesWorkspace(
+  db: Database,
+  event: WebhookEventName,
+  data: Record<string, unknown>,
+  workspaceId: string,
+): boolean {
+  const workspace = db.query("SELECT id FROM workspace WHERE id = ?1").get(workspaceId);
+  if (!workspace) return false;
+
+  const teamId =
+    typeof data.teamId === "string"
+      ? data.teamId
+      : event.startsWith("team.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (teamId) {
+    const team = db.query("SELECT workspace_id FROM teams WHERE id = ?1").get(teamId) as {
+      workspace_id: string | null;
+    } | null;
+    if (!team) {
+      // A Team row is deleted before team.deleted is dispatched. The resolver
+      // includes the owner snapshot so that event remains deliverable.
+      if (event !== "team.deleted" || !Array.isArray(data._teamOwnerIds)) return false;
+    } else if (team.workspace_id !== workspaceId) {
+      return false;
+    }
+  }
+
+  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  if (issueId) {
+    const issue = db
+      .query("SELECT workspace_id, team_id FROM issues WHERE id = ?1")
+      .get(issueId) as {
+      workspace_id: string | null;
+      team_id: string;
+    } | null;
+    if (!issue || issue.workspace_id !== workspaceId) return false;
+    if (teamId && issue.team_id !== teamId) return false;
+  }
+
+  const projectId =
+    typeof data.projectId === "string"
+      ? data.projectId
+      : event.startsWith("project.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (projectId) {
+    const project = db.query("SELECT workspace_id FROM projects WHERE id = ?1").get(projectId) as {
+      workspace_id: string | null;
+    } | null;
+    if (!project || project.workspace_id !== workspaceId) return false;
+    if (teamId) {
+      const relation = db
+        .query("SELECT workspace_id FROM project_teams WHERE project_id = ?1 AND team_id = ?2")
+        .get(projectId, teamId) as { workspace_id: string | null } | null;
+      if (!relation || relation.workspace_id !== workspaceId) return false;
+    }
+  }
+
+  if (event.startsWith("workspace.") && typeof data.id === "string" && data.id !== workspaceId) {
+    return false;
+  }
+  return true;
+}
+
 function sqliteEventTeamIds(
   db: Database,
   event: WebhookEventName,
@@ -372,6 +443,8 @@ export class WebhookDispatcher implements WebhookEventSink {
       ? null
       : sqliteEventWorkspaceId(this.db, event, data);
     if (!this.persistence && !sqliteWorkspaceId) return;
+    if (!this.persistence && !sqliteEventMatchesWorkspace(this.db, event, data, sqliteWorkspaceId!))
+      return;
 
     const hooks = this.persistence
       ? await this.persistence.many<WebhookRow>("SELECT * FROM webhooks WHERE enabled = TRUE")
