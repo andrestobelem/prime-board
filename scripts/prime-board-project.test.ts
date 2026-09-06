@@ -863,6 +863,158 @@ describe("project instance lock", () => {
     }
   });
 
+  test("recovers legacy DB reservations when the inode lock is absent", async () => {
+    const home = `/tmp/prime-board-instance-legacy-inode-${crypto.randomUUID()}`;
+    const databasePath = `/tmp/prime-board-instance-legacy-inode-${crypto.randomUUID()}.db`;
+    const projectRoot = "/tmp/projects/legacy-inode-recovery";
+    const identityBeforeDatabase = deriveProjectIdentity(projectRoot, home, databasePath);
+    const instanceId = "legacy-inode-recovery";
+    const startedAt = "2026-01-01T00:00:00.000Z";
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        Response.json({
+          status: "ok",
+          pid: process.pid,
+          projectRoot: identityBeforeDatabase.projectRoot,
+          databasePath: identityBeforeDatabase.databasePath,
+          instanceId,
+        }),
+    });
+    const instanceRecord = {
+      version: 1 as const,
+      projectRoot: identityBeforeDatabase.projectRoot,
+      databasePath: identityBeforeDatabase.databasePath,
+      port: server.port,
+      pid: 999999,
+      instanceId,
+      startedAt,
+    };
+    const databaseRecord = {
+      version: 1 as const,
+      projectRoot: identityBeforeDatabase.projectRoot,
+      databasePath: identityBeforeDatabase.databasePath,
+      pid: 999999,
+      instanceId,
+      reservedAt: startedAt,
+    };
+    const portPath = join(home, ".prime-board", "ports", `${server.port}.lock`);
+    try {
+      for (const path of databaseReservationPaths(identityBeforeDatabase.databasePath, home).slice(
+        0,
+        2,
+      )) {
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(databaseRecord)}\n`);
+      }
+      mkdirSync(identityBeforeDatabase.lockPath, { recursive: true });
+      writeFileSync(identityBeforeDatabase.metadataPath, `${JSON.stringify(instanceRecord)}\n`);
+      mkdirSync(portPath, { recursive: true });
+      writeFileSync(
+        join(portPath, "reservation.json"),
+        `${JSON.stringify({
+          version: 1,
+          port: server.port,
+          pid: 999999,
+          launcherPid: 999998,
+          instanceId,
+          reservedAt: startedAt,
+        })}\n`,
+      );
+
+      // La DB aparece después de adquirir alias y physical; el inode path es nuevo.
+      writeFileSync(databasePath, "sqlite fixture");
+      const identity = deriveProjectIdentity(projectRoot, home, databasePath);
+      expect(identity.databaseInodeLockPath).not.toBeNull();
+      expect(existsSync(identity.databaseInodeLockPath!)).toBe(false);
+
+      const status = await resolveInstanceStatus(identity);
+      const repeatedStatus = await resolveInstanceStatus(identity);
+
+      expect(status.state).toBe("running");
+      expect(repeatedStatus.state).toBe("running");
+      expect(existsSync(identity.databaseInodeLockPath!)).toBe(false);
+      for (const path of databaseReservationPaths(identity.databasePath, home).slice(0, 2)) {
+        expect(JSON.parse(readFileSync(join(path, "reservation.json"), "utf8"))).toMatchObject({
+          pid: process.pid,
+          instanceId,
+        });
+      }
+      expect(JSON.parse(readFileSync(join(portPath, "reservation.json"), "utf8"))).toMatchObject({
+        pid: process.pid,
+        serverPid: process.pid,
+        instanceId,
+      });
+    } finally {
+      server.stop(true);
+      rmSync(home, { recursive: true, force: true });
+      rmSync(databasePath, { force: true });
+    }
+  });
+
+  test("blocks when an inode reservation is replaced", async () => {
+    const home = `/tmp/prime-board-instance-replaced-inode-${crypto.randomUUID()}`;
+    const databasePath = `/tmp/prime-board-instance-replaced-inode-${crypto.randomUUID()}.db`;
+    writeFileSync(databasePath, "sqlite fixture");
+    const identity = deriveProjectIdentity("/tmp/projects/replaced-inode", home, databasePath);
+    const instanceId = "replaced-inode-owner";
+    const instanceRecord = {
+      version: 1 as const,
+      projectRoot: identity.projectRoot,
+      databasePath: identity.databasePath,
+      port: 3333,
+      pid: process.pid,
+      serverPid: process.pid,
+      instanceId,
+      leaseToken: crypto.randomUUID(),
+      startedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const databaseRecord = {
+      version: 1 as const,
+      projectRoot: identity.projectRoot,
+      databasePath: identity.databasePath,
+      pid: process.pid,
+      serverPid: process.pid,
+      instanceId,
+      leaseToken: "replaced-inode-database-token",
+      reservedAt: instanceRecord.startedAt,
+    };
+    const releaseInstance = acquireInstanceLock(identity, instanceRecord);
+    let releaseDatabase: (() => void) | null = null;
+    let releasePort: (() => void) | null = null;
+    try {
+      releaseDatabase = acquireDatabaseReservation(identity, databaseRecord);
+      const portReservation = await reserveAvailablePort(
+        instanceRecord.port,
+        true,
+        home,
+        async () => true,
+        instanceId,
+      );
+      releasePort = portReservation.release;
+      const inodePath = identity.databaseInodeLockPath!;
+      writeFileSync(
+        join(inodePath, "reservation.json"),
+        `${JSON.stringify({ ...databaseRecord, instanceId: "replacement" })}\n`,
+      );
+
+      const status = await resolveInstanceStatus(identity);
+      const repeatedStatus = await resolveInstanceStatus(identity);
+
+      expect(status.state).toBe("blocked");
+      expect(repeatedStatus.state).toBe("blocked");
+      expect(JSON.parse(readFileSync(join(inodePath, "reservation.json"), "utf8"))).toMatchObject({
+        instanceId: "replacement",
+      });
+    } finally {
+      releasePort?.();
+      releaseDatabase?.();
+      releaseInstance();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(databasePath, { force: true });
+    }
+  });
+
   test("does not take over while a launcher transition is live", () => {
     const home = `/tmp/prime-board-instance-transition-${crypto.randomUUID()}`;
     const identity = deriveProjectIdentity("/tmp/projects/transition", home);

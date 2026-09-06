@@ -804,13 +804,25 @@ export async function resolveInstanceStatus(
     promoteInstanceOwner(identity, owner, status.record.instanceId, status.record.leaseToken);
     // Reserva la DB después. Si un launcher concurrente gana la carrera, esta
     // reparación no debe sobrescribir su metadata.
-    const databaseLeaseToken = currentDatabaseLeaseToken(identity);
+    const databaseLeaseToken = currentDatabaseLeaseToken(identity, true);
     if (databaseLeaseToken === null) throw new Error("Database reservation lease is inconsistent");
-    promoteDatabaseReservationOwner(identity, owner, status.record.instanceId, databaseLeaseToken);
+    promoteDatabaseReservationOwner(
+      identity,
+      owner,
+      status.record.instanceId,
+      databaseLeaseToken,
+      true,
+    );
     promotePortReservationOwner(identity, owner, status.record.port, status.record.instanceId);
   } catch {
     // Health confirma un server activo, pero una reserva sin promoción completa
     // no permite iniciar acciones ni un segundo escritor.
+    return { state: "blocked", record: promotedRecord };
+  }
+  if (
+    !databaseReservationsMatchInstance(identity, promotedRecord, processIsAlive) ||
+    !portReservationMatchesInstance(identity, promotedRecord, processIsAlive)
+  ) {
     return { state: "blocked", record: promotedRecord };
   }
   return { state: "running", record: promotedRecord };
@@ -1069,11 +1081,30 @@ function databaseReservationRecordPath(path: string): string {
   return join(path, "reservation.json");
 }
 
-function currentDatabaseLeaseToken(identity: ProjectInstanceIdentity): string | undefined | null {
+function databaseReservationPathHasState(path: string): boolean {
+  const transitionPath = ownershipTransitionPath(path);
+  return (
+    existsSync(path) ||
+    existsSync(databaseReservationRecordPath(path)) ||
+    existsSync(transitionPath) ||
+    existsSync(`${transitionPath}.recovery`)
+  );
+}
+
+function currentDatabaseLeaseToken(
+  identity: ProjectInstanceIdentity,
+  allowMissingInode = false,
+): string | undefined | null {
   let token: string | undefined;
   let sawRecord = false;
   let sawLegacyRecord = false;
-  for (const path of databaseReservationPathsForIdentity(identity)) {
+  const paths = databaseReservationPathsForIdentity(identity);
+  for (const path of paths) {
+    const inodeIsMissing =
+      allowMissingInode &&
+      path === identity.databaseInodeLockPath &&
+      !databaseReservationPathHasState(path);
+    if (inodeIsMissing) continue;
     const record = readDatabaseReservation(path);
     if (
       record === null ||
@@ -1110,14 +1141,17 @@ export function promoteDatabaseReservationOwner(
   owner: ProcessOwnership,
   instanceId?: string,
   leaseToken?: string,
+  allowMissingInode = false,
 ): void {
   if (!isPositiveInteger(owner.pid)) throw new Error("Database owner PID is invalid");
   const paths = databaseReservationPathsForIdentity(identity);
+  const inodePath = identity.databaseInodeLockPath;
+  const inodeWasPresent = inodePath !== null && databaseReservationPathHasState(inodePath);
   const promoted = withOwnershipTransitions(paths, () => {
-    if (paths.some((path) => !existsSync(databaseReservationRecordPath(path)))) {
-      throw new Error(`Database reservation is missing: ${identity.databasePath}`);
-    }
     for (const path of paths) {
+      const inodeIsMissing =
+        allowMissingInode && path === inodePath && !inodeWasPresent && !existsSync(path);
+      if (inodeIsMissing) continue;
       const metadataPath = databaseReservationRecordPath(path);
       const existing = readDatabaseReservation(path);
       if (existing === null || existing === "invalid") {
@@ -1182,43 +1216,44 @@ function databaseReservationsMatchInstance(
   instance: InstanceRecord,
   probe: ProcessProbe,
 ): boolean {
-  const paths = [identity.databaseLockPath, identity.databasePhysicalLockPath];
-  // Los launchers anteriores no creaban la reserva de inode cuando la DB aún
-  // no existía. Valídala si está presente, pero no conviertas esa ventana de
-  // migración en un bloqueo permanente de un server saludable.
-  if (identity.databaseInodeLockPath && existsSync(identity.databaseInodeLockPath)) {
-    paths.push(identity.databaseInodeLockPath);
-  }
-  const reservations = paths.map((path) => readDatabaseReservation(path));
-  let databaseLeaseToken: string | undefined;
-  let sawLegacyReservation = false;
-  for (const [index, reservation] of reservations.entries()) {
-    if (
-      reservation === null ||
-      reservation === "invalid" ||
-      reservation.projectRoot !== identity.projectRoot ||
-      reservation.databasePath !== identity.databasePath ||
-      reservation.instanceId !== instance.instanceId ||
-      !processOwnerIsAlive(reservation, probe) ||
-      (reservation.leaseToken !== undefined &&
-        !hasOwnershipMarker(paths[index]!, reservation.leaseToken))
-    ) {
-      return false;
-    }
-    // El lease token de la reserva DB es distinto del token del lock de la
-    // instancia. Solo exige que todas las reservas DB compartan su token.
-    if (reservation.leaseToken === undefined) {
-      if (databaseLeaseToken !== undefined) return false;
-      sawLegacyReservation = true;
-    } else {
-      if (sawLegacyReservation) return false;
-      if (databaseLeaseToken !== undefined && databaseLeaseToken !== reservation.leaseToken) {
+  const paths = databaseReservationPathsForIdentity(identity);
+  const inodePath = identity.databaseInodeLockPath;
+  const inodeWasPresent = inodePath !== null && databaseReservationPathHasState(inodePath);
+  const matching = withOwnershipTransitions(paths, () => {
+    const reservations = paths.map((path) => readDatabaseReservation(path));
+    let databaseLeaseToken: string | undefined;
+    let sawLegacyReservation = false;
+    for (const [index, reservation] of reservations.entries()) {
+      const path = paths[index]!;
+      const inodeIsMissing = path === inodePath && !inodeWasPresent && !existsSync(path);
+      if (inodeIsMissing) continue;
+      if (
+        reservation === null ||
+        reservation === "invalid" ||
+        reservation.projectRoot !== identity.projectRoot ||
+        reservation.databasePath !== identity.databasePath ||
+        reservation.instanceId !== instance.instanceId ||
+        !processOwnerIsAlive(reservation, probe) ||
+        (reservation.leaseToken !== undefined && !hasOwnershipMarker(path, reservation.leaseToken))
+      ) {
         return false;
       }
-      databaseLeaseToken = reservation.leaseToken;
+      // El lease token de la reserva DB es distinto del token del lock de la
+      // instancia. Solo exige que todas las reservas DB compartan su token.
+      if (reservation.leaseToken === undefined) {
+        if (databaseLeaseToken !== undefined) return false;
+        sawLegacyReservation = true;
+      } else {
+        if (sawLegacyReservation) return false;
+        if (databaseLeaseToken !== undefined && databaseLeaseToken !== reservation.leaseToken) {
+          return false;
+        }
+        databaseLeaseToken = reservation.leaseToken;
+      }
     }
-  }
-  return true;
+    return true;
+  });
+  return matching ?? false;
 }
 
 function portReservationPathForIdentity(identity: ProjectInstanceIdentity, port: number): string {
