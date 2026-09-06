@@ -15,6 +15,7 @@ import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-f
 import { readReplicaMetadata, type ReadReplicaMetadata } from "./replica-metadata.ts";
 import { readEventLog } from "./event-log.ts";
 import { archiveDocumentSnapshot } from "./documents-archive.ts";
+import { normalizeAvatarUrl } from "../domain/actors.ts";
 
 export interface RebuildResult {
   issues: number;
@@ -441,12 +442,13 @@ export function rebuildFromRepo(
         throw new Error(`Invalid actor status for actor ${actor.name}: ${status}`);
       }
       db.query(
-        "INSERT INTO actors (id, name, email, type, workspace_role, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        "INSERT INTO actors (id, name, email, type, avatar_url, workspace_role, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
       ).run(
         id,
         actor.name as string,
         actor.email ?? null,
         actor.type as string,
+        normalizeAvatarUrl(actor.avatarUrl, null),
         workspaceRole,
         status,
         timestamp,

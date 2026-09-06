@@ -40,6 +40,10 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     name: String!
     email: String
+    """
+    Absolute HTTP(S) URL for the profile avatar.
+    """
+    avatarUrl: String
     type: ActorType!
     workspaceRole: ActorWorkspaceRole!
     status: ActorStatus!
@@ -620,11 +624,19 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     type: ActorType!
     email: String
+    """
+    Absolute HTTP(S) URL for the profile avatar.
+    """
+    avatarUrl: String
   }
 
   input ActorUpdateInput {
     name: String
     email: String
+    """
+    Absolute HTTP(S) URL for the profile avatar.
+    """
+    avatarUrl: String
   }
 
   input ApiKeyCreateInput {

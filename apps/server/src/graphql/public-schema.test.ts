@@ -7,6 +7,7 @@ import { typeDefs } from "@prime-board/schema";
 const REPO_ROOT = resolve(import.meta.dir, "../../../..");
 
 const EXPECTED_PUBLIC_DESCRIPTIONS = [
+  "Absolute HTTP(S) URL for the profile avatar.",
   "Workspaces granted to this Actor through the current credential.",
   "The default destination for issues created without an explicit state. Editable through teamUpdate.",
   "NULL for Workspace labels.",
@@ -38,6 +39,8 @@ const EXPECTED_PUBLIC_DESCRIPTIONS = [
   "Narrative project update (status, risks, and next steps).",
   "Completed issues divided by total issues (0..1).",
   "Must be a state in the Team.",
+  "Absolute HTTP(S) URL for the profile avatar.",
+  "Absolute HTTP(S) URL for the profile avatar.",
   "Plaintext key. Returned once; only its hash is stored.",
   "Omit to create a Workspace label.",
   "Number of issues from which the label was removed.",

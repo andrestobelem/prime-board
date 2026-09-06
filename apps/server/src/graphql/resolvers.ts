@@ -1848,7 +1848,9 @@ export const resolvers = {
         },
         actorCreate: async (
           _parent: unknown,
-          args: { input: { name: string; type: string; email?: string | null } },
+          args: {
+            input: { name: string; type: string; email?: string | null; avatarUrl?: string | null };
+          },
           context: Context,
         ) => {
           const viewer = requireViewer(context);
@@ -1882,7 +1884,10 @@ export const resolvers = {
         },
         actorUpdate: async (
           _parent: unknown,
-          args: { id: string; input: { name?: string | null; email?: string | null } },
+          args: {
+            id: string;
+            input: { name?: string | null; email?: string | null; avatarUrl?: string | null };
+          },
           context: Context,
         ) => {
           const viewer = requireViewer(context);

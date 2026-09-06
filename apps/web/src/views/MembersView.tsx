@@ -26,6 +26,7 @@ interface Member {
   id: string;
   name: string;
   email: string | null;
+  avatarUrl: string | null;
   type: string;
   status: string;
   createdAt: string;
@@ -41,7 +42,7 @@ function isHistoricalAgent(member: Member): boolean {
 
 const MEMBERS_QUERY = `{
   viewer { id workspaceRole }
-  actors { id name email type status createdAt apiKeys { id name createdAt lastUsedAt revokedAt expiresAt scopes teamIds } }
+  actors { id name email avatarUrl type status createdAt apiKeys { id name createdAt lastUsedAt revokedAt expiresAt scopes teamIds } }
   teams { id key name }
 }`;
 
@@ -68,6 +69,7 @@ export function MembersView() {
   const [editing, setEditing] = useState<Member | null>(null);
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
+  const [editAvatarUrl, setEditAvatarUrl] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [keyScopes, setKeyScopes] = useState("READ,WRITE,ADMIN");
@@ -167,6 +169,7 @@ export function MembersView() {
     setEditing(member);
     setEditName(member.name);
     setEditEmail(member.email ?? "");
+    setEditAvatarUrl(member.avatarUrl ?? "");
     setEditError(null);
   }
 
@@ -188,11 +191,15 @@ export function MembersView() {
     try {
       await mutate(
         `mutation($id: ID!, $input: ActorUpdateInput!) {
-        actorUpdate(id: $id, input: $input) { actor { id name email } }
+        actorUpdate(id: $id, input: $input) { actor { id name email avatarUrl } }
       }`,
         {
           id: editing.id,
-          input: { name: nextName, email: editEmail.trim() || null },
+          input: {
+            name: nextName,
+            email: editEmail.trim() || null,
+            avatarUrl: editAvatarUrl.trim() || null,
+          },
         },
       );
       closeEdit();
@@ -447,6 +454,15 @@ export function MembersView() {
                   value={editEmail}
                   placeholder="optional"
                   onChange={(event) => setEditEmail(event.target.value)}
+                  onKeyDown={(event) => event.key === "Enter" && saveEdit()}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                Avatar URL
+                <input
+                  value={editAvatarUrl}
+                  placeholder="optional"
+                  onChange={(event) => setEditAvatarUrl(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && saveEdit()}
                 />
               </label>

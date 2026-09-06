@@ -23,8 +23,33 @@ export function mapActor(row: ActorRow) {
     type: row.type,
     workspaceRole: row.workspace_role,
     status: row.status,
+    avatarUrl: row.avatar_url,
     createdAt: row.created_at,
   };
+}
+
+/** Normaliza el avatar del perfil sin aceptar valores enormes ni espacios. */
+export function normalizeAvatarUrl(value: unknown, current: string | null): string | null {
+  if (value === undefined) return current;
+  if (value !== null && typeof value !== "string") {
+    throw apiError("VALIDATION_FAILED", "Avatar URL must be a string");
+  }
+  const normalized = value?.trim() || null;
+  if (normalized && normalized.length > 2048) {
+    throw apiError("VALIDATION_FAILED", "Avatar URL cannot exceed 2048 characters");
+  }
+  if (normalized) {
+    let parsed: URL;
+    try {
+      parsed = new URL(normalized);
+    } catch {
+      throw apiError("VALIDATION_FAILED", "Avatar URL must be an absolute HTTP(S) URL");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw apiError("VALIDATION_FAILED", "Avatar URL must use HTTP or HTTPS");
+    }
+  }
+  return normalized;
 }
 
 export function getActor(db: Database, id: string): ActorRow | null {
@@ -42,7 +67,7 @@ export function listActors(db: Database, type?: string | null): ActorRow[] {
 
 export function createActor(
   db: Database,
-  input: { name: string; type: string; email?: string | null },
+  input: { name: string; type: string; email?: string | null; avatarUrl?: string | null },
 ): ActorRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Actor name cannot be empty");
@@ -55,15 +80,23 @@ export function createActor(
   const id = newId();
   const timestamp = now();
   db.query(
-    "INSERT INTO actors (id, name, email, type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-  ).run(id, name, input.email ?? null, input.type, timestamp, timestamp);
+    "INSERT INTO actors (id, name, email, type, avatar_url, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+  ).run(
+    id,
+    name,
+    input.email?.trim() || null,
+    input.type,
+    normalizeAvatarUrl(input.avatarUrl, null),
+    timestamp,
+    timestamp,
+  );
   return getActor(db, id)!;
 }
 
 export function updateActor(
   db: Database,
   id: string,
-  input: { name?: string | null; email?: string | null },
+  input: { name?: string | null; email?: string | null; avatarUrl?: string | null },
 ): ActorRow {
   const existing = getActor(db, id);
   if (!existing) throw apiError("NOT_FOUND", "Actor not found");
@@ -77,12 +110,10 @@ export function updateActor(
   if (duplicate) throw apiError("VALIDATION_FAILED", "Actor name already exists");
 
   const email = input.email === undefined ? existing.email : input.email?.trim() || null;
-  db.query("UPDATE actors SET name = ?1, email = ?2, updated_at = ?3 WHERE id = ?4").run(
-    name,
-    email,
-    now(),
-    id,
-  );
+  const avatarUrl = normalizeAvatarUrl(input.avatarUrl, existing.avatar_url);
+  db.query(
+    "UPDATE actors SET name = ?1, email = ?2, avatar_url = ?3, updated_at = ?4 WHERE id = ?5",
+  ).run(name, email, avatarUrl, now(), id);
   return getActor(db, id)!;
 }
 

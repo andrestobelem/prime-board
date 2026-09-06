@@ -2,7 +2,7 @@ import type { Persistence, PersistenceTransaction } from "../db/persistence.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
-import type { ApiKeyRow, ApiKeyScope } from "./actors.ts";
+import { normalizeAvatarUrl, type ApiKeyRow, type ApiKeyScope } from "./actors.ts";
 
 const HISTORICAL_AGENT_NAMES = new Set(["claude", "demo-agent", "linear"]);
 const API_KEY_SCOPES: readonly ApiKeyScope[] = ["read", "write", "admin"];
@@ -31,6 +31,7 @@ export function mapPostgresActor(row: ActorRow) {
     type: row.type,
     workspaceRole: row.workspace_role,
     status: row.status,
+    avatarUrl: row.avatar_url,
     createdAt: row.created_at,
   };
 }
@@ -59,7 +60,7 @@ export async function listPostgresActors(
 
 export async function createPostgresActor(
   persistence: Persistence,
-  input: { name: string; type: string; email?: string | null },
+  input: { name: string; type: string; email?: string | null; avatarUrl?: string | null },
 ): Promise<ActorRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Actor name cannot be empty");
@@ -74,10 +75,17 @@ export async function createPostgresActor(
   const timestamp = now();
   try {
     const row = await persistence.one<ActorRow>(
-      `INSERT INTO actors (id, name, email, type, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $5)
+      `INSERT INTO actors (id, name, email, type, avatar_url, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $6)
        RETURNING *`,
-      [id, name, input.email ?? null, input.type, timestamp],
+      [
+        id,
+        name,
+        input.email?.trim() || null,
+        input.type,
+        normalizeAvatarUrl(input.avatarUrl, null),
+        timestamp,
+      ],
     );
     if (!row) throw new Error("PostgreSQL actor insert returned no row");
     return row;
@@ -90,7 +98,7 @@ export async function createPostgresActor(
 export async function updatePostgresActor(
   persistence: Persistence,
   id: string,
-  input: { name?: string | null; email?: string | null },
+  input: { name?: string | null; email?: string | null; avatarUrl?: string | null },
 ): Promise<ActorRow> {
   const existing = await getPostgresActor(persistence, id);
   if (!existing) throw apiError("NOT_FOUND", "Actor not found");
@@ -106,9 +114,10 @@ export async function updatePostgresActor(
     throw apiError("VALIDATION_FAILED", "Actor name already exists");
   }
   const email = input.email === undefined ? existing.email : input.email?.trim() || null;
+  const avatarUrl = normalizeAvatarUrl(input.avatarUrl, existing.avatar_url);
   const row = await persistence.one<ActorRow>(
-    `UPDATE actors SET name = $1, email = $2, updated_at = $3 WHERE id = $4 RETURNING *`,
-    [name, email, now(), id],
+    `UPDATE actors SET name = $1, email = $2, avatar_url = $3, updated_at = $4 WHERE id = $5 RETURNING *`,
+    [name, email, avatarUrl, now(), id],
   );
   if (!row) throw apiError("NOT_FOUND", "Actor not found");
   return row;

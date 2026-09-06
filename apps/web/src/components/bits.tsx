@@ -53,7 +53,11 @@ export function StateIcon({ state }: { state: { type: string; color?: string; na
   );
 }
 
-export function Avatar({ actor }: { actor: { name: string; type: string } | null }) {
+export function Avatar({
+  actor,
+}: {
+  actor: { name: string; type: string; avatarUrl?: string | null } | null;
+}) {
   if (!actor)
     return (
       <span className="avatar" title="Unassigned">
@@ -67,7 +71,19 @@ export function Avatar({ actor }: { actor: { name: string; type: string } | null
       className={`avatar${isAgent ? " agent" : ""}`}
       title={`${actor.name}${isAgent ? " (agent)" : ""}`}
     >
-      {isAgent ? <Icon name="bot" size={11} /> : initials}
+      {actor.avatarUrl ? (
+        <img
+          src={actor.avatarUrl}
+          alt=""
+          width={18}
+          height={18}
+          style={{ width: 18, height: 18, borderRadius: "inherit", objectFit: "cover" }}
+        />
+      ) : isAgent ? (
+        <Icon name="bot" size={11} />
+      ) : (
+        initials
+      )}
     </span>
   );
 }
