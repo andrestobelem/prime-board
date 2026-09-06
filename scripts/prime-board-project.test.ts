@@ -134,22 +134,17 @@ describe("atomic project database reservations", () => {
       );
       expect((await fetch(`http://127.0.0.1:${server.port}/health`)).ok).toBe(true);
 
-      let releaseContender: (() => void) | null = null;
-      try {
-        expect(() => {
-          releaseContender = acquireDatabaseReservation(
-            contenderIdentity,
-            {
-              ...legacyRecord,
-              projectRoot: contenderIdentity.projectRoot,
-              instanceId: "new-owner",
-            },
-            () => false,
-          );
-        }).toThrow("Database reservation is busy");
-      } finally {
-        releaseContender?.();
-      }
+      expect(() =>
+        acquireDatabaseReservation(
+          contenderIdentity,
+          {
+            ...legacyRecord,
+            projectRoot: contenderIdentity.projectRoot,
+            instanceId: "new-owner",
+          },
+          () => false,
+        ),
+      ).toThrow("Database reservation is busy");
       expect(existsSync(ownerIdentity.lockPath)).toBe(true);
       for (const path of databaseReservationPaths(ownerIdentity.databasePath, home)) {
         expect(JSON.parse(readFileSync(join(path, "reservation.json"), "utf8"))).toMatchObject({
@@ -436,6 +431,372 @@ describe("atomic project database reservations", () => {
       );
     } finally {
       release();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("blocks a hardlink contender while a legacy owner is unresolved", () => {
+    const root = `/tmp/prime-board-db-hardlink-legacy-${crypto.randomUUID()}`;
+    const home = `${root}/home`;
+    const source = `${root}/source.db`;
+    const alias = `${root}/alias.db`;
+    const ownerRoot = `${root}/owner-project`;
+    const contenderRoot = `${root}/contender-project`;
+    mkdirSync(root, { recursive: true });
+    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
+    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const instanceId = "legacy-live-child";
+    const ownerRecord = {
+      version: 1 as const,
+      projectRoot: ownerIdentity.projectRoot,
+      databasePath: ownerIdentity.databasePath,
+      pid: 999999,
+      instanceId,
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const child = Bun.serve({ port: 0, fetch: () => Response.json({ status: "ok" }) });
+    try {
+      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(ownerRecord)}\n`);
+      }
+      mkdirSync(ownerIdentity.lockPath, { recursive: true });
+      writeFileSync(
+        ownerIdentity.metadataPath,
+        `${JSON.stringify({ ...ownerRecord, port: child.port })}\n`,
+      );
+      writeFileSync(source, "sqlite fixture");
+      linkSync(source, alias);
+      const ownerIdentityAfterDatabase = deriveProjectIdentity(ownerRoot, home, source);
+      expect(ownerIdentity.databaseInodeLockPath).toBeNull();
+      expect(contenderIdentity.databaseInodeLockPath).toBeNull();
+      expect(contenderIdentity.databasePath).toBe(alias);
+      const ownerInodePath = ownerIdentityAfterDatabase.databaseInodeLockPath;
+      expect(ownerInodePath).not.toBeNull();
+      if (ownerInodePath) expect(databaseReservationPaths(alias, home)).toContain(ownerInodePath);
+
+      expect(() =>
+        acquireDatabaseReservation(
+          contenderIdentity,
+          {
+            version: 1,
+            projectRoot: contenderIdentity.projectRoot,
+            databasePath: contenderIdentity.databasePath,
+            pid: process.pid,
+            instanceId: "new-owner",
+            reservedAt: "2026-01-01T00:00:01.000Z",
+          },
+          () => false,
+        ),
+      ).toThrow("Database reservation is busy");
+      expect(existsSync(ownerIdentity.databaseLockPath)).toBe(true);
+      expect(existsSync(ownerIdentity.databasePhysicalLockPath)).toBe(true);
+      for (const path of databaseReservationPaths(alias, home)) {
+        expect(existsSync(path)).toBe(false);
+      }
+    } finally {
+      child.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reclaims a stale legacy owner before acquiring a hardlink alias", () => {
+    const root = `/tmp/prime-board-db-hardlink-stale-${crypto.randomUUID()}`;
+    const home = `${root}/home`;
+    const source = `${root}/source.db`;
+    const alias = `${root}/alias.db`;
+    const ownerRoot = `${root}/owner-project`;
+    const contenderRoot = `${root}/contender-project`;
+    mkdirSync(root, { recursive: true });
+    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
+    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const staleRecord = {
+      version: 1 as const,
+      projectRoot: ownerIdentity.projectRoot,
+      databasePath: ownerIdentity.databasePath,
+      pid: 999999,
+      serverPid: 999999,
+      instanceId: "stale-owner",
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    };
+    try {
+      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(staleRecord)}\n`);
+      }
+      mkdirSync(ownerIdentity.lockPath, { recursive: true });
+      writeFileSync(
+        ownerIdentity.metadataPath,
+        `${JSON.stringify({
+          ...staleRecord,
+          port: 1,
+          serverPid: 999999,
+          startedAt: staleRecord.reservedAt,
+        })}\n`,
+      );
+      writeFileSync(source, "sqlite fixture");
+      linkSync(source, alias);
+      const release = acquireDatabaseReservation(
+        contenderIdentity,
+        {
+          version: 1,
+          projectRoot: contenderIdentity.projectRoot,
+          databasePath: contenderIdentity.databasePath,
+          pid: process.pid,
+          instanceId: "new-owner",
+          reservedAt: "2026-01-01T00:00:01.000Z",
+        },
+        () => false,
+      );
+      try {
+        const ownerIdentityAfterDatabase = deriveProjectIdentity(ownerRoot, home, source);
+        expect(ownerIdentity.databaseInodeLockPath).toBeNull();
+        expect(contenderIdentity.databaseInodeLockPath).toBeNull();
+        const ownerInodePath = ownerIdentityAfterDatabase.databaseInodeLockPath;
+        expect(ownerInodePath).not.toBeNull();
+        if (ownerInodePath) expect(databaseReservationPaths(alias, home)).toContain(ownerInodePath);
+        expect(databaseReservationPaths(alias, home)).toSatisfy((paths) =>
+          paths.every((path) => existsSync(path)),
+        );
+        expect(existsSync(ownerIdentity.databaseLockPath)).toBe(false);
+        expect(existsSync(ownerIdentity.databasePhysicalLockPath)).toBe(false);
+      } finally {
+        release();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a legacy hardlink owner without a server PID", () => {
+    const root = `/tmp/prime-board-db-hardlink-legacy-unresolved-${crypto.randomUUID()}`;
+    const home = `${root}/home`;
+    const source = `${root}/source.db`;
+    const alias = `${root}/alias.db`;
+    const ownerRoot = `${root}/owner-project`;
+    const contenderRoot = `${root}/contender-project`;
+    mkdirSync(root, { recursive: true });
+    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
+    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const legacyRecord = {
+      version: 1 as const,
+      projectRoot: ownerIdentity.projectRoot,
+      databasePath: ownerIdentity.databasePath,
+      pid: 999999,
+      instanceId: "legacy-owner",
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    };
+    try {
+      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(legacyRecord)}\n`);
+      }
+      writeFileSync(source, "sqlite fixture");
+      linkSync(source, alias);
+
+      expect(() =>
+        acquireDatabaseReservation(
+          contenderIdentity,
+          {
+            ...legacyRecord,
+            projectRoot: contenderIdentity.projectRoot,
+            databasePath: contenderIdentity.databasePath,
+            instanceId: "new-owner",
+          },
+          () => false,
+        ),
+      ).toThrow("Database reservation is busy");
+      expect(databaseReservationPaths(alias, home).every((path) => !existsSync(path))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("blocks a hardlink owner with malformed legacy metadata", () => {
+    const root = `/tmp/prime-board-db-hardlink-malformed-${crypto.randomUUID()}`;
+    const home = `${root}/home`;
+    const source = `${root}/source.db`;
+    const alias = `${root}/alias.db`;
+    const ownerRoot = `${root}/owner-project`;
+    const contenderRoot = `${root}/contender-project`;
+    mkdirSync(root, { recursive: true });
+    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
+    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    try {
+      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "reservation.json"), '{"malformed":true}\n');
+      }
+      mkdirSync(ownerIdentity.lockPath, { recursive: true });
+      writeFileSync(ownerIdentity.metadataPath, '{"malformed":true}\n');
+      writeFileSync(source, "sqlite fixture");
+      linkSync(source, alias);
+
+      expect(() =>
+        acquireDatabaseReservation(
+          contenderIdentity,
+          {
+            version: 1,
+            projectRoot: contenderIdentity.projectRoot,
+            databasePath: contenderIdentity.databasePath,
+            pid: process.pid,
+            instanceId: "new-owner",
+            reservedAt: "2026-01-01T00:00:01.000Z",
+          },
+          () => false,
+        ),
+      ).toThrow("Database reservation is busy");
+      expect(databaseReservationPaths(alias, home).every((path) => !existsSync(path))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a hardlink owner when its legacy database path is unlinked", () => {
+    const root = `/tmp/prime-board-db-hardlink-unlinked-${crypto.randomUUID()}`;
+    const home = `${root}/home`;
+    const source = `${root}/source.db`;
+    const alias = `${root}/alias.db`;
+    const ownerRoot = `${root}/owner-project`;
+    const contenderRoot = `${root}/contender-project`;
+    mkdirSync(root, { recursive: true });
+    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
+    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const legacyRecord = {
+      version: 1 as const,
+      projectRoot: ownerIdentity.projectRoot,
+      databasePath: ownerIdentity.databasePath,
+      pid: 999999,
+      instanceId: "legacy-owner",
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    };
+    try {
+      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(legacyRecord)}\n`);
+      }
+      mkdirSync(ownerIdentity.lockPath, { recursive: true });
+      writeFileSync(ownerIdentity.metadataPath, `${JSON.stringify(legacyRecord)}\n`);
+      writeFileSync(source, "sqlite fixture");
+      linkSync(source, alias);
+      rmSync(source);
+
+      expect(() =>
+        acquireDatabaseReservation(
+          contenderIdentity,
+          {
+            ...legacyRecord,
+            projectRoot: contenderIdentity.projectRoot,
+            databasePath: contenderIdentity.databasePath,
+            instanceId: "new-owner",
+          },
+          () => false,
+        ),
+      ).toThrow("Database reservation is busy");
+      expect(databaseReservationPaths(alias, home).every((path) => !existsSync(path))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("promotes and releases the inode lock when SQLite appears after acquisition", () => {
+    const root = `/tmp/prime-board-db-preexisting-${crypto.randomUUID()}`;
+    const home = `${root}/home`;
+    const databasePath = `${root}/database.db`;
+    const projectRoot = `${root}/project`;
+    mkdirSync(root, { recursive: true });
+    const identity = deriveProjectIdentity(projectRoot, home, databasePath);
+    const instanceId = "preexisting-db-owner";
+    const record = {
+      version: 1 as const,
+      projectRoot: identity.projectRoot,
+      databasePath: identity.databasePath,
+      pid: process.pid,
+      instanceId,
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    };
+    let release: ReturnType<typeof acquireDatabaseReservation> | null = null;
+    let paths: string[] = [];
+    try {
+      release = acquireDatabaseReservation(identity, record, () => false);
+      expect(identity.databaseInodeLockPath).toBeNull();
+      writeFileSync(databasePath, "sqlite fixture");
+      promoteDatabaseReservationOwner(
+        identity,
+        { pid: process.pid },
+        instanceId,
+        release.leaseToken,
+      );
+      paths = databaseReservationPaths(databasePath, home);
+      expect(paths).toHaveLength(3);
+      expect(paths.every((path) => existsSync(path))).toBe(true);
+      rmSync(databasePath);
+    } finally {
+      release?.();
+      expect(paths).toHaveLength(3);
+      expect(paths.every((path) => !existsSync(path))).toBe(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("blocks a hardlink owner when its DB server PID is stale but health is active", async () => {
+    const root = `/tmp/prime-board-db-hardlink-health-${crypto.randomUUID()}`;
+    const home = `${root}/home`;
+    const source = `${root}/source.db`;
+    const alias = `${root}/alias.db`;
+    const ownerRoot = `${root}/owner-project`;
+    const contenderRoot = `${root}/contender-project`;
+    mkdirSync(root, { recursive: true });
+    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
+    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const healthServer = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ status: "ok", pid: process.pid }),
+    });
+    const stalePid = 999999;
+    const legacyRecord = {
+      version: 1 as const,
+      projectRoot: ownerIdentity.projectRoot,
+      databasePath: ownerIdentity.databasePath,
+      pid: stalePid,
+      serverPid: stalePid,
+      instanceId: "health-owner",
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    };
+    try {
+      for (const path of databaseReservationPaths(source, home).slice(0, 2)) {
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(legacyRecord)}\n`);
+      }
+      mkdirSync(ownerIdentity.lockPath, { recursive: true });
+      writeFileSync(
+        ownerIdentity.metadataPath,
+        `${JSON.stringify({
+          ...legacyRecord,
+          port: healthServer.port,
+          startedAt: legacyRecord.reservedAt,
+        })}\n`,
+      );
+      writeFileSync(source, "sqlite fixture");
+      linkSync(source, alias);
+      expect((await fetch(`http://127.0.0.1:${healthServer.port}/health`)).ok).toBe(true);
+      expect(() =>
+        acquireDatabaseReservation(
+          contenderIdentity,
+          {
+            version: 1,
+            projectRoot: contenderIdentity.projectRoot,
+            databasePath: contenderIdentity.databasePath,
+            pid: process.pid,
+            instanceId: "new-owner",
+            reservedAt: "2026-01-01T00:00:01.000Z",
+          },
+          () => false,
+        ),
+      ).toThrow("Database reservation is busy");
+      expect(databaseReservationPaths(alias, home).every((path) => !existsSync(path))).toBe(true);
+    } finally {
+      healthServer.stop(true);
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -797,7 +1158,7 @@ describe("project instance lock", () => {
       version: 1 as const,
       projectRoot: identity.projectRoot,
       databasePath: identity.databasePath,
-      port: server.port,
+      port: server.port!,
       pid: 999999,
       launcherPid: 999998,
       instanceId,
@@ -819,7 +1180,7 @@ describe("project instance lock", () => {
     let releaseDatabase: (() => void) | null = null;
     try {
       const portReservation = await reserveAvailablePort(
-        server.port,
+        server.port!,
         true,
         home,
         async () => true,
@@ -924,22 +1285,34 @@ describe("project instance lock", () => {
 
       // La DB aparece después de adquirir alias y physical; el inode path es nuevo.
       writeFileSync(databasePath, "sqlite fixture");
-      const identity = deriveProjectIdentity(projectRoot, home, databasePath);
-      expect(identity.databaseInodeLockPath).not.toBeNull();
-      expect(existsSync(identity.databaseInodeLockPath!)).toBe(false);
+      const identityAfterDatabase = deriveProjectIdentity(projectRoot, home, databasePath);
+      const inodePath = identityAfterDatabase.databaseInodeLockPath!;
+      expect(identityBeforeDatabase.databaseInodeLockPath).toBeNull();
+      expect(inodePath).not.toBeNull();
+      expect(existsSync(inodePath)).toBe(false);
 
-      const status = await resolveInstanceStatus(identity);
-      const repeatedStatus = await resolveInstanceStatus(identity);
+      const status = await resolveInstanceStatus(identityBeforeDatabase);
+      const repeatedStatus = await resolveInstanceStatus(identityBeforeDatabase);
 
       expect(status.state).toBe("running");
       expect(repeatedStatus.state).toBe("running");
-      expect(existsSync(identity.databaseInodeLockPath!)).toBe(false);
-      for (const path of databaseReservationPaths(identity.databasePath, home).slice(0, 2)) {
-        expect(JSON.parse(readFileSync(join(path, "reservation.json"), "utf8"))).toMatchObject({
-          pid: process.pid,
-          instanceId,
-        });
-      }
+      expect(existsSync(inodePath)).toBe(true);
+      const databaseRecords = databaseReservationPaths(
+        identityBeforeDatabase.databasePath,
+        home,
+      ).map((path) => JSON.parse(readFileSync(join(path, "reservation.json"), "utf8")));
+      expect(databaseRecords).toHaveLength(3);
+      expect(databaseRecords[0]).toMatchObject({
+        pid: process.pid,
+        serverPid: process.pid,
+        instanceId,
+      });
+      expect(typeof databaseRecords[0].leaseToken).toBe("string");
+      expect(databaseRecords.map((record) => record.leaseToken)).toEqual([
+        databaseRecords[0].leaseToken,
+        databaseRecords[0].leaseToken,
+        databaseRecords[0].leaseToken,
+      ]);
       expect(JSON.parse(readFileSync(join(portPath, "reservation.json"), "utf8"))).toMatchObject({
         pid: process.pid,
         serverPid: process.pid,

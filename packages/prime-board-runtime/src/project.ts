@@ -166,6 +166,18 @@ export function deriveProjectIdentity(
   };
 }
 
+function homeDirectoryForIdentity(identity: ProjectInstanceIdentity): string {
+  return dirname(dirname(dirname(identity.databaseLockPath)));
+}
+
+/** Actualiza la ruta inode para una identidad creada antes de existir la DB. */
+function databaseInodeLockPathForIdentity(identity: ProjectInstanceIdentity): string | null {
+  return (
+    databaseInodeReservationPath(identity.databasePath, homeDirectoryForIdentity(identity)) ??
+    identity.databaseInodeLockPath
+  );
+}
+
 export interface InstanceRecord {
   version: 1;
   projectRoot: string;
@@ -218,6 +230,10 @@ export type LeaseRelease = (() => void) & {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isValidPort(value: unknown): value is number {
+  return isPositiveInteger(value) && value <= 65535;
 }
 
 function isOptionalPositiveInteger(value: unknown): boolean {
@@ -386,14 +402,111 @@ function processOwnerIsAlive(
   return record.processGroupId !== undefined && processGroupIsAlive(record.processGroupId);
 }
 
-function readInstanceRecord(identity: ProjectInstanceIdentity): InstanceRecord | null {
-  if (!existsSync(identity.metadataPath)) return null;
+function readInstanceRecordAt(metadataPath: string): InstanceRecord | null {
+  if (!existsSync(metadataPath)) return null;
   try {
-    const value: unknown = JSON.parse(readFileSync(identity.metadataPath, "utf8"));
+    const value: unknown = JSON.parse(readFileSync(metadataPath, "utf8"));
     return isInstanceRecord(value) ? value : null;
   } catch {
     return null;
   }
+}
+
+function readInstanceRecord(identity: ProjectInstanceIdentity): InstanceRecord | null {
+  return readInstanceRecordAt(identity.metadataPath);
+}
+
+type ProjectLockDatabaseMetadata = {
+  projectRoot: string;
+  databasePath: string;
+  port?: number;
+  host?: string;
+  pid?: number;
+  launcherPid?: number;
+  serverPid?: number;
+  processGroupId?: number;
+  instanceId?: string;
+};
+
+type DatabaseInodeReservationConflict = {
+  path: string;
+  reservation: DatabaseReservationRecord;
+};
+
+function readProjectLockDatabaseMetadataAt(
+  metadataPath: string,
+): ProjectLockDatabaseMetadata | null {
+  if (!existsSync(metadataPath)) return null;
+  try {
+    const value: unknown = JSON.parse(readFileSync(metadataPath, "utf8"));
+    if (!isRecord(value)) return null;
+    if (typeof value.projectRoot !== "string" || typeof value.databasePath !== "string")
+      return null;
+    const instanceId =
+      typeof value.instanceId === "string" &&
+      value.instanceId.length > 0 &&
+      value.instanceId.trim() === value.instanceId
+        ? value.instanceId
+        : undefined;
+    return {
+      projectRoot: value.projectRoot,
+      databasePath: value.databasePath,
+      port: isValidPort(value.port) ? value.port : undefined,
+      host: isOptionalString(value.host) ? value.host : undefined,
+      pid: isPositiveInteger(value.pid) ? value.pid : undefined,
+      launcherPid: isPositiveInteger(value.launcherPid) ? value.launcherPid : undefined,
+      serverPid: isPositiveInteger(value.serverPid) ? value.serverPid : undefined,
+      processGroupId: isPositiveInteger(value.processGroupId) ? value.processGroupId : undefined,
+      instanceId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function projectLockHealthIsAlive(record: ProjectLockDatabaseMetadata): boolean {
+  // Sin puerto no existe una prueba de terminación. Conserva el lock.
+  if (record.port === undefined) return true;
+  const host = hostForHealthUrl(record.host ?? "127.0.0.1");
+  const url = `http://${host}:${record.port}/health`;
+  try {
+    const result = Bun.spawnSync(
+      [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--noproxy",
+        "*",
+        "--connect-timeout",
+        "0.2",
+        "--max-time",
+        "0.5",
+        url,
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    if (result.exitCode === 0) return true;
+    // ECONNREFUSED demuestra que el endpoint ya no escucha. Un timeout u otro
+    // error no demuestra terminación porque el owner puede estar bloqueado.
+    return result.exitCode !== 7;
+  } catch {
+    // Si no se puede ejecutar el probe, conserva la reserva.
+    return true;
+  }
+}
+
+function projectLockOwnerIsAlive(
+  record: ProjectLockDatabaseMetadata,
+  probe: ProcessProbe,
+): boolean {
+  if (record.serverPid === undefined) return true;
+  for (const pid of [record.pid, record.serverPid, record.launcherPid]) {
+    if (pid !== undefined && probe(pid)) return true;
+  }
+  if (record.processGroupId !== undefined && processGroupIsAlive(record.processGroupId))
+    return true;
+  return projectLockHealthIsAlive(record);
 }
 
 function writeJsonAtomically(path: string, value: unknown): void {
@@ -1091,6 +1204,109 @@ function databaseReservationPathHasState(path: string): boolean {
   );
 }
 
+function databaseReservationPathsMatchIdentity(
+  identity: ProjectInstanceIdentity,
+  paths: readonly string[],
+): boolean {
+  const currentPaths = databaseReservationPathsForIdentity(identity);
+  return (
+    currentPaths.length === paths.length &&
+    currentPaths.every((path, index) => path === paths[index])
+  );
+}
+
+function databaseInodeReservationBlockedByProjectOwner(
+  identity: ProjectInstanceIdentity,
+  instanceId?: string,
+): boolean {
+  const inodePath = databaseInodeLockPathForIdentity(identity);
+  if (!inodePath || !existsSync(identity.databasePath)) return false;
+  let databaseStats: ReturnType<typeof statSync>;
+  try {
+    databaseStats = statSync(identity.databasePath);
+  } catch {
+    return true;
+  }
+  const projectsPath = dirname(identity.lockPath);
+  let projectLocks: string[];
+  try {
+    projectLocks = readdirSync(projectsPath);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+  for (const projectLock of projectLocks) {
+    if (!projectLock.endsWith(".lock")) continue;
+    const metadataPath = join(projectsPath, projectLock, "instance.json");
+    const owner = readProjectLockDatabaseMetadataAt(metadataPath);
+    // Un lock de proyecto ocupado sin metadata verificable no permite probar
+    // que su DB sea ajena ni que su owner terminó. El estado incierto bloquea
+    // la reserva antes de que otro proceso pueda abrir SQLite.
+    if (!owner) return true;
+    if (
+      owner.projectRoot === identity.projectRoot &&
+      owner.databasePath === identity.databasePath &&
+      owner.instanceId === instanceId
+    ) {
+      continue;
+    }
+    let ownerStats: ReturnType<typeof statSync>;
+    try {
+      ownerStats = statSync(owner.databasePath);
+    } catch {
+      // El path puede desaparecer mientras un proceso mantiene abierto el
+      // inode. No hay evidencia suficiente para descartar este owner.
+      return true;
+    }
+    if (ownerStats.dev !== databaseStats.dev || ownerStats.ino !== databaseStats.ino) continue;
+    if (projectLockOwnerIsAlive(owner, processIsAlive)) return true;
+  }
+  return false;
+}
+
+function databaseInodeReservationConflictsForIdentity(
+  identity: ProjectInstanceIdentity,
+  excludedPaths: ReadonlySet<string>,
+): DatabaseInodeReservationConflict[] | null {
+  const inodePath = databaseInodeLockPathForIdentity(identity);
+  if (!inodePath || !existsSync(identity.databasePath)) return [];
+  let databaseStats: ReturnType<typeof statSync>;
+  try {
+    databaseStats = statSync(identity.databasePath);
+  } catch {
+    return null;
+  }
+  const databasesPath = dirname(identity.databaseLockPath);
+  let reservationPaths: string[];
+  try {
+    reservationPaths = readdirSync(databasesPath);
+  } catch {
+    return null;
+  }
+  const conflicts: DatabaseInodeReservationConflict[] = [];
+  for (const reservationPath of reservationPaths) {
+    if (!reservationPath.endsWith(".lock")) continue;
+    const path = join(databasesPath, reservationPath);
+    if (excludedPaths.has(path)) continue;
+    const reservation = readDatabaseReservation(path);
+    // Un lock extranjero sin una snapshot verificable no puede demostrar que
+    // su owner terminó. Conserva el estado ocupado en vez de adivinar que es
+    // un lock ajeno o stale.
+    if (reservation === null || reservation === "invalid") return null;
+    let reservationStats: ReturnType<typeof statSync>;
+    try {
+      reservationStats = statSync(reservation.databasePath);
+    } catch {
+      // El path puede desaparecer mientras el owner mantiene abierto el inode.
+      // Sin stat no se puede demostrar que la reserva sea ajena o stale.
+      return null;
+    }
+    if (reservationStats.dev === databaseStats.dev && reservationStats.ino === databaseStats.ino) {
+      conflicts.push({ path, reservation });
+    }
+  }
+  return conflicts;
+}
+
 function currentDatabaseLeaseToken(
   identity: ProjectInstanceIdentity,
   allowMissingInode = false,
@@ -1099,11 +1315,10 @@ function currentDatabaseLeaseToken(
   let sawRecord = false;
   let sawLegacyRecord = false;
   const paths = databaseReservationPathsForIdentity(identity);
+  const inodePath = databaseInodeLockPathForIdentity(identity);
   for (const path of paths) {
     const inodeIsMissing =
-      allowMissingInode &&
-      path === identity.databaseInodeLockPath &&
-      !databaseReservationPathHasState(path);
+      allowMissingInode && path === inodePath && !databaseReservationPathHasState(path);
     if (inodeIsMissing) continue;
     const record = readDatabaseReservation(path);
     if (
@@ -1129,7 +1344,7 @@ export function databaseReservationPathsForIdentity(identity: ProjectInstanceIde
   return [
     identity.databaseLockPath,
     identity.databasePhysicalLockPath,
-    identity.databaseInodeLockPath,
+    databaseInodeLockPathForIdentity(identity),
   ]
     .filter((path): path is string => Boolean(path))
     .sort();
@@ -1141,19 +1356,43 @@ export function promoteDatabaseReservationOwner(
   owner: ProcessOwnership,
   instanceId?: string,
   leaseToken?: string,
-  allowMissingInode = false,
+  allowMissingInode = true,
 ): void {
   if (!isPositiveInteger(owner.pid)) throw new Error("Database owner PID is invalid");
   const paths = databaseReservationPathsForIdentity(identity);
-  const inodePath = identity.databaseInodeLockPath;
+  const inodePath = databaseInodeLockPathForIdentity(identity);
   const inodeWasPresent = inodePath !== null && databaseReservationPathHasState(inodePath);
   const promoted = withOwnershipTransitions(paths, () => {
-    for (const path of paths) {
-      const inodeIsMissing =
-        allowMissingInode && path === inodePath && !inodeWasPresent && !existsSync(path);
-      if (inodeIsMissing) continue;
+    if (!databaseReservationPathsMatchIdentity(identity, paths)) {
+      throw new Error(`Database reservation paths changed: ${identity.databasePath}`);
+    }
+    const inodeConflicts = databaseInodeReservationConflictsForIdentity(identity, new Set(paths));
+    if (inodeConflicts === null || inodeConflicts.length > 0) {
+      throw new Error(`Database reservation is busy: ${identity.databasePath}`);
+    }
+    const reservations = paths.map((path) => ({
+      path,
+      inodeIsMissing:
+        allowMissingInode && path === inodePath && !inodeWasPresent && !existsSync(path),
+      existing: readDatabaseReservation(path),
+    }));
+    const missingInode = reservations.find((reservation) => reservation.inodeIsMissing);
+    const sourceReservation =
+      reservations
+        .map((reservation) => reservation.existing)
+        .find(
+          (reservation): reservation is DatabaseReservationRecord =>
+            reservation !== null && reservation !== "invalid",
+        ) ?? null;
+    const promotedLeaseToken =
+      missingInode && leaseToken === undefined && sourceReservation?.leaseToken === undefined
+        ? randomUUID()
+        : leaseToken;
+
+    for (const reservation of reservations) {
+      if (reservation.inodeIsMissing) continue;
+      const { path, existing } = reservation;
       const metadataPath = databaseReservationRecordPath(path);
-      const existing = readDatabaseReservation(path);
       if (existing === null || existing === "invalid") {
         throw new Error(`Database reservation is incomplete: ${identity.databasePath}`);
       }
@@ -1171,13 +1410,34 @@ export function promoteDatabaseReservationOwner(
       ) {
         throw new Error("Database reservation belongs to another launcher");
       }
+      if (existing.leaseToken === undefined && promotedLeaseToken !== undefined) {
+        writeOwnershipMarker(path, promotedLeaseToken);
+      }
       writeJsonAtomically(metadataPath, {
         ...existing,
+        ...(promotedLeaseToken === undefined ? {} : { leaseToken: promotedLeaseToken }),
         pid: owner.pid,
         launcherPid: existing.launcherPid ?? existing.pid,
         serverPid: owner.pid,
         ...(owner.processGroupId === undefined ? {} : { processGroupId: owner.processGroupId }),
       });
+    }
+
+    if (missingInode) {
+      if (!sourceReservation || promotedLeaseToken === undefined || existsSync(missingInode.path)) {
+        throw new Error(`Database reservation is incomplete: ${identity.databasePath}`);
+      }
+      const metadata = {
+        ...sourceReservation,
+        leaseToken: promotedLeaseToken,
+        pid: owner.pid,
+        launcherPid: sourceReservation.launcherPid ?? sourceReservation.pid,
+        serverPid: owner.pid,
+        ...(owner.processGroupId === undefined ? {} : { processGroupId: owner.processGroupId }),
+      };
+      mkdirSync(missingInode.path, { recursive: true, mode: 0o700 });
+      writeOwnershipMarker(missingInode.path, promotedLeaseToken);
+      writeJsonAtomically(databaseReservationRecordPath(missingInode.path), metadata);
     }
     return true;
   });
@@ -1217,9 +1477,12 @@ function databaseReservationsMatchInstance(
   probe: ProcessProbe,
 ): boolean {
   const paths = databaseReservationPathsForIdentity(identity);
-  const inodePath = identity.databaseInodeLockPath;
+  const inodePath = databaseInodeLockPathForIdentity(identity);
   const inodeWasPresent = inodePath !== null && databaseReservationPathHasState(inodePath);
   const matching = withOwnershipTransitions(paths, () => {
+    if (!databaseReservationPathsMatchIdentity(identity, paths)) return false;
+    const inodeConflicts = databaseInodeReservationConflictsForIdentity(identity, new Set(paths));
+    if (inodeConflicts === null || inodeConflicts.length > 0) return false;
     const reservations = paths.map((path) => readDatabaseReservation(path));
     let databaseLeaseToken: string | undefined;
     let sawLegacyReservation = false;
@@ -1372,15 +1635,21 @@ function databaseReservationSnapshotMatches(
 function legacyDatabaseOwnerNeedsProjectProtection(
   path: string,
   reservation: DatabaseReservationRecord,
+  crossInode = false,
 ): boolean {
-  if (reservation.serverPid !== undefined) return false;
+  // Una reserva legacy sin serverPid no demuestra que el child terminó mientras
+  // otro alias conserva el mismo inode. No retires una reserva cross-inode solo
+  // porque el PID de la snapshot ya no responde.
+  if (crossInode && reservation.serverPid === undefined && existsSync(reservation.databasePath)) {
+    return true;
+  }
   const stateRoot = dirname(dirname(path));
   const ownerIdentity = deriveProjectIdentity(
     reservation.projectRoot,
     dirname(stateRoot),
     reservation.databasePath,
   );
-  if (!existsSync(ownerIdentity.lockPath)) return false;
+  if (!existsSync(ownerIdentity.lockPath)) return crossInode;
   const instance = readInstanceRecord(ownerIdentity);
   if (!instance) return true;
   if (
@@ -1388,11 +1657,16 @@ function legacyDatabaseOwnerNeedsProjectProtection(
     instance.databasePath !== reservation.databasePath ||
     instance.instanceId !== reservation.instanceId
   ) {
-    return false;
+    return crossInode;
   }
   // Sin serverPid no hay una prueba local de que el child legacy haya muerto.
   // Conserva la reserva hasta que el owner del proyecto resuelva su lock.
-  return instance.serverPid === undefined || processOwnerIsAlive(instance, processIsAlive);
+  if (instance.serverPid === undefined || processOwnerIsAlive(instance, processIsAlive)) {
+    return true;
+  }
+  // Un PID stale tampoco prueba que el child terminó: el health endpoint puede
+  // seguir atendiendo mientras la metadata conserva un PID anterior.
+  return projectLockHealthIsAlive(instance);
 }
 
 function retireDatabaseReservation(
@@ -1450,28 +1724,105 @@ function retireDatabaseReservation(
   });
 }
 
+function databaseReservationPathsForRelease(
+  identity: ProjectInstanceIdentity,
+  expected: Pick<
+    DatabaseReservationRecord,
+    "projectRoot" | "databasePath" | "instanceId" | "leaseToken" | "reservedAt"
+  >,
+): string[] {
+  const paths = new Set(databaseReservationPathsForIdentity(identity));
+  const databasesPath = dirname(identity.databaseLockPath);
+  if (!expected.leaseToken) return [...paths];
+  let reservationPaths: string[];
+  try {
+    reservationPaths = readdirSync(databasesPath);
+  } catch {
+    return [...paths];
+  }
+  for (const reservationPath of reservationPaths) {
+    if (!reservationPath.endsWith(".lock")) continue;
+    const path = join(databasesPath, reservationPath);
+    const current = readDatabaseReservation(path);
+    if (
+      current !== null &&
+      current !== "invalid" &&
+      (current.projectRoot !== expected.projectRoot ||
+        current.databasePath !== expected.databasePath ||
+        current.reservedAt !== expected.reservedAt ||
+        !leaseIdentityMatches(current, expected))
+    ) {
+      continue;
+    }
+    if (hasOwnershipMarker(path, expected.leaseToken)) paths.add(path);
+  }
+  return [...paths];
+}
+
 export function acquireDatabaseReservation(
   identity: ProjectInstanceIdentity,
   record: DatabaseReservationRecord,
   probe: ProcessProbe = processIsAlive,
 ): LeaseRelease {
-  const paths = databaseReservationPathsForIdentity(identity);
+  let paths = databaseReservationPathsForIdentity(identity);
   const leaseToken = leaseTokenOrRandom(record.leaseToken);
   const ownedRecord: DatabaseReservationRecord = { ...record, leaseToken };
-  for (const path of paths) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < paths.length + 1; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    paths = databaseReservationPathsForIdentity(identity);
+    for (const path of paths) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const inodeConflicts = databaseInodeReservationConflictsForIdentity(identity, new Set(paths));
+    if (inodeConflicts === null) {
+      throw new Error(`Database reservation is busy: ${identity.databasePath}`);
+    }
+    for (const conflict of inodeConflicts) {
+      if (processOwnerIsAlive(conflict.reservation, probe)) {
+        throw new Error(`Database is already reserved: ${identity.databasePath}`);
+      }
+      if (legacyDatabaseOwnerNeedsProjectProtection(conflict.path, conflict.reservation, true)) {
+        throw new Error(`Database reservation is busy: ${identity.databasePath}`);
+      }
+      retireDatabaseReservation(conflict.path, conflict.reservation, probe);
+    }
     const recoveredTransitions = new Set<string>();
     const created: string[] = [];
     try {
       const initialized = withOwnershipTransitions(
         paths,
         () => {
+          if (!databaseReservationPathsMatchIdentity(identity, paths)) {
+            const pathError = new Error(
+              `Database reservation paths changed: ${identity.databasePath}`,
+            );
+            Object.assign(pathError, { code: "EAGAIN" });
+            throw pathError;
+          }
+          if (
+            databaseInodeLockPathForIdentity(identity) &&
+            databaseInodeReservationBlockedByProjectOwner(identity, ownedRecord.instanceId)
+          ) {
+            throw new Error(`Database reservation is busy: ${identity.databasePath}`);
+          }
+          const currentInodeConflicts = databaseInodeReservationConflictsForIdentity(
+            identity,
+            new Set(paths),
+          );
+          if (currentInodeConflicts === null || currentInodeConflicts.length > 0) {
+            throw new Error(`Database reservation is busy: ${identity.databasePath}`);
+          }
           for (const path of paths) {
             // Si recuperamos la transición stale de una escritura incompleta,
             // podemos retirar el directorio bajo la misma transición antes de
             // publicar la reserva nueva. No arrastres la prueba a otro intento.
-            if (recoveredTransitions.has(path) && readDatabaseReservation(path) === null) {
-              rmSync(path, { recursive: true, force: true });
+            if (existsSync(path)) {
+              if (recoveredTransitions.has(path) && readDatabaseReservation(path) === null) {
+                rmSync(path, { recursive: true, force: true });
+              } else {
+                const conflictError = new Error(
+                  `Database reservation is already present: ${identity.databasePath}`,
+                );
+                Object.assign(conflictError, { code: "EEXIST" });
+                throw conflictError;
+              }
             }
             mkdirSync(path, { mode: 0o700 });
             created.push(path);
@@ -1490,7 +1841,8 @@ export function acquireDatabaseReservation(
           released = true;
           // Cada reserva se elimina solo si todavía pertenece a esta adquisición.
           // Un launcher anterior no debe borrar una reserva que ya tomó otro proceso.
-          for (const path of [...paths].reverse()) {
+          const releasePaths = databaseReservationPathsForRelease(identity, ownedRecord);
+          for (const path of [...releasePaths].reverse()) {
             removeOwnedDatabaseReservation(path, ownedRecord);
           }
         },
@@ -1501,6 +1853,10 @@ export function acquireDatabaseReservation(
       for (const path of [...created].reverse()) {
         // No se puede limpiar un path cuyo token ya no se puede verificar.
         removeOwnedDatabaseReservation(path, ownedRecord);
+      }
+      if ((error as NodeJS.ErrnoException).code === "EAGAIN") {
+        paths = databaseReservationPathsForIdentity(identity);
+        continue;
       }
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 
