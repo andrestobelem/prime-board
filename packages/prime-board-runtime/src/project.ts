@@ -417,21 +417,23 @@ function readInstanceRecordAt(metadataPath: string): InstanceRecord | null {
   }
 }
 
-function readInstanceRecord(identity: ProjectInstanceIdentity): InstanceRecord | null {
-  return readInstanceRecordAt(identity.metadataPath);
-}
+type ProjectLockDatabaseIdentity = Pick<InstanceRecord, "projectRoot" | "databasePath">;
+type ProjectLockDatabaseRuntime = ProjectLockDatabaseIdentity &
+  Pick<InstanceRecord, "port" | "pid"> &
+  Partial<Pick<InstanceRecord, "host" | "launcherPid" | "processGroupId" | "instanceId">>;
 
-type ProjectLockDatabaseMetadata = {
-  projectRoot: string;
-  databasePath: string;
-  port?: number;
-  host?: string;
-  pid?: number;
-  launcherPid?: number;
-  serverPid?: number;
-  processGroupId?: number;
-  instanceId?: string;
-};
+type ProjectLockDatabaseMetadata =
+  | (ProjectLockDatabaseIdentity &
+      Partial<Pick<InstanceRecord, "instanceId">> & {
+        kind: "unresolved";
+      })
+  | (ProjectLockDatabaseRuntime & {
+      kind: "legacy";
+    })
+  | (ProjectLockDatabaseRuntime & {
+      kind: "promoted";
+      serverPid: number;
+    });
 
 type DatabaseInodeReservationConflict = {
   path: string;
@@ -447,31 +449,44 @@ function readProjectLockDatabaseMetadataAt(
     if (!isRecord(value)) return null;
     if (typeof value.projectRoot !== "string" || typeof value.databasePath !== "string")
       return null;
-    const instanceId =
-      typeof value.instanceId === "string" &&
-      value.instanceId.length > 0 &&
-      value.instanceId.trim() === value.instanceId
-        ? value.instanceId
-        : undefined;
-    return {
+    const identity: ProjectLockDatabaseIdentity = {
       projectRoot: value.projectRoot,
       databasePath: value.databasePath,
-      port: isValidPort(value.port) ? value.port : undefined,
-      host: isOptionalString(value.host) ? value.host : undefined,
-      pid: isPositiveInteger(value.pid) ? value.pid : undefined,
-      launcherPid: isPositiveInteger(value.launcherPid) ? value.launcherPid : undefined,
-      serverPid: isPositiveInteger(value.serverPid) ? value.serverPid : undefined,
-      processGroupId: isPositiveInteger(value.processGroupId) ? value.processGroupId : undefined,
-      instanceId,
     };
+    const instanceId = isOptionalToken(value.instanceId) ? value.instanceId : undefined;
+    const port = isValidPort(value.port) ? value.port : undefined;
+    const pid = isPositiveInteger(value.pid) ? value.pid : undefined;
+    if (port === undefined || pid === undefined) {
+      return {
+        ...identity,
+        ...(instanceId === undefined ? {} : { instanceId }),
+        kind: "unresolved",
+      };
+    }
+    const host = typeof value.host === "string" ? value.host : undefined;
+    const launcherPid = isPositiveInteger(value.launcherPid) ? value.launcherPid : undefined;
+    const processGroupId = isPositiveInteger(value.processGroupId)
+      ? value.processGroupId
+      : undefined;
+    const runtime: ProjectLockDatabaseRuntime = {
+      ...identity,
+      port,
+      pid,
+      ...(host === undefined ? {} : { host }),
+      ...(launcherPid === undefined ? {} : { launcherPid }),
+      ...(processGroupId === undefined ? {} : { processGroupId }),
+      ...(instanceId === undefined ? {} : { instanceId }),
+    };
+    const serverPid = isPositiveInteger(value.serverPid) ? value.serverPid : undefined;
+    return serverPid === undefined
+      ? { ...runtime, kind: "legacy" }
+      : { ...runtime, kind: "promoted", serverPid };
   } catch {
     return null;
   }
 }
 
-function projectLockHealthIsAlive(record: ProjectLockDatabaseMetadata): boolean {
-  // Sin puerto no existe una prueba de terminación. Conserva el lock.
-  if (record.port === undefined) return true;
+function projectLockHealthIsAlive(record: Pick<InstanceRecord, "port" | "host">): boolean {
   const host = hostForHealthUrl(record.host ?? "127.0.0.1");
   const url = `http://${host}:${record.port}/health`;
   try {
@@ -501,17 +516,26 @@ function projectLockHealthIsAlive(record: ProjectLockDatabaseMetadata): boolean 
   }
 }
 
-function projectLockOwnerIsAlive(
-  record: ProjectLockDatabaseMetadata,
-  probe: ProcessProbe,
-): boolean {
-  if (record.serverPid === undefined) return true;
-  for (const pid of [record.pid, record.serverPid, record.launcherPid]) {
-    if (pid !== undefined && probe(pid)) return true;
+function projectLockOwnerIsAlive({
+  record,
+  probe,
+}: {
+  record: ProjectLockDatabaseMetadata;
+  probe: ProcessProbe;
+}): boolean {
+  switch (record.kind) {
+    case "unresolved":
+    case "legacy":
+      // Las metadata no promovidas no prueban que el child terminó.
+      return true;
+    case "promoted":
+      for (const pid of [record.pid, record.serverPid, record.launcherPid]) {
+        if (pid !== undefined && probe(pid)) return true;
+      }
+      if (record.processGroupId !== undefined && processGroupIsAlive(record.processGroupId))
+        return true;
+      return projectLockHealthIsAlive(record);
   }
-  if (record.processGroupId !== undefined && processGroupIsAlive(record.processGroupId))
-    return true;
-  return projectLockHealthIsAlive(record);
 }
 
 function writeJsonAtomically(path: string, value: unknown): void {
@@ -805,7 +829,7 @@ export function classifyInstance(
   probe: ProcessProbe = processIsAlive,
 ): InstanceStatus {
   if (!existsSync(identity.lockPath)) return { state: "not-running", record: null };
-  const record = readInstanceRecord(identity);
+  const record = readInstanceRecordAt(identity.metadataPath);
   if (
     !record ||
     record.version !== 1 ||
@@ -983,7 +1007,7 @@ function removeOwnedInstanceLock(
   if (!leaseToken) return false;
   return (
     withOwnershipTransition(identity.lockPath, () => {
-      const current = readInstanceRecord(identity);
+      const current = readInstanceRecordAt(identity.metadataPath);
       if (
         current !== null &&
         (current.projectRoot !== expected.projectRoot ||
@@ -1022,7 +1046,7 @@ export function retireInstanceLock(
     withOwnershipTransition(
       identity.lockPath,
       () => {
-        const current = readInstanceRecord(identity);
+        const current = readInstanceRecordAt(identity.metadataPath);
         if (current === null) {
           // Una transición stale puede dejar el lock sin metadata. No retires
           // metadata malformed ni una escritura que no demuestre un crash.
@@ -1045,7 +1069,7 @@ export function retireInstanceLock(
     const retired = withOwnershipTransition(
       identity.lockPath,
       () => {
-        const current = readInstanceRecord(identity);
+        const current = readInstanceRecordAt(identity.metadataPath);
         if (current === null) {
           // Una transición stale puede dejar el lock sin metadata. La ausencia
           // de metadata debe ser real y el owner observado debe estar muerto.
@@ -1077,7 +1101,7 @@ export function retireInstanceLock(
   // Las instalaciones legacy no tienen marker. Recupera solo el snapshot stale
   // que observó el caller; una adquisición nueva cambia el token o el timestamp.
   withOwnershipTransition(identity.lockPath, () => {
-    const current = readInstanceRecord(identity);
+    const current = readInstanceRecordAt(identity.metadataPath);
     if (
       current === null ||
       !instanceRecordBelongsTo(current, expected) ||
@@ -1179,7 +1203,7 @@ export function promoteInstanceOwner(
   const promoted = withOwnershipTransition(identity.lockPath, () => {
     const record = ensureInstanceOwnerRecord(
       identity,
-      readInstanceRecord(identity),
+      readInstanceRecordAt(identity.metadataPath),
       instanceId,
       leaseToken,
     );
@@ -1209,10 +1233,13 @@ function databaseReservationPathHasState(path: string): boolean {
   );
 }
 
-function databaseReservationPathsMatchIdentity(
-  identity: ProjectInstanceIdentity,
-  paths: readonly string[],
-): boolean {
+function databaseReservationPathsMatchIdentity({
+  identity,
+  paths,
+}: {
+  identity: ProjectInstanceIdentity;
+  paths: readonly string[];
+}): boolean {
   const currentPaths = databaseReservationPathsForIdentity(identity);
   return (
     currentPaths.length === paths.length &&
@@ -1220,28 +1247,41 @@ function databaseReservationPathsMatchIdentity(
   );
 }
 
-function databaseInodeReservationBlockedByProjectOwner(
-  identity: ProjectInstanceIdentity,
-  instanceId?: string,
-): boolean {
+function lockPathsAt(directoryPath: string): string[] {
+  return readdirSync(directoryPath)
+    .filter((entry) => entry.endsWith(".lock"))
+    .map((entry) => join(directoryPath, entry));
+}
+
+function fileInodeAt(path: string): { dev: number; ino: number } | null {
+  try {
+    const stats = statSync(path);
+    return { dev: stats.dev, ino: stats.ino };
+  } catch {
+    return null;
+  }
+}
+
+function databaseInodeReservationBlockedByProjectOwner({
+  identity,
+  instanceId,
+}: {
+  identity: ProjectInstanceIdentity;
+  instanceId?: string;
+}): boolean {
   const inodePath = databaseInodeLockPathForIdentity(identity);
   if (!inodePath || !existsSync(identity.databasePath)) return false;
-  let databaseStats: ReturnType<typeof statSync>;
-  try {
-    databaseStats = statSync(identity.databasePath);
-  } catch {
-    return true;
-  }
+  const databaseInode = fileInodeAt(identity.databasePath);
+  if (!databaseInode) return true;
   const projectsPath = dirname(identity.lockPath);
-  let projectLocks: string[];
+  let projectLockPaths: string[];
   try {
-    projectLocks = readdirSync(projectsPath);
+    projectLockPaths = lockPathsAt(projectsPath);
   } catch (error) {
     return errorCode(error) !== "ENOENT";
   }
-  for (const projectLock of projectLocks) {
-    if (!projectLock.endsWith(".lock")) continue;
-    const metadataPath = join(projectsPath, projectLock, "instance.json");
+  for (const projectLockPath of projectLockPaths) {
+    const metadataPath = join(projectLockPath, "instance.json");
     const owner = readProjectLockDatabaseMetadataAt(metadataPath);
     // Un lock de proyecto ocupado sin metadata verificable no permite probar
     // que su DB sea ajena ni que su owner terminó. El estado incierto bloquea
@@ -1254,58 +1294,51 @@ function databaseInodeReservationBlockedByProjectOwner(
     ) {
       continue;
     }
-    let ownerStats: ReturnType<typeof statSync>;
-    try {
-      ownerStats = statSync(owner.databasePath);
-    } catch {
+    const ownerInode = fileInodeAt(owner.databasePath);
+    if (!ownerInode) {
       // El path puede desaparecer mientras un proceso mantiene abierto el
       // inode. No hay evidencia suficiente para descartar este owner.
       return true;
     }
-    if (ownerStats.dev !== databaseStats.dev || ownerStats.ino !== databaseStats.ino) continue;
-    if (projectLockOwnerIsAlive(owner, processIsAlive)) return true;
+    if (ownerInode.dev !== databaseInode.dev || ownerInode.ino !== databaseInode.ino) continue;
+    if (projectLockOwnerIsAlive({ record: owner, probe: processIsAlive })) return true;
   }
   return false;
 }
 
-function databaseInodeReservationConflictsForIdentity(
-  identity: ProjectInstanceIdentity,
-  excludedPaths: ReadonlySet<string>,
-): DatabaseInodeReservationConflict[] | null {
+function databaseInodeReservationConflictsForIdentity({
+  identity,
+  excludedPaths,
+}: {
+  identity: ProjectInstanceIdentity;
+  excludedPaths: ReadonlySet<string>;
+}): DatabaseInodeReservationConflict[] | null {
   const inodePath = databaseInodeLockPathForIdentity(identity);
   if (!inodePath || !existsSync(identity.databasePath)) return [];
-  let databaseStats: ReturnType<typeof statSync>;
-  try {
-    databaseStats = statSync(identity.databasePath);
-  } catch {
-    return null;
-  }
+  const databaseInode = fileInodeAt(identity.databasePath);
+  if (!databaseInode) return null;
   const databasesPath = dirname(identity.databaseLockPath);
   let reservationPaths: string[];
   try {
-    reservationPaths = readdirSync(databasesPath);
+    reservationPaths = lockPathsAt(databasesPath);
   } catch {
     return null;
   }
   const conflicts: DatabaseInodeReservationConflict[] = [];
-  for (const reservationPath of reservationPaths) {
-    if (!reservationPath.endsWith(".lock")) continue;
-    const path = join(databasesPath, reservationPath);
+  for (const path of reservationPaths) {
     if (excludedPaths.has(path)) continue;
     const reservation = readDatabaseReservation(path);
     // Un lock extranjero sin una snapshot verificable no puede demostrar que
     // su owner terminó. Conserva el estado ocupado en vez de adivinar que es
     // un lock ajeno o stale.
     if (reservation === null || reservation === "invalid") return null;
-    let reservationStats: ReturnType<typeof statSync>;
-    try {
-      reservationStats = statSync(reservation.databasePath);
-    } catch {
+    const reservationInode = fileInodeAt(reservation.databasePath);
+    if (!reservationInode) {
       // El path puede desaparecer mientras el owner mantiene abierto el inode.
       // Sin stat no se puede demostrar que la reserva sea ajena o stale.
       return null;
     }
-    if (reservationStats.dev === databaseStats.dev && reservationStats.ino === databaseStats.ino) {
+    if (reservationInode.dev === databaseInode.dev && reservationInode.ino === databaseInode.ino) {
       conflicts.push({ path, reservation });
     }
   }
@@ -1368,10 +1401,13 @@ export function promoteDatabaseReservationOwner(
   const inodePath = databaseInodeLockPathForIdentity(identity);
   const inodeWasPresent = inodePath !== null && databaseReservationPathHasState(inodePath);
   const promoted = withOwnershipTransitions(paths, () => {
-    if (!databaseReservationPathsMatchIdentity(identity, paths)) {
+    if (!databaseReservationPathsMatchIdentity({ identity, paths })) {
       throw new Error(`Database reservation paths changed: ${identity.databasePath}`);
     }
-    const inodeConflicts = databaseInodeReservationConflictsForIdentity(identity, new Set(paths));
+    const inodeConflicts = databaseInodeReservationConflictsForIdentity({
+      identity,
+      excludedPaths: new Set(paths),
+    });
     if (inodeConflicts === null || inodeConflicts.length > 0) {
       throw new Error(`Database reservation is busy: ${identity.databasePath}`);
     }
@@ -1381,7 +1417,7 @@ export function promoteDatabaseReservationOwner(
         allowMissingInode && path === inodePath && !inodeWasPresent && !existsSync(path),
       existing: readDatabaseReservation(path),
     }));
-    const missingInode = reservations.find((reservation) => reservation.inodeIsMissing);
+    const missingInodeReservation = reservations.find((reservation) => reservation.inodeIsMissing);
     const sourceReservation =
       reservations
         .map((reservation) => reservation.existing)
@@ -1390,7 +1426,9 @@ export function promoteDatabaseReservationOwner(
             reservation !== null && reservation !== "invalid",
         ) ?? null;
     const promotedLeaseToken =
-      missingInode && leaseToken === undefined && sourceReservation?.leaseToken === undefined
+      missingInodeReservation &&
+      leaseToken === undefined &&
+      sourceReservation?.leaseToken === undefined
         ? randomUUID()
         : leaseToken;
 
@@ -1428,8 +1466,12 @@ export function promoteDatabaseReservationOwner(
       });
     }
 
-    if (missingInode) {
-      if (!sourceReservation || promotedLeaseToken === undefined || existsSync(missingInode.path)) {
+    if (missingInodeReservation) {
+      if (
+        !sourceReservation ||
+        promotedLeaseToken === undefined ||
+        existsSync(missingInodeReservation.path)
+      ) {
         throw new Error(`Database reservation is incomplete: ${identity.databasePath}`);
       }
       const metadata = {
@@ -1440,9 +1482,9 @@ export function promoteDatabaseReservationOwner(
         serverPid: owner.pid,
         ...(owner.processGroupId === undefined ? {} : { processGroupId: owner.processGroupId }),
       };
-      mkdirSync(missingInode.path, { recursive: true, mode: 0o700 });
-      writeOwnershipMarker(missingInode.path, promotedLeaseToken);
-      writeJsonAtomically(databaseReservationRecordPath(missingInode.path), metadata);
+      mkdirSync(missingInodeReservation.path, { recursive: true, mode: 0o700 });
+      writeOwnershipMarker(missingInodeReservation.path, promotedLeaseToken);
+      writeJsonAtomically(databaseReservationRecordPath(missingInodeReservation.path), metadata);
     }
     return true;
   });
@@ -1485,8 +1527,11 @@ function databaseReservationsMatchInstance(
   const inodePath = databaseInodeLockPathForIdentity(identity);
   const inodeWasPresent = inodePath !== null && databaseReservationPathHasState(inodePath);
   const matching = withOwnershipTransitions(paths, () => {
-    if (!databaseReservationPathsMatchIdentity(identity, paths)) return false;
-    const inodeConflicts = databaseInodeReservationConflictsForIdentity(identity, new Set(paths));
+    if (!databaseReservationPathsMatchIdentity({ identity, paths })) return false;
+    const inodeConflicts = databaseInodeReservationConflictsForIdentity({
+      identity,
+      excludedPaths: new Set(paths),
+    });
     if (inodeConflicts === null || inodeConflicts.length > 0) return false;
     const reservations = paths.map((path) => readDatabaseReservation(path));
     let databaseLeaseToken: string | undefined;
@@ -1637,11 +1682,15 @@ function databaseReservationSnapshotMatches(
   );
 }
 
-function legacyDatabaseOwnerNeedsProjectProtection(
-  path: string,
-  reservation: DatabaseReservationRecord,
+function legacyDatabaseOwnerNeedsProjectProtection({
+  path,
+  reservation,
   crossInode = false,
-): boolean {
+}: {
+  path: string;
+  reservation: DatabaseReservationRecord;
+  crossInode?: boolean;
+}): boolean {
   // Una reserva legacy sin serverPid no demuestra que el child terminó mientras
   // otro alias conserva el mismo inode. No retires una reserva cross-inode solo
   // porque el PID de la snapshot ya no responde.
@@ -1655,7 +1704,7 @@ function legacyDatabaseOwnerNeedsProjectProtection(
     reservation.databasePath,
   );
   if (!existsSync(ownerIdentity.lockPath)) return crossInode;
-  const instance = readInstanceRecord(ownerIdentity);
+  const instance = readInstanceRecordAt(ownerIdentity.metadataPath);
   if (!instance) return true;
   if (
     instance.projectRoot !== reservation.projectRoot ||
@@ -1684,7 +1733,7 @@ function retireDatabaseReservation(
     if (
       current !== null &&
       current !== "invalid" &&
-      legacyDatabaseOwnerNeedsProjectProtection(path, current)
+      legacyDatabaseOwnerNeedsProjectProtection({ path, reservation: current })
     ) {
       return;
     }
@@ -1729,13 +1778,16 @@ function retireDatabaseReservation(
   });
 }
 
-function databaseReservationPathsForRelease(
-  identity: ProjectInstanceIdentity,
+function databaseReservationPathsForRelease({
+  identity,
+  expected,
+}: {
+  identity: ProjectInstanceIdentity;
   expected: Pick<
     DatabaseReservationRecord,
     "projectRoot" | "databasePath" | "instanceId" | "leaseToken" | "reservedAt"
-  >,
-): string[] {
+  >;
+}): string[] {
   const paths = new Set(databaseReservationPathsForIdentity(identity));
   const databasesPath = dirname(identity.databaseLockPath);
   if (!expected.leaseToken) return [...paths];
@@ -1775,7 +1827,10 @@ export function acquireDatabaseReservation(
   for (let attempt = 0; attempt < 4; attempt += 1) {
     paths = databaseReservationPathsForIdentity(identity);
     for (const path of paths) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const inodeConflicts = databaseInodeReservationConflictsForIdentity(identity, new Set(paths));
+    const inodeConflicts = databaseInodeReservationConflictsForIdentity({
+      identity,
+      excludedPaths: new Set(paths),
+    });
     if (inodeConflicts === null) {
       throw new Error(`Database reservation is busy: ${identity.databasePath}`);
     }
@@ -1783,7 +1838,13 @@ export function acquireDatabaseReservation(
       if (processOwnerIsAlive(conflict.reservation, probe)) {
         throw new Error(`Database is already reserved: ${identity.databasePath}`);
       }
-      if (legacyDatabaseOwnerNeedsProjectProtection(conflict.path, conflict.reservation, true)) {
+      if (
+        legacyDatabaseOwnerNeedsProjectProtection({
+          path: conflict.path,
+          reservation: conflict.reservation,
+          crossInode: true,
+        })
+      ) {
         throw new Error(`Database reservation is busy: ${identity.databasePath}`);
       }
       retireDatabaseReservation(conflict.path, conflict.reservation, probe);
@@ -1794,7 +1855,7 @@ export function acquireDatabaseReservation(
       const initialized = withOwnershipTransitions(
         paths,
         () => {
-          if (!databaseReservationPathsMatchIdentity(identity, paths)) {
+          if (!databaseReservationPathsMatchIdentity({ identity, paths })) {
             const pathError = new Error(
               `Database reservation paths changed: ${identity.databasePath}`,
             );
@@ -1803,14 +1864,17 @@ export function acquireDatabaseReservation(
           }
           if (
             databaseInodeLockPathForIdentity(identity) &&
-            databaseInodeReservationBlockedByProjectOwner(identity, ownedRecord.instanceId)
+            databaseInodeReservationBlockedByProjectOwner({
+              identity,
+              instanceId: ownedRecord.instanceId,
+            })
           ) {
             throw new Error(`Database reservation is busy: ${identity.databasePath}`);
           }
-          const currentInodeConflicts = databaseInodeReservationConflictsForIdentity(
+          const currentInodeConflicts = databaseInodeReservationConflictsForIdentity({
             identity,
-            new Set(paths),
-          );
+            excludedPaths: new Set(paths),
+          });
           if (currentInodeConflicts === null || currentInodeConflicts.length > 0) {
             throw new Error(`Database reservation is busy: ${identity.databasePath}`);
           }
@@ -1846,7 +1910,10 @@ export function acquireDatabaseReservation(
           released = true;
           // Cada reserva se elimina solo si todavía pertenece a esta adquisición.
           // Un launcher anterior no debe borrar una reserva que ya tomó otro proceso.
-          const releasePaths = databaseReservationPathsForRelease(identity, ownedRecord);
+          const releasePaths = databaseReservationPathsForRelease({
+            identity,
+            expected: ownedRecord,
+          });
           for (const path of [...releasePaths].reverse()) {
             removeOwnedDatabaseReservation(path, ownedRecord);
           }

@@ -24,6 +24,35 @@ import {
   retireInstanceLock,
 } from "./prime-board-project-lib.ts";
 
+function createHardlinkFixture(label: string) {
+  const root = `/tmp/prime-board-db-hardlink-${label}-${crypto.randomUUID()}`;
+  const home = `${root}/home`;
+  const source = `${root}/source.db`;
+  const alias = `${root}/alias.db`;
+  const ownerRoot = `${root}/owner-project`;
+  const contenderRoot = `${root}/contender-project`;
+  mkdirSync(root, { recursive: true });
+  return {
+    root,
+    home,
+    source,
+    alias,
+    ownerRoot,
+    ownerIdentity: deriveProjectIdentity(ownerRoot, home, source),
+    contenderIdentity: deriveProjectIdentity(contenderRoot, home, alias),
+  };
+}
+
+function writeDatabaseReservationRecords(
+  paths: readonly string[],
+  record: DatabaseReservationRecord,
+): void {
+  for (const path of paths) {
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, "reservation.json"), `${JSON.stringify(record)}\n`);
+  }
+}
+
 describe("project instance identity", () => {
   test("derives independent global paths from the repository root", () => {
     const alpha = deriveProjectIdentity("/tmp/projects/alpha", "/tmp/home");
@@ -437,15 +466,8 @@ describe("atomic project database reservations", () => {
   });
 
   test("blocks a hardlink contender while a legacy owner is unresolved", () => {
-    const root = `/tmp/prime-board-db-hardlink-legacy-${crypto.randomUUID()}`;
-    const home = `${root}/home`;
-    const source = `${root}/source.db`;
-    const alias = `${root}/alias.db`;
-    const ownerRoot = `${root}/owner-project`;
-    const contenderRoot = `${root}/contender-project`;
-    mkdirSync(root, { recursive: true });
-    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
-    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const { root, home, source, alias, ownerRoot, ownerIdentity, contenderIdentity } =
+      createHardlinkFixture("legacy");
     const instanceId = "legacy-live-child";
     const ownerRecord = {
       version: 1,
@@ -457,10 +479,10 @@ describe("atomic project database reservations", () => {
     } satisfies DatabaseReservationRecord;
     const child = Bun.serve({ port: 0, fetch: () => Response.json({ status: "ok" }) });
     try {
-      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
-        mkdirSync(path, { recursive: true });
-        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(ownerRecord)}\n`);
-      }
+      writeDatabaseReservationRecords(
+        databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2),
+        ownerRecord,
+      );
       mkdirSync(ownerIdentity.lockPath, { recursive: true });
       writeFileSync(
         ownerIdentity.metadataPath,
@@ -502,15 +524,8 @@ describe("atomic project database reservations", () => {
   });
 
   test("reclaims a stale legacy owner before acquiring a hardlink alias", () => {
-    const root = `/tmp/prime-board-db-hardlink-stale-${crypto.randomUUID()}`;
-    const home = `${root}/home`;
-    const source = `${root}/source.db`;
-    const alias = `${root}/alias.db`;
-    const ownerRoot = `${root}/owner-project`;
-    const contenderRoot = `${root}/contender-project`;
-    mkdirSync(root, { recursive: true });
-    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
-    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const { root, home, source, alias, ownerRoot, ownerIdentity, contenderIdentity } =
+      createHardlinkFixture("stale");
     const staleRecord = {
       version: 1,
       projectRoot: ownerIdentity.projectRoot,
@@ -521,10 +536,10 @@ describe("atomic project database reservations", () => {
       reservedAt: "2026-01-01T00:00:00.000Z",
     } satisfies DatabaseReservationRecord;
     try {
-      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
-        mkdirSync(path, { recursive: true });
-        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(staleRecord)}\n`);
-      }
+      writeDatabaseReservationRecords(
+        databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2),
+        staleRecord,
+      );
       mkdirSync(ownerIdentity.lockPath, { recursive: true });
       writeFileSync(
         ownerIdentity.metadataPath,
@@ -570,15 +585,8 @@ describe("atomic project database reservations", () => {
   });
 
   test("keeps a legacy hardlink owner without a server PID", () => {
-    const root = `/tmp/prime-board-db-hardlink-legacy-unresolved-${crypto.randomUUID()}`;
-    const home = `${root}/home`;
-    const source = `${root}/source.db`;
-    const alias = `${root}/alias.db`;
-    const ownerRoot = `${root}/owner-project`;
-    const contenderRoot = `${root}/contender-project`;
-    mkdirSync(root, { recursive: true });
-    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
-    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const { root, home, source, alias, ownerIdentity, contenderIdentity } =
+      createHardlinkFixture("legacy-unresolved");
     const legacyRecord = {
       version: 1,
       projectRoot: ownerIdentity.projectRoot,
@@ -588,10 +596,10 @@ describe("atomic project database reservations", () => {
       reservedAt: "2026-01-01T00:00:00.000Z",
     } satisfies DatabaseReservationRecord;
     try {
-      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
-        mkdirSync(path, { recursive: true });
-        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(legacyRecord)}\n`);
-      }
+      writeDatabaseReservationRecords(
+        databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2),
+        legacyRecord,
+      );
       writeFileSync(source, "sqlite fixture");
       linkSync(source, alias);
 
@@ -614,15 +622,8 @@ describe("atomic project database reservations", () => {
   });
 
   test("blocks a hardlink owner with malformed legacy metadata", () => {
-    const root = `/tmp/prime-board-db-hardlink-malformed-${crypto.randomUUID()}`;
-    const home = `${root}/home`;
-    const source = `${root}/source.db`;
-    const alias = `${root}/alias.db`;
-    const ownerRoot = `${root}/owner-project`;
-    const contenderRoot = `${root}/contender-project`;
-    mkdirSync(root, { recursive: true });
-    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
-    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const { root, home, source, alias, ownerIdentity, contenderIdentity } =
+      createHardlinkFixture("malformed");
     try {
       for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
         mkdirSync(path, { recursive: true });
@@ -654,15 +655,8 @@ describe("atomic project database reservations", () => {
   });
 
   test("keeps a hardlink owner when its legacy database path is unlinked", () => {
-    const root = `/tmp/prime-board-db-hardlink-unlinked-${crypto.randomUUID()}`;
-    const home = `${root}/home`;
-    const source = `${root}/source.db`;
-    const alias = `${root}/alias.db`;
-    const ownerRoot = `${root}/owner-project`;
-    const contenderRoot = `${root}/contender-project`;
-    mkdirSync(root, { recursive: true });
-    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
-    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const { root, home, source, alias, ownerIdentity, contenderIdentity } =
+      createHardlinkFixture("unlinked");
     const legacyRecord = {
       version: 1,
       projectRoot: ownerIdentity.projectRoot,
@@ -672,10 +666,10 @@ describe("atomic project database reservations", () => {
       reservedAt: "2026-01-01T00:00:00.000Z",
     } satisfies DatabaseReservationRecord;
     try {
-      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2)) {
-        mkdirSync(path, { recursive: true });
-        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(legacyRecord)}\n`);
-      }
+      writeDatabaseReservationRecords(
+        databaseReservationPaths(ownerIdentity.databasePath, home).slice(0, 2),
+        legacyRecord,
+      );
       mkdirSync(ownerIdentity.lockPath, { recursive: true });
       writeFileSync(ownerIdentity.metadataPath, `${JSON.stringify(legacyRecord)}\n`);
       writeFileSync(source, "sqlite fixture");
@@ -741,15 +735,8 @@ describe("atomic project database reservations", () => {
   });
 
   test("blocks a hardlink owner when its DB server PID is stale but health is active", async () => {
-    const root = `/tmp/prime-board-db-hardlink-health-${crypto.randomUUID()}`;
-    const home = `${root}/home`;
-    const source = `${root}/source.db`;
-    const alias = `${root}/alias.db`;
-    const ownerRoot = `${root}/owner-project`;
-    const contenderRoot = `${root}/contender-project`;
-    mkdirSync(root, { recursive: true });
-    const ownerIdentity = deriveProjectIdentity(ownerRoot, home, source);
-    const contenderIdentity = deriveProjectIdentity(contenderRoot, home, alias);
+    const { root, home, source, alias, ownerIdentity, contenderIdentity } =
+      createHardlinkFixture("health");
     const healthServer = Bun.serve({
       port: 0,
       fetch: () => Response.json({ status: "ok", pid: process.pid }),
@@ -765,10 +752,10 @@ describe("atomic project database reservations", () => {
       reservedAt: "2026-01-01T00:00:00.000Z",
     } satisfies DatabaseReservationRecord;
     try {
-      for (const path of databaseReservationPaths(source, home).slice(0, 2)) {
-        mkdirSync(path, { recursive: true });
-        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(legacyRecord)}\n`);
-      }
+      writeDatabaseReservationRecords(
+        databaseReservationPaths(source, home).slice(0, 2),
+        legacyRecord,
+      );
       mkdirSync(ownerIdentity.lockPath, { recursive: true });
       writeFileSync(
         ownerIdentity.metadataPath,
@@ -1292,9 +1279,9 @@ describe("project instance lock", () => {
       // La DB aparece después de adquirir alias y physical; el inode path es nuevo.
       writeFileSync(databasePath, "sqlite fixture");
       const identityAfterDatabase = deriveProjectIdentity(projectRoot, home, databasePath);
-      const inodePath = identityAfterDatabase.databaseInodeLockPath!;
+      const inodePath = identityAfterDatabase.databaseInodeLockPath;
+      if (inodePath === null) throw new Error("Expected the database inode lock path");
       expect(identityBeforeDatabase.databaseInodeLockPath).toBeNull();
-      expect(inodePath).not.toBeNull();
       expect(existsSync(inodePath)).toBe(false);
 
       const status = await resolveInstanceStatus(identityBeforeDatabase);
