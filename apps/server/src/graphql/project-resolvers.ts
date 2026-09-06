@@ -7,7 +7,10 @@ import {
   assertCanManagePostgresProject,
   canAccessPostgresProject,
   createPostgresProject,
+  createPostgresProjectDependency,
+  deletePostgresProjectDependency,
   getPostgresProject,
+  getPostgresProjectDependency,
   listPostgresProjectTeamIds,
   listPostgresProjectMemberIds,
   listPostgresProjectDependencyRows,
@@ -724,28 +727,19 @@ export const projectResolvers = {
           context,
           await listPostgresProjectTeamIds(context.persistence, source.id),
         );
-        // PostgreSQL adapter currently exposes relation rows through the shared planning schema.
-        const target = await getPostgresProject(context.persistence, args.input.dependsOnProjectId);
-        if (!target) throw apiError("NOT_FOUND", "Dependency project not found");
-        const id = crypto.randomUUID();
-        await context.persistence.execute(
-          "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at) VALUES ($1, $2, $3, $4, $5)",
-          [
-            id,
-            source.id,
-            target.id,
-            args.input.type?.toLowerCase() === "related" ? "related" : "blocks",
-            new Date().toISOString(),
-          ],
+        const dependency = await createPostgresProjectDependency(
+          context.persistence,
+          args.input,
+          context.workspace.workspaceId,
         );
         return {
           success: true,
           dependency: {
-            id,
-            projectId: source.id,
-            dependsOnProjectId: target.id,
-            type: args.input.type?.toLowerCase() === "related" ? "related" : "blocks",
-            createdAt: new Date().toISOString(),
+            id: dependency.id,
+            projectId: dependency.project_id,
+            dependsOnProjectId: dependency.depends_on_project_id,
+            type: dependency.type,
+            createdAt: dependency.created_at,
           },
         };
       }
@@ -771,16 +765,20 @@ export const projectResolvers = {
     projectDependencyDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const row = await context.persistence.one<{ project_id: string }>(
-          "SELECT project_id FROM project_dependencies WHERE id = $1",
-          [args.id],
-        );
-        if (!row) throw apiError("NOT_FOUND", "Project dependency not found");
-        await assertCanManagePostgresProject(context.persistence, viewer, row.project_id);
-        await context.persistence.execute("DELETE FROM project_dependencies WHERE id = $1", [
+        const dependency = await getPostgresProjectDependency(
+          context.persistence,
           args.id,
-        ]);
-        return { success: true };
+          context.workspace.workspaceId,
+        );
+        if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
+        await assertCanManagePostgresProject(context.persistence, viewer, dependency.project_id);
+        return {
+          success: await deletePostgresProjectDependency(
+            context.persistence,
+            args.id,
+            context.workspace.workspaceId,
+          ),
+        };
       }
       const row = context.db
         .query("SELECT project_id FROM project_dependencies WHERE id = ?1")

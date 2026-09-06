@@ -26,6 +26,17 @@ export interface PostgresProjectRow {
   archived_at: string | null;
 }
 
+export const POSTGRES_PROJECT_DEPENDENCY_TYPES = ["blocks", "related"] as const;
+export type PostgresProjectDependencyType = (typeof POSTGRES_PROJECT_DEPENDENCY_TYPES)[number];
+
+export interface PostgresProjectDependencyRow {
+  id: string;
+  project_id: string;
+  depends_on_project_id: string;
+  type: PostgresProjectDependencyType;
+  created_at: string;
+}
+
 export interface PostgresProjectInput {
   name: string;
   description?: string | null;
@@ -233,19 +244,127 @@ export async function listPostgresProjectMemberIds(
 export async function listPostgresProjectDependencyRows(
   persistence: Persistence | PersistenceTransaction,
   projectId: string,
-): Promise<
-  readonly {
-    id: string;
-    project_id: string;
-    depends_on_project_id: string;
-    type: "blocks" | "related";
-    created_at: string;
-  }[]
-> {
-  return persistence.many(
+): Promise<readonly PostgresProjectDependencyRow[]> {
+  return persistence.many<PostgresProjectDependencyRow>(
     "SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE project_id = $1 ORDER BY created_at, id",
     [projectId],
   );
+}
+
+function resolvePostgresProjectDependencyType(
+  type: string | null | undefined,
+): PostgresProjectDependencyType {
+  const normalized = type?.toLowerCase();
+  if (normalized === undefined || normalized === "blocks") return "blocks";
+  if (normalized === "related") return "related";
+  throw apiError("VALIDATION_FAILED", `Invalid project dependency type: ${type}`);
+}
+
+/**
+ * Las tablas de planning de PostgreSQL son de instalación mientras el backend
+ * conserva el contrato de un único Workspace. Validar el contexto antes de
+ * resolver IDs evita usar un selector vencido o de otro Workspace.
+ */
+async function assertPostgresWorkspace(
+  persistence: Persistence | PersistenceTransaction,
+  workspaceId?: string,
+): Promise<void> {
+  if (workspaceId) {
+    if (
+      !(await persistence.one<{ id: string }>("SELECT id FROM workspace WHERE id = $1", [
+        workspaceId,
+      ]))
+    ) {
+      throw apiError("NOT_FOUND", "Workspace is not initialized");
+    }
+    return;
+  }
+
+  const workspaces = await persistence.many<{ id: string }>(
+    "SELECT id FROM workspace ORDER BY created_at, id",
+  );
+  if (workspaces.length === 0) throw apiError("NOT_FOUND", "Workspace is not initialized");
+  if (workspaces.length !== 1) {
+    throw apiError("WORKSPACE_REQUIRED", "A Workspace selector is required");
+  }
+}
+
+async function getPostgresProjectDependencyInWorkspace(
+  persistence: Persistence | PersistenceTransaction,
+  id: string,
+  workspaceId?: string,
+  forUpdate = false,
+): Promise<PostgresProjectDependencyRow | null> {
+  await assertPostgresWorkspace(persistence, workspaceId);
+  return persistence.one<PostgresProjectDependencyRow>(
+    `SELECT id, project_id, depends_on_project_id, type, created_at
+     FROM project_dependencies WHERE id = $1${forUpdate ? " FOR UPDATE" : ""}`,
+    [id],
+  );
+}
+
+export async function getPostgresProjectDependency(
+  persistence: Persistence | PersistenceTransaction,
+  id: string,
+  workspaceId?: string,
+): Promise<PostgresProjectDependencyRow | null> {
+  return getPostgresProjectDependencyInWorkspace(persistence, id, workspaceId);
+}
+
+export async function createPostgresProjectDependency(
+  persistence: Persistence,
+  input: { projectId: string; dependsOnProjectId: string; type?: string | null },
+  workspaceId?: string,
+): Promise<PostgresProjectDependencyRow> {
+  return persistence.transaction(async (tx) => {
+    await assertPostgresWorkspace(tx, workspaceId);
+    const type = resolvePostgresProjectDependencyType(input.type);
+    if (input.projectId === input.dependsOnProjectId) {
+      throw apiError("VALIDATION_FAILED", "A project cannot depend on itself");
+    }
+
+    const source = await tx.one<PostgresProjectRow>(
+      "SELECT * FROM projects WHERE id = $1 FOR UPDATE",
+      [input.projectId],
+    );
+    if (!source) throw apiError("NOT_FOUND", "Project not found");
+    const target = await tx.one<PostgresProjectRow>(
+      "SELECT * FROM projects WHERE id = $1 FOR SHARE",
+      [input.dependsOnProjectId],
+    );
+    if (!target) throw apiError("NOT_FOUND", "Dependency project not found");
+
+    const id = newId();
+    const timestamp = now();
+    const row = await tx.one<PostgresProjectDependencyRow>(
+      `INSERT INTO project_dependencies
+       (id, project_id, depends_on_project_id, type, created_at)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, project_id, depends_on_project_id, type, created_at`,
+      [id, source.id, target.id, type, timestamp],
+    );
+    if (!row) throw new Error("PostgreSQL project dependency insert returned no row");
+    return row;
+  });
+}
+
+export async function deletePostgresProjectDependency(
+  persistence: Persistence,
+  id: string,
+  workspaceId?: string,
+): Promise<boolean> {
+  return persistence.transaction(async (tx) => {
+    const dependency = await getPostgresProjectDependencyInWorkspace(tx, id, workspaceId, true);
+    if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
+
+    const result = await tx.execute<PostgresProjectDependencyRow>(
+      `DELETE FROM project_dependencies WHERE id = $1
+       RETURNING id, project_id, depends_on_project_id, type, created_at`,
+      [id],
+    );
+    if (result.rowCount !== 1) throw apiError("NOT_FOUND", "Project dependency not found");
+    return true;
+  });
 }
 
 async function validateProjectMembers(
