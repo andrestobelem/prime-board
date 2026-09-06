@@ -12,6 +12,7 @@ function fakeRepo(): RepoSync & { syncCalls: number; syncIssueCalls: string[] } 
   const state = { syncCalls: 0, syncIssueCalls: [] as string[] };
   return {
     root: "/tmp/fake-repo",
+    preflight: () => undefined,
     sync: () => {
       state.syncCalls += 1;
     },
@@ -56,6 +57,26 @@ describe("withRepoSyncDispatch", () => {
 
     expect(olvidadizo).toHaveBeenCalledTimes(1);
     expect(repo.syncCalls).toBe(1);
+  });
+
+  it("ejecuta el preflight antes del resolver y del sync de respaldo", () => {
+    const order: string[] = [];
+    const repo: RepoSync = {
+      root: "/tmp/fake-repo",
+      preflight: () => order.push("preflight"),
+      sync: () => order.push("sync"),
+      syncIssue: () => order.push("syncIssue"),
+    };
+    const tracker = trackedRepoSync(repo);
+    const resolver = mock((_p: unknown, _a: unknown, _c: unknown) => {
+      order.push("resolver");
+      return { success: true };
+    });
+    const wrapped = withRepoSyncDispatch({ someMutation: resolver });
+
+    wrapped.someMutation(null, {}, { repo: tracker });
+
+    expect(order).toEqual(["preflight", "resolver", "sync"]);
   });
 
   it("no duplica el sync si el resolver ya sincronizó a mano (completo o dirigido)", () => {

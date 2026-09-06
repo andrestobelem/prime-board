@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 import { createRepoSync } from "./repo-sync.ts";
+import { archiveDocumentRows } from "./documents-archive.ts";
 import { readEventLog } from "./event-log.ts";
 
 let app: TestApp;
@@ -246,6 +247,7 @@ try {
       {},
       {
         root: "injected-repo",
+        preflight() {},
         sync() {
           throw new Error("git unavailable");
         },
@@ -402,6 +404,51 @@ try {
       expect(() => repo!.syncIssue("PB-1")).toThrow(/documents.json/);
       expect(existsSync(documentsPath)).toBe(true);
     } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza una mutación antes de persistir ante una captura vacía divergente", async () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-divergent-documents-"));
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const isolated = createTestApp(isolatedRoot);
+    const previousArchive = process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+    process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE = archivePath;
+    try {
+      const created = await gql(
+        isolated,
+        'mutation { issueCreate(input: { teamKey: "PB", title: "Before divergence" }) { success } }',
+      );
+      expect(created.errors).toBeUndefined();
+      const repo = createRepoSync(isolated.db, isolatedRoot);
+      expect(repo).not.toBeNull();
+      repo!.sync();
+      const documentsPath = join(isolatedRoot, ".prime-board", "meta", "documents.json");
+      writeFileSync(documentsPath, "[]\n");
+      archiveDocumentRows(
+        Array.from({ length: 5 }, (_, index) => ({ id: `document-${index}` })),
+        archivePath,
+        "replica",
+      );
+      const before = isolated.db
+        .query("SELECT title, updated_at FROM issues WHERE number = 1")
+        .get() as { title: string; updated_at: string };
+      const eventCountBefore = readEventLog({ rootDir: isolatedRoot }).length;
+      const result = await gql(
+        isolated,
+        'mutation { issueUpdate(id: "PB-1", input: { title: "Must not persist" }) { success } }',
+      );
+      expect(result.errors?.[0]?.message).toMatch(/does not match/);
+      expect(result.data).toBeNull();
+      expect(
+        isolated.db.query("SELECT title, updated_at FROM issues WHERE number = 1").get(),
+      ).toEqual(before);
+      expect(readEventLog({ rootDir: isolatedRoot })).toHaveLength(eventCountBefore);
+      expect(existsSync(documentsPath)).toBe(true);
+    } finally {
+      if (previousArchive === undefined) delete process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+      else process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE = previousArchive;
       isolated.stop();
       rmSync(isolatedRoot, { recursive: true, force: true });
     }

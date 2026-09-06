@@ -13,7 +13,7 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { exportBoard, exportIssue } from "./exporter.ts";
+import { exportBoard, exportIssue, prepareRetiredDocuments } from "./exporter.ts";
 import { appendActivityEvents } from "./activity-stream.ts";
 import {
   createGitCommitter,
@@ -40,6 +40,11 @@ export interface RepoSyncOptions extends IssueEventPipelineOptions {
 }
 
 export interface RepoSync {
+  /**
+   * Valida y retira capturas de Documents antes de persistir una mutación.
+   * Una divergencia falla antes de que cambien SQLite o el Log canónico.
+   */
+  preflight(): void;
   /**
    * Regenera el repo completo (cambios de metadata, borrados).
    * Los fallos se propagan al caller para que la mutación no informe éxito
@@ -85,6 +90,11 @@ export function createRepoSync(
   };
   return {
     root,
+    preflight() {
+      withCanonicalEventLogLock(root, () =>
+        prepareRetiredDocuments(db, root, process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE),
+      );
+    },
     sync() {
       sync(() => exportBoard(db, root));
     },

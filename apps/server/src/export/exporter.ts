@@ -468,6 +468,30 @@ function archiveRetiredSqliteDocuments(db: Database, archivePath?: string): void
   archiveDocumentRows(rows, trimmed, "sqlite");
 }
 
+/**
+ * Prepara las fuentes retiradas antes de persistir una mutación.
+ *
+ * Archivar y retirar una captura es seguro después de verificar el destino:
+ * si la fuente diverge, `archiveDocumentSnapshot` falla y la captura queda en
+ * el repo. El despacho de mutaciones llama esta puerta antes del resolver para
+ * que el error no ocurra después de escribir SQLite o el Log canónico.
+ */
+export function prepareRetiredDocuments(db: Database, rootDir: string, archivePath?: string): void {
+  archiveRetiredSqliteDocuments(db, archivePath);
+  const documentsSnapshot = join(rootDir, ".prime-board", "meta", "documents.json");
+  if (!existsSync(documentsSnapshot)) return;
+  const trimmedArchivePath = archivePath?.trim();
+  if (!trimmedArchivePath) {
+    throw new Error(
+      "Refusing export: .prime-board/meta/documents.json is retired; provide PRIME_BOARD_DOCUMENTS_ARCHIVE after archiving it externally",
+    );
+  }
+  // The source is removed only after the external archive has been written and
+  // verified. Without this explicit option, export and RepoSync fail closed.
+  archiveDocumentSnapshot(documentsSnapshot, trimmedArchivePath, "replica");
+  unlinkSync(documentsSnapshot);
+}
+
 export interface ExportOptions {
   /** Exportar solo un team (por key). Sin esto, exporta todo el workspace. */
   teamKey?: string | null;
@@ -488,20 +512,7 @@ export function exportBoard(
 ): ExportResult {
   const base = join(rootDir, ".prime-board");
   const archivePath = options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
-  archiveRetiredSqliteDocuments(db, archivePath);
-  const documentsSnapshot = join(base, "meta", "documents.json");
-  if (existsSync(documentsSnapshot)) {
-    const trimmedArchivePath = archivePath?.trim();
-    if (!trimmedArchivePath) {
-      throw new Error(
-        "Refusing export: .prime-board/meta/documents.json is retired; provide PRIME_BOARD_DOCUMENTS_ARCHIVE after archiving it externally",
-      );
-    }
-    // The source is removed only after the external archive is written and
-    // verified. Without this explicit option, export and RepoSync fail closed.
-    archiveDocumentSnapshot(documentsSnapshot, trimmedArchivePath, "replica");
-    unlinkSync(documentsSnapshot);
-  }
+  prepareRetiredDocuments(db, rootDir, archivePath);
   // No se borra todo de entrada: se escribe lo que cambió y al final se barren
   // los archivos que ya no corresponden (AT-166). Así un sync completo con datos
   // sin cambios no toca ningún archivo.

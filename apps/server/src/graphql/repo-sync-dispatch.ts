@@ -30,6 +30,8 @@ export const SYNC_EXCLUDED_MUTATIONS: ReadonlySet<string> = new Set([
 ]);
 
 export interface TrackedRepoSync extends RepoSync {
+  /** Valida fuentes de Documents antes de ejecutar la mutación. */
+  preflight(): void;
   /** ¿Se llamó a sync()/syncIssue() desde que se reseteó el rastreo? */
   wasCalled(): boolean;
   /** Reinicia el rastreo — se llama antes de cada mutation top-level. */
@@ -47,6 +49,9 @@ export function trackedRepoSync(repo: RepoSync): TrackedRepoSync {
   let called = false;
   return {
     root: repo.root,
+    preflight() {
+      repo.preflight();
+    },
     sync() {
       called = true;
       repo.sync();
@@ -90,6 +95,9 @@ export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(muta
         return resolver(...callArgs);
       }
       tracker.reset();
+      // Documents retirados deben validarse antes de que el resolver escriba
+      // SQLite o emita Activity/eventos canónicos.
+      tracker.preflight();
       const finish = () => {
         if (!tracker.wasCalled()) tracker.sync();
       };
