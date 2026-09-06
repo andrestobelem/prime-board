@@ -1,21 +1,25 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { Worker } from "node:worker_threads";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { fromPartial } from "@total-typescript/shoehorn";
 import {
   createProject,
   createProjectDependency,
   deleteProjectDependency,
 } from "../domain/projects.ts";
-import { createInitiativeUpdate, deleteInitiativeUpdate } from "../domain/initiatives.ts";
+import {
+  createInitiative,
+  createInitiativeUpdate,
+  deleteInitiativeUpdate,
+} from "../domain/initiatives.ts";
 import type { ActorRow, AuthScopeContext, PlanningAuthorizationHooks } from "../auth/viewer.ts";
 import { createApiKey } from "../domain/actors.ts";
 import { createTeam } from "../domain/teams.ts";
 import { bootstrap } from "../db/seed.ts";
-import { migrate } from "../db/database.ts";
+import { openDatabase } from "../db/database.ts";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 
 let app: TestApp | null = null;
@@ -158,14 +162,13 @@ interface FilePlanningFixture {
   keyId: string;
   sourceId: string;
   targetId: string;
+  initiativeId: string;
 }
 
 function filePlanningFixture(limitedToPrimary: boolean): FilePlanningFixture {
   const rootDir = mkdtempSync(join(tmpdir(), "prb-planning-scope-"));
   const dbPath = join(rootDir, "board.sqlite");
-  const db = new Database(dbPath, { strict: true });
-  db.exec("PRAGMA foreign_keys = ON;");
-  migrate(db);
+  const db = openDatabase(dbPath);
   bootstrap(db);
   const workspace = db.query<{ id: string }, []>("SELECT id FROM workspace LIMIT 1").get();
   const actor = db
@@ -198,6 +201,16 @@ function filePlanningFixture(limitedToPrimary: boolean): FilePlanningFixture {
     { name: "concurrent target", teamIds: [primaryTeam.id] },
     workspace.id,
   );
+  const initiative = createInitiative(
+    db,
+    actor.id,
+    {
+      name: "concurrent initiative",
+      projectIds: [source.id],
+      teamIds: [primaryTeam.id],
+    },
+    workspace.id,
+  );
   return {
     rootDir,
     dbPath,
@@ -209,34 +222,32 @@ function filePlanningFixture(limitedToPrimary: boolean): FilePlanningFixture {
     keyId: key.row.id,
     sourceId: source.id,
     targetId: target.id,
+    initiativeId: initiative.id,
   };
 }
 
-function waitForBarrier(path: string): void {
-  const deadline = Date.now() + 10_000;
-  while (!existsSync(path)) {
-    if (existsSync(`${path}.error`)) throw new Error(`Concurrent writer failed: ${path}`);
-    if (Date.now() > deadline) throw new Error(`Concurrent writer timed out: ${path}`);
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-  }
-}
+const WRITER_READY = 1;
+const WRITER_START = 2;
+const WRITER_ATTEMPTED = 3;
+const WRITER_BLOCKED = 4;
+const WRITER_RELEASE = 5;
+const WRITER_DONE = 6;
+const WRITER_FAILED = 7;
 
-function waitForOneOf(paths: readonly string[]): string {
-  const deadline = Date.now() + 10_000;
+function waitForState(state: Int32Array, ...expected: number[]): number {
   while (true) {
-    const found = paths.find((path) => existsSync(path));
-    if (found) return found;
-    if (Date.now() > deadline) throw new Error(`Concurrent writer timed out: ${paths.join(", ")}`);
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    const current = Atomics.load(state, 0);
+    if (expected.includes(current)) return current;
+    // The notify handshake synchronizes normal progress; this timeout only
+    // prevents a failed worker from hanging the test forever.
+    const result = Atomics.wait(state, 0, current, 10_000);
+    if (result === "timed-out") throw new Error("Concurrent SQLite worker timed out");
   }
 }
 
 interface SqliteWriter {
   waitReady(): void;
   begin(): void;
-  release(): void;
-  waitBlocked(): void;
-  waitDone(): void;
   waitDoneOrBlocked(): void;
   stop(): void;
 }
@@ -244,29 +255,21 @@ interface SqliteWriter {
 function startSqliteWriter(
   fixture: FilePlanningFixture,
   mode: "limits-add" | "limits-clear" | "project-team-change",
+  teamId = fixture.secondaryTeamId,
 ): SqliteWriter {
-  const barrierDir = join(fixture.rootDir, `${mode}-${Date.now()}-${Math.random()}`);
-  mkdirSync(barrierDir, { recursive: true });
-  const workerPath = join(barrierDir, "writer.ts");
+  const state = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  const databaseModule = join(import.meta.dir, "../db/database.ts");
   const workerSource = [
-    'import { Database } from "bun:sqlite";',
-    'import { existsSync, writeFileSync } from "node:fs";',
-    'import { join } from "node:path";',
-    "const [dbPath, barrierDir, mode, workspaceId, keyId, teamId, projectId, secondaryTeamId] = process.argv.slice(2);",
-    "const ready = join(barrierDir, 'ready');",
-    "const start = join(barrierDir, 'start');",
-    "const attempted = join(barrierDir, 'attempted');",
-    "const blocked = join(barrierDir, 'blocked');",
-    "const release = join(barrierDir, 'release');",
-    "const done = join(barrierDir, 'done');",
-    "const failed = join(barrierDir, 'failed');",
-    "const wait = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);",
-    "const waitFor = (path) => { while (!existsSync(path)) wait(); };",
-    "const db = new Database(dbPath, { strict: true });",
-    "db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 0;');",
-    "writeFileSync(ready, 'ready');",
-    "waitFor(start);",
-    "writeFileSync(attempted, 'attempted');",
+    'import { workerData } from "node:worker_threads";',
+    "import { openDatabase } from " + JSON.stringify(databaseModule) + ";",
+    "const { state: sharedState, dbPath, mode, workspaceId, keyId, teamId, projectId, secondaryTeamId } = workerData;",
+    "const state = new Int32Array(sharedState);",
+    "const setState = (value) => { Atomics.store(state, 0, value); Atomics.notify(state, 0); };",
+    `const waitFor = (value) => { while (Atomics.load(state, 0) !== value) Atomics.wait(state, 0, Atomics.load(state, 0)); };`,
+    "const db = openDatabase(dbPath);",
+    `setState(${WRITER_READY});`,
+    `waitFor(${WRITER_START});`,
+    `setState(${WRITER_ATTEMPTED});`,
     "const mutate = () => db.transaction(() => {",
     "  if (mode === 'limits-add') {",
     "    db.query('INSERT INTO api_key_team_limits (api_key_id, team_id, workspace_id) VALUES (?1, ?2, ?3)').run(keyId, teamId, workspaceId);",
@@ -279,52 +282,52 @@ function startSqliteWriter(
     "})();",
     "try {",
     "  mutate();",
-    "  writeFileSync(done, 'done');",
+    `setState(${WRITER_DONE});`,
     "} catch (error) {",
-    "  writeFileSync(blocked, error instanceof Error ? error.message : String(error));",
-    "  waitFor(release);",
-    "  try { mutate(); writeFileSync(done, 'done'); }",
-    "  catch (retryError) { writeFileSync(failed, retryError instanceof Error ? retryError.message : String(retryError)); }",
+    `setState(${WRITER_BLOCKED});`,
+    `waitFor(${WRITER_RELEASE});`,
+    `  try { mutate(); setState(${WRITER_DONE}); }`,
+    `  catch { setState(${WRITER_FAILED}); }`,
     "}",
     "db.close();",
   ].join("\n");
-  writeFileSync(workerPath, workerSource);
-  const child: ChildProcess = spawn(
-    process.execPath,
-    [
-      workerPath,
-      fixture.dbPath,
-      barrierDir,
+  const worker = new Worker(workerSource, {
+    eval: true,
+    workerData: {
+      state: state.buffer,
+      dbPath: fixture.dbPath,
       mode,
-      fixture.workspaceId,
-      fixture.keyId,
-      fixture.primaryTeamId,
-      fixture.targetId,
-      fixture.secondaryTeamId,
-    ],
-    { cwd: process.cwd(), stdio: "ignore" },
-  );
-  const path = (name: string) => join(barrierDir, name);
+      workspaceId: fixture.workspaceId,
+      keyId: fixture.keyId,
+      teamId,
+      projectId: fixture.targetId,
+      secondaryTeamId: fixture.secondaryTeamId,
+    },
+  });
+  worker.on("error", () => {
+    Atomics.store(state, 0, WRITER_FAILED);
+    Atomics.notify(state, 0);
+  });
   return {
-    waitReady: () => waitForBarrier(path("ready")),
-    begin: () => writeFileSync(path("start"), "start"),
-    release: () => writeFileSync(path("release"), "release"),
-    waitBlocked: () => waitForBarrier(path("blocked")),
-    waitDone: () => {
-      waitForBarrier(path("done"));
-      if (existsSync(path("failed"))) throw new Error("Concurrent writer retry failed");
+    waitReady: () => {
+      expect(waitForState(state, WRITER_READY, WRITER_FAILED)).toBe(WRITER_READY);
+    },
+    begin: () => {
+      Atomics.store(state, 0, WRITER_START);
+      Atomics.notify(state, 0);
     },
     waitDoneOrBlocked: () => {
-      const outcome = waitForOneOf([path("done"), path("blocked")]);
-      if (outcome === path("blocked")) {
-        writeFileSync(path("release"), "release");
-        waitForBarrier(path("done"));
+      const result = waitForState(state, WRITER_DONE, WRITER_BLOCKED, WRITER_FAILED);
+      if (result === WRITER_BLOCKED) {
+        Atomics.store(state, 0, WRITER_RELEASE);
+        Atomics.notify(state, 0);
+        expect(waitForState(state, WRITER_DONE, WRITER_FAILED)).toBe(WRITER_DONE);
+      } else {
+        expect(result).toBe(WRITER_DONE);
       }
-      if (existsSync(path("failed"))) throw new Error("Concurrent writer retry failed");
     },
     stop: () => {
-      if (child.exitCode === null) child.kill();
-      rmSync(barrierDir, { recursive: true, force: true });
+      void worker.terminate();
     },
   };
 }
@@ -332,14 +335,18 @@ function startSqliteWriter(
 function startWriterDuringTransaction(
   fixture: FilePlanningFixture,
   mode: "limits-add" | "limits-clear" | "project-team-change",
-  waitForCommit: boolean,
+  teamId = fixture.secondaryTeamId,
 ): SqliteWriter {
-  const writer = startSqliteWriter(fixture, mode);
-  writer.waitReady();
-  writer.begin();
-  if (waitForCommit) writer.waitDoneOrBlocked();
-  else writer.waitBlocked();
-  return writer;
+  const writer = startSqliteWriter(fixture, mode, teamId);
+  try {
+    writer.waitReady();
+    writer.begin();
+    writer.waitDoneOrBlocked();
+    return writer;
+  } catch (error) {
+    writer.stop();
+    throw error;
+  }
 }
 
 function closeFilePlanningFixture(fixture: FilePlanningFixture): void {
@@ -349,6 +356,43 @@ function closeFilePlanningFixture(fixture: FilePlanningFixture): void {
 
 function stopWriter(writer: SqliteWriter | null): void {
   writer?.stop();
+}
+
+function expectSqliteBusySnapshot(action: () => unknown): void {
+  let caught: unknown;
+  try {
+    action();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeDefined();
+  if (!(caught instanceof Error)) throw new Error("SQLite mutation did not throw an Error");
+  const code = "code" in caught && typeof caught.code === "string" ? caught.code : "";
+  const message = caught.message.toLowerCase();
+  expect(
+    code === "SQLITE_BUSY_SNAPSHOT" ||
+      (code === "SQLITE_BUSY" && message.includes("locked")) ||
+      message.includes("sqlite_busy_snapshot") ||
+      message.includes("database is locked"),
+  ).toBe(true);
+}
+
+function expectUnauthorized(action: () => unknown): void {
+  let caught: unknown;
+  try {
+    action();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeDefined();
+  if (!caught || typeof caught !== "object" || !("extensions" in caught)) {
+    throw new Error("Authorization mutation did not return an API error");
+  }
+  const extensions = caught.extensions;
+  if (!extensions || typeof extensions !== "object" || !("code" in extensions)) {
+    throw new Error("Authorization mutation did not include an error code");
+  }
+  expect(extensions.code).toBe("UNAUTHORIZED");
 }
 
 describe("planning Team-limit authorization scope", () => {
@@ -496,7 +540,41 @@ describe("planning Team-limit authorization scope", () => {
 });
 
 describe("SQLite planning transaction interleavings", () => {
-  it("serializes a project Team change that starts during authorization", () => {
+  it("rejects a scope changed before the transaction with UNAUTHORIZED", () => {
+    const fixture = filePlanningFixture(true);
+    try {
+      fixture.db.transaction(() => {
+        fixture.db
+          .query("DELETE FROM api_key_team_limits WHERE api_key_id = ?1")
+          .run(fixture.keyId);
+        fixture.db
+          .query(
+            "INSERT INTO api_key_team_limits (api_key_id, team_id, workspace_id) VALUES (?1, ?2, ?3)",
+          )
+          .run(fixture.keyId, fixture.secondaryTeamId, fixture.workspaceId);
+      })();
+      const auth = fromPartial<AuthScopeContext>({
+        keyId: fixture.keyId,
+        teamIds: [fixture.primaryTeamId],
+      });
+      expectUnauthorized(() =>
+        createProjectDependency(
+          fixture.db,
+          { projectId: fixture.sourceId, dependsOnProjectId: fixture.targetId },
+          fixture.workspaceId,
+          fixture.actor,
+          auth,
+        ),
+      );
+      const dependencies = fixture.db
+        .query<{ count: number }, []>("SELECT count(*) AS count FROM project_dependencies")
+        .get();
+      expect(dependencies?.count).toBe(0);
+    } finally {
+      closeFilePlanningFixture(fixture);
+    }
+  });
+  it("rejects a project Team change during authorization without a dependency write", () => {
     const fixture = filePlanningFixture(true);
     let writer: SqliteWriter | null = null;
     try {
@@ -506,20 +584,19 @@ describe("SQLite planning transaction interleavings", () => {
       });
       const hooks: PlanningAuthorizationHooks = {
         afterAuthorization: () => {
-          writer = startWriterDuringTransaction(fixture, "project-team-change", false);
+          writer = startWriterDuringTransaction(fixture, "project-team-change");
         },
       };
-      const dependency = createProjectDependency(
-        fixture.db,
-        { projectId: fixture.sourceId, dependsOnProjectId: fixture.targetId },
-        fixture.workspaceId,
-        fixture.actor,
-        auth,
-        hooks,
+      expectSqliteBusySnapshot(() =>
+        createProjectDependency(
+          fixture.db,
+          { projectId: fixture.sourceId, dependsOnProjectId: fixture.targetId },
+          fixture.workspaceId,
+          fixture.actor,
+          auth,
+          hooks,
+        ),
       );
-      expect(dependency.project_id).toBe(fixture.sourceId);
-      writer!.release();
-      writer!.waitDone();
       const dependencies = fixture.db
         .query<{ count: number }, []>("SELECT count(*) AS count FROM project_dependencies")
         .get();
@@ -528,77 +605,269 @@ describe("SQLite planning transaction interleavings", () => {
           "SELECT team_id FROM project_teams WHERE project_id = ?1",
         )
         .all(fixture.targetId);
-      expect(dependencies?.count).toBe(1);
+      expect(dependencies?.count).toBe(0);
       expect(targetTeams.map((row) => row.team_id)).toEqual([fixture.secondaryTeamId]);
+      expectUnauthorized(() =>
+        createProjectDependency(
+          fixture.db,
+          { projectId: fixture.sourceId, dependsOnProjectId: fixture.targetId },
+          fixture.workspaceId,
+          fixture.actor,
+          auth,
+        ),
+      );
+      expect(
+        fixture.db
+          .query<{ count: number }, []>("SELECT count(*) AS count FROM project_dependencies")
+          .get()?.count,
+      ).toBe(0);
     } finally {
       stopWriter(writer);
       closeFilePlanningFixture(fixture);
     }
   });
 
-  it("serializes zero-to-one and one-to-zero key limits around a mutation", () => {
-    const fixture = filePlanningFixture(false);
+  it("rejects status creation after a key limit changes during authorization", () => {
+    const fixture = filePlanningFixture(true);
     let writer: SqliteWriter | null = null;
-    let secondWriter: SqliteWriter | null = null;
     try {
-      const unrestricted = fromPartial<AuthScopeContext>({ keyId: fixture.keyId, teamIds: null });
-      const addHooks: PlanningAuthorizationHooks = {
+      const auth = fromPartial<AuthScopeContext>({
+        keyId: fixture.keyId,
+        teamIds: [fixture.primaryTeamId],
+      });
+      const hooks: PlanningAuthorizationHooks = {
         afterAuthorization: () => {
-          writer = startWriterDuringTransaction(fixture, "limits-add", false);
+          writer = startWriterDuringTransaction(fixture, "limits-clear", fixture.secondaryTeamId);
         },
       };
+      expectSqliteBusySnapshot(() =>
+        createInitiativeUpdate(
+          fixture.db,
+          fixture.initiativeId,
+          fixture.actor.id,
+          { body: "concurrent status", health: "on_track" },
+          fixture.workspaceId,
+          fixture.actor,
+          auth,
+          hooks,
+        ),
+      );
+      const updates = fixture.db
+        .query<{ count: number }, [string]>(
+          "SELECT count(*) AS count FROM initiative_updates WHERE initiative_id = ?1",
+        )
+        .get(fixture.initiativeId);
+      const limits = fixture.db
+        .query<{ count: number }, [string]>(
+          "SELECT count(*) AS count FROM api_key_team_limits WHERE api_key_id = ?1",
+        )
+        .get(fixture.keyId);
+      expect(updates?.count).toBe(0);
+      expect(limits?.count).toBe(0);
+      const retryAuth = fromPartial<AuthScopeContext>({ keyId: fixture.keyId, teamIds: null });
+      const retried = createInitiativeUpdate(
+        fixture.db,
+        fixture.initiativeId,
+        fixture.actor.id,
+        { body: "concurrent status", health: "on_track" },
+        fixture.workspaceId,
+        fixture.actor,
+        retryAuth,
+      );
+      expect(retried.initiative_id).toBe(fixture.initiativeId);
+      expect(
+        fixture.db
+          .query<{ count: number }, [string]>(
+            "SELECT count(*) AS count FROM initiative_updates WHERE initiative_id = ?1",
+          )
+          .get(fixture.initiativeId)?.count,
+      ).toBe(1);
+    } finally {
+      stopWriter(writer);
+      closeFilePlanningFixture(fixture);
+    }
+  });
+
+  it("rejects status deletion after an unrestricted key gains a limit during authorization", () => {
+    const fixture = filePlanningFixture(false);
+    let writer: SqliteWriter | null = null;
+    try {
+      const update = createInitiativeUpdate(
+        fixture.db,
+        fixture.initiativeId,
+        fixture.actor.id,
+        { body: "status to delete", health: "on_track" },
+        fixture.workspaceId,
+        fixture.actor,
+      );
+      const auth = fromPartial<AuthScopeContext>({ keyId: fixture.keyId, teamIds: null });
+      const hooks: PlanningAuthorizationHooks = {
+        afterAuthorization: () => {
+          writer = startWriterDuringTransaction(fixture, "limits-add", fixture.secondaryTeamId);
+        },
+      };
+      expectSqliteBusySnapshot(() =>
+        deleteInitiativeUpdate(
+          fixture.db,
+          update.id,
+          fixture.workspaceId,
+          fixture.actor,
+          auth,
+          hooks,
+        ),
+      );
+      const updates = fixture.db
+        .query<{ count: number }, [string]>(
+          "SELECT count(*) AS count FROM initiative_updates WHERE initiative_id = ?1",
+        )
+        .get(fixture.initiativeId);
+      const limits = fixture.db
+        .query<{ count: number }, [string]>(
+          "SELECT count(*) AS count FROM api_key_team_limits WHERE api_key_id = ?1",
+        )
+        .get(fixture.keyId);
+      expect(updates?.count).toBe(1);
+      expect(limits?.count).toBe(1);
+      const retryAuth = fromPartial<AuthScopeContext>({
+        keyId: fixture.keyId,
+        teamIds: [fixture.secondaryTeamId],
+      });
+      expectUnauthorized(() =>
+        deleteInitiativeUpdate(
+          fixture.db,
+          update.id,
+          fixture.workspaceId,
+          fixture.actor,
+          retryAuth,
+        ),
+      );
+      expect(
+        fixture.db
+          .query<{ count: number }, [string]>(
+            "SELECT count(*) AS count FROM initiative_updates WHERE initiative_id = ?1",
+          )
+          .get(fixture.initiativeId)?.count,
+      ).toBe(1);
+    } finally {
+      stopWriter(writer);
+      closeFilePlanningFixture(fixture);
+    }
+  });
+  it("rejects dependency creation after a zero-to-one limit change", () => {
+    const fixture = filePlanningFixture(false);
+    let writer: SqliteWriter | null = null;
+    try {
+      const auth = fromPartial<AuthScopeContext>({ keyId: fixture.keyId, teamIds: null });
+      const hooks: PlanningAuthorizationHooks = {
+        afterAuthorization: () => {
+          writer = startWriterDuringTransaction(fixture, "limits-add", fixture.secondaryTeamId);
+        },
+      };
+      expectSqliteBusySnapshot(() =>
+        createProjectDependency(
+          fixture.db,
+          { projectId: fixture.sourceId, dependsOnProjectId: fixture.targetId },
+          fixture.workspaceId,
+          fixture.actor,
+          auth,
+          hooks,
+        ),
+      );
+      expect(
+        fixture.db
+          .query<{ count: number }, [string]>(
+            "SELECT count(*) AS count FROM api_key_team_limits WHERE api_key_id = ?1",
+          )
+          .get(fixture.keyId)?.count,
+      ).toBe(1);
+      expect(
+        fixture.db
+          .query<{ count: number }, []>("SELECT count(*) AS count FROM project_dependencies")
+          .get()?.count,
+      ).toBe(0);
+      const retryAuth = fromPartial<AuthScopeContext>({
+        keyId: fixture.keyId,
+        teamIds: [fixture.secondaryTeamId],
+      });
+      expectUnauthorized(() =>
+        createProjectDependency(
+          fixture.db,
+          { projectId: fixture.sourceId, dependsOnProjectId: fixture.targetId },
+          fixture.workspaceId,
+          fixture.actor,
+          retryAuth,
+        ),
+      );
+      expect(
+        fixture.db
+          .query<{ count: number }, []>("SELECT count(*) AS count FROM project_dependencies")
+          .get()?.count,
+      ).toBe(0);
+    } finally {
+      stopWriter(writer);
+      closeFilePlanningFixture(fixture);
+    }
+  });
+
+  it("allows dependency deletion after a one-to-zero limit change on a fresh scope", () => {
+    const fixture = filePlanningFixture(true);
+    let writer: SqliteWriter | null = null;
+    try {
+      const auth = fromPartial<AuthScopeContext>({
+        keyId: fixture.keyId,
+        teamIds: [fixture.primaryTeamId],
+      });
       const dependency = createProjectDependency(
         fixture.db,
         { projectId: fixture.sourceId, dependsOnProjectId: fixture.targetId },
         fixture.workspaceId,
         fixture.actor,
-        unrestricted,
-        addHooks,
+        auth,
       );
-      expect(dependency.project_id).toBe(fixture.sourceId);
-      writer!.release();
-      writer!.waitDone();
-      const addedLimits = fixture.db
-        .query<{ count: number }, [string]>(
-          "SELECT count(*) AS count FROM api_key_team_limits WHERE api_key_id = ?1",
-        )
-        .get(fixture.keyId);
-      expect(addedLimits?.count).toBe(1);
-
-      const limited = fromPartial<AuthScopeContext>({
-        keyId: fixture.keyId,
-        teamIds: [fixture.primaryTeamId],
-      });
-      const clearHooks: PlanningAuthorizationHooks = {
+      const hooks: PlanningAuthorizationHooks = {
         afterAuthorization: () => {
-          secondWriter = startWriterDuringTransaction(fixture, "limits-clear", false);
+          writer = startWriterDuringTransaction(fixture, "limits-clear", fixture.secondaryTeamId);
         },
       };
+      expectSqliteBusySnapshot(() =>
+        deleteProjectDependency(
+          fixture.db,
+          dependency.id,
+          fixture.workspaceId,
+          fixture.actor,
+          auth,
+          hooks,
+        ),
+      );
+      expect(
+        fixture.db
+          .query<{ count: number }, [string]>(
+            "SELECT count(*) AS count FROM api_key_team_limits WHERE api_key_id = ?1",
+          )
+          .get(fixture.keyId)?.count,
+      ).toBe(0);
+      expect(
+        fixture.db
+          .query<{ count: number }, []>("SELECT count(*) AS count FROM project_dependencies")
+          .get()?.count,
+      ).toBe(1);
+      const retryAuth = fromPartial<AuthScopeContext>({ keyId: fixture.keyId, teamIds: null });
       expect(
         deleteProjectDependency(
           fixture.db,
           dependency.id,
           fixture.workspaceId,
           fixture.actor,
-          limited,
-          clearHooks,
+          retryAuth,
         ),
       ).toBe(true);
-      secondWriter!.release();
-      secondWriter!.waitDone();
-      const remainingDependencies = fixture.db
-        .query<{ count: number }, []>("SELECT count(*) AS count FROM project_dependencies")
-        .get();
-      const clearedLimits = fixture.db
-        .query<{ count: number }, [string]>(
-          "SELECT count(*) AS count FROM api_key_team_limits WHERE api_key_id = ?1",
-        )
-        .get(fixture.keyId);
-      expect(remainingDependencies?.count).toBe(0);
-      expect(clearedLimits?.count).toBe(0);
+      expect(
+        fixture.db
+          .query<{ count: number }, []>("SELECT count(*) AS count FROM project_dependencies")
+          .get()?.count,
+      ).toBe(0);
     } finally {
       stopWriter(writer);
-      stopWriter(secondWriter);
       closeFilePlanningFixture(fixture);
     }
   });

@@ -8,6 +8,11 @@ import type {
 } from "../db/persistence.ts";
 import type { AuthScopeContext, PlanningAuthorizationHooks, ActorRow } from "../auth/viewer.ts";
 import type { PostgresProjectDependencyRow, PostgresProjectRow } from "./postgres-projects.ts";
+import type { PostgresInitiativeUpdateRow } from "./postgres-initiatives.ts";
+import {
+  createPostgresInitiativeUpdate,
+  deletePostgresInitiativeUpdate,
+} from "./postgres-initiatives.ts";
 import {
   createPostgresProjectDependency,
   deletePostgresProjectDependency,
@@ -125,6 +130,104 @@ function fakePersistence(options: FakeOptions = {}): {
     persistence,
     snapshot: () => cloneState(state),
     transactions: () => transactionCount,
+  };
+}
+
+interface PlanningFakeState {
+  limits: string[];
+  projectTeams: string[];
+  initiativeTeams: string[];
+  initiativeProjects: string[];
+  dependencies: PostgresProjectDependencyRow[];
+  updates: PostgresInitiativeUpdateRow[];
+}
+
+function planningFakePersistence(state: PlanningFakeState): Persistence {
+  const projects = new Map([
+    ["source", project("source")],
+    ["target", project("target")],
+  ]);
+  const transaction = fromPartial<PersistenceTransaction>({
+    one: async (sql: string, params?: SqlParameters) => {
+      if (sql.includes("FROM workspace")) return fromPartial({ id: workspaceId });
+      if (sql.includes("FROM api_keys"))
+        return fromPartial({ id: "key-1", revoked_at: null, expires_at: null });
+      if (sql.includes("FROM projects")) return projects.get(String(params?.[0])) ?? null;
+      if (sql.includes("FROM teams")) return fromPartial({ id: "team-1" });
+      if (sql.includes("FROM initiatives"))
+        return fromPartial({ id: "initiative-1", owner_id: "admin" });
+      if (sql.includes("FROM project_dependencies"))
+        return state.dependencies.find((dependency) => dependency.id === params?.[0]) ?? null;
+      if (sql.includes("FROM initiative_updates"))
+        return state.updates.find((update) => update.id === params?.[0]) ?? null;
+      if (sql.includes("INSERT INTO initiative_updates")) {
+        const update = fromPartial<PostgresInitiativeUpdateRow>({
+          id: "update-created",
+          initiative_id: "initiative-1",
+          author_id: "admin",
+          health: "on_track",
+          body: "created",
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        });
+        state.updates.push(update);
+        return update;
+      }
+      return null;
+    },
+    many: async (sql: string) => {
+      if (sql.includes("api_key_team_limits"))
+        return state.limits.map((teamId) => fromPartial({ team_id: teamId }));
+      if (sql.includes("project_teams"))
+        return state.projectTeams.map((teamId) => fromPartial({ team_id: teamId }));
+      if (sql.includes("initiative_teams"))
+        return state.initiativeTeams.map((teamId) => fromPartial({ team_id: teamId }));
+      if (sql.includes("initiative_projects"))
+        return state.initiativeProjects.map((projectId) => fromPartial({ project_id: projectId }));
+      return [];
+    },
+    execute: async (sql: string) => {
+      if (sql.includes("DELETE FROM project_dependencies")) {
+        state.dependencies = [];
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("DELETE FROM initiative_updates")) {
+        state.updates = [];
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error("unexpected fake PostgreSQL write");
+    },
+  });
+  return fromPartial<Persistence>({
+    transaction: async <Result>(callback: (tx: PersistenceTransaction) => Promise<Result>) =>
+      callback(transaction),
+    close: async () => undefined,
+  });
+}
+
+function barrierHooks(change: () => void): {
+  hooks: PlanningAuthorizationHooks;
+  ready: Promise<void>;
+  release: () => void;
+} {
+  let signalReady!: () => void;
+  let releaseGate!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    signalReady = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  return {
+    hooks: {
+      beforeAuthorization: async () => {
+        change();
+        signalReady();
+        await gate;
+      },
+    },
+    ready,
+    release: releaseGate,
   };
 }
 
@@ -306,5 +409,104 @@ describe("PostgreSQL planning auth scope", () => {
     release();
     await expect(operation).rejects.toMatchObject({ extensions: { code: "UNAUTHORIZED" } });
     expect(state.dependencies).toHaveLength(0);
+  });
+});
+
+describe("PostgreSQL planning scope barriers", () => {
+  function stateWithAuth(): PlanningFakeState {
+    return {
+      limits: ["team-1"],
+      projectTeams: ["team-1"],
+      initiativeTeams: ["team-1"],
+      initiativeProjects: [],
+      dependencies: [
+        {
+          id: "dependency-1",
+          project_id: "source",
+          depends_on_project_id: "target",
+          type: "blocks",
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      updates: [],
+    };
+  }
+
+  it("uses the fake PostgreSQL barrier for dependency delete without a write", async () => {
+    const state = stateWithAuth();
+    const fake = planningFakePersistence(state);
+    const barrier = barrierHooks(() => {
+      state.limits = ["team-2"];
+    });
+    const viewer = fromPartial<ActorRow>({ id: "admin", workspace_role: "admin" });
+    const auth = fromPartial<AuthScopeContext>({ keyId: "key-1", teamIds: ["team-1"] });
+    const operation = deletePostgresProjectDependency(
+      fake,
+      "dependency-1",
+      workspaceId,
+      viewer,
+      auth,
+      barrier.hooks,
+    );
+    await barrier.ready;
+    barrier.release();
+    await expect(operation).rejects.toMatchObject({ extensions: { code: "UNAUTHORIZED" } });
+    expect(state.dependencies).toHaveLength(1);
+  });
+
+  it("uses the fake PostgreSQL barrier for status create without a write", async () => {
+    const state = stateWithAuth();
+    const fake = planningFakePersistence(state);
+    const barrier = barrierHooks(() => {
+      state.limits = ["team-2"];
+    });
+    const viewer = fromPartial<ActorRow>({ id: "admin", workspace_role: "admin" });
+    const auth = fromPartial<AuthScopeContext>({ keyId: "key-1", teamIds: ["team-1"] });
+    const operation = createPostgresInitiativeUpdate(
+      fake,
+      viewer,
+      "initiative-1",
+      { health: "on_track", body: "status" },
+      workspaceId,
+      auth,
+      barrier.hooks,
+    );
+    await barrier.ready;
+    barrier.release();
+    await expect(operation).rejects.toMatchObject({ extensions: { code: "UNAUTHORIZED" } });
+    expect(state.updates).toHaveLength(0);
+  });
+
+  it("uses the fake PostgreSQL barrier for status delete without a write", async () => {
+    const state = stateWithAuth();
+    state.updates = [
+      fromPartial<PostgresInitiativeUpdateRow>({
+        id: "update-1",
+        initiative_id: "initiative-1",
+        author_id: "admin",
+        health: "on_track",
+        body: "status",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }),
+    ];
+    const fake = planningFakePersistence(state);
+    const barrier = barrierHooks(() => {
+      state.limits = ["team-2"];
+    });
+    const viewer = fromPartial<ActorRow>({ id: "admin", workspace_role: "admin" });
+    const auth = fromPartial<AuthScopeContext>({ keyId: "key-1", teamIds: ["team-1"] });
+    const operation = deletePostgresInitiativeUpdate(
+      fake,
+      viewer,
+      "update-1",
+      workspaceId,
+      auth,
+      barrier.hooks,
+    );
+    await barrier.ready;
+    barrier.release();
+    await expect(operation).rejects.toMatchObject({ extensions: { code: "UNAUTHORIZED" } });
+    expect(state.updates).toHaveLength(1);
   });
 });
