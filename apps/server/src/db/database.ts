@@ -727,6 +727,277 @@ function normalizedSql(sql: string): string {
   return sql.toLowerCase().replace(/\s+/g, "");
 }
 
+type SqlTokenKind =
+  "identifier" | "quoted_identifier" | "string" | "number" | "operator" | "punctuation";
+
+interface SqlToken {
+  kind: SqlTokenKind;
+  value: string;
+  start: number;
+  end: number;
+}
+
+function pushSqlToken(
+  tokens: SqlToken[],
+  kind: SqlTokenKind,
+  value: string,
+  start: number,
+  end: number,
+): void {
+  tokens.push({ kind, value, start, end });
+}
+
+function isSqlIdentifierStart(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return (
+    (codePoint !== undefined && codePoint >= 0x80) ||
+    (character >= "a" && character <= "z") ||
+    (character >= "A" && character <= "Z") ||
+    character === "_"
+  );
+}
+
+function isSqlIdentifierPart(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return (
+    isSqlIdentifierStart(character) || (character >= "0" && character <= "9") || character === "$"
+  );
+}
+
+function sqliteTokens(sql: string): SqlToken[] | null {
+  const tokens: SqlToken[] = [];
+  let position = 0;
+
+  while (position < sql.length) {
+    const character = sql[position];
+    const next = sql[position + 1];
+    if (character === undefined) break;
+
+    if (/\s/.test(character)) {
+      position += 1;
+      continue;
+    }
+    if (character === "-" && next === "-") {
+      position += 2;
+      while (position < sql.length && sql[position] !== "\n") position += 1;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      const end = sql.indexOf("*/", position + 2);
+      if (end < 0) return null;
+      position = end + 2;
+      continue;
+    }
+
+    if (character === "'") {
+      const start = position;
+      position += 1;
+      let closed = false;
+      while (position < sql.length) {
+        if (sql[position] !== "'") {
+          position += 1;
+          continue;
+        }
+        if (sql[position + 1] === "'") {
+          position += 2;
+          continue;
+        }
+        position += 1;
+        closed = true;
+        break;
+      }
+      if (!closed) return null;
+      pushSqlToken(tokens, "string", sql.slice(start, position), start, position);
+      continue;
+    }
+
+    if (character === '"' || character === "`") {
+      const quote = character;
+      const start = position;
+      position += 1;
+      let closed = false;
+      while (position < sql.length) {
+        if (sql[position] !== quote) {
+          position += 1;
+          continue;
+        }
+        if (sql[position + 1] === quote) {
+          position += 2;
+          continue;
+        }
+        position += 1;
+        closed = true;
+        break;
+      }
+      if (!closed) return null;
+      const quoted = sql.slice(start + 1, position - 1);
+      pushSqlToken(
+        tokens,
+        "quoted_identifier",
+        quoted.replaceAll(quote + quote, quote),
+        start,
+        position,
+      );
+      continue;
+    }
+
+    if (character === "[") {
+      const end = sql.indexOf("]", position + 1);
+      if (end < 0) return null;
+      pushSqlToken(tokens, "quoted_identifier", sql.slice(position + 1, end), position, end + 1);
+      position = end + 1;
+      continue;
+    }
+
+    if (
+      (character >= "0" && character <= "9") ||
+      (character === "." && next !== undefined && next >= "0" && next <= "9")
+    ) {
+      const start = position;
+      if (character === "0" && (next === "x" || next === "X")) {
+        position += 2;
+        while (position < sql.length && /[0-9a-fA-F]/.test(sql[position] ?? "")) position += 1;
+      } else {
+        while (position < sql.length && /[0-9]/.test(sql[position] ?? "")) position += 1;
+        if (sql[position] === ".") {
+          position += 1;
+          while (position < sql.length && /[0-9]/.test(sql[position] ?? "")) position += 1;
+        }
+        if (sql[position] === "e" || sql[position] === "E") {
+          const exponentStart = position;
+          position += 1;
+          if (sql[position] === "+" || sql[position] === "-") position += 1;
+          const digitsStart = position;
+          while (position < sql.length && /[0-9]/.test(sql[position] ?? "")) position += 1;
+          if (digitsStart === position) position = exponentStart;
+        }
+      }
+      pushSqlToken(tokens, "number", sql.slice(start, position), start, position);
+      continue;
+    }
+
+    if (isSqlIdentifierStart(character)) {
+      const start = position;
+      position += 1;
+      while (position < sql.length && isSqlIdentifierPart(sql[position] ?? "")) position += 1;
+      pushSqlToken(tokens, "identifier", sql.slice(start, position), start, position);
+      continue;
+    }
+
+    const operator = ["->>", "<<", ">>", "||", "<=", ">=", "<>", "!=", "==", "->"].find(
+      (candidate) => sql.startsWith(candidate, position),
+    );
+    if (operator) {
+      pushSqlToken(tokens, "operator", operator, position, position + operator.length);
+      position += operator.length;
+      continue;
+    }
+
+    if ("~!%^&*+-/=<>|".includes(character)) {
+      pushSqlToken(tokens, "operator", character, position, position + 1);
+    } else {
+      pushSqlToken(tokens, "punctuation", character, position, position + 1);
+    }
+    position += 1;
+  }
+
+  return tokens;
+}
+
+function singleSqlStatement(tokens: readonly SqlToken[]): readonly SqlToken[] | null {
+  const semicolon = tokens.findIndex((token) => token.value === ";");
+  if (semicolon < 0) return tokens;
+  return tokens.slice(semicolon + 1).length === 0 ? tokens.slice(0, semicolon) : null;
+}
+
+function comparableSqlToken(token: SqlToken): string {
+  if (token.kind === "identifier" || token.kind === "quoted_identifier") {
+    return `identifier:${token.value.toLowerCase()}`;
+  }
+  return `${token.kind}:${token.value}`;
+}
+
+function comparableSqlTokens(tokens: readonly SqlToken[]): string[] {
+  return tokens.map(comparableSqlToken);
+}
+
+/**
+ * Extrae solo tokens CHECK que SQLite puede interpretar como restricciones.
+ * Los comentarios y literales son tokens indivisibles, por lo que nunca pueden
+ * aportar una expresión falsa. La comprobación no pretende ser un parser SQL
+ * general: EXPLAIN valida antes que la definición completa siga siendo ejecutable.
+ * La comparación es canónica a nivel de tokens y no acepta reescrituras que solo
+ * sean equivalentes por semántica. SQLite no expone CHECK mediante PRAGMA, por
+ * eso la definición de sqlite_master se vuelve a compilar con un nombre temporal.
+ */
+function checkExpressionsFromDefinition(definition: string): SqlToken[][] | null {
+  const parsed = sqliteTokens(definition);
+  if (parsed === null) return null;
+  const tokens = singleSqlStatement(parsed);
+  if (tokens === null) return null;
+  const expressions: SqlToken[][] = [];
+  for (let position = 0; position < tokens.length; position += 1) {
+    const token = tokens[position];
+    if (token?.kind !== "identifier" || token.value.toLowerCase() !== "check") {
+      continue;
+    }
+    const opening = tokens[position + 1];
+    if (opening?.value !== "(") continue;
+    let depth = 1;
+    for (let end = position + 2; end < tokens.length; end += 1) {
+      const nested = tokens[end];
+      if (nested?.value === "(") depth += 1;
+      if (nested?.value !== ")") continue;
+      depth -= 1;
+      if (depth !== 0) continue;
+      expressions.push(tokens.slice(position + 2, end));
+      position = end;
+      break;
+    }
+    if (depth !== 0) return null;
+  }
+  return expressions;
+}
+
+function definitionForExplain(definition: string): string | null {
+  const parsed = sqliteTokens(definition);
+  const tokens = parsed === null ? null : singleSqlStatement(parsed);
+  if (
+    !tokens ||
+    tokens[0]?.kind !== "identifier" ||
+    tokens[0].value.toLowerCase() !== "create" ||
+    tokens[1]?.kind !== "identifier" ||
+    tokens[1].value.toLowerCase() !== "table"
+  ) {
+    return null;
+  }
+  const opening = tokens.findIndex((token, position) => position > 1 && token.value === "(");
+  if (opening < 0) return null;
+  const tableToken = tokens[opening - 1];
+  if (tableToken?.kind !== "identifier" && tableToken?.kind !== "quoted_identifier") {
+    return null;
+  }
+  const probeName = "__prb641_check_probe";
+  if (tableToken.value.toLowerCase() === probeName) return null;
+  return `${definition.slice(0, tableToken.start)}${probeName}${definition.slice(tableToken.end)}`;
+}
+
+function executableTableDefinition(db: Database, definition: string): boolean {
+  const explainable = definitionForExplain(definition);
+  if (explainable === null) return false;
+  try {
+    const query = db.query(`EXPLAIN ${explainable}`);
+    try {
+      query.all();
+      return true;
+    } finally {
+      query.finalize();
+    }
+  } catch {
+    return false;
+  }
+}
+
 function hasViewPreferencesKeyIndex(db: Database): boolean {
   const index = indexList(db, "view_preferences").find(
     (value) => value.name === "idx_view_preferences_key",
@@ -1016,9 +1287,26 @@ function columnContractProblems(
 function checkConstraintProblems(db: Database, table: string, checks: readonly string[]): string[] {
   const definition = tableSql(db, table);
   if (definition === null) return [`missing table ${table}`];
-  const normalized = normalizedSql(definition);
+  const actualChecks = checkExpressionsFromDefinition(definition);
+  const executable = executableTableDefinition(db, definition);
+  if (actualChecks === null || !executable) {
+    return [
+      `${table} has an invalid or unparsable SQL definition`,
+      ...checks.map((expression) => `${table} is missing CHECK (${expression})`),
+    ];
+  }
+  const actual = actualChecks.map(comparableSqlTokens);
   return checks
-    .filter((expression) => !normalized.includes(normalizedSql(`CHECK (${expression})`)))
+    .filter((expression) => {
+      const expectedTokens = sqliteTokens(expression);
+      if (expectedTokens === null) return true;
+      const expected = comparableSqlTokens(expectedTokens);
+      return !actual.some(
+        (candidate) =>
+          candidate.length === expected.length &&
+          candidate.every((token, position) => token === expected[position]),
+      );
+    })
     .map((expression) => `${table} is missing CHECK (${expression})`);
 }
 

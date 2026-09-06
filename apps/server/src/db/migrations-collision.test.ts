@@ -29,12 +29,15 @@ function databaseWithMigrationsThrough(versionLimit: number): Database {
   return db;
 }
 
-function restoreLegacySavedViews(db: Database): void {
+function restoreLegacySavedViews(
+  db: Database,
+  scopeCheck = "CHECK (scope IN ('personal', 'team', 'workspace'))",
+): void {
   db.exec(`
     CREATE TABLE saved_views (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      scope TEXT NOT NULL CHECK (scope IN ('personal', 'team', 'workspace')),
+      scope TEXT NOT NULL ${scopeCheck},
       team_id TEXT,
       owner_id TEXT NOT NULL REFERENCES actors(id),
       filter_json TEXT NOT NULL DEFAULT '{}',
@@ -51,6 +54,27 @@ function restoreLegacySavedViews(db: Database): void {
     CREATE UNIQUE INDEX idx_saved_views_workspace_id ON saved_views(workspace_id, id);
     CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
     CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
+  `);
+}
+
+function replaceLegacySavedViewsScopeCheck(db: Database, scopeCheck: string): void {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP INDEX IF EXISTS idx_saved_views_workspace_id;
+    DROP INDEX IF EXISTS idx_saved_views_scope;
+    DROP INDEX IF EXISTS idx_saved_views_owner;
+    ALTER TABLE saved_views RENAME TO _prb641_saved_views;
+  `);
+  restoreLegacySavedViews(db, scopeCheck);
+  db.exec(`
+    INSERT INTO saved_views
+      (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+       created_at, updated_at, archived_at, columns_json, workspace_id)
+    SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+           created_at, updated_at, archived_at, columns_json, workspace_id
+      FROM _prb641_saved_views;
+    DROP TABLE _prb641_saved_views;
+    PRAGMA foreign_keys = ON;
   `);
 }
 
@@ -953,6 +977,94 @@ describe("colisión de migraciones SQLite", () => {
       const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
       migrate(db);
       expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(migrationCount);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("ignora CHECKs canónicos escritos en comentarios o literales y permite reparar", () => {
+    const maliciousChecks = [
+      "CHECK(1)/* scope IN ('personal', 'team', 'workspace') */",
+      "CHECK ('scope IN (''personal'', ''team'', ''workspace'')')",
+    ];
+
+    for (const scopeCheck of maliciousChecks) {
+      const db = databaseWithMigrationsThrough(32);
+      try {
+        replaceLegacySavedViewsScopeCheck(db, scopeCheck);
+        const beforeSchema = db
+          .query(
+            `SELECT type, name, sql FROM sqlite_master
+             WHERE tbl_name = 'saved_views' OR name LIKE 'idx_saved_views_%'
+             ORDER BY type, name`,
+          )
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const runMigration = () => migrate(db);
+
+        let firstError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          firstError = error instanceof Error ? error.message : String(error);
+        }
+        expect(firstError).toMatch(/migration 0033.*saved_views.*CHECK/i);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(
+          db
+            .query(
+              `SELECT type, name, sql FROM sqlite_master
+               WHERE tbl_name = 'saved_views' OR name LIKE 'idx_saved_views_%'
+               ORDER BY type, name`,
+            )
+            .all(),
+        ).toEqual(beforeSchema);
+        expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+
+        let secondError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          secondError = error instanceof Error ? error.message : String(error);
+        }
+        expect(secondError).toBe(firstError);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+        db.exec("PRAGMA foreign_keys = OFF; DROP TABLE saved_views; PRAGMA foreign_keys = ON");
+        restoreLegacySavedViews(db);
+        migrate(db);
+        expect(db.query("SELECT version, name FROM _migrations WHERE version >= 32").all()).toEqual(
+          [
+            { version: 32, name: "notification_preferences" },
+            { version: 33, name: "views_preferences" },
+          ],
+        );
+        expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("acepta un CHECK canónico con comentarios inline y multiline", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      replaceLegacySavedViewsScopeCheck(
+        db,
+        `CHECK (
+          scope /* inline */ IN (
+            'personal', /* multiline
+            comment */ 'team', 'workspace'
+          )
+        )`,
+      );
+
+      migrate(db);
+      expect(db.query("SELECT version, name FROM _migrations WHERE version >= 32").all()).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();
