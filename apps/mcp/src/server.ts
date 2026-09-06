@@ -666,12 +666,17 @@ export function createServer(config: McpConfig | McpSession): McpServer {
   server.registerTool(
     "save_issue_label",
     {
-      description: "Create or update a label. Omit team to create a workspace label.",
+      description:
+        "Create or update a label. Omit team when creating a Workspace label; pass null when moving an existing label to the Workspace.",
       inputSchema: {
         id: z.string().optional(),
         name: z.string().optional(),
         color: z.string().optional(),
-        team: z.string().optional().describe("Team key or ID (create only)"),
+        team: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("Team key or ID; null moves the label to the Workspace"),
       },
     },
     async (args) => {
@@ -679,6 +684,10 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         const input: Record<string, unknown> = {};
         if (args.name !== undefined) input.name = args.name;
         if (args.color !== undefined) input.color = args.color;
+        if (args.team !== undefined) {
+          input.teamId =
+            args.team === null ? null : (await resolveTeam(sessionConfig, args.team)).id;
+        }
         if (!Object.keys(input).length)
           throw new Error("VALIDATION_FAILED: provide at least one field to update");
         const data = await gqlRequest(
@@ -693,7 +702,9 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       if (!args.name) throw new Error("VALIDATION_FAILED: `name` is required to create a label");
       const input: Record<string, unknown> = { name: args.name };
       if (args.color !== undefined) input.color = args.color;
-      if (args.team !== undefined) input.teamId = (await resolveTeam(sessionConfig, args.team)).id;
+      if (args.team !== undefined && args.team !== null) {
+        input.teamId = (await resolveTeam(sessionConfig, args.team)).id;
+      }
       const data = await gqlRequest(
         sessionConfig,
         `mutation($input: LabelCreateInput!) { labelCreate(input: $input) { label { id name color teamId } } }`,
