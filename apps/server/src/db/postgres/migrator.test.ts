@@ -5,6 +5,15 @@ import { POSTGRES_MIGRATIONS, migratePostgres } from "./migrator.ts";
 const postgresUrl = process.env.PRIME_BOARD_POSTGRES_URL;
 
 describe("PostgreSQL projector checkpoint migration", () => {
+  it("mantiene versiones únicas y ordenadas al registrar Views", () => {
+    const versions = POSTGRES_MIGRATIONS.map((migration) => migration.version);
+    expect(new Set(versions).size).toBe(versions.length);
+    expect(versions).toEqual([...versions].sort((left, right) => left - right));
+    expect(POSTGRES_MIGRATIONS.find((migration) => migration.version === 13)).toMatchObject({
+      name: "views_preferences",
+    });
+  });
+
   it("keeps historical Documents migration and appends retirement migration", () => {
     expect(POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 5)).toMatchObject({
       name: "documents",
@@ -56,4 +65,50 @@ describe("PostgreSQL projector checkpoint migration", () => {
       await harness.close();
     }
   });
+  realMigrationTest(
+    "applies Views migration and reruns it idempotently on PostgreSQL",
+    async () => {
+      const harness = await createPostgresHarness({
+        url: postgresUrl!,
+        schemaPrefix: "views-preferences",
+      });
+      try {
+        const columnsBeforeRepeat = await harness.sql`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'saved_views'
+          AND column_name IN ('workspace_id', 'project_id', 'initiative_id')
+        ORDER BY column_name
+      `;
+        expect(columnsBeforeRepeat.map((row: { column_name: string }) => row.column_name)).toEqual([
+          "initiative_id",
+          "project_id",
+          "workspace_id",
+        ]);
+        const tables = await harness.sql`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = current_schema()
+          AND table_name IN ('view_preferences', 'view_subscriptions')
+        ORDER BY table_name
+      `;
+        expect(tables.map((row: { table_name: string }) => row.table_name)).toEqual([
+          "view_preferences",
+          "view_subscriptions",
+        ]);
+
+        await migratePostgres(harness.sql as unknown as Bun.SQL);
+
+        const migrations = await harness.sql`
+        SELECT count(*)::int AS count
+        FROM schema_migrations
+        WHERE version = 13 AND name = 'views_preferences'
+      `;
+        expect(migrations[0]?.count).toBe(1);
+      } finally {
+        await harness.close();
+      }
+    },
+  );
 });

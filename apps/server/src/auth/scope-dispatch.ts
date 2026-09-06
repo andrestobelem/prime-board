@@ -14,6 +14,7 @@ import { getMilestone } from "../domain/milestones.ts";
 import { getCycle } from "../domain/cycles.ts";
 import { getReview } from "../domain/reviews.ts";
 import { getSavedView } from "../domain/saved-views.ts";
+import { listInitiativeTeamIds } from "../domain/initiatives.ts";
 import { getTeam } from "../domain/teams.ts";
 import { getProject, listProjectTeamIds } from "../domain/projects.ts";
 import { postgresInboxTeamId } from "../domain/postgres-inbox.ts";
@@ -35,7 +36,12 @@ const ADMIN_MUTATIONS = new Set([
 ]);
 
 const KEY_MUTATIONS = new Set(["apiKeyCreate", "apiKeyDelete", "apiKeyRotate"]);
-const SAFE_MUTATIONS = new Set(["actorUpdate", "actorLeave", ...KEY_MUTATIONS]);
+const SAFE_MUTATIONS = new Set([
+  "actorUpdate",
+  "actorLeave",
+  "notificationPreferencesUpdate",
+  ...KEY_MUTATIONS,
+]);
 
 // PRB-430/431 migran primero Workspace, actores y credenciales. Las demás
 // operaciones no deben caer silenciosamente en el SQLite efímero del seam.
@@ -58,6 +64,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "query:initiative",
   "query:savedViews",
   "query:savedView",
+  "query:viewPreferences",
+  "query:savedViewSubscriptions",
   "query:favorites",
   "query:review",
   "query:reviews",
@@ -120,6 +128,11 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:savedViewUpdate",
   "mutation:savedViewDuplicate",
   "mutation:savedViewDelete",
+  "mutation:viewPreferencesUpdate",
+  "mutation:viewSubscriptionUpdate",
+  "mutation:viewSubscriptionDelete",
+  "mutation:savedViewSubscribe",
+  "mutation:savedViewUnsubscribe",
   "mutation:favoriteCreate",
   "mutation:favoriteDelete",
   "mutation:favoriteReorder",
@@ -216,20 +229,73 @@ function teamIdsForSavedView(context: Context, viewId: unknown): string[] {
   const id = scalar(viewId);
   if (!id) return [];
   const row = getSavedView(context.db, id, context.workspace.workspaceId);
-  if (!row) return [];
-  return row.team_id ? scopedTeamIds(context, [row.team_id]) : ["__workspace__"];
+  if (!row) return ["__missing__"];
+  if (row.team_id) return scopedTeamIds(context, [row.team_id]);
+  if (row.project_id)
+    return scopedTeamIds(
+      context,
+      listProjectTeamIds(context.db, row.project_id, context.workspace.workspaceId),
+    );
+  if (row.initiative_id)
+    return scopedTeamIds(
+      context,
+      listInitiativeTeamIds(context.db, row.initiative_id, context.workspace.workspaceId),
+    );
+  return ["__workspace__"];
 }
 
 async function operationTeamIdsForSavedView(context: Context, viewId: unknown): Promise<string[]> {
   if (!context.persistence) return teamIdsForSavedView(context, viewId);
   const id = scalar(viewId);
   if (!id) return ["__missing__"];
-  const row = await context.persistence.one<{ team_id: string | null }>(
-    "SELECT team_id FROM saved_views WHERE id = $1",
+  const row = await context.persistence.one<{
+    team_id: string | null;
+    project_id: string | null;
+    initiative_id: string | null;
+  }>("SELECT team_id, project_id, initiative_id FROM saved_views WHERE id = $1", [id]);
+  if (!row) return ["__missing__"];
+  if (row.team_id) return [row.team_id];
+  if (row.project_id) {
+    const teams = await context.persistence.many<{ team_id: string }>(
+      "SELECT team_id FROM project_teams WHERE project_id = $1 ORDER BY team_id",
+      [row.project_id],
+    );
+    return teams.length ? teams.map((team) => team.team_id) : ["__missing__"];
+  }
+  if (row.initiative_id) {
+    const teams = await context.persistence.many<{ team_id: string }>(
+      `SELECT team_id FROM initiative_teams WHERE initiative_id = $1
+       UNION
+       SELECT pt.team_id
+       FROM initiative_projects ip
+       JOIN project_teams pt ON pt.project_id = ip.project_id
+       WHERE ip.initiative_id = $1
+       ORDER BY team_id`,
+      [row.initiative_id],
+    );
+    return teams.length ? teams.map((team) => team.team_id) : ["__missing__"];
+  }
+  return ["__workspace__"];
+}
+
+async function operationTeamIdsForInitiative(
+  context: Context,
+  initiativeId: unknown,
+): Promise<string[]> {
+  const id = scalar(initiativeId);
+  if (!id) return [];
+  if (!context.persistence) return teamIdsForInitiative(context, id);
+  const rows = await context.persistence.many<{ team_id: string }>(
+    `SELECT team_id FROM initiative_teams WHERE initiative_id = $1
+     UNION
+     SELECT pt.team_id
+     FROM initiative_projects ip
+     JOIN project_teams pt ON pt.project_id = ip.project_id
+     WHERE ip.initiative_id = $1
+     ORDER BY team_id`,
     [id],
   );
-  if (!row) return ["__missing__"];
-  return row.team_id ? [row.team_id] : ["__workspace__"];
+  return rows.length ? rows.map((row) => row.team_id) : ["__workspace__"];
 }
 
 async function operationTeamIdsForProject(context: Context, projectId: unknown): Promise<string[]> {
@@ -360,6 +426,7 @@ async function operationTeamIds(
 
   switch (field) {
     case "viewer":
+    case "notificationPreferences":
     case "workspace":
     case "workspaces":
     case "teams":
@@ -393,6 +460,9 @@ async function operationTeamIds(
       return args.team ? scopedTeamIds(context, args.team) : null;
     case "savedView":
       return operationTeamIdsForSavedView(context, args.id);
+    case "viewPreferences":
+    case "savedViewSubscriptions":
+      return args.viewId ? operationTeamIdsForSavedView(context, args.viewId) : null;
     case "savedViews":
       return args.teamId ? scopedTeamIds(context, args.teamId) : null;
     case "review":
@@ -563,14 +633,24 @@ async function operationTeamIds(
     case "reviewUpdate":
     case "reviewDelete":
       return teamIdsForReview(context, args.id);
-    case "savedViewCreate":
-      return input.scope?.toString().toLowerCase() === "team"
-        ? scopedTeamIds(context, input.teamId)
-        : null;
+    case "savedViewCreate": {
+      const scope = input.scope?.toString().toLowerCase();
+      if (scope === "team") return scopedTeamIds(context, input.teamId);
+      if (scope === "project") return operationTeamIdsForProject(context, input.projectId);
+      if (scope === "initiative") return operationTeamIdsForInitiative(context, input.initiativeId);
+      return null;
+    }
     case "savedViewUpdate":
     case "savedViewDuplicate":
     case "savedViewDelete":
       return operationTeamIdsForSavedView(context, args.id);
+    case "viewPreferencesUpdate":
+      return input.viewId ? operationTeamIdsForSavedView(context, input.viewId) : null;
+    case "viewSubscriptionUpdate":
+    case "viewSubscriptionDelete":
+    case "savedViewSubscribe":
+    case "savedViewUnsubscribe":
+      return operationTeamIdsForSavedView(context, args.viewId ?? args.id);
     case "favoriteCreate":
       return input.projectId
         ? operationTeamIdsForProject(context, input.projectId)

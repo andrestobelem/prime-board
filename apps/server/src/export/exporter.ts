@@ -77,9 +77,18 @@ function savedViewNaturalKey(view: {
   name: string;
   scope: string;
   team: string | null;
+  project?: string | null;
+  initiative?: string | null;
   owner: string;
 }): string {
-  return JSON.stringify([view.scope, view.team, view.owner, view.name]);
+  return JSON.stringify([
+    view.scope,
+    view.team,
+    view.project ?? null,
+    view.initiative ?? null,
+    view.owner,
+    view.name,
+  ]);
 }
 
 function savedViewsUseField(views: Array<Record<string, any>>, field: string): boolean {
@@ -713,11 +722,18 @@ export function exportBoard(
   // deliberate, self-contained replacement instead of a late unknown-reference error.
   const savedViews = db
     .query(
-      `SELECT sv.*, owners.name AS owner_name, teams.key AS team_key
+      `SELECT sv.*, owners.name AS owner_name, teams.key AS team_key,
+              projects.name AS project_name, initiatives.name AS initiative_name
        FROM saved_views sv
        JOIN actors owners ON owners.id = sv.owner_id
        LEFT JOIN teams ON teams.id = sv.team_id
-       ${teamFilter ? "WHERE sv.team_id = ?1" : ""}
+       LEFT JOIN projects ON projects.id = sv.project_id
+       LEFT JOIN initiatives ON initiatives.id = sv.initiative_id
+       ${
+         teamFilter
+           ? "WHERE sv.team_id = ?1 OR EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = sv.project_id AND project_teams.team_id = ?1) OR EXISTS (SELECT 1 FROM initiative_teams WHERE initiative_teams.initiative_id = sv.initiative_id AND initiative_teams.team_id = ?1)"
+           : ""
+       }
        ORDER BY sv.created_at, sv.id`,
     )
     .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
@@ -740,6 +756,8 @@ export function exportBoard(
         name: view.name,
         scope: view.scope,
         team: view.team_key ?? null,
+        ...(view.project_name ? { project: view.project_name } : {}),
+        ...(view.initiative_name ? { initiative: view.initiative_name } : {}),
         owner: view.owner_name,
         filter: translateSavedViewFilter(
           JSON.parse(view.filter_json),
@@ -755,21 +773,114 @@ export function exportBoard(
     ),
   );
 
+  const preferenceRows = db
+    .query(
+      `SELECT vp.*, actors.name AS actor_name,
+              sv.name AS saved_view_name, sv.scope AS saved_view_scope,
+              sv_owners.name AS saved_view_owner, sv_teams.key AS saved_view_team,
+              sv_projects.name AS saved_view_project, sv_initiatives.name AS saved_view_initiative
+       FROM view_preferences vp
+       LEFT JOIN actors ON actors.id = vp.actor_id
+       LEFT JOIN saved_views sv ON sv.id = vp.view_id
+       LEFT JOIN actors sv_owners ON sv_owners.id = sv.owner_id
+       LEFT JOIN teams sv_teams ON sv_teams.id = sv.team_id
+       LEFT JOIN projects sv_projects ON sv_projects.id = sv.project_id
+       LEFT JOIN initiatives sv_initiatives ON sv_initiatives.id = sv.initiative_id
+       ${
+         teamFilter
+           ? "WHERE vp.view_id IN (SELECT sv_scope.id FROM saved_views sv_scope WHERE sv_scope.team_id = ?1 OR EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = sv_scope.project_id AND project_teams.team_id = ?1) OR EXISTS (SELECT 1 FROM initiative_teams WHERE initiative_teams.initiative_id = sv_scope.initiative_id AND initiative_teams.team_id = ?1))"
+           : ""
+       }
+       ORDER BY vp.created_at, vp.id`,
+    )
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
+  write(
+    join(base, "meta", "view-preferences.json"),
+    stableStringify(
+      preferenceRows.map((preference) => ({
+        view: preference.view_id
+          ? {
+              name: preference.saved_view_name,
+              scope: preference.saved_view_scope,
+              team: preference.saved_view_team ?? null,
+              ...(preference.saved_view_project ? { project: preference.saved_view_project } : {}),
+              ...(preference.saved_view_initiative
+                ? { initiative: preference.saved_view_initiative }
+                : {}),
+              owner: preference.saved_view_owner,
+            }
+          : null,
+        actor: preference.actor_name ?? null,
+        scope: preference.scope,
+        viewType: preference.view_type,
+        layout: preference.layout,
+        orderBy: preference.order_by,
+        groupBy: preference.group_by,
+        columns: JSON.parse(preference.columns_json || "[]"),
+      })),
+    ),
+  );
+
+  const subscriptionRows = db
+    .query(
+      `SELECT vs.*, actors.name AS actor_name,
+              sv.name AS saved_view_name, sv.scope AS saved_view_scope,
+              sv_owners.name AS saved_view_owner, sv_teams.key AS saved_view_team,
+              sv_projects.name AS saved_view_project, sv_initiatives.name AS saved_view_initiative
+       FROM view_subscriptions vs
+       JOIN actors ON actors.id = vs.actor_id
+       JOIN saved_views sv ON sv.id = vs.view_id
+       LEFT JOIN actors sv_owners ON sv_owners.id = sv.owner_id
+       LEFT JOIN teams sv_teams ON sv_teams.id = sv.team_id
+       LEFT JOIN projects sv_projects ON sv_projects.id = sv.project_id
+       LEFT JOIN initiatives sv_initiatives ON sv_initiatives.id = sv.initiative_id
+       ${
+         teamFilter
+           ? "WHERE sv.team_id = ?1 OR EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = sv.project_id AND project_teams.team_id = ?1) OR EXISTS (SELECT 1 FROM initiative_teams WHERE initiative_teams.initiative_id = sv.initiative_id AND initiative_teams.team_id = ?1)"
+           : ""
+       }
+       ORDER BY vs.created_at, vs.id`,
+    )
+    .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<Record<string, any>>;
+  write(
+    join(base, "meta", "view-subscriptions.json"),
+    stableStringify(
+      subscriptionRows.map((subscription) => ({
+        view: {
+          name: subscription.saved_view_name,
+          scope: subscription.saved_view_scope,
+          team: subscription.saved_view_team ?? null,
+          ...(subscription.saved_view_project ? { project: subscription.saved_view_project } : {}),
+          ...(subscription.saved_view_initiative
+            ? { initiative: subscription.saved_view_initiative }
+            : {}),
+          owner: subscription.saved_view_owner,
+        },
+        actor: subscription.actor_name,
+        issueChanges: Boolean(subscription.issue_changes),
+        slack: Boolean(subscription.slack),
+      })),
+    ),
+  );
+
   const favoriteRows = db
     .query(
       `SELECT f.*, actors.name AS actor_name,
               projects.name AS project_name,
               sv.name AS saved_view_name, sv.scope AS saved_view_scope,
-              sv_owners.name AS saved_view_owner, sv_teams.key AS saved_view_team
+              sv_owners.name AS saved_view_owner, sv_teams.key AS saved_view_team,
+              sv_projects.name AS saved_view_project, sv_initiatives.name AS saved_view_initiative
        FROM favorites f
        JOIN actors ON actors.id = f.actor_id
        LEFT JOIN projects ON projects.id = f.project_id
        LEFT JOIN saved_views sv ON sv.id = f.saved_view_id
        LEFT JOIN actors sv_owners ON sv_owners.id = sv.owner_id
        LEFT JOIN teams sv_teams ON sv_teams.id = sv.team_id
+       LEFT JOIN projects sv_projects ON sv_projects.id = sv.project_id
+       LEFT JOIN initiatives sv_initiatives ON sv_initiatives.id = sv.initiative_id
        ${
          teamFilter
-           ? "WHERE (f.project_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_teams fpt WHERE fpt.project_id = f.project_id AND fpt.team_id = ?1)) OR sv.team_id = ?1"
+           ? "WHERE (f.project_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_teams fpt WHERE fpt.project_id = f.project_id AND fpt.team_id = ?1)) OR sv.team_id = ?1 OR EXISTS (SELECT 1 FROM project_teams svpt WHERE svpt.project_id = sv.project_id AND svpt.team_id = ?1) OR EXISTS (SELECT 1 FROM initiative_teams svit WHERE svit.initiative_id = sv.initiative_id AND svit.team_id = ?1)"
            : ""
        }
        ORDER BY actors.name, f.position, f.created_at, f.id`,
@@ -806,6 +917,10 @@ export function exportBoard(
               name: favorite.saved_view_name,
               scope: favorite.saved_view_scope,
               team: favorite.saved_view_team ?? null,
+              ...(favorite.saved_view_project ? { project: favorite.saved_view_project } : {}),
+              ...(favorite.saved_view_initiative
+                ? { initiative: favorite.saved_view_initiative }
+                : {}),
               owner: favorite.saved_view_owner,
             }
           : null,

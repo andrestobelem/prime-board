@@ -15,7 +15,7 @@ describe("saved views extras", () => {
       `
       mutation($input: SavedViewCreateInput!) {
         savedViewCreate(input: $input) {
-          savedView { id name columns archivedAt }
+          savedView { id name columns archivedAt preferences { layout } }
         }
       }
     `,
@@ -26,6 +26,7 @@ describe("saved views extras", () => {
           teamId,
           filter: { priority: { eq: 1 } },
           columns: ["identifier", "title", "priority", "assignee"],
+          layout: "BOARD",
         },
       },
     );
@@ -33,12 +34,13 @@ describe("saved views extras", () => {
     const original = created.data!.savedViewCreate.savedView;
     expect(original.columns).toEqual(["identifier", "title", "priority", "assignee"]);
     expect(original.archivedAt).toBeNull();
+    expect(original.preferences.layout).toBe("BOARD");
 
     const duplicated = await gql(
       app,
       `mutation($id: ID!) {
         savedViewDuplicate(id: $id) {
-          savedView { id name columns filter scope }
+          savedView { id name columns filter scope preferences { layout } }
         }
       }`,
       { id: original.id },
@@ -50,6 +52,7 @@ describe("saved views extras", () => {
     expect(copy.columns).toEqual(original.columns);
     expect(copy.filter).toEqual({ priority: { eq: 1 } });
     expect(copy.scope).toBe("TEAM");
+    expect(copy.preferences.layout).toBe("BOARD");
 
     const archived = await gql(
       app,

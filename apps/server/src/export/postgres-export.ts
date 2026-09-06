@@ -24,6 +24,8 @@ const TABLES = [
   "api_key_scopes",
   "api_key_team_limits",
   "saved_views",
+  "view_preferences",
+  "view_subscriptions",
   "favorites",
   "team_memberships",
   "project_updates",

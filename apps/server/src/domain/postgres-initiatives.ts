@@ -86,7 +86,7 @@ export async function listPostgresInitiativeScopeTeamIds(
 
 export async function canAccessPostgresInitiative(
   persistence: Persistence,
-  viewer: ActorRow,
+  viewer: Pick<ActorRow, "id" | "workspace_role">,
   initiativeId: string,
 ): Promise<boolean> {
   const row = await getPostgresInitiative(persistence, initiativeId);

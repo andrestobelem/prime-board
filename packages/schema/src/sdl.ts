@@ -66,6 +66,55 @@ export const typeDefs = /* GraphQL */ `
     isDefault: Boolean!
   }
 
+  enum NotificationCategory {
+    ASSIGNMENTS
+    MENTIONS
+    COMMENTS
+    STATUS_CHANGES
+    REVIEWS
+    PROJECT_UPDATES
+  }
+
+  enum NotificationChannel {
+    INBOX
+    DESKTOP
+    MOBILE
+    EMAIL
+    SLACK
+  }
+
+  enum NotificationEmailDelivery {
+    DIGEST
+    IMMEDIATE
+  }
+
+  type NotificationPreference {
+    actorId: ID!
+    workspaceId: ID!
+    category: NotificationCategory!
+    channel: NotificationChannel!
+    enabled: Boolean!
+    emailDelivery: NotificationEmailDelivery
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
+  input NotificationPreferenceInput {
+    category: NotificationCategory!
+    channel: NotificationChannel!
+    enabled: Boolean!
+    emailDelivery: NotificationEmailDelivery
+  }
+
+  input NotificationPreferencesUpdateInput {
+    preferences: [NotificationPreferenceInput!]!
+  }
+
+  type NotificationPreferencesPayload {
+    success: Boolean!
+    preferences: [NotificationPreference!]!
+  }
+
   input WorkspaceCreateInput {
     name: String!
     urlKey: String!
@@ -979,6 +1028,8 @@ export const typeDefs = /* GraphQL */ `
     PERSONAL
     TEAM
     WORKSPACE
+    PROJECT
+    INITIATIVE
   }
 
   """
@@ -989,6 +1040,8 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     scope: SavedViewScope!
     team: Team
+    project: Project
+    initiative: Initiative
     owner: Actor!
     """
     Serialized IssueFilter (JSON).
@@ -1003,19 +1056,100 @@ export const typeDefs = /* GraphQL */ `
     Visible list columns (field IDs).
     """
     columns: [String!]!
+    """
+    Effective ViewPreferences for the current Actor.
+    """
+    preferences: ViewPreferences!
+    displayPreferences: ViewPreferences!
+    subscriptions: [ViewSubscription!]!
     createdAt: DateTime!
     updatedAt: DateTime!
     archivedAt: DateTime
+  }
+
+  enum ViewPreferenceScope {
+    ACTOR
+    WORKSPACE
+  }
+
+  enum ViewType {
+    ISSUE
+    PROJECT
+    INITIATIVE
+    FEED
+  }
+
+  enum ViewLayout {
+    LIST
+    BOARD
+  }
+
+  type ViewPreferences {
+    id: ID
+    workspaceId: ID!
+    viewId: ID
+    actorId: ID
+    viewType: ViewType!
+    scope: ViewPreferenceScope!
+    layout: ViewLayout!
+    orderBy: IssueOrder!
+    groupBy: String!
+    columns: [String!]!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
+  input ViewPreferencesUpdateInput {
+    viewId: ID
+    viewType: ViewType
+    scope: ViewPreferenceScope
+    layout: ViewLayout
+    orderBy: IssueOrder
+    groupBy: String
+    columns: [String!]
+  }
+
+  type ViewSubscription {
+    id: ID!
+    workspaceId: ID!
+    viewId: ID!
+    actorId: ID!
+    actor: Actor!
+    issueChanges: Boolean!
+    """
+    Slack delivery is persisted as intent. A Slack transport is not part of this slice.
+    """
+    slack: Boolean!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
+  input ViewSubscriptionUpdateInput {
+    issueChanges: Boolean
+    slack: Boolean
+  }
+
+  type ViewPreferencesPayload {
+    success: Boolean!
+    preferences: ViewPreferences!
+  }
+
+  type ViewSubscriptionPayload {
+    success: Boolean!
+    subscription: ViewSubscription!
   }
 
   input SavedViewCreateInput {
     name: String!
     scope: SavedViewScope!
     teamId: ID
+    projectId: ID
+    initiativeId: ID
     filter: JSON
     orderBy: IssueOrder
     groupBy: String
     columns: [String!]
+    layout: ViewLayout
   }
 
   input SavedViewUpdateInput {
@@ -1024,6 +1158,7 @@ export const typeDefs = /* GraphQL */ `
     orderBy: IssueOrder
     groupBy: String
     columns: [String!]
+    layout: ViewLayout
     archived: Boolean
   }
 
@@ -1054,6 +1189,7 @@ export const typeDefs = /* GraphQL */ `
     Actor authenticated by the API key in the Authorization header.
     """
     viewer: Actor!
+    notificationPreferences: [NotificationPreference!]!
     workspace: Workspace!
     """
     Workspaces accessible to the current Actor and credential.
@@ -1086,6 +1222,8 @@ export const typeDefs = /* GraphQL */ `
     """
     savedViews(teamId: ID, includeArchived: Boolean = false): [SavedView!]!
     savedView(id: ID!): SavedView
+    viewPreferences(viewId: ID, viewType: ViewType = ISSUE): ViewPreferences!
+    savedViewSubscriptions(viewId: ID!): [ViewSubscription!]!
     favorites: [Favorite!]!
     """
     Events relevant to the authenticated actor (assignments and comments on their issues).
@@ -1120,6 +1258,9 @@ export const typeDefs = /* GraphQL */ `
   type Mutation {
     workspaceCreate(input: WorkspaceCreateInput!): WorkspaceCreatePayload!
     workspaceUpdate(input: WorkspaceUpdateInput!): WorkspacePayload!
+    notificationPreferencesUpdate(
+      input: NotificationPreferencesUpdateInput!
+    ): NotificationPreferencesPayload!
     teamArchive(id: ID!): TeamPayload!
     teamUnarchive(id: ID!): TeamPayload!
     teamDelete(id: ID!, confirmation: String!): DeletePayload!
@@ -1174,6 +1315,14 @@ export const typeDefs = /* GraphQL */ `
     savedViewUpdate(id: ID!, input: SavedViewUpdateInput!): SavedViewPayload!
     savedViewDuplicate(id: ID!): SavedViewPayload!
     savedViewDelete(id: ID!): DeletePayload!
+    viewPreferencesUpdate(input: ViewPreferencesUpdateInput!): ViewPreferencesPayload!
+    viewSubscriptionUpdate(
+      viewId: ID!
+      input: ViewSubscriptionUpdateInput!
+    ): ViewSubscriptionPayload!
+    viewSubscriptionDelete(viewId: ID!): DeletePayload!
+    savedViewSubscribe(id: ID!, input: ViewSubscriptionUpdateInput): ViewSubscriptionPayload!
+    savedViewUnsubscribe(id: ID!): DeletePayload!
     favoriteCreate(input: FavoriteCreateInput!): FavoritePayload!
     favoriteDelete(id: ID!): DeletePayload!
     favoriteReorder(id: ID!, position: Int!): FavoritePayload!

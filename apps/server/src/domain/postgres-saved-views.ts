@@ -6,16 +6,29 @@ import {
   assertPostgresTeamActive,
   canWritePostgresTeam,
 } from "./postgres-teams.ts";
+import {
+  canAccessPostgresProject,
+  getPostgresProject,
+  listPostgresProjectTeamIds,
+} from "./postgres-projects.ts";
+import {
+  canAccessPostgresInitiative,
+  getPostgresInitiative,
+  listPostgresInitiativeTeamIds,
+} from "./postgres-initiatives.ts";
 import { newId, now } from "../db/util.ts";
 
-export type PostgresSavedViewScope = "personal" | "team" | "workspace";
+export type PostgresSavedViewScope = "personal" | "team" | "workspace" | "project" | "initiative";
 
 export interface PostgresSavedViewRow {
   id: string;
   name: string;
   scope: PostgresSavedViewScope;
   team_id: string | null;
+  project_id: string | null;
+  initiative_id: string | null;
   owner_id: string;
+  workspace_id: string;
   filter_json: string;
   order_by: string;
   group_by: string;
@@ -46,7 +59,13 @@ function parseColumns(columns: unknown): string {
 
 function resolveScope(scope: string): PostgresSavedViewScope {
   const normalized = scope.toLowerCase();
-  if (normalized !== "personal" && normalized !== "team" && normalized !== "workspace") {
+  if (
+    normalized !== "personal" &&
+    normalized !== "team" &&
+    normalized !== "workspace" &&
+    normalized !== "project" &&
+    normalized !== "initiative"
+  ) {
     throw apiError("VALIDATION_FAILED", `Invalid saved view scope: ${scope}`);
   }
   return normalized;
@@ -62,6 +81,8 @@ export function mapPostgresSavedView(row: PostgresSavedViewRow) {
     name: row.name,
     scope: row.scope,
     teamId: row.team_id,
+    projectId: row.project_id,
+    initiativeId: row.initiative_id,
     ownerId: row.owner_id,
     filter: JSON.parse(row.filter_json) as Record<string, unknown>,
     orderBy: row.order_by,
@@ -88,10 +109,24 @@ export async function canAccessPostgresSavedView(
 ): Promise<boolean> {
   if (row.scope === "personal") return row.owner_id === viewer.id;
   if (row.scope === "workspace") return true;
-  if (!row.team_id) return false;
-  const team = await getPostgresTeam(persistence, { id: row.team_id });
-  if (!team) return false;
-  return canWritePostgresTeam(persistence, viewer, row.team_id);
+  if (row.scope === "team") {
+    if (!row.team_id) return false;
+    const team = await getPostgresTeam(persistence, { id: row.team_id });
+    if (!team) return false;
+    return canWritePostgresTeam(persistence, viewer, row.team_id);
+  }
+  if (row.scope === "project") {
+    return Boolean(
+      row.project_id &&
+      (await getPostgresProject(persistence, row.project_id)) &&
+      (await canAccessPostgresProject(persistence, viewer, row.project_id)),
+    );
+  }
+  return Boolean(
+    row.initiative_id &&
+    (await getPostgresInitiative(persistence, row.initiative_id)) &&
+    (await canAccessPostgresInitiative(persistence, viewer, row.initiative_id)),
+  );
 }
 
 export async function listPostgresSavedViews(
@@ -111,7 +146,17 @@ export async function listPostgresSavedViews(
       if (team?.archived_at) continue;
     }
     if (!(await canAccessPostgresSavedView(persistence, row, viewer))) continue;
-    if (teamId && row.scope === "team" && row.team_id !== teamId) continue;
+    if (teamId) {
+      if (row.scope === "team" && row.team_id !== teamId) continue;
+      if (row.scope === "project" && row.project_id) {
+        const teamIds = await listPostgresProjectTeamIds(persistence, row.project_id);
+        if (!teamIds.includes(teamId)) continue;
+      }
+      if (row.scope === "initiative" && row.initiative_id) {
+        const teamIds = await listPostgresInitiativeTeamIds(persistence, row.initiative_id);
+        if (!teamIds.includes(teamId)) continue;
+      }
+    }
     result.push(row);
   }
   return result;
@@ -134,6 +179,55 @@ async function validateTeamScope(
   return teamId;
 }
 
+async function validateScope(
+  persistence: Persistence,
+  viewer: Pick<ActorRow, "id" | "workspace_role">,
+  scope: PostgresSavedViewScope,
+  teamId: string | null,
+  projectId: string | null,
+  initiativeId: string | null,
+): Promise<{ teamId: string | null; projectId: string | null; initiativeId: string | null }> {
+  if (scope === "team") {
+    return {
+      teamId: await validateTeamScope(persistence, viewer, scope, teamId),
+      projectId: null,
+      initiativeId: null,
+    };
+  }
+  if (scope === "project") {
+    if (!projectId) throw apiError("VALIDATION_FAILED", "Project saved views require projectId");
+    const project = await getPostgresProject(persistence, projectId);
+    if (!project || !(await canAccessPostgresProject(persistence, viewer, projectId))) {
+      throw apiError("NOT_FOUND", "Project not found");
+    }
+    if (viewer.workspace_role !== "admin") {
+      const teamIds = await listPostgresProjectTeamIds(persistence, projectId);
+      for (const destination of teamIds) {
+        if (!(await canWritePostgresTeam(persistence, viewer, destination))) {
+          throw apiError("UNAUTHORIZED", "Project access policy does not allow this operation");
+        }
+      }
+    }
+    return { teamId: null, projectId, initiativeId: null };
+  }
+  if (scope === "initiative") {
+    if (!initiativeId)
+      throw apiError("VALIDATION_FAILED", "Initiative saved views require initiativeId");
+    const initiative = await getPostgresInitiative(persistence, initiativeId);
+    if (
+      !initiative ||
+      !(await canAccessPostgresInitiative(persistence, viewer, initiativeId)) ||
+      (initiative.owner_id &&
+        initiative.owner_id !== viewer.id &&
+        viewer.workspace_role !== "admin")
+    ) {
+      throw apiError("NOT_FOUND", "Initiative not found");
+    }
+    return { teamId: null, projectId: null, initiativeId };
+  }
+  return { teamId: null, projectId: null, initiativeId: null };
+}
+
 export async function createPostgresSavedView(
   persistence: Persistence,
   owner: Pick<ActorRow, "id" | "workspace_role">,
@@ -141,6 +235,8 @@ export async function createPostgresSavedView(
     name: string;
     scope: string;
     teamId?: string | null;
+    projectId?: string | null;
+    initiativeId?: string | null;
     filter?: unknown;
     orderBy?: string | null;
     groupBy?: string | null;
@@ -150,7 +246,18 @@ export async function createPostgresSavedView(
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Saved view name cannot be empty");
   const scope = resolveScope(input.scope);
-  const teamId = await validateTeamScope(persistence, owner, scope, input.teamId ?? null);
+  const targets = await validateScope(
+    persistence,
+    owner,
+    scope,
+    input.teamId ?? null,
+    input.projectId ?? null,
+    input.initiativeId ?? null,
+  );
+  const workspace = await persistence.one<{ id: string }>(
+    "SELECT id FROM workspace ORDER BY created_at, id LIMIT 1",
+  );
+  if (!workspace) throw apiError("NOT_FOUND", "Workspace not found");
   const orderBy = input.orderBy ?? "CREATED_DESC";
   if (!ORDER_BY_VALUES.has(orderBy)) {
     throw apiError("VALIDATION_FAILED", `Invalid orderBy: ${orderBy}`);
@@ -163,14 +270,17 @@ export async function createPostgresSavedView(
   const timestamp = now();
   await persistence.execute(
     `INSERT INTO saved_views
-     (id, name, scope, team_id, owner_id, filter_json, order_by, group_by, columns_json, created_at, updated_at, archived_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, NULL)`,
+     (id, name, scope, team_id, project_id, initiative_id, owner_id, workspace_id, filter_json, order_by, group_by, columns_json, created_at, updated_at, archived_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, NULL)`,
     [
       id,
       name,
       scope,
-      teamId,
+      targets.teamId,
+      targets.projectId,
+      targets.initiativeId,
       viewerId(owner),
+      workspace.id,
       parseFilter(input.filter),
       orderBy,
       groupBy,
@@ -203,9 +313,14 @@ export async function updatePostgresSavedView(
   if (existing.scope === "personal" && existing.owner_id !== viewer.id) {
     throw apiError("NOT_FOUND", "Saved view not found");
   }
-  if (existing.scope === "team" && existing.team_id) {
-    await validateTeamScope(persistence, viewer, existing.scope, existing.team_id);
-  }
+  await validateScope(
+    persistence,
+    viewer,
+    existing.scope,
+    existing.team_id,
+    existing.project_id,
+    existing.initiative_id,
+  );
 
   const sets: string[] = [];
   const params: SqlValue[] = [];
@@ -260,6 +375,8 @@ export async function duplicatePostgresSavedView(
     name: `${existing.name} (copy)`,
     scope: existing.scope,
     teamId: existing.team_id,
+    projectId: existing.project_id,
+    initiativeId: existing.initiative_id,
     filter: JSON.parse(existing.filter_json),
     orderBy: existing.order_by,
     groupBy: existing.group_by,
@@ -279,9 +396,14 @@ export async function deletePostgresSavedView(
   if (existing.scope === "personal" && existing.owner_id !== viewer.id) {
     throw apiError("NOT_FOUND", "Saved view not found");
   }
-  if (existing.scope === "team" && existing.team_id) {
-    await validateTeamScope(persistence, viewer, existing.scope, existing.team_id);
-  }
+  await validateScope(
+    persistence,
+    viewer,
+    existing.scope,
+    existing.team_id,
+    existing.project_id,
+    existing.initiative_id,
+  );
   await persistence.execute("DELETE FROM saved_views WHERE id = $1", [id]);
   return true;
 }

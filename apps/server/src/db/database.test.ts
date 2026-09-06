@@ -196,7 +196,7 @@ describe("openDatabase", () => {
       expect(
         db.query("SELECT name FROM sqlite_master WHERE name = 'retired_documents'").get(),
       ).toBeNull();
-      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 30 });
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 31 });
     } finally {
       db.close();
     }
@@ -530,7 +530,7 @@ describe("multi-workspace root migration", () => {
     });
     expect(membership.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 30 });
+    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 32 });
 
     migrate(db);
     expect(db.query("SELECT count(*) AS count FROM workspace_memberships").get()).toEqual({

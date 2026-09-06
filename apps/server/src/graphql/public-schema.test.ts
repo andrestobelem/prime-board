@@ -70,6 +70,8 @@ const EXPECTED_PUBLIC_DESCRIPTIONS = [
   "Serialized IssueFilter (JSON).",
   "UI grouping criterion: state | milestone | assignee | priority.",
   "Visible list columns (field IDs).",
+  "Effective ViewPreferences for the current Actor.",
+  "Slack delivery is persisted as intent. A Slack transport is not part of this slice.",
   "Actor authenticated by the API key in the Authorization header.",
   "Workspaces accessible to the current Actor and credential.",
   "Accepts a UUID or readable identifier (AT-126).",

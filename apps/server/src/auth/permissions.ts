@@ -159,19 +159,29 @@ export function assertCanManageApiKey(
 }
 
 /** Los proyectos quedan bajo los teams asociados: cualquier miembro autorizado puede gestionarlos. */
-export function assertCanManageProject(db: Database, viewer: ActorRow, projectId: string): void {
+export function assertCanManageProject(
+  db: Database,
+  viewer: ActorRow,
+  projectId: string,
+  workspaceId?: string,
+): void {
   if (isWorkspaceAdmin(viewer)) return;
-  const project = getProject(db, projectId);
+  const project = getProject(db, projectId, workspaceId);
   if (!project) return;
-  const teamIds = listProjectTeamIds(db, projectId);
+  const teamIds = listProjectTeamIds(db, projectId, workspaceId);
   for (const teamId of teamIds) assertCanAccessTeam(db, viewer, teamId);
   if (teamIds.length > 0 && teamIds.every((teamId) => canWriteTeam(db, viewer, teamId))) return;
   throw apiError("UNAUTHORIZED", "Project access policy does not allow this operation");
 }
 
 /** Un Project heredado de varios Teams exige acceso a todos sus Teams. */
-export function canAccessProject(db: Database, viewer: ActorRow, projectId: string): boolean {
-  const teamIds = listProjectTeamIds(db, projectId);
+export function canAccessProject(
+  db: Database,
+  viewer: ActorRow,
+  projectId: string,
+  workspaceId?: string,
+): boolean {
+  const teamIds = listProjectTeamIds(db, projectId, workspaceId);
   return teamIds.length > 0 && teamIds.every((teamId) => canAccessTeam(db, viewer, teamId));
 }
 

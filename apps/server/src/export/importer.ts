@@ -145,14 +145,29 @@ function validatePartialScope(base: string, teamKey: string): void {
     const savedViews = existsSync(join(base, "meta", "saved-views.json"))
       ? (readJson(join(base, "meta", "saved-views.json")) as Array<Record<string, any>>)
       : [];
+    const initiativeSnapshotPath = join(base, "meta", "initiatives.json");
+    const initiativeNames = existsSync(initiativeSnapshotPath)
+      ? new Set(
+          (readJson(initiativeSnapshotPath) as Array<Record<string, any>>)
+            .filter((initiative) => (initiative.teams ?? []).includes(teamKey))
+            .map((initiative) => String(initiative.name)),
+        )
+      : new Set<string>();
     const savedViewKeys = new Set(
       savedViews
-        .filter((view) => view.scope === "team" && view.team === teamKey)
+        .filter(
+          (view) =>
+            (view.scope === "team" && view.team === teamKey) ||
+            (view.scope === "project" && projectNames.has(String(view.project))) ||
+            (view.scope === "initiative" && initiativeNames.has(String(view.initiative))),
+        )
         .map((view) =>
           savedViewNaturalKey({
             name: view.name,
             scope: view.scope,
             team: view.team ?? null,
+            project: view.project ?? null,
+            initiative: view.initiative ?? null,
             owner: view.owner,
           }),
         ),
@@ -168,6 +183,8 @@ function validatePartialScope(base: string, teamKey: string): void {
           name: view.name,
           scope: view.scope,
           team: view.team ?? null,
+          project: view.project ?? null,
+          initiative: view.initiative ?? null,
           owner: view.owner,
         });
         if (!savedViewKeys.has(key)) {
@@ -182,9 +199,18 @@ function savedViewNaturalKey(view: {
   name: string;
   scope: string;
   team: string | null;
+  project?: string | null;
+  initiative?: string | null;
   owner: string;
 }): string {
-  return JSON.stringify([view.scope, view.team, view.owner, view.name]);
+  return JSON.stringify([
+    view.scope,
+    view.team,
+    view.project ?? null,
+    view.initiative ?? null,
+    view.owner,
+    view.name,
+  ]);
 }
 
 /** Lee un issue en markdown: front-matter YAML + `# título` + descripción. */
@@ -396,6 +422,8 @@ export function rebuildFromRepo(
       "webhooks",
       "issues",
       "cycles",
+      "view_subscriptions",
+      "view_preferences",
       "favorites",
       "saved_views",
       "initiative_teams",
@@ -819,11 +847,26 @@ export function rebuildFromRepo(
         if (!ownerId)
           throw new Error(`Saved view "${view.name}" references unknown owner ${view.owner}`);
         let teamId: string | null = null;
+        let projectId: string | null = null;
+        let initiativeId: string | null = null;
         if (view.scope === "team") {
           if (!view.team) throw new Error(`Team saved view "${view.name}" missing team key`);
           teamId = teamIds.get(view.team) ?? null;
           if (!teamId)
             throw new Error(`Saved view "${view.name}" references unknown team ${view.team}`);
+        } else if (view.scope === "project") {
+          if (!view.project) throw new Error(`Project saved view "${view.name}" missing project`);
+          projectId = projectIds.get(view.project) ?? null;
+          if (!projectId)
+            throw new Error(`Saved view "${view.name}" references unknown project ${view.project}`);
+        } else if (view.scope === "initiative") {
+          if (!view.initiative)
+            throw new Error(`Initiative saved view "${view.name}" missing initiative`);
+          initiativeId = initiativeIds.get(view.initiative) ?? null;
+          if (!initiativeId)
+            throw new Error(
+              `Saved view "${view.name}" references unknown initiative ${view.initiative}`,
+            );
         }
         const filter = translateSavedViewFilter(
           view.filter ?? {},
@@ -834,13 +877,15 @@ export function rebuildFromRepo(
         const savedViewId = newId();
         db.query(
           `INSERT INTO saved_views
-            (id, name, scope, team_id, owner_id, filter_json, order_by, group_by, columns_json, created_at, updated_at, archived_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)`,
+            (id, name, scope, team_id, project_id, initiative_id, owner_id, filter_json, order_by, group_by, columns_json, created_at, updated_at, archived_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13)`,
         ).run(
           savedViewId,
           view.name,
           view.scope,
           teamId,
+          projectId,
+          initiativeId,
           ownerId,
           JSON.stringify(filter),
           view.orderBy ?? "CREATED_DESC",
@@ -853,10 +898,98 @@ export function rebuildFromRepo(
           name: view.name,
           scope: view.scope,
           team: view.team ?? null,
+          project: view.project ?? null,
+          initiative: view.initiative ?? null,
           owner: view.owner,
         });
         if (savedViewIds.has(key)) throw new Error(`Duplicate saved view reference: ${key}`);
         savedViewIds.set(key, savedViewId);
+      }
+    }
+
+    // 6c. Preferencias y suscripciones de Views (PRB-390), después de resolver sus vistas.
+    const viewPreferencePath = join(base, "meta", "view-preferences.json");
+    if (existsSync(viewPreferencePath)) {
+      for (const preference of readJson(viewPreferencePath) as Array<Record<string, any>>) {
+        const view = preference.view as Record<string, any> | null;
+        const viewId = view
+          ? (savedViewIds.get(
+              savedViewNaturalKey({
+                name: view.name,
+                scope: view.scope,
+                team: view.team ?? null,
+                project: view.project ?? null,
+                initiative: view.initiative ?? null,
+                owner: view.owner,
+              }),
+            ) ?? null)
+          : null;
+        if (view && !viewId) {
+          throw new Error(`View preference references unknown saved view ${view.name}`);
+        }
+        const actorId = preference.actor ? (actorIds.get(preference.actor) ?? null) : null;
+        if (String(preference.scope).toLowerCase() === "actor" && !actorId) {
+          throw new Error(`Actor view preference references unknown actor ${preference.actor}`);
+        }
+        db.query(
+          `INSERT INTO view_preferences
+            (id, workspace_id, view_id, actor_id, view_type, scope, layout, order_by, group_by, columns_json, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)`,
+        ).run(
+          newId(),
+          rebuiltWorkspaceId,
+          viewId,
+          String(preference.scope).toLowerCase() === "actor" ? actorId : null,
+          String(preference.viewType ?? "issue").toLowerCase(),
+          String(preference.scope ?? "workspace").toLowerCase(),
+          String(preference.layout ?? "list").toLowerCase(),
+          String(preference.orderBy ?? "UPDATED_DESC").toUpperCase(),
+          String(preference.groupBy ?? "state").toLowerCase(),
+          JSON.stringify(preference.columns ?? []),
+          timestamp,
+        );
+      }
+    }
+
+    const viewSubscriptionPath = join(base, "meta", "view-subscriptions.json");
+    if (existsSync(viewSubscriptionPath)) {
+      for (const subscription of readJson(viewSubscriptionPath) as Array<Record<string, any>>) {
+        const view = subscription.view as Record<string, any>;
+        const viewId = savedViewIds.get(
+          savedViewNaturalKey({
+            name: view.name,
+            scope: view.scope,
+            team: view.team ?? null,
+            project: view.project ?? null,
+            initiative: view.initiative ?? null,
+            owner: view.owner,
+          }),
+        );
+        if (!viewId) {
+          throw new Error(`View subscription references unknown saved view ${view.name}`);
+        }
+        const actorId = actorIds.get(subscription.actor);
+        if (!actorId) {
+          throw new Error(`View subscription references unknown actor ${subscription.actor}`);
+        }
+        const issueChanges = Boolean(subscription.issueChanges);
+        const slack = Boolean(subscription.slack);
+        if (!issueChanges && !slack) {
+          throw new Error(`View subscription for ${view.name} has no enabled channel`);
+        }
+        db.query(
+          `INSERT INTO view_subscriptions
+            (id, workspace_id, view_id, actor_id, issue_changes, slack, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
+        ).run(
+          newId(),
+          rebuiltWorkspaceId,
+          viewId,
+          actorId,
+          issueChanges ? 1 : 0,
+          slack ? 1 : 0,
+          timestamp,
+        );
       }
     }
 

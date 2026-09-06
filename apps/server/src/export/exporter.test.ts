@@ -96,6 +96,8 @@ describe("exportBoard", () => {
       "reviews.json",
       "saved-views.json",
       "teams.json",
+      "view-preferences.json",
+      "view-subscriptions.json",
       "workspace-labels.json",
       "workspace.json",
     ]);

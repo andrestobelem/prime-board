@@ -32,6 +32,9 @@ import migration0027 from "./migrations/0027_documents.sql" with { type: "text" 
 import migration0028 from "./migrations/0028_issue_subscribers.sql" with { type: "text" };
 import migration0029 from "./migrations/0029_comments_fts.sql" with { type: "text" };
 import migration0030 from "./migrations/0030_documents_retirement.sql" with { type: "text" };
+// PRB-382 es dueño de la migración 0031 (UserSettings); las notificaciones usan una tabla separada.
+import migration0032 from "./migrations/0032_notification_preferences.sql" with { type: "text" };
+import migration0033 from "./migrations/0033_views_preferences.sql" with { type: "text" };
 import { verifyDocumentRows } from "../export/documents-archive.ts";
 import { newId, now } from "./util.ts";
 
@@ -72,6 +75,9 @@ const MIGRATIONS: Migration[] = [
   { version: 28, name: "issue_subscribers", sql: migration0028 },
   { version: 29, name: "comments_fts", sql: migration0029 },
   { version: 30, name: "documents_retirement", sql: migration0030 },
+  // PRB-386 ya aplicó esta versión en bases existentes. No la renumeres.
+  { version: 32, name: "notification_preferences", sql: migration0032 },
+  { version: 33, name: "views_preferences", sql: migration0033 },
 ];
 
 const WORKSPACE_ROOT_TABLES = [
@@ -291,11 +297,19 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
   );
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue;
-    // PRB-472 reconstruye el grafo de tablas para reemplazar FKs simples por
-    // FKs compuestas. SQLite no permite cambiar foreign_keys dentro de una
-    // transacción activa, por eso el runner desactiva la comprobación solo
-    // alrededor de esta migración y la reactiva aun si falla.
-    const rebuild = migration.version === 25;
+    // PRB-390 solo se aplica después del esquema de SavedView. Algunas
+    // fixtures de migración de Documents omiten de forma intencional esa tabla.
+    if (
+      migration.version === 33 &&
+      !db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'saved_views'").get()
+    ) {
+      continue;
+    }
+    // PRB-472 y PRB-390 reconstruyen el grafo de tablas para reemplazar FKs
+    // simples por FKs compuestas. SQLite no permite cambiar foreign_keys dentro
+    // de una transacción activa. El runner desactiva las comprobaciones solo
+    // alrededor de estas migraciones y las reactiva aun si una falla.
+    const rebuild = migration.version === 25 || migration.version === 33;
     if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
