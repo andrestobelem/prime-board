@@ -10,6 +10,7 @@ import {
   quoteSqliteIdentifier,
   sqliteColumnName,
   sqliteColumnNames,
+  type SQLiteColumnLookup,
 } from "./sqlite-row.ts";
 
 export interface SQLiteEventImportOptions {
@@ -59,6 +60,10 @@ interface ImportScope {
   readonly activityHasWorkspace: boolean;
   readonly issueHasWorkspace: boolean;
   readonly teamHasWorkspace: boolean;
+  readonly activityWorkspaceColumn: string | undefined;
+  readonly issueWorkspaceColumn: string | undefined;
+  readonly teamWorkspaceColumn: string | undefined;
+  readonly ambiguousTables: readonly string[];
   readonly activityTable: ResolvedTable | undefined;
   readonly issueTable: ResolvedTable | undefined;
   readonly teamTable: ResolvedTable | undefined;
@@ -89,13 +94,28 @@ function physicalNameFor(db: Database, table: string | ResolvedTable): string | 
   return typeof table === "string" ? resolveTable(db, table)?.physicalName : table.physicalName;
 }
 
-function hasColumn(db: Database, table: string | ResolvedTable, column: string): boolean {
+function columnLookup(
+  db: Database,
+  table: string | ResolvedTable,
+  column: string,
+): SQLiteColumnLookup {
   const physicalName = physicalNameFor(db, table);
-  if (physicalName === undefined) return false;
-  const columns = sqliteColumnNames(db, physicalName);
-  if (columns === undefined) return false;
-  const normalizedColumn = column.toLowerCase();
-  return columns.some((name) => name.toLowerCase() === normalizedColumn);
+  if (physicalName === undefined) return { kind: "missing" };
+  return sqliteColumnName(db, physicalName, column);
+}
+
+function foundColumn(lookup: SQLiteColumnLookup): string | undefined {
+  return lookup.kind === "found" ? lookup.name : undefined;
+}
+
+function isAmbiguousColumn(lookup: SQLiteColumnLookup): boolean {
+  return lookup.kind === "ambiguous" || lookup.kind === "invalid";
+}
+
+function hasAmbiguousTableMetadata(db: Database, table: ResolvedTable | undefined): boolean {
+  if (table === undefined) return false;
+  const metadata = sqliteColumnNames(db, table.physicalName);
+  return metadata.kind === "ambiguous" || metadata.kind === "invalid";
 }
 function textValue(value: unknown): string | undefined {
   if (typeof value === "string") return value.length > 0 ? value : undefined;
@@ -161,16 +181,18 @@ function actorWorkspaceIndexes(
   membershipsTable: ResolvedTable | undefined,
 ): ReadonlyMap<string, ReadonlySet<string>> {
   if (membershipsTable === undefined) return new Map();
-  const columns = sqliteColumnNames(db, membershipsTable.physicalName);
-  if (columns === undefined) {
+  const actorLookup = sqliteColumnName(db, membershipsTable.physicalName, "actor_id");
+  const workspaceLookup = sqliteColumnName(db, membershipsTable.physicalName, "workspace_id");
+  if (actorLookup.kind === "ambiguous" || workspaceLookup.kind === "ambiguous") {
     throw new Error("SQLite event import rejected ambiguous workspace membership columns");
   }
-  const actorColumn = sqliteColumnName(db, membershipsTable.physicalName, "actor_id");
-  const workspaceColumn = sqliteColumnName(db, membershipsTable.physicalName, "workspace_id");
-  if (actorColumn === undefined || workspaceColumn === undefined) return new Map();
+  if (actorLookup.kind === "invalid" || workspaceLookup.kind === "invalid") {
+    throw new Error("SQLite event import rejected invalid workspace membership metadata");
+  }
+  if (actorLookup.kind === "missing" || workspaceLookup.kind === "missing") return new Map();
   const rows = db
     .query(
-      `SELECT ${quoteSqliteIdentifier(actorColumn)} AS actor_id, ${quoteSqliteIdentifier(workspaceColumn)} AS workspace_id FROM ${quoteSqliteIdentifier(membershipsTable.physicalName)}`,
+      `SELECT ${quoteSqliteIdentifier(actorLookup.name)} AS actor_id, ${quoteSqliteIdentifier(workspaceLookup.name)} AS workspace_id FROM ${quoteSqliteIdentifier(membershipsTable.physicalName)}`,
     )
     .all() as unknown[];
   const result = new Map<string, Set<string>>();
@@ -212,10 +234,17 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
 
   const workspaceIds: string[] = [];
   if (workspaceTable !== undefined) {
-    const idColumn = sqliteColumnName(db, workspaceTable.physicalName, "id");
-    if (idColumn === undefined) {
+    const idLookup = sqliteColumnName(db, workspaceTable.physicalName, "id");
+    if (idLookup.kind === "ambiguous") {
       throw new Error("SQLite event import rejected an ambiguous Workspace ID column");
     }
+    if (idLookup.kind === "invalid") {
+      throw new Error("SQLite event import rejected invalid Workspace column metadata");
+    }
+    if (idLookup.kind === "missing") {
+      throw new Error("SQLite event import Workspace table requires an id column");
+    }
+    const idColumn = idLookup.name;
     const values = db
       .query(
         `SELECT ${quoteSqliteIdentifier(idColumn)} AS id FROM ${quoteSqliteIdentifier(workspaceTable.physicalName)} ORDER BY ${quoteSqliteIdentifier(idColumn)}`,
@@ -243,28 +272,75 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
     throw new Error(`SQLite event import Workspace ${requestedWorkspaceId} does not exist`);
   }
 
-  const activityHasWorkspace = hasColumn(db, activityTable ?? "activity", "workspace_id");
-  const issueHasWorkspace = hasColumn(db, issueTable ?? "issues", "workspace_id");
-  const teamHasWorkspace = hasColumn(db, teamTable ?? "teams", "workspace_id");
-  if (multipleWorkspaces && (!activityHasWorkspace || !issueHasWorkspace || !teamHasWorkspace)) {
+  const activityWorkspaceLookup = columnLookup(db, activityTable ?? "activity", "workspace_id");
+  const issueWorkspaceLookup = columnLookup(db, issueTable ?? "issues", "workspace_id");
+  const teamWorkspaceLookup = columnLookup(db, teamTable ?? "teams", "workspace_id");
+  const workspaceColumnLookups = [
+    ["activity", activityWorkspaceLookup],
+    ["issues", issueWorkspaceLookup],
+    ["teams", teamWorkspaceLookup],
+  ] as const;
+  const scopedTables = [
+    ["activity", activityTable],
+    ["issues", issueTable],
+    ["teams", teamTable],
+    ["actors", actorTable],
+  ] as const;
+  const ambiguousTables: string[] = scopedTables
+    .filter(([, table]) => hasAmbiguousTableMetadata(db, table))
+    .map(([table]) => table);
+  for (const [table, lookup] of workspaceColumnLookups) {
+    if (isAmbiguousColumn(lookup) && !ambiguousTables.includes(table)) {
+      ambiguousTables.push(table);
+    }
+  }
+  if (multipleWorkspaces && ambiguousTables.length > 0) {
+    throw new Error(
+      `SQLite event import rejected ambiguous column metadata on ${ambiguousTables.join(", ")}`,
+    );
+  }
+  if (
+    multipleWorkspaces &&
+    workspaceColumnLookups.some(([, lookup]) => lookup.kind === "missing")
+  ) {
     throw new Error(
       "SQLite event import cannot scope a multi-Workspace source without workspace_id on activity, issues, and teams",
     );
   }
 
+  if (
+    hasAmbiguousTableMetadata(db, membershipsTable) &&
+    !ambiguousTables.includes("workspace_memberships")
+  ) {
+    ambiguousTables.push("workspace_memberships");
+  }
+  const uniqueAmbiguousTables = [...new Set(ambiguousTables)];
+
   return {
     workspaceId: requestedWorkspaceId ?? workspaceIds[0],
     workspaceIds: new Set(workspaceIds),
     multipleWorkspaces,
-    activityHasWorkspace,
-    issueHasWorkspace,
-    teamHasWorkspace,
+    activityHasWorkspace: activityWorkspaceLookup.kind === "found",
+    issueHasWorkspace: issueWorkspaceLookup.kind === "found",
+    teamHasWorkspace: teamWorkspaceLookup.kind === "found",
+    activityWorkspaceColumn: foundColumn(activityWorkspaceLookup),
+    issueWorkspaceColumn: foundColumn(issueWorkspaceLookup),
+    teamWorkspaceColumn: foundColumn(teamWorkspaceLookup),
+    ambiguousTables: uniqueAmbiguousTables,
     activityTable,
     issueTable,
     teamTable,
     actorTable,
-    actorWorkspaceIds: actorWorkspaceIndexes(db, membershipsTable),
+    actorWorkspaceIds:
+      uniqueAmbiguousTables.length > 0 ? new Map() : actorWorkspaceIndexes(db, membershipsTable),
   };
+}
+
+function qualifiedColumn(table: string, column: string | undefined): string {
+  if (column === undefined) {
+    throw new Error(`SQLite event import requires a resolved ${table} column`);
+  }
+  return `${table}.${quoteSqliteIdentifier(column)}`;
 }
 
 function activityQuery(scope: ImportScope): string {
@@ -280,26 +356,35 @@ function activityQuery(scope: ImportScope): string {
   const issueTable = quoteSqliteIdentifier(scope.issueTable.physicalName);
   const teamTable = quoteSqliteIdentifier(scope.teamTable.physicalName);
   const actorTable = quoteSqliteIdentifier(scope.actorTable.physicalName);
+  const activityWorkspaceReference = scope.activityHasWorkspace
+    ? qualifiedColumn("activity", scope.activityWorkspaceColumn)
+    : "NULL";
+  const issueWorkspaceReference = scope.issueHasWorkspace
+    ? qualifiedColumn("issues", scope.issueWorkspaceColumn)
+    : "NULL";
+  const teamWorkspaceReference = scope.teamHasWorkspace
+    ? qualifiedColumn("teams", scope.teamWorkspaceColumn)
+    : "NULL";
   const activityWorkspace = scope.activityHasWorkspace
-    ? "activity.workspace_id AS activity_workspace_id"
+    ? `${activityWorkspaceReference} AS activity_workspace_id`
     : "NULL AS activity_workspace_id";
   const issueWorkspace = scope.issueHasWorkspace
-    ? "issues.workspace_id AS issue_workspace_id"
+    ? `${issueWorkspaceReference} AS issue_workspace_id`
     : "NULL AS issue_workspace_id";
   const teamWorkspace = scope.teamHasWorkspace
-    ? "teams.workspace_id AS team_workspace_id"
+    ? `${teamWorkspaceReference} AS team_workspace_id`
     : "NULL AS team_workspace_id";
   const issueJoin =
     scope.activityHasWorkspace && scope.issueHasWorkspace
       ? scope.multipleWorkspaces
-        ? `LEFT JOIN ${issueTable} AS issues ON issues.id = activity.issue_id AND activity.workspace_id IS NOT NULL AND issues.workspace_id = activity.workspace_id`
-        : `LEFT JOIN ${issueTable} AS issues ON issues.id = activity.issue_id AND (activity.workspace_id IS NULL OR issues.workspace_id = activity.workspace_id)`
+        ? `LEFT JOIN ${issueTable} AS issues ON issues.id = activity.issue_id AND ${activityWorkspaceReference} IS NOT NULL AND ${issueWorkspaceReference} = ${activityWorkspaceReference}`
+        : `LEFT JOIN ${issueTable} AS issues ON issues.id = activity.issue_id AND (${activityWorkspaceReference} IS NULL OR ${issueWorkspaceReference} = ${activityWorkspaceReference})`
       : `LEFT JOIN ${issueTable} AS issues ON issues.id = activity.issue_id`;
   const teamJoin =
     scope.issueHasWorkspace && scope.teamHasWorkspace
       ? scope.multipleWorkspaces
-        ? `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id AND issues.workspace_id IS NOT NULL AND teams.workspace_id = issues.workspace_id`
-        : `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id AND (issues.workspace_id IS NULL OR teams.workspace_id = issues.workspace_id)`
+        ? `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id AND ${issueWorkspaceReference} IS NOT NULL AND ${teamWorkspaceReference} = ${issueWorkspaceReference}`
+        : `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id AND (${issueWorkspaceReference} IS NULL OR ${teamWorkspaceReference} = ${issueWorkspaceReference})`
       : `LEFT JOIN ${teamTable} AS teams ON teams.id = issues.team_id`;
   return `SELECT activity.id AS id,
                  teams.key || '-' || issues.number AS issue_identifier,
@@ -320,6 +405,33 @@ function activityQuery(scope: ImportScope): string {
           ORDER BY activity.created_at, activity.id`;
 }
 
+function tableRowCount(db: Database, table: ResolvedTable | undefined): number {
+  if (table === undefined) return 0;
+  const row = normalizeSqliteResultRow(
+    db.query(`SELECT count(*) AS count FROM ${quoteSqliteIdentifier(table.physicalName)}`).get(),
+  );
+  const count = row?.count;
+  if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
+    throw new Error("SQLite event import rejected malformed Activity table count");
+  }
+  return count;
+}
+
+function ambiguousImportResult(db: Database, scope: ImportScope): SQLiteEventImportResult {
+  const scanned = tableRowCount(db, scope.activityTable);
+  return {
+    status: "completed",
+    scanned,
+    emitted: 0,
+    duplicates: 0,
+    orphaned: 0,
+    outOfScope: 0,
+    rejected: 0,
+    ambiguous: scanned,
+    warnings: scope.ambiguousTables.slice(0, 100).map((table) => `ambiguous:${table}`),
+  };
+}
+
 /**
  * Importa la historia durable disponible en Activity de SQLite al stream
  * canónico. No lee logs históricos por Issue ni se conecta a PostgreSQL.
@@ -327,6 +439,9 @@ function activityQuery(scope: ImportScope): string {
  */
 export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteEventImportResult {
   const scope = resolveImportScope(options.db, options.workspaceId);
+  if (scope.ambiguousTables.length > 0) {
+    return ambiguousImportResult(options.db, scope);
+  }
   if (!hasTable(options.db, "activity")) {
     return {
       status: "completed",

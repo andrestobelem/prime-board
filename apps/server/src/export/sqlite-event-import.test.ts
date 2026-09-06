@@ -181,6 +181,31 @@ describe("SQLite history import", () => {
     }
   });
 
+  it("fails closed for Unicode-equivalent Activity column names", () => {
+    const db = workspaceDatabase(1);
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-unicode-columns-"));
+    try {
+      db.exec('ALTER TABLE activity RENAME COLUMN workspace_id TO "WORKSPACE_ID"');
+      db.exec('ALTER TABLE activity ADD COLUMN "İD" TEXT');
+      db.exec('ALTER TABLE activity ADD COLUMN "i̇d" TEXT');
+      addWorkspaceActivity(db, "workspace-2", "unicode-collision", "issue-1");
+
+      const result = importSqliteActivity({ db, rootDir: root });
+      expect(result).toMatchObject({
+        scanned: 1,
+        emitted: 0,
+        orphaned: 0,
+        rejected: 0,
+        ambiguous: 1,
+      });
+      expect(result.warnings).toContain("ambiguous:activity");
+      expect(readEventLog(root)).toEqual([]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("imports Activity and singleton Workspace rows with uppercase physical columns", () => {
     const db = uppercaseActivityDatabase();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-uppercase-columns-"));

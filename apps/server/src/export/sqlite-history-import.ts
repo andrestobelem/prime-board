@@ -18,7 +18,7 @@ import {
   normalizeSqliteResultRow,
   quoteSqliteIdentifier,
   sqliteColumnName,
-  sqliteColumnNames,
+  type SQLiteColumnLookup,
 } from "./sqlite-row.ts";
 
 /** Tablas SQLite compartidas que se pueden representar en el Repository Source. */
@@ -365,13 +365,14 @@ function physicalNameFor(db: Database, table: string | ResolvedTable): string | 
   return typeof table === "string" ? resolveTable(db, table)?.physicalName : table.physicalName;
 }
 
-function hasColumn(db: Database, table: string | ResolvedTable, column: string): boolean {
+function columnLookup(
+  db: Database,
+  table: string | ResolvedTable,
+  column: string,
+): SQLiteColumnLookup {
   const physicalName = physicalNameFor(db, table);
-  if (physicalName === undefined) return false;
-  const columns = sqliteColumnNames(db, physicalName);
-  if (columns === undefined) return false;
-  const normalizedColumn = column.toLowerCase();
-  return columns.some((name) => name.toLowerCase() === normalizedColumn);
+  if (physicalName === undefined) return { kind: "missing" };
+  return sqliteColumnName(db, physicalName, column);
 }
 function isSensitiveTableName(table: string): boolean {
   const compact = table.toLowerCase().replace(/[^a-z0-9]+/gu, "");
@@ -419,10 +420,17 @@ function resolveScope(db: Database, requestedWorkspaceId: string | undefined): S
 
   const workspaceIds: string[] = [];
   if (workspaceTable !== undefined) {
-    const idColumn = sqliteColumnName(db, workspaceTable.physicalName, "id");
-    if (idColumn === undefined) {
+    const idLookup = sqliteColumnName(db, workspaceTable.physicalName, "id");
+    if (idLookup.kind === "ambiguous") {
       throw new Error("SQLite history import rejected an ambiguous Workspace ID column");
     }
+    if (idLookup.kind === "invalid") {
+      throw new Error("SQLite history import rejected invalid Workspace column metadata");
+    }
+    if (idLookup.kind === "missing") {
+      throw new Error("SQLite history import Workspace table requires an id column");
+    }
+    const idColumn = idLookup.name;
     const values = db
       .query(
         `SELECT ${quoteSqliteIdentifier(idColumn)} AS id FROM ${quoteSqliteIdentifier(workspaceTable.physicalName)} ORDER BY ${quoteSqliteIdentifier(idColumn)}`,
@@ -451,12 +459,20 @@ function resolveScope(db: Database, requestedWorkspaceId: string | undefined): S
   }
   // El importador legacy de Activity ya exige estas tres columnas. Mantener el
   // mismo cierre evita que los IDs crucen alcances.
-  if (
-    multipleWorkspaces &&
-    (!hasColumn(db, "activity", "workspace_id") ||
-      !hasColumn(db, "issues", "workspace_id") ||
-      !hasColumn(db, "teams", "workspace_id"))
-  ) {
+  const workspaceColumns = [
+    ["activity", columnLookup(db, "activity", "workspace_id")],
+    ["issues", columnLookup(db, "issues", "workspace_id")],
+    ["teams", columnLookup(db, "teams", "workspace_id")],
+  ] as const;
+  const ambiguousWorkspaceColumns = workspaceColumns
+    .filter(([, lookup]) => lookup.kind === "ambiguous" || lookup.kind === "invalid")
+    .map(([table]) => table);
+  if (ambiguousWorkspaceColumns.length > 0) {
+    throw new Error(
+      `SQLite history import rejected ambiguous column metadata on ${ambiguousWorkspaceColumns.join(", ")}`,
+    );
+  }
+  if (multipleWorkspaces && workspaceColumns.some(([, lookup]) => lookup.kind === "missing")) {
     throw new Error(
       "SQLite history import cannot scope a multi-Workspace source without workspace_id on activity, issues, and teams",
     );

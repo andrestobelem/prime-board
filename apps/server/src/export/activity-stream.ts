@@ -10,7 +10,12 @@ import {
   validateDomainEvent,
 } from "./event-log.ts";
 import type { CanonicalEventLog } from "./issue-event-pipeline.ts";
-import { normalizeSqliteResultRow, sqliteColumnNames } from "./sqlite-row.ts";
+import {
+  normalizeSqliteResultRow,
+  quoteSqliteIdentifier,
+  sqliteColumnName,
+  sqliteColumnNames,
+} from "./sqlite-row.ts";
 
 export interface ActivityEventRow {
   readonly id: string;
@@ -33,17 +38,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function assertUnambiguousTableColumns(db: Database, table: string): void {
-  if (sqliteColumnNames(db, table) === undefined) {
+  const metadata = sqliteColumnNames(db, table);
+  if (metadata.kind === "ambiguous") {
     throw new Error(`${table} table has ambiguous column names`);
+  }
+  if (metadata.kind === "invalid") {
+    throw new Error(`${table} table has invalid column metadata`);
   }
 }
 
-function hasActivityWorkspaceColumn(db: Database): boolean {
-  const columns = sqliteColumnNames(db, "activity");
-  if (columns === undefined) {
+function activityWorkspaceColumn(db: Database): string | undefined {
+  const lookup = sqliteColumnName(db, "activity", "workspace_id");
+  if (lookup.kind === "ambiguous") {
     throw new Error("Activity table has ambiguous column names");
   }
-  return columns.some((column) => column.toLowerCase() === "workspace_id");
+  if (lookup.kind === "invalid") {
+    throw new Error("Activity table has invalid column metadata");
+  }
+  return lookup.kind === "found" ? lookup.name : undefined;
 }
 
 export function isSharedActivityType(type: string): boolean {
@@ -225,7 +237,11 @@ export function appendActivityEvents(
   for (const table of ["activity", "issues", "teams", "actors"]) {
     assertUnambiguousTableColumns(db, table);
   }
-  const workspaceColumn = hasActivityWorkspaceColumn(db) ? "activity.workspace_id" : "NULL";
+  const workspaceColumnName = activityWorkspaceColumn(db);
+  const workspaceColumn =
+    workspaceColumnName === undefined
+      ? "NULL"
+      : `activity.${quoteSqliteIdentifier(workspaceColumnName)}`;
   const rows = db
     .query(
       `SELECT activity.id AS id,
