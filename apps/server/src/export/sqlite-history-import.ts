@@ -686,9 +686,9 @@ function workspaceIndexes(
   // Los Actors son identidades globales. Las membresías indican en qué
   // Workspaces seleccionados se puede recibir el evento de identidad. Un
   // esquema ambiguo o inválido no produce un mapa parcial que parezca fiable.
-  if (membershipMetadata.state === "found") {
-    const memberships = tables.get("workspace_memberships")?.rows ?? [];
-    for (const row of memberships) {
+  const memberships = tables.get("workspace_memberships");
+  if (membershipMetadata.state === "found" && memberships !== undefined) {
+    for (const row of memberships.rows) {
       const actorId = textValue(row.actor_id);
       const workspaceId = textValue(row.workspace_id);
       if (actorId !== undefined && workspaceId !== undefined) {
@@ -736,6 +736,7 @@ function workspaceIndexes(
 function referencedWorkspaceIds(
   identity: RowIdentity,
   indexes: RowIndexes,
+  multipleWorkspaces: boolean,
 ): {
   candidates: Set<string>;
   missing: boolean;
@@ -785,19 +786,20 @@ function referencedWorkspaceIds(
       }
       if (
         indexes.workspaceMembershipMetadata.state === "ambiguous" ||
-        indexes.workspaceMembershipMetadata.state === "invalid"
+        indexes.workspaceMembershipMetadata.state === "invalid" ||
+        (indexes.workspaceMembershipMetadata.state === "missing" && multipleWorkspaces)
       ) {
         // Una referencia a Actor no es segura si la metadata de Membership no
-        // prueba su Workspace. Conserva el alcance directo de la fila, pero
-        // cierra la decisión en lugar de usarlo como prueba del Actor.
+        // prueba su Workspace. Solo una fuente singleton puede usar el
+        // fallback legacy cuando la metadata no existe.
         ambiguous = true;
         continue;
       }
       const actorWorkspaces = indexes.actorWorkspaceIds.get(value);
       if (direct.workspaceId !== undefined) {
         if (actorWorkspaces && !actorWorkspaces.has(direct.workspaceId)) missing = true;
-      } else {
-        for (const workspace of actorWorkspaces ?? []) candidates.add(workspace);
+      } else if (actorWorkspaces !== undefined) {
+        for (const workspace of actorWorkspaces) candidates.add(workspace);
       }
       continue;
     }
@@ -848,7 +850,10 @@ function referencedWorkspaceIds(
   }
   if (table === "actors") {
     const id = identity.sourceId;
-    for (const workspace of indexes.actorWorkspaceIds.get(id) ?? []) candidates.add(workspace);
+    const actorWorkspaces = indexes.actorWorkspaceIds.get(id);
+    if (actorWorkspaces !== undefined) {
+      for (const workspace of actorWorkspaces) candidates.add(workspace);
+    }
   }
   if (table === "workspace") {
     const id = textValue(row.id);
@@ -866,7 +871,7 @@ function referencedWorkspaceIds(
 }
 
 function rowScope(identity: RowIdentity, scope: SourceScope, indexes: RowIndexes): RowScope {
-  const info = referencedWorkspaceIds(identity, indexes);
+  const info = referencedWorkspaceIds(identity, indexes, scope.multipleWorkspaces);
   if (info.invalid)
     return {
       workspaceId: undefined,

@@ -647,6 +647,9 @@ describe("complete SQLite history import", () => {
     const db = sourceDatabase();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-uppercase-"));
     try {
+      db.query(
+        "INSERT INTO workspace VALUES ('w2', 'Other', 'other', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
       db.exec(
         'ALTER TABLE workspace_memberships RENAME COLUMN id TO "ID"; ALTER TABLE workspace_memberships RENAME COLUMN workspace_id TO "WORKSPACE_ID"; ALTER TABLE workspace_memberships RENAME COLUMN actor_id TO "ACTOR_ID";',
       );
@@ -679,6 +682,100 @@ describe("complete SQLite history import", () => {
       });
       expect(result).toMatchObject({ emitted: 1, ambiguous: 0, rejected: 0 });
       expect(result.tables.activity).toMatchObject({ emitted: 1, ambiguous: 0 });
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: false,
+      });
+      expect(applied).toMatchObject({ emitted: 1, written: 1 });
+      expect(readEventLog(root).some((event) => event.eventId === "ac1")).toBe(true);
+
+      const repeated = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: false,
+      });
+      expect(repeated).toMatchObject({ emitted: 0, written: 0, duplicates: 1 });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects Activity Actor when Membership metadata is missing in a multi-Workspace source", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-multi-missing-"));
+    try {
+      db.query(
+        "INSERT INTO workspace VALUES ('w2', 'Other', 'other', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
+      db.exec("DROP TABLE workspace_memberships");
+
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+        includeSnapshots: false,
+      });
+      expect(dry).toMatchObject({ emitted: 0, written: 0 });
+      expect(dry.tables.activity).toMatchObject({ emitted: 0, ambiguous: 1 });
+      expect(dry.warnings).toContain("ambiguous:activity:ac1");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: false,
+      });
+      expect(applied).toMatchObject({ emitted: 0, written: 0 });
+      expect(applied.tables.activity).toMatchObject({ emitted: 0, ambiguous: 1 });
+      expect(applied.warnings).toContain("ambiguous:activity:ac1");
+      expect(readEventLog(root).some((event) => event.eventId === "ac1")).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects Activity Actor when Membership columns are missing in a multi-Workspace source", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-columns-missing-"));
+    try {
+      db.query(
+        "INSERT INTO workspace VALUES ('w2', 'Other', 'other', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
+      db.exec("DROP TABLE workspace_memberships");
+      db.exec("CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, role TEXT)");
+      db.query("INSERT INTO workspace_memberships VALUES ('wm-missing-columns', 'admin')").run();
+
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+        includeSnapshots: false,
+      });
+      expect(dry).toMatchObject({ emitted: 0, written: 0 });
+      expect(dry.tables.activity).toMatchObject({ emitted: 0, ambiguous: 1 });
+      expect(dry.warnings).toContain("ambiguous:activity:ac1");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: false,
+      });
+      expect(applied).toMatchObject({ emitted: 0, written: 0 });
+      expect(applied.tables.activity).toMatchObject({ emitted: 0, ambiguous: 1 });
+      expect(applied.warnings).toContain("ambiguous:activity:ac1");
+      expect(readEventLog(root).some((event) => event.eventId === "ac1")).toBe(false);
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
