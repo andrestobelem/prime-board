@@ -157,10 +157,10 @@ function sqliteEventWorkspaceId(
 }
 
 /**
- * Checks that an event's explicit Workspace agrees with every resource in its
- * data. A scoped sink is an internal boundary, but a wrong resource ID must
- * still fail closed instead of turning an empty Team lookup into a broadcast
- * to Workspace hooks.
+ * Valida que el Workspace explícito coincida con cada recurso del evento.
+ * Aunque el sink scopeado es un límite interno, un ID de recurso incorrecto
+ * debe fallar cerrado y no convertir una búsqueda vacía de Team en un
+ * broadcast a los Webhooks del Workspace.
  */
 function sqliteEventMatchesWorkspace(
   db: Database,
@@ -182,9 +182,12 @@ function sqliteEventMatchesWorkspace(
       workspace_id: string | null;
     } | null;
     if (!team) {
-      // A Team row is deleted before team.deleted is dispatched. The resolver
-      // includes the owner snapshot so that event remains deliverable.
-      if (event !== "team.deleted" || !Array.isArray(data._teamOwnerIds)) return false;
+      // La fila del Team se elimina antes de despachar team.deleted. El
+      // resolver conserva su Workspace antes de borrarlo; un snapshot de
+      // owners no prueba por sí solo el origen del evento.
+      const deletedTeamWorkspaceId =
+        typeof data._teamWorkspaceId === "string" ? data._teamWorkspaceId : null;
+      if (event !== "team.deleted" || deletedTeamWorkspaceId !== workspaceId) return false;
     } else if (team.workspace_id !== workspaceId) {
       return false;
     }
@@ -507,7 +510,9 @@ export class WebhookDispatcher implements WebhookEventSink {
     const workspaceId =
       sqliteWorkspaceId ?? (typeof data._workspaceId === "string" ? data._workspaceId : null);
     const publicData = Object.fromEntries(
-      Object.entries(data).filter(([key]) => key !== "_teamOwnerIds" && key !== "_workspaceId"),
+      Object.entries(data).filter(
+        ([key]) => key !== "_teamOwnerIds" && key !== "_teamWorkspaceId" && key !== "_workspaceId",
+      ),
     );
     const body = JSON.stringify({
       event,

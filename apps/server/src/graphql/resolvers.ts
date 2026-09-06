@@ -1625,6 +1625,7 @@ export const resolvers = {
               name: deleted.name,
               teamId: deleted.id,
               _teamOwnerIds: owners,
+              _teamWorkspaceId: deleted.workspace_id ?? context.workspace.workspaceId,
             });
             return { success: true };
           }
@@ -1647,6 +1648,7 @@ export const resolvers = {
             name: deleted.name,
             teamId: deleted.id,
             _teamOwnerIds: teamOwnerIds,
+            _teamWorkspaceId: deleted.workspace_id ?? context.workspace.workspaceId,
           });
           return { success: true };
         },

@@ -484,6 +484,7 @@ describe("webhooks", () => {
       .find((body) => body.event === "team.deleted");
     expect(deletion).toBeDefined();
     expect(deletion.data._teamOwnerIds).toBeUndefined();
+    expect(deletion.data._teamWorkspaceId).toBeUndefined();
     expect(deletion.data.teamId).toBe(team.data!.teamCreate.team.id);
   });
 

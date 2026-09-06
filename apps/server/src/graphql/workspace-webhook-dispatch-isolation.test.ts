@@ -12,6 +12,7 @@ let projectAId: string;
 let viewerId: string;
 let workspaceBKey: string;
 let workspaceBId: string;
+let deletedTeamBId: string;
 
 const delivered: string[] = [];
 const bodies: string[] = [];
@@ -84,6 +85,29 @@ describe("workspace scope for webhook dispatch", () => {
     await createWebhook("https://hooks.example/b", workspaceBKey);
     await createWebhook("https://hooks.example/b-all", workspaceBKey, ["*"]);
     await createWebhook("https://hooks.example/a", workspaceAKey);
+    await createWebhook("https://hooks.example/a-deleted", workspaceAKey, ["team.deleted"]);
+
+    const team = await gql(
+      app,
+      `mutation { teamCreate(input: { name: "Deleted B", key: "DB" }) { team { id key } } }`,
+      {},
+      app.apiKey,
+      workspaceBKey,
+    );
+    expect(team.errors).toBeUndefined();
+    deletedTeamBId = team.data!.teamCreate.team.id;
+    const deleted = await gql(
+      app,
+      `mutation($id: ID!, $confirmation: String!) { teamDelete(id: $id, confirmation: $confirmation) { success } }`,
+      { id: deletedTeamBId, confirmation: "DB" },
+      app.apiKey,
+      workspaceBKey,
+    );
+    expect(deleted.errors).toBeUndefined();
+    expect(deleted.data!.teamDelete.success).toBe(true);
+    await app.events.idle();
+    delivered.length = 0;
+    bodies.length = 0;
   });
 
   afterAll(() => app.stop());
@@ -109,6 +133,32 @@ describe("workspace scope for webhook dispatch", () => {
 
     expect(delivered).toEqual(["https://hooks.example/a"]);
     expect(JSON.parse(bodies[0]!).workspaceId).toBe(workspaceAId);
+  });
+
+  it("falla cerrado si un Team borrado de otro Workspace se reenvía a A", async () => {
+    delivered.length = 0;
+    bodies.length = 0;
+    const dispatcher = new WebhookDispatcher(app.db, {
+      retryDelays: [],
+      fetchFn: makeFetch(),
+    });
+
+    // El Team existió en B, pero ya no hay una fila que permita inferir su
+    // Workspace. Un snapshot de owners no prueba el origen del evento.
+    dispatcher.emitForWorkspace(
+      workspaceAId,
+      "team.deleted",
+      { id: viewerId, name: "admin", type: "HUMAN" },
+      {
+        id: deletedTeamBId,
+        teamId: deletedTeamBId,
+        _teamOwnerIds: [viewerId],
+      },
+    );
+    await dispatcher.idle();
+
+    expect(delivered).toHaveLength(0);
+    expect(bodies).toHaveLength(0);
   });
 
   it("falla cerrado si el recurso no pertenece al Workspace explícito", async () => {
