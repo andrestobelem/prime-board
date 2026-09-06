@@ -54,6 +54,70 @@ function restoreLegacySavedViews(db: Database): void {
   `);
 }
 
+function replaceSavedViewsWithIndependentForeignKeys(db: Database): void {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP INDEX IF EXISTS idx_saved_views_workspace_id;
+    DROP INDEX IF EXISTS idx_saved_views_scope;
+    DROP INDEX IF EXISTS idx_saved_views_owner;
+    ALTER TABLE saved_views RENAME TO _prb629_saved_views;
+    CREATE TABLE saved_views (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('personal', 'team', 'workspace')),
+      team_id TEXT,
+      owner_id TEXT NOT NULL REFERENCES actors(id),
+      filter_json TEXT NOT NULL DEFAULT '{}',
+      order_by TEXT NOT NULL DEFAULT 'CREATED_DESC',
+      group_by TEXT NOT NULL DEFAULT 'state',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      workspace_id TEXT REFERENCES workspace(id) ON DELETE CASCADE,
+      CHECK ((scope = 'team' AND team_id IS NOT NULL) OR (scope != 'team' AND team_id IS NULL)),
+      FOREIGN KEY (workspace_id) REFERENCES teams(workspace_id),
+      FOREIGN KEY (team_id) REFERENCES teams(id)
+    );
+    INSERT INTO saved_views (
+      id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+      created_at, updated_at, archived_at, columns_json, workspace_id
+    )
+    SELECT
+      id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+      created_at, updated_at, archived_at, columns_json, workspace_id
+    FROM _prb629_saved_views;
+    DROP TABLE _prb629_saved_views;
+    CREATE UNIQUE INDEX idx_saved_views_workspace_id ON saved_views(workspace_id, id);
+    CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
+    CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+function restoreSavedViewsAfterRejectedSchema(db: Database): void {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP INDEX IF EXISTS idx_saved_views_workspace_id;
+    DROP INDEX IF EXISTS idx_saved_views_scope;
+    DROP INDEX IF EXISTS idx_saved_views_owner;
+    ALTER TABLE saved_views RENAME TO _prb629_rejected_saved_views;
+  `);
+  restoreLegacySavedViews(db);
+  db.exec(`
+    INSERT INTO saved_views (
+      id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+      created_at, updated_at, archived_at, columns_json, workspace_id
+    )
+    SELECT
+      id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+      created_at, updated_at, archived_at, columns_json, workspace_id
+    FROM _prb629_rejected_saved_views;
+    DROP TABLE _prb629_rejected_saved_views;
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
 function seedLegacyNotificationAndViewData(db: Database): void {
   bootstrap(db);
   const workspace = db.query("SELECT id FROM workspace LIMIT 1").get() as { id: string };
@@ -667,6 +731,93 @@ describe("colisión de migraciones SQLite", () => {
       const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
       migrate(db);
       expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(migrationCount);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza FKs independientes aunque imiten la FK compuesta de Teams", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      replaceSavedViewsWithIndependentForeignKeys(db);
+
+      const beforeSavedViews = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeFavorite = db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get();
+      const beforeSchema = db
+        .query(
+          `SELECT type, name, sql
+           FROM sqlite_master
+           WHERE name IN (
+             'saved_views', 'idx_saved_views_workspace_id', 'idx_saved_views_scope',
+             'idx_saved_views_owner'
+           )
+           ORDER BY type, name`,
+        )
+        .all();
+      const beforeMigrations = db.query("SELECT count(*) AS count FROM _migrations").get();
+      const runMigration = () => migrate(db);
+
+      let firstError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(
+        /migration 0033.*missing foreign keys.*workspace_id, team_id.*teams/i,
+      );
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(beforeMigrations);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeSavedViews);
+      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
+        beforeFavorite,
+      );
+      expect(
+        db
+          .query(
+            `SELECT type, name, sql
+             FROM sqlite_master
+             WHERE name IN (
+               'saved_views', 'idx_saved_views_workspace_id', 'idx_saved_views_scope',
+               'idx_saved_views_owner'
+             )
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual(beforeSchema);
+      for (const table of ["_prb390_saved_views", "view_preferences", "view_subscriptions"]) {
+        expect(
+          db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1").get(table),
+        ).toBeNull();
+      }
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+      let secondError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        secondError = error instanceof Error ? error.message : String(error);
+      }
+      expect(secondError).toBe(firstError);
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(beforeMigrations);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeSavedViews);
+
+      restoreSavedViewsAfterRejectedSchema(db);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      migrate(db);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
+        beforeFavorite,
+      );
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+
+      const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
+      migrate(db);
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(migrationCount);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();
     }
