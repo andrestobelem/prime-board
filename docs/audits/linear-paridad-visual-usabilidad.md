@@ -2,7 +2,7 @@
 
 > Ticket: [PRB-278](http://localhost:3333/issue/PRB-278)
 > Fecha del relevamiento visual: 2026-08-17 (snapshot histórico)
-> Verificación del contrato local vigente: 2026-08-23
+> Verificación del contrato local vigente: 2026-09-06
 > Commit base de la revisión: `1e9bf7d` (`main`), con cambios locales verificados
 > Alcance: UI web, contrato GraphQL y documentación oficial de Linear; la captura visual no audita todos los backends.
 
@@ -10,8 +10,10 @@
 
 Las observaciones visuales y de interacción de este documento pertenecen al snapshot del 2026-08-17.
 Para el contrato vigente, el código actual separa SQLite (predeterminado, con selección de Workspace) de
-PostgreSQL (opcional, singleton y con dominios aún en migración). No uses las frases históricas sobre
-single-workspace, switcher o persistencia como una descripción de ambos backends.
+PostgreSQL (opcional, singleton y con dominios aún en migración). Para la configuración de Projects e
+Initiatives, consulta [`docs/specs/project-initiative-settings.md`](../specs/project-initiative-settings.md).
+No uses las frases históricas sobre single-workspace, switcher o persistencia como una descripción de ambos
+backends.
 
 ## Veredicto
 
@@ -134,7 +136,10 @@ Incluye estos cambios en la próxima tanda de calidad. No los trates como una re
 
 ## Deuda de documentación detectada
 
-`docs/alcance-mvp.md` y `docs/specs/mvp.md` todavía describen como fuera de alcance Relations, Milestones, Cycles, Inbox, Initiatives, Saved Views y Project Updates, aunque hoy existen en API/UI/CLI/MCP. Esa documentación histórica explica el origen, pero ya no funciona como mapa de producto vigente. Actualízala o agrega un documento de alcance actual antes de la próxima tanda. Así «faltante» no significará «feature deliberadamente post-MVP».
+`docs/specs/mvp.md` conserva como histórico el alcance original. `docs/alcance-mvp.md` ya separa ese
+registro de la matriz vigente, que incluye Relations, Milestones, Cycles, Inbox, Initiatives, Saved
+Views y Project Updates. Para Projects e Initiatives, usa [`docs/specs/project-initiative-settings.md`](../specs/project-initiative-settings.md)
+como contrato operativo. Así «faltante» no significa «feature deliberadamente post-MVP».
 
 ## Qué dejamos fuera deliberadamente
 

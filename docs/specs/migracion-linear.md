@@ -62,22 +62,29 @@ El proceso solo aplica si no quedan `conflict` ni `loss`. La CLI también rechaz
 
 Dos ejecuciones sobre el mismo export y el mismo estado producen el mismo plan. La segunda ejecución no produce operaciones nuevas. El repositorio versiona el mapa de origen, pero este nunca contiene hashes de API keys ni secretos de webhooks.
 
-## Fuera de representación
+## Fuera de representación del importador
 
-El importador debe distinguir Documents, adjuntos, Threads, Cycles, due dates, estimaciones, Project Updates, Initiatives, suscripciones y metadata de Projects. Documents propios no se crean en prime-board: su contenido no se copia a descripciones de Issues ni se descarta sin una pérdida explícita. Los artefactos externos de Linear se conservan como enlaces con título cuando el export entrega una URL.
+El importador debe distinguir Documents, adjuntos, Threads, Cycles, due dates, estimaciones,
+Project Updates, Initiatives, suscripciones y metadata de Projects. Esta lista describe las
+pérdidas del camino Linear → prime-board; no afirma que esas entidades estén ausentes del modelo
+local. Projects e Initiatives, incluidos Project Updates e Initiative Status Updates, tienen un
+contrato local separado en [`project-initiative-settings.md`](project-initiative-settings.md).
+Documents propios no se crean en prime-board: su contenido no se copia a descripciones de Issues ni
+se descarta sin una pérdida explícita. Los artefactos externos de Linear se conservan como enlaces
+con título cuando el export entrega una URL.
 
-## Política de funcionalidades sin equivalente
+## Política de funcionalidades sin equivalente en el importador
 
 La migración no inventa campos en el modelo de prime-board. Esta es la política aprobada:
 
-| Dato de Linear                               | Tratamiento                                                                                                                                                                                          | Resultado del plan                                      |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Adjuntos                                     | Conserva URL, nombre y metadata como enlaces en una sección de la descripción; no copia bytes automáticamente.                                                                                       | `warning` por conversión.                               |
-| Documents                                    | No crea Documents locales ni convierte su contenido en descripciones de Issues. Si un artefacto externo de Linear solo tiene URL y título, lo conserva como enlace en la sección `Linear artifacts`. | `warning` por artefacto externo o pérdida de contenido. |
-| Threads y Comments inline                    | Importa cuerpo, autor y fecha como Comment plano; guarda el anclaje textual en el reporte.                                                                                                           | `loss` si existe anclaje.                               |
-| Cycles, estimaciones y due dates             | No los agrega en silencio al esquema; los lista en el reporte y bloquea `apply` hasta una decisión explícita.                                                                                        | `loss`.                                                 |
-| Project Updates, Initiatives y suscripciones | Los conserva como referencia en el reporte de migración; no los presenta como entidades de prime-board.                                                                                              | `loss`.                                                 |
-| Estado `duplicate`                           | Crea el mismo nombre con State Type `canceled` y deja un warning.                                                                                                                                    | `warning`.                                              |
+| Dato de Linear                               | Tratamiento                                                                                                                                                                                                                                    | Resultado del plan                                      |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Adjuntos                                     | Conserva URL, nombre y metadata como enlaces en una sección de la descripción; no copia bytes automáticamente.                                                                                                                                 | `warning` por conversión.                               |
+| Documents                                    | No crea Documents locales ni convierte su contenido en descripciones de Issues. Si un artefacto externo de Linear solo tiene URL y título, lo conserva como enlace en la sección `Linear artifacts`.                                           | `warning` por artefacto externo o pérdida de contenido. |
+| Threads y Comments inline                    | Importa cuerpo, autor y fecha como Comment plano; guarda el anclaje textual en el reporte.                                                                                                                                                     | `loss` si existe anclaje.                               |
+| Cycles, estimaciones y due dates             | No los agrega en silencio al esquema; los lista en el reporte y bloquea `apply` hasta una decisión explícita.                                                                                                                                  | `loss`.                                                 |
+| Project Updates, Initiatives y suscripciones | El importador actual los conserva como referencia en el reporte y marca la parte no mapeada como pérdida; no los reconstruye desde el export de Linear. El modelo local sí tiene estas entidades y su export/rebuild usa un contrato distinto. | `loss`.                                                 |
+| Estado `duplicate`                           | Crea el mismo nombre con State Type `canceled` y deja un warning.                                                                                                                                                                              | `warning`.                                              |
 
 `--allow-losses` es obligatorio para aplicar una captura con `loss`. El corte oficial no debe usarlo hasta revisar y aceptar el reporte.
 

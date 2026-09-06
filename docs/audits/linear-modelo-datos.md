@@ -2,15 +2,18 @@
 
 > Ticket: [PRB-377](http://localhost:3333/issue/PRB-377)  
 > Fecha del relevamiento: 2026-08-18 (snapshot histórico)
-> Verificación del contrato local vigente: 2026-08-23
+> Verificación del contrato local vigente: 2026-09-06
 > Commit base de la revisión: `8899e11` (`main`), con cambios locales verificados
 > Alcance: entidades, relaciones y responsabilidades del modelo; no incluye la implementación de correcciones.
+> El mapa y las conclusiones fechadas son un snapshot histórico. El contrato vigente de Projects e Initiatives
+> está en [`docs/specs/project-initiative-settings.md`](../specs/project-initiative-settings.md).
 
 ## Método y fuentes
 
 El relevamiento de 2026-08-18 revisó el SDL y las migraciones de SQLite hasta `0018_team_archive.sql`.
-Ese material es un snapshot histórico. La verificación del contrato vigente revisó además las migraciones
-SQLite `0019`–`0030`, el backend PostgreSQL y la selección de Workspace. Usamos como referencia externa la
+Ese material es un snapshot histórico. La verificación fechada del contrato vigente revisó además las
+migraciones SQLite `0019`–`0030`, el backend PostgreSQL y la selección de Workspace; el addendum de
+2026-09-06 incorpora `0031` y `0012`. Usamos como referencia externa la
 documentación oficial de Linear:
 
 - [Modelo conceptual](https://linear.app/docs/conceptual-model)
@@ -26,33 +29,35 @@ documentación oficial de Linear:
 
 La comparación distingue **paridad conceptual**, **divergencias intencionales** y **gaps pendientes**. Una diferencia con Linear no es necesariamente un defecto.
 
-## Estado del contrato vigente (verificado el 2026-08-23)
+## Estado del contrato vigente (verificado el 2026-09-06)
 
 El mapa y el veredicto que siguen conservan el snapshot histórico de 2026-08-18. No deben leerse como
 la topología actual sin estas correcciones:
 
-- El backend predeterminado es SQLite (`apps/server/src/config.ts`). Su runner aplica `0001`–`0030`.
+- El backend predeterminado es SQLite (`apps/server/src/config.ts`). Su runner aplica `0001`–`0031`.
   Las migraciones `0024` y `0025` agregan `workspace_id`, Memberships y FKs compuestas; `0026`
   agrega grants de API keys, `0027` conserva el esquema histórico de Documents, `0028` agrega
-  suscriptores de Issues y `0030` retira Documents después de validar el archivo externo. El contrato
-  GraphQL lista/crea Workspaces y selecciona el contexto mediante `X-Workspace-ID`; la CLI y la web
-  tienen el mismo camino.
+  suscriptores de Issues, `0030` retira Documents y `0031` agrega el modelo de planificación.
+  El contrato GraphQL lista/crea Workspaces y selecciona el contexto mediante `X-Workspace-ID`; la
+  CLI y la web tienen el mismo camino.
 - PostgreSQL es un backend opcional (`PRIME_BOARD_PERSISTENCE=postgres`) con migrador independiente
-  de once versiones (`apps/server/src/db/postgres/migrator.ts`). `0005` conserva el esquema histórico
-  de Documents y `0011` lo retira después de validar el archivo externo; `0006` agrega suscriptores,
-  `0007` Memberships y grants, `0008` el Workspace de los límites de Team de API keys y `0009` el
-  grant explícito del Workspace efectivo. Su baseline impone un singleton de Workspace;
-  `workspaceCreate` no está migrado y el servidor mantiene un SQLite efímero o devuelve un error
-  explícito para dominios aún no migrados. Issues, Teams, Projects, Milestones, Cycles, Labels,
-  Activity, suscriptores y Relations tienen paths PostgreSQL; Documents no tiene un path operativo.
-  PRB-437 implementa lectura y mutaciones de Relations y PRB-552 implementa API keys y límites.
-  Comments no tiene ruta PostgreSQL. El event log canónico y el proyector Repository Source → PostgreSQL
-  siguen pendientes según ADR-0019 y PRB-445/453. No debe describirse PostgreSQL como un modelo
-  multi-Workspace ni como un cutover completo.
-- El SDL vigente contiene 26 campos de `Query`, 66 de `Mutation`, 25 de `Issue`, 13 de `Project` y
+  de doce versiones (`apps/server/src/db/postgres/migrator.ts`). `0005` conserva el esquema histórico
+  de Documents y `0011` lo retira después de validar el archivo externo; `0012` agrega Projects e
+  Initiatives con el alcance singleton de PostgreSQL. `0006` agrega suscriptores, `0007` Memberships
+  y grants, `0008` el Workspace de los límites de Team de API keys y `0009` el grant explícito del
+  Workspace efectivo. `workspaceCreate` no está migrado y el servidor mantiene un SQLite efímero o
+  devuelve un error explícito para dominios aún no migrados. La ACL de creación de dependencies y
+  la revalidación de Team limits siguen en PRB-609 y PRB-618. No debe describirse PostgreSQL como un
+  modelo multi-Workspace ni como un cutover completo.
+- El contrato vigente de planificación agrega a Project `startDate`, members, dependencies, Teams,
+  milestones, Issues y updates; agrega a Initiative `priority`, `leadTeam`, resources, labels,
+  owner, updates y progreso derivado. Project admite ACL directa de members o acceso a todos sus
+  Teams; Initiative valida todos sus Projects y Teams. Consulta la especificación canónica para
+  los límites de clientes y export/rebuild.
+- El SDL vigente contiene 28 campos de `Query`, 67 de `Mutation`, 25 de `Issue`, 14 de `Project` y
   2 de `PageInfo`. Los conteos del snapshot histórico no son un objetivo de paridad.
 
-## Veredicto
+## Veredicto del snapshot histórico (2026-08-18)
 
 El núcleo jerárquico del snapshot se alinea con Linear: un Workspace contiene Teams y Actors; los Teams
 contienen Issues y Workflow States; Projects, Cycles y Milestones organizan el trabajo; Initiatives
@@ -109,7 +114,7 @@ un cutover completo.
 | `IssueRelation`            | `IssueRelation`                    | Paridad en blocks/related/duplicate; el modelo de lectura de inversas difiere.                                          |
 | `Review`                   | Sin equivalente directo del núcleo | Divergencia intencional de producto.                                                                                    |
 
-## Hallazgos y clasificación
+## Hallazgos y clasificación del snapshot histórico
 
 ### Paridad suficiente para el núcleo MVP en el snapshot
 
@@ -142,7 +147,7 @@ un cutover completo.
 5. **Favorites:** solo apunta a Project o SavedView; Linear permite favoritos de más tipos, como Issue, Cycle, Label, Team y Document.
 6. **Superficies actuales de Linear:** releases/release notes, integraciones y recursos externos no forman parte del modelo MVP.
 
-## Prioridad sugerida
+## Prioridad sugerida en el snapshot histórico
 
 1. Separar, si el producto lo necesita, historial de issue, auditoría y notificaciones.
 2. Evaluar adjuntos como recursos vinculables; no reintroducir Documents locales sin una nueva decisión.

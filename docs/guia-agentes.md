@@ -56,7 +56,7 @@ PRIME_BOARD_PERSISTENCE=postgres \
 PostgreSQL conserva una única Workspace y una migración incremental por dominios. Los dominios
 migrados usan PostgreSQL. Una operación todavía no migrada puede responder `VALIDATION_FAILED` o
 usar un SQLite efímero de compatibilidad, según el dominio. La presencia de una operación en el
-SDL no garantiza que esté migrada en PostgreSQL. Consulta la [tabla de estado y brechas](alcance-mvp.md#persistencia-vigente-sqlite-y-postgresql) antes de automatizar una operación.
+SDL no garantiza que esté migrada en PostgreSQL. Consulta la [tabla de estado y brechas](alcance-mvp.md#persistencia-vigente-sqlite-y-postgresql) y el [contrato de Projects e Initiatives](specs/project-initiative-settings.md) antes de automatizar planificación.
 
 Para una instancia de desarrollo local, desactiva la solicitud de API key:
 
@@ -246,10 +246,14 @@ pb webhook create --url http://localhost:9999/hook --events issue.created
   `update-list|create|delete`; los comandos de creación aceptan referencias por ID y los cuerpos
   pueden leerse desde stdin con `--body -` o `--description -`.
 - Las superficies de planificación se operan con `pb cycle`, `pb review`, `pb initiative`,
-  `pb inbox` y `pb favorite`; todos sus comandos de lectura aceptan `--json` y las mutaciones
+  `pb project`, `pb inbox` y `pb favorite`; `pb project` acepta `start-date`, `member`,
+  `dependency` y `team`, mientras `pb initiative` acepta `priority`, `lead-team`, `label`,
+  `resource`, `project` y `team`. Todos sus comandos de lectura aceptan `--json` y las mutaciones
   conservan los códigos de salida comunes del CLI.
-- El MCP incluye tools para estas áreas. En planificación se llaman `list_cycles`, `save_cycle`,
-  `carry_over_cycle`, `mark_inbox_read`, `archive_inbox` y `reorder_favorite`, entre otras.
+- El MCP incluye tools para estas áreas. `save_project` y `save_initiative` exponen los campos y
+  relaciones de planificación; también existen `list_cycles`, `save_cycle`, `carry_over_cycle`,
+  `mark_inbox_read`, `archive_inbox` y `reorder_favorite`, entre otras. No hay una tool dedicada
+  para crear o borrar `InitiativeStatusUpdate`; esa operación está disponible por GraphQL.
 - Administración operativa: `pb team create|update|archive|unarchive|delete|membership-*|workflow-state-*|label-*`,
   `pb actor list|create|update` y `pb api-key create|delete` exponen las mutaciones
   administrativas GraphQL y conservan sus errores/autorización.

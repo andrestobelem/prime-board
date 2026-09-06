@@ -108,9 +108,9 @@ function backendBullet(document: string, backend: "SQLite" | "PostgreSQL"): stri
 }
 
 const EXPECTED_SQLITE_TABLE_ROW =
-  "**SQLite** | `bun:sqlite`, archivo definido por `PRIME_BOARD_DB`, migraciones `0001`–`0030`. | Es el camino operativo completo. La migración `0030` retira Documents después de validar el archivo externo; el esquema vigente conserva FTS5 y el soporte de Workspace Context.";
+  "**SQLite** | `bun:sqlite`, archivo definido por `PRIME_BOARD_DB`, migraciones `0001`–`0031`. `0030` retira Documents y `0031` agrega la configuración de Projects e Initiatives. | Es el camino operativo local. `0031` agrega `start_date`, `priority`, `lead_team_id`, `resources_json`, members, dependencies, labels y Initiative Status Updates. Sus triggers conservan el autofill legacy en una DB singleton y rechazan un contexto ambiguo.";
 const EXPECTED_POSTGRES_TABLE_ROW =
-  "**PostgreSQL** | Se activa con `PRIME_BOARD_PERSISTENCE=postgres` y requiere `PRIME_BOARD_POSTGRES_URL`; usa migraciones independientes `0001`–`0011`. `0010` agrega la tabla `projector_checkpoints` y `0011` retira Documents después de validar el archivo externo. | Mantiene una única Workspace y tiene cobertura incremental. Los paths directos cubren Actors, autenticación, API keys y límites de Team, Teams, Issues, Relations, Projects, Milestones, Cycles, Labels, Activity, suscriptores, Reviews, Initiatives, Project Updates, Saved Views, Favorites, Inbox y Webhooks. Relations está implementado por PRB-437; API keys y límites de Team usan `0008` y `0009` por PRB-552. `workspaceCreate` sigue sin migrar. Comments no tiene persistencia PostgreSQL y el event log canónico con su proyector Repository Source → PostgreSQL sigue pendiente según ADR-0019 y PRB-445/453. El SQLite efímero solo sirve como compatibilidad para dominios sin path PG.";
+  "**PostgreSQL** | Se activa con `PRIME_BOARD_PERSISTENCE=postgres` y requiere `PRIME_BOARD_POSTGRES_URL`; usa migraciones independientes `0001`–`0012`. `0011` retira Documents y `0012` agrega planning. | Mantiene una única Workspace y cobertura incremental. `0012` agrega las mismas relaciones sin `workspace_id`; el backend usa el Workspace singleton. La paridad de ACL de dependencies y la revalidación de Team limits siguen en PRB-609 y PRB-618.";
 const EXPECTED_SQLITE_AUDIT_BULLET =
   "- **SQLite** es el backend predeterminado. Usa `bun:sqlite`, migraciones `0001`–`0030` y conserva el esquema histórico de Documents solo durante la migración y no expone esa capacidad.";
 const EXPECTED_POSTGRES_AUDIT_BULLET =
@@ -150,10 +150,8 @@ describe("public GraphQL documentation", () => {
 
     expect(backendTableRow(scope, "SQLite")).toBe(EXPECTED_SQLITE_TABLE_ROW);
     expect(backendTableRow(scope, "PostgreSQL")).toBe(EXPECTED_POSTGRES_TABLE_ROW);
-    expect(scope).toContain(
-      "No se debe presentar PostgreSQL como un reemplazo con paridad de persistencia.",
-    );
-    expect(scope).toContain("una operación puede no estar migrada en PostgreSQL.");
+    expect(scope).toContain("reemplazo con paridad de persistencia.");
+    expect(scope).toContain("cada backend o cliente lo soporte.");
 
     expect(backendBullet(audit, "SQLite")).toBe(EXPECTED_SQLITE_AUDIT_BULLET);
     expect(backendBullet(audit, "PostgreSQL")).toBe(EXPECTED_POSTGRES_AUDIT_BULLET);

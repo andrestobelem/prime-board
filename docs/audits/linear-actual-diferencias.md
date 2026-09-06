@@ -3,7 +3,7 @@
 > Ticket: [PRB-421](http://localhost:3333/issue/PRB-421)
 > Épica relacionada: [Soporte multi-workspace](http://localhost:3333/project/01a0193e-16e4-7000-9836-0e8495aafea6)
 > Fecha del relevamiento: 2026-08-19 (snapshot histórico)
-> Verificación del contrato local vigente: 2026-08-23
+> Verificación del contrato local vigente: 2026-09-06
 > Commit base de la revisión: `8899e11` (`main`), con cambios locales verificados
 > Estado: documento canónico de comparación. No promete paridad total ni replica todas las funciones de Linear.
 
@@ -74,31 +74,45 @@ El snapshot local de esa fecha contenía 25 campos de `Query`, 62 de `Mutation`,
 - `apps/mcp/src/api.ts` y `apps/mcp/src/server.ts`
 - `apps/web/src/components/Sidebar.tsx`, `App.tsx`, `router.tsx`, `api.ts` y `ui-context.ts`
 
-### Contrato local vigente (verificado el 2026-08-23)
+### Contrato local vigente (verificado el 2026-09-06)
 
 El código actual separa dos backends. `SQLite` es el valor predeterminado en
 `apps/server/src/config.ts`; `PRIME_BOARD_PERSISTENCE=postgres` activa el backend opcional de
-PostgreSQL. No hay un único esquema de migraciones que describa ambos backends.
+PostgreSQL. No hay un único esquema de migraciones que describa ambos backends. El contrato
+operativo de planificación está consolidado en [`docs/specs/project-initiative-settings.md`](../specs/project-initiative-settings.md).
 
-- El runner de SQLite en `apps/server/src/db/database.ts` aplica las migraciones `0001` a `0030`.
+- El runner de SQLite en `apps/server/src/db/database.ts` aplica las migraciones `0001` a `0031`.
   `0024` y `0025` agregan raíces, columnas `workspace_id` e invariantes compuestas; `0026` agrega
-  grants de API keys por Workspace, `0027` conserva el registro histórico de Documents y `0030` los
-  retira después de verificar un archivo externo. `0028` agrega suscriptores de Issues.
-- El migrador de PostgreSQL en `apps/server/src/db/postgres/migrator.ts` aplica once migraciones
-  independientes (`0001` a `0011`). `0005` conserva Documents por compatibilidad histórica y `0011`
-  los retira después de verificar un archivo externo. `0006` agrega suscriptores, `0007`
-  agrega Memberships y grants de Workspace, `0008` agrega `workspace_id` a los límites de Team de
-  API keys y `0009` hace explícito el Workspace efectivo de cada grant. Su baseline conserva un
-  singleton de Workspace y todavía no representa todo el alcance multi-Workspace de SQLite.
-- En SQLite, el contrato GraphQL vigente lista y crea Workspaces y acepta selección por contexto;
-  la CLI y la web exponen esa selección. En PostgreSQL, `workspaceCreate` aún devuelve que la
-  operación no está migrada y el resolver de auth conserva el singleton. Los resolvers migrados usan
+  grants de API keys por Workspace, `0027` conserva el registro histórico de Documents, `0028`
+  agrega suscriptores de Issues, `0030` retira Documents y `0031` agrega `start_date`, members,
+  dependencies, Initiative priority, labels, resources y status updates.
+- El migrador de PostgreSQL en `apps/server/src/db/postgres/migrator.ts` aplica doce migraciones
+  independientes (`0001` a `0012`). `0005` conserva Documents por compatibilidad histórica y `0011`
+  los retira después de verificar un archivo externo; `0012` agrega el modelo de planificación. Su
+  baseline conserva un singleton de Workspace y las tablas de planning no tienen `workspace_id`.
+- En SQLite, el contrato GraphQL lista y crea Workspaces y acepta selección por contexto; la CLI y
+  la web exponen esa selección. En PostgreSQL, `workspaceCreate` aún devuelve que la operación no
+  está migrada y el resolver de auth conserva el singleton. Los resolvers migrados usan
   `context.persistence` para Actors, autenticación, API keys y límites, Teams, Issues, Relations,
-  Projects, Milestones, Cycles, Labels, Activity, suscriptores, Reviews, Initiatives,
-  Project Updates, Saved Views, Favorites, Inbox y Webhooks. Relations incluye lectura y mutaciones
+  Projects, Milestones, Cycles, Labels, Activity, suscriptores, Reviews, Initiatives, Project
+  Updates, Saved Views, Favorites, Inbox y Webhooks. Relations incluye lectura y mutaciones
   PostgreSQL desde PRB-437. Comments no tiene una ruta PostgreSQL. El event log canónico y el
   proyector Repository Source → PostgreSQL siguen fuera del runtime, según ADR-0019 y PRB-445/453.
   Los dominios sin path PG usan un SQLite efímero o rechazan la operación de forma explícita.
+- `Project` incluye `startDate`, members directos, dependencies `blocks|related`, Teams, milestones,
+  Issues y Project Updates. No incluye Project owner, labels propias ni resources. `Initiative`
+  incluye priority `0..4`, `leadTeam`, resources, labels, owner, Projects, Teams, status updates y
+  progreso derivado; no agrupa Issues directamente. Project admite ACL directa de members o acceso
+  a todos sus Teams; Initiative valida todos sus Projects y Teams asociados. Initiative owner controla
+  las mutaciones cuando existe owner, incluso frente a un
+  admin; una Initiative sin owner conserva la regla de viewer autorizado.
+- Export/rebuild local conserva esos campos por nombres naturales, genera IDs internos nuevos y
+  falla cerrado ante referencias fuera de alcance. El preflight valida metadata, Workspace, alcance
+  parcial y nombres ambiguos; referencias restantes se validan dentro de la transacción y cualquier
+  error revierte el cambio. Esto no convierte el export local en un Linear export/import.
+- La ACL de `projectDependencyCreate` en PostgreSQL aún requiere el mismo check de gestión que
+  SQLite en PRB-609. La revalidación de Team limits tiene seguimiento en PRB-618. No presentar esta
+  auditoría como paridad completa entre backends.
 - El SDL actual contiene 28 campos de `Query`, 67 de `Mutation`, 25 de `Issue`, 14 de `Project` y
   2 de `PageInfo`. Estos números describen este commit, no un objetivo de paridad con Linear.
 
@@ -141,8 +155,8 @@ backends ni un servicio hosted.
 | Identificador de Issue | `identifier` y `number`; shorthand se resuelve en su organización.                                                 | `TEAM-number`, `UNIQUE(team_id, number)`.                                                                                                                                                                                                                           | **Parcial; scope debe ser explícito**.             | PRB-412 y PRB-414                                                        |
 | Relaciones             | `blocks`, `duplicate`, `related`, `similar` e inversas.                                                            | `blocks`, `duplicate_of`, `related` e inversas calculadas; no `similar`. PostgreSQL tiene lectura y mutaciones directas desde PRB-437.                                                                                                                              | **Parcial**.                                       | No bloquear multi-workspace salvo aislamiento de extremos.               |
 | Comments/Activity      | Comentarios, historial, notificaciones y más entidades colaborativas.                                              | SQLite tiene Comments y Activity issue-céntricos; PostgreSQL tiene Activity e Inbox derivados, pero Comments no tiene una ruta de persistencia. El event log canónico sigue fuera del runtime.                                                                      | **Parcial + simplificación intencional**.          | PRB-415 para scope; features extra después.                              |
-| Projects               | Projects, miembros, labels, documentos, relaciones/dependencias, milestones y updates.                             | Projects multi-Team, lead, estado, target date, milestones, issues y updates; los artefactos externos se conservan como enlaces cuando aplica.                                                                                                                      | **Parcial**.                                       | PRB-412/414 para aislamiento; gaps de producto después.                  |
-| Initiatives            | Agrupan Projects con más jerarquía, labels, updates y relaciones.                                                  | Agrupan Projects y Teams, con owner, estado, target date y progreso.                                                                                                                                                                                                | **Parcial**.                                       | Scopear ahora; ampliar después.                                          |
+| Projects               | Projects, miembros, labels, documentos, relaciones/dependencias, milestones y updates.                             | Projects multi-Team con `description`, lead, `startDate`, `targetDate`, members, dependencies, milestones, issues y updates; no tiene owner, labels propias ni resources. Los artefactos externos se conservan como enlaces cuando aplica.                          | **Parcial**.                                       | PRB-391; ACL PG en PRB-609/618.                                          |
+| Initiatives            | Agrupan Projects con más jerarquía, labels, updates y relaciones.                                                  | Agrupan Projects y Teams, con `priority`, `leadTeam`, resources, labels, owner, status updates y progreso derivado; no agrupan Issues directamente ni tienen jerarquía propia.                                                                                      | **Parcial**.                                       | PRB-391; Initiative Views siguen en PRB-390.                             |
 | Cycles                 | Cycles por Team con métricas y opciones adicionales.                                                               | Cycles por Team con carry-over y progreso.                                                                                                                                                                                                                          | **Paridad de núcleo**.                             | Scopear en PRB-412/414.                                                  |
 | Saved Views            | Custom Views con filtros tipados, scopes, sharing, slug, preferencias y más recursos.                              | Saved Views personal/team/workspace con filtro JSON, orden, agrupación y columnas.                                                                                                                                                                                  | **Parcial**.                                       | Scopear ahora; editor avanzado después.                                  |
 | Display options        | Layout, grouping, ordering y propiedades visibles integradas con Views.                                            | Parte de las preferencias existe en UI/localStorage; cobertura y persistencia son menores.                                                                                                                                                                          | **Parcial**.                                       | No bloquear multi-workspace; evitar cache cruzado en PRB-419.            |
@@ -152,7 +166,7 @@ backends ni un servicio hosted.
 | Reviews                | Linear no tiene esta misma cola como núcleo.                                                                       | `Review` es una cola de aprobación propia.                                                                                                                                                                                                                          | **Divergencia intencional**.                       | No forzar equivalencia.                                                  |
 | Auth/API keys          | Personal API keys y OAuth; scopes pueden limitarse por operación y Team.                                           | API keys por Actor con read/write/admin y límites por Team; SQLite y PostgreSQL aplican el alcance. PostgreSQL usa `0008` y `0009` para el Workspace de los límites y grants. No OAuth.                                                                             | **Parcial + fuera de alcance OAuth**.              | PRB-413; conservar agent-first.                                          |
 | Webhooks               | Más tipos de eventos y administración; se instalan dentro de una Workspace.                                        | SQLite y PostgreSQL persisten scope de Workspace y Team; el dispatcher y el resto de la cobertura siguen en migración incremental.                                                                                                                                  | **Parcial por backend**.                           | PRB-416 y cutover PostgreSQL                                             |
-| API GraphQL            | Contrato muy amplio, `Organization`, conexiones Relay y muchas mutaciones (snapshot: 161 queries y 361 mutations). | SDL local vigente: 26 queries y 66 mutations; PostgreSQL tiene paths directos para los dominios migrados y conserva un SQLite efímero o errores explícitos para los restantes.                                                                                      | **Parcial**.                                       | PRB-414/415; paridad total no es objetivo.                               |
+| API GraphQL            | Contrato muy amplio, `Organization`, conexiones Relay y muchas mutaciones (snapshot: 161 queries y 361 mutations). | SDL local vigente: 28 queries y 67 mutations; PostgreSQL tiene paths directos para los dominios migrados y conserva un SQLite efímero o errores explícitos para los restantes.                                                                                      | **Parcial**.                                       | PRB-414/415; paridad total no es objetivo.                               |
 | CLI/MCP                | No hay un CLI oficial equivalente; integra API y OAuth.                                                            | CLI `pb` y MCP son superficies constitutivas.                                                                                                                                                                                                                       | **Divergencia agent-first**.                       | PRB-417.                                                                 |
 | UI Workspace switcher  | Menú de Workspace permite cambiar, crear o unirse; una cuenta puede tener varias.                                  | La web actual lista y cambia el Workspace con el gate de contexto; crear Workspace sigue siendo una operación GraphQL del camino SQLite.                                                                                                                            | **Parcial por backend**.                           | PRB-418/419 y cutover PostgreSQL                                         |
 | Documents/attachments  | Recursos de documentación y archivos integrados.                                                                   | Documents locales quedaron retirados por PRB-570. El export/rebuild archiva capturas históricas fuera del repositorio; los artefactos externos de Linear conservan URL y título como enlaces. Adjuntos ricos y colaboración siguen fuera.                           | **Parcial; retiro intencional**.                   | PRB-570; conservar conversión de artefactos externos.                    |
@@ -162,28 +176,33 @@ backends ni un servicio hosted.
 
 ## Contrato vigente y decisión de multi-Workspace
 
-### Capacidades verificadas en SQLite (2026-08-23)
+### Capacidades verificadas en SQLite (2026-09-06)
 
 - Una misma DB puede contener varias Workspaces. `workspace_id`, Memberships, grants de API keys y
-  FKs compuestas mantienen el alcance de los recursos en las migraciones `0024`–`0028`.
+  FKs compuestas mantienen el alcance de los recursos en las migraciones `0024`–`0028` y `0031`.
 - GraphQL expone `workspaces` y `workspaceCreate`; `X-Workspace-ID` selecciona el contexto. La CLI y
   la web resuelven el mismo contexto mediante su configuración y su Workspace gate.
+- Projects e Initiatives tienen el contrato de planificación de PRB-391: Project members y
+  dependencies; Initiative priority, labels, resources, leadTeam, owner, updates y progreso. El
+  contrato y el export/rebuild están descritos en [`docs/specs/project-initiative-settings.md`](../specs/project-initiative-settings.md).
 - El contrato impide referencias cross-Workspace en las relaciones verificadas. La cobertura de cada
   dominio y cliente sigue siendo incremental; la existencia de una columna o un test no significa que
   todos los flujos tengan la misma superficie.
 
-### Límites verificados en PostgreSQL (2026-08-23)
+### Límites verificados en PostgreSQL (2026-09-06)
 
 - `0002_workspace_singleton.sql` impone una única Workspace. `workspaceCreate` devuelve que la
   operación todavía no está migrada y `postgres-viewer.ts` autoriza ese singleton mediante el grant y
   la Membership efectiva.
-- El migrador PG tiene once versiones. `0005` conserva Documents históricos y `0011` los retira con
-  un archivo externo verificado. `0006` agrega suscriptores, `0007`
-  Memberships y grants, `0008` el alcance de Workspace de los límites de Team de API keys y `0009`
-  el grant explícito del Workspace efectivo. El servidor usa un SQLite efímero o devuelve un error
-  explícito para los dominios todavía no migrados. Comments no tiene ruta PostgreSQL; Relations sí tiene
-  lectura y mutaciones directas desde PRB-437. El event log canónico y el proyector Repository Source →
-  PostgreSQL siguen pendientes según ADR-0019 y PRB-445/453.
+- El migrador PG tiene doce versiones. `0005` conserva Documents históricos y `0011` los retira con
+  un archivo externo verificado; `0012` agrega el modelo de planificación sin `workspace_id`. `0006`
+  agrega suscriptores, `0007` Memberships y grants, `0008` el alcance de Workspace de los límites de
+  Team de API keys y `0009` el grant explícito del Workspace efectivo. El servidor usa un SQLite
+  efímero o devuelve un error explícito para los dominios todavía no migrados. Comments no tiene ruta
+  PostgreSQL; Relations sí tiene lectura y mutaciones directas desde PRB-437. La ACL de creación de
+  dependencies requiere completar PRB-609 y la revalidación de Team limits sigue en PRB-618. El event
+  log canónico y el proyector Repository Source → PostgreSQL siguen pendientes según ADR-0019 y
+  PRB-445/453.
 - Por lo tanto, no se debe afirmar que PostgreSQL ofrece multi-Workspace, un cutover completo ni
   paridad de persistencia con SQLite.
 
@@ -207,15 +226,15 @@ Una entidad puede existir en el backend y no tener la misma superficie en todos 
 evita cerrar un ticket de API suponiendo que la UI ya tiene paridad. También evita confundir una pérdida del
 importer con una ausencia del modelo.
 
-| Superficie          | Prime-board hoy                                                                                                                                                                                                               | Diferencia relevante frente a Linear                                                           | Alcance de multi-workspace                                                                         |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| DB/dominio          | SQLite tiene el modelo operativo y las migraciones `0001`–`0030`; PostgreSQL tiene once migraciones y cobertura incremental; `0010` agrega `projector_checkpoints` y `0011` retira Documents tras validar el archivo externo. | Menor cobertura de metadatos y recursos avanzados frente a Linear.                             | El alcance multi-Workspace vigente es SQLite; no asumir cutover PostgreSQL.                        |
-| GraphQL             | API interna coherente: 26 queries y 66 mutations en el SDL vigente.                                                                                                                                                           | Linear publica 161/361 y conexiones Relay más amplias; no es drop-in.                          | El selector funciona en SQLite; PostgreSQL requiere completar migración.                           |
-| CLI                 | `pb` cubre issues, planning, actores, keys, webhooks y selección de Workspace en el camino SQLite.                                                                                                                            | Linear no ofrece un CLI oficial equivalente; el CLI local es una ventaja agent-first.          | PostgreSQL ya tiene auth, grants y límites; faltan selección multi-Workspace y dominios restantes. |
-| MCP                 | Tools espejo de la API y actor/agente de primera clase; la sesión fija un contexto.                                                                                                                                           | Contrato de tools no es el MCP/API de Linear.                                                  | Revisar selección cuando el backend PostgreSQL migre.                                              |
-| Web                 | Shell Linear-like, sidebar, listas/board, issue detail, projects, settings, members y gate de Workspace.                                                                                                                      | Faltan acciones, preferencias, accesibilidad y superficies avanzadas.                          | El switcher actual depende del contrato de Workspaces.                                             |
-| Export/rebuild      | Repository Replica Git (`.prime-board`), metadata y rebuild local; no exporta secretos.                                                                                                                                       | No hay equivalente directo en Linear. Algunos datos de importación tienen política de pérdida. | Mantener namespace y contexto por Workspace.                                                       |
-| Auditoría/operación | Activity de Issue, webhooks, comentarios e Inbox receipts. PostgreSQL tiene Activity e Inbox, pero Comments no tiene path PG y el event log canónico de ADR-0019 no está implementado.                                        | Linear separa history, notifications y audit entries con más canales.                          | Mantener el modelo compacto y scoped; revisar PG.                                                  |
+| Superficie          | Prime-board hoy                                                                                                                                                                                                                    | Diferencia relevante frente a Linear                                                                 | Alcance de multi-workspace                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| DB/dominio          | SQLite tiene el modelo operativo y las migraciones `0001`–`0031`; PostgreSQL tiene doce migraciones y cobertura incremental; `0010` agrega `projector_checkpoints`, `0011` retira Documents y `0031`/`0012` agregan planificación. | Menor cobertura de metadatos y recursos avanzados frente a Linear; planning PG mantiene gaps de ACL. | El alcance multi-Workspace vigente es SQLite; no asumir cutover PostgreSQL.                        |
+| GraphQL             | API interna coherente: 28 queries y 67 mutations en el SDL vigente.                                                                                                                                                                | Linear publica 161/361 y conexiones Relay más amplias; no es drop-in.                                | El selector funciona en SQLite; PostgreSQL requiere completar migración.                           |
+| CLI                 | `pb` cubre issues, planning, actores, keys, webhooks y selección de Workspace en el camino SQLite.                                                                                                                                 | Linear no ofrece un CLI oficial equivalente; el CLI local es una ventaja agent-first.                | PostgreSQL ya tiene auth, grants y límites; faltan selección multi-Workspace y dominios restantes. |
+| MCP                 | Tools espejo de la API y actor/agente de primera clase; la sesión fija un contexto.                                                                                                                                                | Contrato de tools no es el MCP/API de Linear.                                                        | Revisar selección cuando el backend PostgreSQL migre.                                              |
+| Web                 | Shell Linear-like, sidebar, listas/board, issue detail, projects, settings, members y gate de Workspace.                                                                                                                           | Faltan acciones, preferencias, accesibilidad y superficies avanzadas.                                | El switcher actual depende del contrato de Workspaces.                                             |
+| Export/rebuild      | Repository Replica Git (`.prime-board`), metadata y rebuild local; no exporta secretos.                                                                                                                                            | No hay equivalente directo en Linear. Algunos datos de importación tienen política de pérdida.       | Mantener namespace y contexto por Workspace.                                                       |
+| Auditoría/operación | Activity de Issue, webhooks, comentarios e Inbox receipts. PostgreSQL tiene Activity e Inbox, pero Comments no tiene path PG y el event log canónico de ADR-0019 no está implementado.                                             | Linear separa history, notifications y audit entries con más canales.                                | Mantener el modelo compacto y scoped; revisar PG.                                                  |
 
 Lee los documentos de migración (`docs/specs/migracion-linear.md`) como política del importer. La no
 importación de Documents locales es una decisión explícita: su contenido no se convierte en Issues ni se
@@ -256,10 +275,10 @@ esas auditorías derivaron). Los gaps que bloquean específicamente varios Works
 
 ## Correcciones respecto de notas anteriores
 
-- `docs/audits/linear-paridad-graphql.md` conserva el snapshot 2026-08-18 (166/373/86/80 en su texto).
-  El SDL local verificado contiene 26/66/25/13/2; ningún conteo implica compatibilidad drop-in.
+- `docs/audits/linear-paridad-graphql.md` conserva el snapshot comparativo (Linear: 166/373/86/80;
+  local: 28/67/25/14/2 en su texto). Ningún conteo implica compatibilidad drop-in.
 - `docs/audits/linear-modelo-datos.md` conserva el snapshot de migraciones SQLite hasta `0018`. El
-  runner SQLite actual llega a `0030`; el migrador PostgreSQL es independiente y llega a `0011`.
+  runner SQLite actual llega a `0031`; el migrador PostgreSQL es independiente y llega a `0012`.
 - `docs/research/linear-settings-parity.md` es un snapshot histórico: varios gaps allí descritos ya
   tienen implementación en SQLite, pero no se deben proyectar automáticamente sobre PostgreSQL.
 - `docs/relevamiento-linear.md` describe FTS sobre comentarios, pero los índices actuales de SQLite y

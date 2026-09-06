@@ -3,7 +3,8 @@
 > Ticket: [PRB-396](http://localhost:3333/issue/PRB-396)
 > Relevamiento de Linear: 2026-08-18
 > Verificación del SDL local: 2026-08-23
-> Estado: snapshot comparativo; los conteos locales de esta tabla corresponden al SDL verificado.
+> Estado: snapshot comparativo del 2026-08-23; sus conteos y hallazgos no son el contrato actual.
+> Contrato vigente de planificación: [`docs/specs/project-initiative-settings.md`](../specs/project-initiative-settings.md).
 > Alcance: contrato GraphQL público; no implementación de correcciones.
 
 ## Método y fuentes
@@ -39,7 +40,28 @@ Por eso, un campo o una mutación presente en el SDL no implica que todos los ba
 soporten. Esta auditoría cuenta el contrato y marca la limitación de persistencia cuando afecta
 la lectura de la paridad.
 
-## Veredicto
+## Addendum: contrato de planificación vigente (2026-09-06)
+
+Las secciones siguientes conservan el snapshot comparativo y sus conteos. No las uses para decidir
+si un campo de Project o Initiative existe hoy. La entrega de PRB-391 agrega al contrato local:
+
+- `Project.startDate`, members directos y dependencies `blocks|related`, además de Teams,
+  milestones, Issues y Project Updates. No agrega Project owner, labels propias ni resources.
+- `Initiative.priority` (`0..4`), `leadTeam`, resources, labels, owner, Projects, Teams, status
+  updates y progreso derivado. No agrupa Issues directamente ni tiene jerarquía de Initiatives.
+- ACL de Project por admin, member directo o acceso a todos los Teams asociados. Initiative valida
+  todos sus Projects y Teams; su owner controla las mutaciones cuando existe owner, incluso para
+  un admin. Una Initiative sin owner conserva la regla de viewer autorizado.
+- SQLite aplica `0031_planning_settings.sql`; PostgreSQL aplica `0012_planning_settings.sql` y
+  mantiene un Workspace singleton. La presencia del campo en SDL no prueba paridad de backend.
+- El export/rebuild local conserva estas relaciones por referencias naturales y falla cerrado sin
+  estado parcial. El import de Linear mantiene su política separada de pérdida para capacidades no
+  representadas por la captura.
+
+Para la matriz de clientes, ownership de PRB-385/386/390/391 y la lista completa de export/rebuild,
+consulta la especificación canónica enlazada arriba.
+
+## Veredicto del snapshot comparativo (2026-08-23)
 
 Prime Board ofrece un contrato GraphQL coherente para el núcleo de Issues y planificación, pero **no es compatible drop-in con la API GraphQL de Linear**. Los conceptos principales están presentes. Difieren los nombres, los tipos, la paginación, los filtros y la cobertura de operaciones.
 
@@ -73,7 +95,7 @@ Los conteos no son una métrica de calidad. Linear expone funcionalidades que Pr
 | `Document`      | `Document`         | Document es una capacidad retirada de Prime Board. Se conserva el enlace a la documentación de Linear solo como fuente externa; no se crea una entidad local. |
 | `Label`         | `IssueLabel`       | Prime Board simplifica labels a nombre/color/scope.                                                                                                           |
 
-## Hallazgos de contrato
+## Hallazgos de contrato del snapshot
 
 ### 1. Conexiones y paginación
 
@@ -172,7 +194,7 @@ Prime Board define explícitamente tres códigos de dominio:
 
 La documentación de Linear indica que `extensions` puede contener códigos y detalles de validación, sin limitar el vocabulario a esos tres códigos. El formato es compatible, pero el contrato de códigos de Prime Board es más pequeño.
 
-## Prioridad sugerida
+## Prioridad sugerida en el snapshot
 
 1. Completar conexiones Relay y paginación de las colecciones públicas.
 2. Añadir metadatos y filtros de Issue que impactan búsqueda y planificación (`number`, estimate, due date, transición y subscribers).

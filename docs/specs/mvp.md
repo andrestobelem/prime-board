@@ -4,6 +4,7 @@
 > (esquemas, tipos, comandos, nombres de campos) está en inglés.
 > **Alcance:** esta es la especificación histórica del MVP. No la uses como contrato actual.
 > Para el contrato vigente de Workspace, consulta [`docs/agents/graphql-workspace.md`](../agents/graphql-workspace.md).
+> Para el contrato vigente de Projects e Initiatives, consulta [`project-initiative-settings.md`](project-initiative-settings.md).
 > Para exportación, réplica y reconstrucción, prevalecen [`README.md`](../../README.md),
 > [`docs/guia-agentes.md`](../guia-agentes.md) y [ADR-0004](../adr/0004-repo-como-fuente-de-verdad.md).
 

@@ -1,8 +1,9 @@
 # Documentación
 
-Este índice organiza la documentación por audiencia y por tipo. El contrato operativo vigente
-está en la guía de agentes y en los documentos de `docs/agents/`. Los documentos que describen
-el MVP o decisiones anteriores indican su carácter histórico.
+Este índice organiza la documentación por audiencia y por tipo. El contrato operativo vigente está
+en la [especificación de Projects e Initiatives](specs/project-initiative-settings.md), la guía de
+agentes y los documentos de `docs/agents/`. Los documentos que describen el MVP o decisiones
+anteriores indican su carácter histórico.
 
 ## Por audiencia
 
@@ -29,7 +30,9 @@ el MVP o decisiones anteriores indican su carácter histórico.
 
 ### Alcance y especificaciones
 
-- [Alcance del MVP](alcance-mvp.md): alcance y decisiones estructurales del MVP histórico.
+- [Alcance del MVP](alcance-mvp.md): matriz vigente y decisiones estructurales del MVP histórico.
+- [Contrato de Projects e Initiatives](specs/project-initiative-settings.md): campos, relaciones,
+  ACL, clientes y export/rebuild vigentes para planificación.
 - [Especificación técnica del MVP](specs/mvp.md): especificación histórica; no es el contrato actual.
 - [Contrato de migración Linear → prime-board](specs/migracion-linear.md): entradas y salidas de la migración.
 - [Relevamiento de Linear](relevamiento-linear.md): inventario usado como referencia histórica.

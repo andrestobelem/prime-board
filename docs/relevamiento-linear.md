@@ -2,7 +2,9 @@
 
 > Objetivo: inventariar las funcionalidades de Linear candidatas a clonar en prime-board,
 > con una primera clasificación pensando en **agentes como usuarios principales**.
-> La decisión final de alcance se documenta en [`alcance-mvp.md`](alcance-mvp.md).
+> Estado: inventario histórico de candidatos; no es el contrato operativo vigente.
+> La decisión final de alcance se documenta en [`alcance-mvp.md`](alcance-mvp.md) y el contrato
+> actual de Projects e Initiatives en [`specs/project-initiative-settings.md`](specs/project-initiative-settings.md).
 
 ## Criterio de clasificación
 
