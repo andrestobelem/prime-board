@@ -110,7 +110,9 @@ if (values["merge-local"]) {
   }
   if (values.apply) {
     const config = loadConfig();
-    const db = openDatabase(config.dbPath);
+    const db = openDatabase(config.dbPath, {
+      repositoryRoot: config.repoRoot ?? undefined,
+    });
     const rebuilt = rebuildFromRepo(db, values.out);
     console.log(
       `Rebuilt ${rebuilt.issues} issues, ${rebuilt.comments} comments and ${rebuilt.events} events`,
@@ -148,7 +150,9 @@ else {
 }
 if (values.apply) {
   const config = loadConfig();
-  const db = openDatabase(config.dbPath);
+  const db = openDatabase(config.dbPath, {
+    repositoryRoot: config.repoRoot ?? undefined,
+  });
   const rebuilt = rebuildFromRepo(db, outDir);
   console.log(
     `Rebuilt ${rebuilt.issues} issues, ${rebuilt.comments} comments and ${rebuilt.events} events`,

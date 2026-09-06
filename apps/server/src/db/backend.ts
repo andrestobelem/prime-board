@@ -10,6 +10,8 @@ export interface PersistenceOptions {
   path: string;
   /** PostgreSQL connection URL, required for the postgres backend. */
   url?: string;
+  /** Repository root used to validate retired Documents archives. */
+  repositoryRoot?: string;
 }
 
 /**
@@ -26,7 +28,9 @@ export function resolvePersistenceBackend(value: string | undefined): Persistenc
 export function openPersistence(options: PersistenceOptions): Persistence {
   const backend = options.backend ?? "sqlite";
   if (backend === "sqlite") {
-    return createSqlitePersistence(openDatabase(options.path));
+    return createSqlitePersistence(
+      openDatabase(options.path, { repositoryRoot: options.repositoryRoot }),
+    );
   }
   if (!options.url) {
     throw new Error("PostgreSQL persistence backend requires a connection URL");

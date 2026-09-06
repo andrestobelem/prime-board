@@ -152,6 +152,11 @@ describe("retired Documents archive", () => {
       expect(() => archiveDocumentRows([{ id: "one" }], brokenOutput, "sqlite")).toThrow(
         /symbolic link/,
       );
+      const brokenParent = join(root, "broken-parent");
+      symlinkSync(join(root, "missing-directory"), brokenParent, "dir");
+      expect(() =>
+        archiveDocumentRows([{ id: "one" }], join(brokenParent, "archive.json"), "sqlite"),
+      ).toThrow(/symbolic link/);
 
       archiveDocumentRows([{ id: "one" }], archivePath, "sqlite");
       chmodSync(archivePath, 0o644);

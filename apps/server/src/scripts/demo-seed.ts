@@ -17,7 +17,9 @@ const credentialDatabasePath =
   config.persistenceBackend === "postgres" && config.postgresUrl
     ? `${config.dbPath}|postgres:${config.postgresUrl}`
     : config.dbPath;
-const db = openDatabase(config.dbPath);
+const db = openDatabase(config.dbPath, {
+  repositoryRoot: config.repoRoot ?? undefined,
+});
 
 const seeded = bootstrap(db, config.bootstrap);
 if (config.authMode !== "local" && seeded.created && seeded.adminApiKey) {
