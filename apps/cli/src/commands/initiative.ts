@@ -6,13 +6,15 @@ import { ApiError, UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
 import { readBody, resolveTeam } from "../resolve.ts";
 
-const INITIATIVE_FIELDS = `id name description state targetDate archivedAt progress completedIssues totalIssues
-  createdAt updatedAt owner { id name type } projects { id name } teams { id key name }`;
+const INITIATIVE_FIELDS = `id name description state priority targetDate archivedAt progress completedIssues totalIssues
+  resources leadTeam { id key name } labels { id name color } createdAt updatedAt
+  owner { id name type } projects { id name } teams { id key name }`;
 const USAGE = `Usage:
   pb initiative list [--include-archived] [--json]
   pb initiative view <ID> [--json]
-  pb initiative create --name TEXT [--description TEXT|-] [--state STATE]
-                       [--target-date DATE] [--project ID ...] [--team KEY ...] [--json]
+  pb initiative create --name TEXT [--description TEXT|-] [--state STATE] [--priority N]
+                       [--target-date DATE] [--lead-team KEY] [--label ID ...] [--resource JSON ...]
+                       [--project ID ...] [--team KEY ...] [--json]
   pb initiative update <ID> [--name TEXT] [--description TEXT|-] [--state STATE]
                        [--target-date DATE] [--archived true|false] [--project ID ...] [--team KEY ...] [--json]
   pb initiative delete <ID> [--json]`;
@@ -66,7 +68,11 @@ export async function initiativeCommand(argv: string[]): Promise<void> {
         name: { type: "string" },
         description: { type: "string" },
         state: { type: "string" },
+        priority: { type: "string" },
         "target-date": { type: "string" },
+        "lead-team": { type: "string" },
+        label: { type: "string", multiple: true },
+        resource: { type: "string", multiple: true },
         project: { type: "string", multiple: true },
         team: { type: "string", multiple: true },
         json: { type: "boolean" },
@@ -76,7 +82,12 @@ export async function initiativeCommand(argv: string[]): Promise<void> {
     const input: Record<string, unknown> = { name: values.name };
     if (values.description !== undefined) input.description = await readBody(values.description);
     if (values.state) input.state = values.state.toUpperCase();
+    if (values.priority !== undefined) input.priority = Number(values.priority);
     if (values["target-date"]) input.targetDate = values["target-date"];
+    if (values["lead-team"]) input.leadTeamId = (await resolveTeam(config, values["lead-team"])).id;
+    if (values.label?.length) input.labelIds = values.label;
+    if (values.resource?.length)
+      input.resources = values.resource.map((value) => JSON.parse(value));
     if (values.project?.length) input.projectIds = values.project;
     if (values.team?.length) input.teamIds = await teamIds(config, values.team);
     const data = await gqlRequest(
@@ -99,7 +110,11 @@ export async function initiativeCommand(argv: string[]): Promise<void> {
         name: { type: "string" },
         description: { type: "string" },
         state: { type: "string" },
+        priority: { type: "string" },
         "target-date": { type: "string" },
+        "lead-team": { type: "string" },
+        label: { type: "string", multiple: true },
+        resource: { type: "string", multiple: true },
         archived: { type: "string" },
         project: { type: "string", multiple: true },
         team: { type: "string", multiple: true },
@@ -110,7 +125,12 @@ export async function initiativeCommand(argv: string[]): Promise<void> {
     if (values.name !== undefined) input.name = values.name;
     if (values.description !== undefined) input.description = await readBody(values.description);
     if (values.state !== undefined) input.state = values.state.toUpperCase();
+    if (values.priority !== undefined) input.priority = Number(values.priority);
     if (values["target-date"] !== undefined) input.targetDate = values["target-date"];
+    if (values["lead-team"] !== undefined)
+      input.leadTeamId = (await resolveTeam(config, values["lead-team"])).id;
+    if (values.label) input.labelIds = values.label;
+    if (values.resource) input.resources = values.resource.map((value) => JSON.parse(value));
     if (values.archived !== undefined) input.archived = values.archived === "true";
     if (values.project) input.projectIds = values.project;
     if (values.team) input.teamIds = await teamIds(config, values.team);

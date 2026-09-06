@@ -26,6 +26,7 @@ export interface ProjectRow {
   state: (typeof PROJECT_STATES)[number];
   lead_id: string | null;
   target_date: string | null;
+  start_date: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -39,6 +40,7 @@ export function mapProject(row: ProjectRow) {
     state: row.state,
     leadId: row.lead_id,
     targetDate: row.target_date,
+    startDate: row.start_date,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
@@ -182,9 +184,18 @@ function allTeamIds(db: Database, workspaceId?: string): string[] {
 
 function validate(
   db: Database,
-  input: { state?: string | null; leadId?: string | null; targetDate?: string | null },
+  input: {
+    state?: string | null;
+    leadId?: string | null;
+    targetDate?: string | null;
+    startDate?: string | null;
+  },
 ): void {
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
+  if (input.startDate != null) parseDateTime(input.startDate, "startDate");
+  if (input.startDate != null && input.targetDate != null && input.startDate > input.targetDate) {
+    throw apiError("VALIDATION_FAILED", "Project startDate cannot be after targetDate");
+  }
   if (input.state != null && !PROJECT_STATES.includes(input.state as never)) {
     throw apiError("VALIDATION_FAILED", `Invalid project state: ${input.state}`);
   }
@@ -201,7 +212,10 @@ export function createProject(
     state?: string | null;
     leadId?: string | null;
     targetDate?: string | null;
+    startDate?: string | null;
+    memberIds?: string[] | null;
     teamIds?: string[] | null;
+    dependencyIds?: string[] | null;
   },
   workspaceId?: string,
 ): ProjectRow {
@@ -213,8 +227,8 @@ export function createProject(
   db.transaction(() => {
     const timestamp = now();
     db.query(
-      `INSERT INTO projects (id, name, description, state, lead_id, target_date, created_at, updated_at, workspace_id)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
+      `INSERT INTO projects (id, name, description, state, lead_id, target_date, start_date, created_at, updated_at, workspace_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)`,
     ).run(
       id,
       name,
@@ -222,12 +236,15 @@ export function createProject(
       input.state ?? "backlog",
       input.leadId ?? null,
       input.targetDate ?? null,
+      input.startDate ?? null,
       timestamp,
       workspaceId ?? null,
     );
     // Sin teamIds explícitos, el proyecto se asocia a todos los teams actuales
     // (compatibilidad con clientes previos a AT-152).
     setProjectTeams(db, id, input.teamIds ?? allTeamIds(db, workspaceId), workspaceId);
+    setProjectMembers(db, id, input.memberIds ?? [], workspaceId);
+    setProjectDependencies(db, id, input.dependencyIds ?? [], workspaceId);
   })();
   return getProject(db, id, workspaceId)!;
 }
@@ -241,7 +258,10 @@ export function updateProject(
     state?: string | null;
     leadId?: string | null;
     targetDate?: string | null;
+    startDate?: string | null;
+    memberIds?: string[] | null;
     teamIds?: string[] | null;
+    dependencyIds?: string[] | null;
   },
   workspaceId?: string,
 ): ProjectRow {
@@ -249,6 +269,9 @@ export function updateProject(
   if (!project) throw apiError("NOT_FOUND", "Project not found");
   validate(db, input);
   if (input.teamIds) setProjectTeams(db, id, input.teamIds, workspaceId);
+  if (input.memberIds !== undefined) setProjectMembers(db, id, input.memberIds ?? [], workspaceId);
+  if (input.dependencyIds !== undefined)
+    setProjectDependencies(db, id, input.dependencyIds ?? [], workspaceId);
 
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -265,6 +288,7 @@ export function updateProject(
   if (input.state != null) push("state", input.state);
   if (input.leadId !== undefined) push("lead_id", input.leadId);
   if (input.targetDate !== undefined) push("target_date", input.targetDate);
+  if (input.startDate !== undefined) push("start_date", input.startDate);
 
   if (sets.length > 0) {
     push("updated_at", now());
@@ -279,4 +303,157 @@ export function updateProject(
     );
   }
   return getProject(db, id, workspaceId)!;
+}
+
+export function listProjectMemberIds(
+  db: Database,
+  projectId: string,
+  workspaceId?: string,
+): string[] {
+  const query = workspaceId
+    ? `SELECT actor_id FROM project_members WHERE project_id = ?1 AND ${workspaceClause("workspace_id", "?2")} ORDER BY actor_id`
+    : "SELECT actor_id FROM project_members WHERE project_id = ?1 ORDER BY actor_id";
+  return (
+    workspaceId ? db.query(query).values(projectId, workspaceId) : db.query(query).values(projectId)
+  ).map((row) => row[0] as string);
+}
+
+export function projectHasMember(
+  db: Database,
+  projectId: string,
+  actorId: string,
+  workspaceId?: string,
+): boolean {
+  const query = workspaceId
+    ? `SELECT 1 FROM project_members WHERE project_id = ?1 AND actor_id = ?2 AND ${workspaceClause("workspace_id", "?3")}`
+    : "SELECT 1 FROM project_members WHERE project_id = ?1 AND actor_id = ?2";
+  return Boolean(
+    workspaceId
+      ? db.query(query).get(projectId, actorId, workspaceId)
+      : db.query(query).get(projectId, actorId),
+  );
+}
+
+function setProjectMembers(
+  db: Database,
+  projectId: string,
+  actorIds: string[],
+  workspaceId?: string,
+): void {
+  const unique = [...new Set(actorIds)];
+  for (const actorId of unique) {
+    const actor = getActor(db, actorId);
+    if (!actor) throw apiError("NOT_FOUND", `Project member not found: ${actorId}`);
+  }
+  if (workspaceId)
+    db.query(
+      `DELETE FROM project_members WHERE project_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+    ).run(projectId, workspaceId);
+  else db.query("DELETE FROM project_members WHERE project_id = ?1").run(projectId);
+  for (const actorId of unique)
+    db.query(
+      "INSERT INTO project_members (project_id, actor_id, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4)",
+    ).run(projectId, actorId, now(), workspaceId ?? null);
+}
+
+export function listProjectDependencyRows(
+  db: Database,
+  projectId: string,
+  workspaceId?: string,
+): Array<{
+  id: string;
+  project_id: string;
+  depends_on_project_id: string;
+  type: "blocks" | "related";
+  created_at: string;
+}> {
+  const query = workspaceId
+    ? `SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE project_id = ?1 AND ${workspaceClause("workspace_id", "?2")} ORDER BY created_at, id`
+    : "SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE project_id = ?1 ORDER BY created_at, id";
+  return (
+    workspaceId ? db.query(query).all(projectId, workspaceId) : db.query(query).all(projectId)
+  ) as Array<{
+    id: string;
+    project_id: string;
+    depends_on_project_id: string;
+    type: "blocks" | "related";
+    created_at: string;
+  }>;
+}
+
+function setProjectDependencies(
+  db: Database,
+  projectId: string,
+  dependencyIds: string[],
+  workspaceId?: string,
+): void {
+  const unique = [...new Set(dependencyIds)];
+  for (const dependsOnProjectId of unique) {
+    if (dependsOnProjectId === projectId)
+      throw apiError("VALIDATION_FAILED", "A project cannot depend on itself");
+    const dependency = getProject(db, dependsOnProjectId, workspaceId);
+    if (!dependency)
+      throw apiError("NOT_FOUND", `Dependency project not found: ${dependsOnProjectId}`);
+  }
+  if (workspaceId)
+    db.query(
+      `DELETE FROM project_dependencies WHERE project_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+    ).run(projectId, workspaceId);
+  else db.query("DELETE FROM project_dependencies WHERE project_id = ?1").run(projectId);
+  for (const dependsOnProjectId of unique)
+    db.query(
+      "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at, workspace_id) VALUES (?1, ?2, ?3, 'blocks', ?4, ?5)",
+    ).run(newId(), projectId, dependsOnProjectId, now(), workspaceId ?? null);
+}
+
+export function createProjectDependency(
+  db: Database,
+  input: { projectId: string; dependsOnProjectId: string; type?: string | null },
+  workspaceId?: string,
+): {
+  id: string;
+  project_id: string;
+  depends_on_project_id: string;
+  type: "blocks" | "related";
+  created_at: string;
+} {
+  if (input.projectId === input.dependsOnProjectId)
+    throw apiError("VALIDATION_FAILED", "A project cannot depend on itself");
+  const project = getProject(db, input.projectId, workspaceId);
+  const target = getProject(db, input.dependsOnProjectId, workspaceId);
+  if (!project || !target) throw apiError("NOT_FOUND", "Dependency project not found");
+  const type =
+    input.type === "related"
+      ? "related"
+      : input.type === "blocks" || input.type == null
+        ? "blocks"
+        : null;
+  if (!type) throw apiError("VALIDATION_FAILED", `Invalid project dependency type: ${input.type}`);
+  const id = newId();
+  db.query(
+    "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+  ).run(id, input.projectId, input.dependsOnProjectId, type, now(), workspaceId ?? null);
+  return db
+    .query(
+      "SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE id = ?1",
+    )
+    .get(id) as {
+    id: string;
+    project_id: string;
+    depends_on_project_id: string;
+    type: "blocks" | "related";
+    created_at: string;
+  };
+}
+
+export function deleteProjectDependency(db: Database, id: string, workspaceId?: string): boolean {
+  const result = workspaceId
+    ? db
+        .query(
+          `DELETE FROM project_dependencies WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+        )
+        .run(id, workspaceId)
+    : db.query("DELETE FROM project_dependencies WHERE id = ?1").run(id);
+  if (!result.changes) throw apiError("NOT_FOUND", "Project dependency not found");
+  return true;
 }

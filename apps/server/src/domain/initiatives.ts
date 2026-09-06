@@ -20,7 +20,10 @@ export interface InitiativeRow {
   name: string;
   description: string | null;
   state: InitiativeState;
+  priority: number;
   target_date: string | null;
+  lead_team_id: string | null;
+  resources_json: string;
   owner_id: string | null;
   created_at: string;
   updated_at: string;
@@ -29,6 +32,10 @@ export interface InitiativeRow {
 }
 
 type ViewerRef = string | ActorRow;
+
+function workspaceClause(column: string, parameter: string): string {
+  return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
+}
 
 function resolveViewer(db: Database, viewer: ViewerRef): ActorRow | null {
   if (typeof viewer !== "string") return viewer;
@@ -39,13 +46,26 @@ function viewerId(viewer: ViewerRef): string {
   return typeof viewer === "string" ? viewer : viewer.id;
 }
 
+function parseResources(value: string | null | undefined): unknown[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export function mapInitiative(row: InitiativeRow) {
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     state: row.state,
+    priority: row.priority,
     targetDate: row.target_date,
+    leadTeamId: row.lead_team_id,
+    resources: parseResources(row.resources_json),
     ownerId: row.owner_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -163,7 +183,7 @@ export function canViewInitiative(
   if (!viewer) return false;
   const teamIds = new Set(listInitiativeTeamIds(db, initiativeId, workspaceId));
   for (const projectId of listInitiativeProjectIds(db, initiativeId, workspaceId)) {
-    for (const teamId of listProjectTeamIds(db, projectId)) teamIds.add(teamId);
+    for (const teamId of listProjectTeamIds(db, projectId, workspaceId)) teamIds.add(teamId);
     if (!canAccessProject(db, viewer, projectId)) return false;
   }
   return [...teamIds].every(
@@ -220,7 +240,11 @@ export function createInitiative(
     name: string;
     description?: string | null;
     state?: string | null;
+    priority?: number | null;
     targetDate?: string | null;
+    leadTeamId?: string | null;
+    labelIds?: string[] | null;
+    resources?: unknown[] | null;
     projectIds?: string[] | null;
     teamIds?: string[] | null;
   },
@@ -229,6 +253,12 @@ export function createInitiative(
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Initiative name cannot be empty");
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
+  validatePriority(input.priority);
+  if (input.leadTeamId != null && !getTeam(db, { id: input.leadTeamId }, workspaceId)) {
+    throw apiError("NOT_FOUND", "Initiative lead team not found");
+  }
+  validateResources(input.resources);
+  validateLabels(db, input.labelIds, workspaceId);
   const ownerId = viewerId(ownerRef);
   const id = newId();
   const timestamp = now();
@@ -236,14 +266,17 @@ export function createInitiative(
   db.transaction(() => {
     db.query(
       `INSERT INTO initiatives
-        (id, name, description, state, target_date, owner_id, created_at, updated_at, archived_at, workspace_id)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, NULL, ?8)`,
+        (id, name, description, state, priority, target_date, lead_team_id, resources_json, owner_id, created_at, updated_at, archived_at, workspace_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, NULL, ?11)`,
     ).run(
       id,
       name,
       input.description ?? null,
       state,
+      input.priority ?? 0,
       input.targetDate ?? null,
+      input.leadTeamId ?? null,
+      JSON.stringify(input.resources ?? []),
       ownerId,
       timestamp,
       workspaceId ?? null,
@@ -251,6 +284,8 @@ export function createInitiative(
     if (input.projectIds?.length) setProjects(db, id, input.projectIds, ownerRef, workspaceId);
     if (input.teamIds !== undefined && input.teamIds !== null)
       setTeams(db, id, input.teamIds, ownerRef, workspaceId);
+    if (input.labelIds !== undefined && input.labelIds !== null)
+      setLabels(db, id, input.labelIds, workspaceId);
   })();
   return getInitiative(db, id, workspaceId)!;
 }
@@ -276,7 +311,11 @@ export function updateInitiative(
     name?: string | null;
     description?: string | null;
     state?: string | null;
+    priority?: number | null;
     targetDate?: string | null;
+    leadTeamId?: string | null;
+    labelIds?: string[] | null;
+    resources?: unknown[] | null;
     projectIds?: string[] | null;
     teamIds?: string[] | null;
     archived?: boolean | null;
@@ -287,6 +326,16 @@ export function updateInitiative(
   if (!existing) throw apiError("NOT_FOUND", "Initiative not found");
   assertCanMutate(db, existing, viewerRef, workspaceId);
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
+  validatePriority(input.priority);
+  if (
+    input.leadTeamId !== undefined &&
+    input.leadTeamId !== null &&
+    !getTeam(db, { id: input.leadTeamId }, workspaceId)
+  ) {
+    throw apiError("NOT_FOUND", "Initiative lead team not found");
+  }
+  validateResources(input.resources);
+  validateLabels(db, input.labelIds, workspaceId);
 
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -303,7 +352,11 @@ export function updateInitiative(
     }
     if (input.description !== undefined) push("description", input.description);
     if (input.state != null) push("state", resolveState(input.state));
+    if (input.priority !== undefined && input.priority !== null) push("priority", input.priority);
     if (input.targetDate !== undefined) push("target_date", input.targetDate);
+    if (input.leadTeamId !== undefined) push("lead_team_id", input.leadTeamId);
+    if (input.resources !== undefined)
+      push("resources_json", JSON.stringify(input.resources ?? []));
     if (input.archived === true) push("archived_at", now());
     if (input.archived === false) push("archived_at", null);
 
@@ -333,7 +386,17 @@ export function updateInitiative(
     }
     if (input.teamIds !== undefined && input.teamIds !== null) {
       setTeams(db, id, input.teamIds, viewerRef, workspaceId);
-      if (sets.length === 0 && input.projectIds === undefined) {
+      if (sets.length === 0 && input.projectIds === undefined && input.labelIds === undefined) {
+        workspaceId
+          ? db
+              .query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2 AND workspace_id = ?3")
+              .run(now(), id, workspaceId)
+          : db.query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2").run(now(), id);
+      }
+    }
+    if (input.labelIds !== undefined && input.labelIds !== null) {
+      setLabels(db, id, input.labelIds, workspaceId);
+      if (sets.length === 0 && input.projectIds === undefined && input.teamIds === undefined) {
         workspaceId
           ? db
               .query("UPDATE initiatives SET updated_at = ?1 WHERE id = ?2 AND workspace_id = ?3")
@@ -370,6 +433,120 @@ export function deleteInitiative(
     db.query("DELETE FROM initiative_teams WHERE initiative_id = ?1").run(id);
     db.query("DELETE FROM initiatives WHERE id = ?1").run(id);
   }
+  return true;
+}
+
+function validatePriority(priority: number | null | undefined): void {
+  if (
+    priority !== undefined &&
+    priority !== null &&
+    (!Number.isInteger(priority) || priority < 0 || priority > 4)
+  ) {
+    throw apiError("VALIDATION_FAILED", "Initiative priority must be an integer between 0 and 4");
+  }
+}
+
+function validateResources(resources: unknown[] | null | undefined): void {
+  if (resources === undefined || resources === null) return;
+  if (!Array.isArray(resources))
+    throw apiError("VALIDATION_FAILED", "Initiative resources must be a list");
+}
+
+function validateLabels(
+  db: Database,
+  labelIds: string[] | null | undefined,
+  workspaceId?: string,
+): void {
+  if (labelIds === undefined || labelIds === null) return;
+  for (const labelId of new Set(labelIds)) {
+    const label = workspaceId
+      ? db
+          .query(`SELECT id FROM labels WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`)
+          .get(labelId, workspaceId)
+      : db.query("SELECT id FROM labels WHERE id = ?1").get(labelId);
+    if (!label) throw apiError("NOT_FOUND", `Initiative label not found: ${labelId}`);
+  }
+}
+
+function setLabels(
+  db: Database,
+  initiativeId: string,
+  labelIds: string[],
+  workspaceId?: string,
+): void {
+  if (workspaceId)
+    db.query(
+      `DELETE FROM initiative_labels WHERE initiative_id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+    ).run(initiativeId, workspaceId);
+  else db.query("DELETE FROM initiative_labels WHERE initiative_id = ?1").run(initiativeId);
+  for (const labelId of new Set(labelIds))
+    db.query(
+      "INSERT INTO initiative_labels (initiative_id, label_id, workspace_id) VALUES (?1, ?2, ?3)",
+    ).run(initiativeId, labelId, workspaceId ?? null);
+}
+
+export function listInitiativeLabelIds(
+  db: Database,
+  initiativeId: string,
+  workspaceId?: string,
+): string[] {
+  const query = workspaceId
+    ? `SELECT label_id FROM initiative_labels WHERE initiative_id = ?1 AND ${workspaceClause("workspace_id", "?2")} ORDER BY label_id`
+    : "SELECT label_id FROM initiative_labels WHERE initiative_id = ?1 ORDER BY label_id";
+  return (
+    workspaceId
+      ? db.query(query).values(initiativeId, workspaceId)
+      : db.query(query).values(initiativeId)
+  ).map((row) => row[0] as string);
+}
+
+export function listInitiativeUpdateRows(
+  db: Database,
+  initiativeId: string,
+  workspaceId?: string,
+): Array<Record<string, unknown>> {
+  const query = workspaceId
+    ? `SELECT * FROM initiative_updates WHERE initiative_id = ?1 AND ${workspaceClause("workspace_id", "?2")} ORDER BY created_at DESC, id DESC`
+    : "SELECT * FROM initiative_updates WHERE initiative_id = ?1 ORDER BY created_at DESC, id DESC";
+  return (
+    workspaceId ? db.query(query).all(initiativeId, workspaceId) : db.query(query).all(initiativeId)
+  ) as Array<Record<string, unknown>>;
+}
+
+export function createInitiativeUpdate(
+  db: Database,
+  initiativeId: string,
+  authorId: string,
+  input: { body: string; health?: string | null },
+  workspaceId?: string,
+): Record<string, unknown> {
+  const initiative = getInitiative(db, initiativeId, workspaceId);
+  if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
+  const body = input.body.trim();
+  if (!body) throw apiError("VALIDATION_FAILED", "Initiative update body cannot be empty");
+  const health = input.health ?? "on_track";
+  if (!["on_track", "at_risk", "off_track"].includes(health))
+    throw apiError("VALIDATION_FAILED", `Invalid initiative update health: ${health}`);
+  const id = newId();
+  const timestamp = now();
+  db.query(
+    "INSERT INTO initiative_updates (id, initiative_id, author_id, health, body, created_at, updated_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
+  ).run(id, initiativeId, authorId, health, body, timestamp, workspaceId ?? null);
+  return db.query("SELECT * FROM initiative_updates WHERE id = ?1").get(id) as Record<
+    string,
+    unknown
+  >;
+}
+
+export function deleteInitiativeUpdate(db: Database, id: string, workspaceId?: string): boolean {
+  const result = workspaceId
+    ? db
+        .query(
+          `DELETE FROM initiative_updates WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`,
+        )
+        .run(id, workspaceId)
+    : db.query("DELETE FROM initiative_updates WHERE id = ?1").run(id);
+  if (!result.changes) throw apiError("NOT_FOUND", "Initiative update not found");
   return true;
 }
 

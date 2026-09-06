@@ -69,6 +69,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:workspaceUpdate",
   "mutation:projectCreate",
   "mutation:projectUpdate",
+  "mutation:projectDependencyCreate",
+  "mutation:projectDependencyDelete",
   "mutation:projectArchive",
   "mutation:projectUnarchive",
   "mutation:milestoneCreate",
@@ -80,6 +82,8 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:cycleCarryOver",
   "mutation:initiativeCreate",
   "mutation:initiativeUpdate",
+  "mutation:initiativeStatusUpdateCreate",
+  "mutation:initiativeStatusUpdateDelete",
   "mutation:initiativeDelete",
   "mutation:projectUpdateCreate",
   "mutation:projectUpdateDelete",
@@ -522,6 +526,28 @@ async function operationTeamIds(
         ? current
         : [...new Set([...current, ...scopedTeamIds(context, input.teamIds)])];
     }
+    case "projectDependencyCreate":
+      if (context.persistence) return [];
+      return [
+        ...new Set([
+          ...teamIdsForProject(context, input.projectId),
+          ...teamIdsForProject(context, input.dependsOnProjectId),
+        ]),
+      ];
+    case "projectDependencyDelete": {
+      if (context.persistence) return [];
+      const row = context.db
+        .query("SELECT project_id, depends_on_project_id FROM project_dependencies WHERE id = ?1")
+        .get(scalar(args.id)) as { project_id: string; depends_on_project_id: string } | null;
+      return row
+        ? [
+            ...new Set([
+              ...teamIdsForProject(context, row.project_id),
+              ...teamIdsForProject(context, row.depends_on_project_id),
+            ]),
+          ]
+        : ["__missing__"];
+    }
     case "projectArchive":
     case "projectUnarchive":
       if (context.persistence) return [];
@@ -604,6 +630,17 @@ async function operationTeamIds(
       if (!targetTeams.length) return ["__workspace__"];
       return [...new Set([...current.direct, ...current.projects, ...targetTeams])];
     }
+    case "initiativeStatusUpdateCreate":
+      if (context.persistence) return [];
+      return teamIdsForInitiative(context, input.initiativeId);
+    case "initiativeStatusUpdateDelete":
+      if (context.persistence) return [];
+      const initiativeUpdate = context.db
+        .query("SELECT initiative_id FROM initiative_updates WHERE id = ?1")
+        .get(scalar(args.id)) as { initiative_id: string } | null;
+      return initiativeUpdate
+        ? teamIdsForInitiative(context, initiativeUpdate.initiative_id)
+        : ["__missing__"];
     case "initiativeDelete":
       if (context.persistence) return [];
       return teamIdsForInitiative(context, args.id);

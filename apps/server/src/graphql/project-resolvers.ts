@@ -9,6 +9,8 @@ import {
   createPostgresProject,
   getPostgresProject,
   listPostgresProjectTeamIds,
+  listPostgresProjectMemberIds,
+  listPostgresProjectDependencyRows,
   listPostgresProjects,
   mapPostgresProject,
   updatePostgresProject,
@@ -40,6 +42,10 @@ import {
   createProject,
   listProjects,
   listProjectTeamIds,
+  listProjectMemberIds,
+  listProjectDependencyRows,
+  createProjectDependency,
+  deleteProjectDependency,
   mapProject,
   updateProject,
 } from "../domain/projects.ts";
@@ -94,7 +100,29 @@ function projectTeamsAllowed(context: Context, projectId: string): boolean {
   );
 }
 
+function projectAllowed(context: Context, projectId: string): boolean {
+  const viewer = requireViewer(context);
+  const teamIds = listProjectTeamIds(context.db, projectId, context.workspace.workspaceId);
+  const memberIds = listProjectMemberIds(context.db, projectId, context.workspace.workspaceId);
+  const directMember = memberIds.includes(viewer.id);
+  const visibleByTeams =
+    teamIds.length > 0 && teamIds.every((teamId) => canAccessTeam(context.db, viewer, teamId));
+  return (
+    (directMember || visibleByTeams || viewer.workspace_role === "admin") &&
+    apiKeyTeamsWithinLimit(context.auth, teamIds)
+  );
+}
+
 async function postgresProjectTeamsAllowed(context: Context, projectId: string): Promise<boolean> {
+  const viewer = requireViewer(context);
+  const teamIds = await listPostgresProjectTeamIds(context.persistence!, projectId);
+  return (
+    (await canAccessPostgresProject(context.persistence!, viewer, projectId)) &&
+    apiKeyTeamsWithinLimit(context.auth, teamIds)
+  );
+}
+
+async function postgresProjectAllowed(context: Context, projectId: string): Promise<boolean> {
   const viewer = requireViewer(context);
   const teamIds = await listPostgresProjectTeamIds(context.persistence!, projectId);
   return (
@@ -122,6 +150,47 @@ export const projectResolvers = {
       }
       return mapActor(lookupActor(context, project.leadId)!);
     },
+    members: async (project: MappedProject, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        if (!(await postgresProjectAllowed(context, project.id))) return [];
+      } else if (!projectAllowed(context, project.id)) return [];
+      const ids = context.persistence
+        ? await listPostgresProjectMemberIds(context.persistence, project.id)
+        : listProjectMemberIds(context.db, project.id, context.workspace.workspaceId);
+      const actors = [];
+      for (const id of ids) {
+        const actor = context.persistence
+          ? await getPostgresActor(context.persistence, id)
+          : lookupActor(context, id);
+        if (actor) actors.push(context.persistence ? mapPostgresActor(actor) : mapActor(actor));
+      }
+      return actors;
+    },
+    dependencies: async (project: MappedProject, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        if (!(await postgresProjectAllowed(context, project.id))) return [];
+      } else if (!projectAllowed(context, project.id)) return [];
+      const rows = context.persistence
+        ? await listPostgresProjectDependencyRows(context.persistence, project.id)
+        : listProjectDependencyRows(context.db, project.id, context.workspace.workspaceId);
+      const visibleRows = context.persistence
+        ? (
+            await Promise.all(
+              rows.map(async (row) =>
+                (await postgresProjectAllowed(context, row.depends_on_project_id)) ? row : null,
+              ),
+            )
+          ).filter((row): row is (typeof rows)[number] => row !== null)
+        : rows.filter((row) => projectAllowed(context, row.depends_on_project_id));
+      return visibleRows.map((row) => ({
+        id: row.id,
+        projectId: row.project_id,
+        dependsOnProjectId: row.depends_on_project_id,
+        type: row.type,
+        createdAt: row.created_at,
+      }));
+    },
+    startDate: (project: MappedProject) => project.startDate,
     milestones: async (project: MappedProject, _args: unknown, context: Context) => {
       if (context.persistence) {
         return (await postgresProjectTeamsAllowed(context, project.id))
@@ -211,6 +280,36 @@ export const projectResolvers = {
     },
   },
 
+  ProjectDependency: {
+    project: async (dependency: { projectId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const project = await getPostgresProject(context.persistence, dependency.projectId);
+        return project && (await postgresProjectTeamsAllowed(context, project.id))
+          ? mapPostgresProject(project)
+          : null;
+      }
+      const project = lookupProject(context, dependency.projectId);
+      return project && projectAllowed(context, project.id) ? mapProject(project) : null;
+    },
+    dependsOnProject: async (
+      dependency: { dependsOnProjectId: string },
+      _args: unknown,
+      context: Context,
+    ) => {
+      if (context.persistence) {
+        const project = await getPostgresProject(
+          context.persistence,
+          dependency.dependsOnProjectId,
+        );
+        return project && (await postgresProjectTeamsAllowed(context, project.id))
+          ? mapPostgresProject(project)
+          : null;
+      }
+      const project = lookupProject(context, dependency.dependsOnProjectId);
+      return project && projectAllowed(context, project.id) ? mapProject(project) : null;
+    },
+  },
+
   ProjectStatusUpdate: {
     project: async (update: { projectId: string }, _args: unknown, context: Context) => {
       if (context.persistence) {
@@ -235,6 +334,11 @@ export const projectResolvers = {
     ON_TRACK: "on_track",
     AT_RISK: "at_risk",
     OFF_TRACK: "off_track",
+  },
+
+  ProjectDependencyType: {
+    BLOCKS: "blocks",
+    RELATED: "related",
   },
 
   Milestone: {
@@ -366,7 +470,7 @@ export const projectResolvers = {
           context.workspace.workspaceId,
         ),
       )
-        .filter((project) => projectTeamsAllowed(context, project.id))
+        .filter((project) => projectAllowed(context, project.id))
         .map(mapProject);
     },
     project: async (_parent: unknown, args: { id: string }, context: Context) => {
@@ -383,7 +487,7 @@ export const projectResolvers = {
           : null;
       }
       const row = lookupProject(context, args.id);
-      return row && projectTeamsAllowed(context, row.id) ? mapProject(row) : null;
+      return row && projectAllowed(context, row.id) ? mapProject(row) : null;
     },
   },
 
@@ -413,6 +517,9 @@ export const projectResolvers = {
       for (const teamId of args.input.teamIds ?? []) requireTeam(context, { id: teamId });
       assertCanCreateProject(context.db, viewer, args.input.teamIds, context.workspace.workspaceId);
       if (args.input.leadId) requireActor(context, args.input.leadId);
+      for (const memberId of args.input.memberIds ?? []) requireActor(context, memberId);
+      for (const dependencyId of args.input.dependencyIds ?? [])
+        requireProject(context, dependencyId);
       const project = mapProject(
         createProject(context.db, args.input, context.workspace.workspaceId),
       );
@@ -592,6 +699,9 @@ export const projectResolvers = {
       }
       assertCanManageProject(context.db, viewer, project.id);
       if (args.input.leadId) requireActor(context, args.input.leadId);
+      for (const memberId of args.input.memberIds ?? []) requireActor(context, memberId);
+      for (const dependencyId of args.input.dependencyIds ?? [])
+        requireProject(context, dependencyId);
       if (args.input.teamIds !== undefined && args.input.teamIds !== null) {
         assertCanManageProjectTeams(context.db, viewer, args.input.teamIds);
       }
@@ -600,6 +710,86 @@ export const projectResolvers = {
       );
       context.events.emit("project.updated", viewer, updatedProject);
       return { success: true, project: updatedProject };
+    },
+    projectDependencyCreate: async (
+      _parent: unknown,
+      args: { input: { projectId: string; dependsOnProjectId: string; type?: string | null } },
+      context: Context,
+    ) => {
+      const viewer = requireViewer(context);
+      if (context.persistence) {
+        const source = await getPostgresProject(context.persistence, args.input.projectId);
+        if (!source) throw apiError("NOT_FOUND", "Project not found");
+        await assertPostgresProjectKeyLimit(
+          context,
+          await listPostgresProjectTeamIds(context.persistence, source.id),
+        );
+        // PostgreSQL adapter currently exposes relation rows through the shared planning schema.
+        const target = await getPostgresProject(context.persistence, args.input.dependsOnProjectId);
+        if (!target) throw apiError("NOT_FOUND", "Dependency project not found");
+        const id = crypto.randomUUID();
+        await context.persistence.execute(
+          "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at) VALUES ($1, $2, $3, $4, $5)",
+          [
+            id,
+            source.id,
+            target.id,
+            args.input.type?.toLowerCase() === "related" ? "related" : "blocks",
+            new Date().toISOString(),
+          ],
+        );
+        return {
+          success: true,
+          dependency: {
+            id,
+            projectId: source.id,
+            dependsOnProjectId: target.id,
+            type: args.input.type?.toLowerCase() === "related" ? "related" : "blocks",
+            createdAt: new Date().toISOString(),
+          },
+        };
+      }
+      requireProject(context, args.input.projectId);
+      requireProject(context, args.input.dependsOnProjectId);
+      assertCanManageProject(context.db, viewer, args.input.projectId);
+      const dependency = createProjectDependency(
+        context.db,
+        args.input,
+        context.workspace.workspaceId,
+      );
+      return {
+        success: true,
+        dependency: {
+          id: dependency.id,
+          projectId: dependency.project_id,
+          dependsOnProjectId: dependency.depends_on_project_id,
+          type: dependency.type,
+          createdAt: dependency.created_at,
+        },
+      };
+    },
+    projectDependencyDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
+      const viewer = requireViewer(context);
+      if (context.persistence) {
+        const row = await context.persistence.one<{ project_id: string }>(
+          "SELECT project_id FROM project_dependencies WHERE id = $1",
+          [args.id],
+        );
+        if (!row) throw apiError("NOT_FOUND", "Project dependency not found");
+        await assertCanManagePostgresProject(context.persistence, viewer, row.project_id);
+        await context.persistence.execute("DELETE FROM project_dependencies WHERE id = $1", [
+          args.id,
+        ]);
+        return { success: true };
+      }
+      const row = context.db
+        .query("SELECT project_id FROM project_dependencies WHERE id = ?1")
+        .get(args.id) as { project_id: string } | null;
+      if (!row) throw apiError("NOT_FOUND", "Project dependency not found");
+      assertCanManageProject(context.db, viewer, row.project_id);
+      return {
+        success: deleteProjectDependency(context.db, args.id, context.workspace.workspaceId),
+      };
     },
     projectUpdateCreate: async (
       _parent: unknown,

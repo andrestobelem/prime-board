@@ -89,6 +89,24 @@ function validatePartialScope(base: string, teamKey: string): void {
   if (projects.some((project) => !(project.teams ?? []).includes(teamKey))) {
     throw new Error(`Partial export ${teamKey} contains an out-of-scope project`);
   }
+  for (const project of projects) {
+    for (const dependency of project.dependencies ?? []) {
+      const target =
+        typeof dependency === "string"
+          ? dependency
+          : (dependency.dependsOnProject ?? dependency.project);
+      if (!projectNames.has(String(target)))
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope project dependency`);
+      if (String(target) === String(project.name))
+        throw new Error(`Partial export ${teamKey} contains a self project dependency`);
+      if (
+        typeof dependency !== "string" &&
+        dependency.type !== "blocks" &&
+        dependency.type !== "related"
+      )
+        throw new Error(`Partial export ${teamKey} contains an invalid project dependency type`);
+    }
+  }
   const cyclesPath = join(base, "meta", "cycles.json");
   if (existsSync(cyclesPath)) {
     const cycles = readJson(cyclesPath) as Array<Record<string, any>>;
@@ -109,6 +127,21 @@ function validatePartialScope(base: string, teamKey: string): void {
     for (const initiative of initiatives) {
       if ((initiative.teams ?? []).some((team: unknown) => team !== teamKey)) {
         throw new Error(`Partial export ${teamKey} contains an out-of-scope initiative team`);
+      }
+      if (initiative.leadTeam != null && initiative.leadTeam !== teamKey) {
+        throw new Error(`Partial export ${teamKey} contains an out-of-scope initiative lead team`);
+      }
+      for (const label of initiative.labels ?? []) {
+        const reference =
+          typeof label === "string"
+            ? label
+            : `${label.team ? `${label.team}/` : "workspace/"}${label.name}`;
+        if (
+          reference.includes("/") &&
+          !reference.startsWith("workspace/") &&
+          !reference.startsWith(`${teamKey}/`)
+        )
+          throw new Error(`Partial export ${teamKey} contains an out-of-scope initiative label`);
       }
       if (
         (initiative.projects ?? []).some((project: unknown) => !projectNames.has(String(project)))
@@ -398,6 +431,10 @@ export function rebuildFromRepo(
       "cycles",
       "favorites",
       "saved_views",
+      "initiative_updates",
+      "initiative_labels",
+      "project_dependencies",
+      "project_members",
       "initiative_teams",
       "initiative_projects",
       "initiatives",
@@ -540,6 +577,11 @@ export function rebuildFromRepo(
 
     // 5. Proyectos y milestones.
     const projectIds = new Map<string, string>();
+    const pendingProjectDependencies: Array<{
+      projectId: string;
+      projectName: string;
+      dependency: any;
+    }> = [];
     const milestoneIds = new Map<string, string>();
     for (const project of readJson(join(base, "meta", "projects.json")) as Array<
       Record<string, any>
@@ -547,14 +589,15 @@ export function rebuildFromRepo(
       const projectId = newId();
       projectIds.set(project.name, projectId);
       db.query(
-        `INSERT INTO projects (id, name, description, state, lead_id, target_date, created_at, updated_at, archived_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
+        `INSERT INTO projects (id, name, description, state, lead_id, start_date, target_date, created_at, updated_at, archived_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)`,
       ).run(
         projectId,
         project.name,
         project.description ?? null,
         project.state,
         project.lead ? (actorIds.get(project.lead) ?? null) : null,
+        project.startDate ?? null,
         project.targetDate ?? null,
         timestamp,
         project.archived ? timestamp : null,
@@ -567,6 +610,17 @@ export function rebuildFromRepo(
             teamId,
           );
         }
+      }
+      for (const actorName of project.members ?? []) {
+        const actorId = actorIds.get(String(actorName));
+        if (!actorId)
+          throw new Error(`Project "${project.name}" references unknown member ${actorName}`);
+        db.query(
+          "INSERT INTO project_members (project_id, actor_id, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4)",
+        ).run(projectId, actorId, timestamp, rebuiltWorkspaceId);
+      }
+      for (const dependency of project.dependencies ?? []) {
+        pendingProjectDependencies.push({ projectId, projectName: project.name, dependency });
       }
       for (const milestone of project.milestones ?? []) {
         const milestoneId = newId();
@@ -584,6 +638,26 @@ export function rebuildFromRepo(
           timestamp,
         );
       }
+    }
+
+    for (const pending of pendingProjectDependencies) {
+      const targetName =
+        typeof pending.dependency === "string"
+          ? pending.dependency
+          : (pending.dependency.dependsOnProject ?? pending.dependency.project);
+      const targetId = projectIds.get(String(targetName));
+      if (!targetId)
+        throw new Error(
+          `Project "${pending.projectName}" references unknown dependency ${targetName}`,
+        );
+      if (targetId === pending.projectId)
+        throw new Error(`Project "${pending.projectName}" cannot depend on itself`);
+      const type = typeof pending.dependency === "string" ? "blocks" : pending.dependency.type;
+      if (type !== "blocks" && type !== "related")
+        throw new Error(`Project "${pending.projectName}" has invalid dependency type ${type}`);
+      db.query(
+        "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      ).run(newId(), pending.projectId, targetId, type, timestamp, rebuiltWorkspaceId);
     }
 
     // 5c. Ciclos (PRB-211); ausente en exports viejos.
@@ -658,21 +732,31 @@ export function rebuildFromRepo(
             `Initiative "${initiative.name}" references unknown owner ${initiative.owner}`,
           );
         }
+        const leadTeamId = initiative.leadTeam ? (teamIds.get(initiative.leadTeam) ?? null) : null;
+        if (initiative.leadTeam && !leadTeamId) {
+          throw new Error(
+            `Initiative "${initiative.name}" references unknown lead team ${initiative.leadTeam}`,
+          );
+        }
         const id = newId();
         if (!ambiguousInitiatives.has(initiativeName)) initiativeIds.set(initiativeName, id);
         db.query(
           `INSERT INTO initiatives
-            (id, name, description, state, target_date, owner_id, created_at, updated_at, archived_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
+            (id, name, description, state, priority, target_date, lead_team_id, resources_json, owner_id, created_at, updated_at, archived_at, workspace_id)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12)`,
         ).run(
           id,
           initiative.name,
           initiative.description ?? null,
           initiative.state,
+          initiative.priority ?? 0,
           initiative.targetDate ?? null,
+          leadTeamId,
+          JSON.stringify(initiative.resources ?? []),
           ownerId,
           timestamp,
           initiative.archived ? timestamp : null,
+          rebuiltWorkspaceId,
         );
         for (const projectName of initiative.projects ?? []) {
           const projectId = projectIds.get(projectName);
@@ -693,6 +777,43 @@ export function rebuildFromRepo(
           db.query("INSERT INTO initiative_teams (initiative_id, team_id) VALUES (?1, ?2)").run(
             id,
             teamId,
+          );
+        }
+        for (const reference of initiative.labels ?? []) {
+          const key =
+            typeof reference === "string"
+              ? reference
+              : `${reference.team ? `${reference.team}/` : "workspace/"}${reference.name}`;
+          const labelId = labelIds.get(key);
+          if (!labelId)
+            throw new Error(`Initiative "${initiative.name}" references unknown label ${key}`);
+          db.query(
+            "INSERT INTO initiative_labels (initiative_id, label_id, workspace_id) VALUES (?1, ?2, ?3)",
+          ).run(id, labelId, rebuiltWorkspaceId);
+        }
+        for (const update of initiative.updates ?? []) {
+          const authorId = actorIds.get(String(update.author));
+          if (!authorId)
+            throw new Error(
+              `Initiative "${initiative.name}" references unknown update author ${update.author}`,
+            );
+          if (!["on_track", "at_risk", "off_track"].includes(String(update.health)))
+            throw new Error(
+              `Initiative "${initiative.name}" has invalid update health ${update.health}`,
+            );
+          if (typeof update.body !== "string" || !update.body.trim())
+            throw new Error(`Initiative "${initiative.name}" has an empty update body`);
+          db.query(
+            "INSERT INTO initiative_updates (id, initiative_id, author_id, health, body, created_at, updated_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+          ).run(
+            newId(),
+            id,
+            authorId,
+            update.health,
+            update.body,
+            update.createdAt ?? timestamp,
+            update.updatedAt ?? update.createdAt ?? timestamp,
+            rebuiltWorkspaceId,
           );
         }
       }

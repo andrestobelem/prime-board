@@ -20,6 +20,7 @@ export interface PostgresProjectRow {
   state: (typeof PROJECT_STATES)[number];
   lead_id: string | null;
   target_date: string | null;
+  start_date: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -31,6 +32,9 @@ export interface PostgresProjectInput {
   state?: string | null;
   leadId?: string | null;
   targetDate?: string | null;
+  startDate?: string | null;
+  memberIds?: string[] | null;
+  dependencyIds?: string[] | null;
   teamIds?: string[] | null;
 }
 
@@ -40,6 +44,9 @@ export interface PostgresProjectUpdateInput {
   state?: string | null;
   leadId?: string | null;
   targetDate?: string | null;
+  startDate?: string | null;
+  memberIds?: string[] | null;
+  dependencyIds?: string[] | null;
   teamIds?: string[] | null;
 }
 
@@ -51,6 +58,7 @@ export function mapPostgresProject(row: PostgresProjectRow) {
     state: row.state,
     leadId: row.lead_id,
     targetDate: row.target_date,
+    startDate: row.start_date,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
@@ -117,6 +125,7 @@ function validateProjectFields(input: {
   name?: string | null;
   state?: string | null;
   targetDate?: string | null;
+  startDate?: string | null;
 }): void {
   if (input.name !== undefined && input.name !== null && !input.name.trim()) {
     throw apiError("VALIDATION_FAILED", "Project name cannot be empty");
@@ -130,6 +139,12 @@ function validateProjectFields(input: {
   }
   if (input.targetDate !== undefined && input.targetDate !== null) {
     parseDateTime(input.targetDate, "targetDate");
+  }
+  if (input.startDate !== undefined && input.startDate !== null) {
+    parseDateTime(input.startDate, "startDate");
+  }
+  if (input.startDate != null && input.targetDate != null && input.startDate > input.targetDate) {
+    throw apiError("VALIDATION_FAILED", "Project startDate cannot be after targetDate");
   }
 }
 
@@ -151,14 +166,28 @@ async function validateProjectTeams(
   return uniqueTeamIds;
 }
 
+async function postgresProjectHasMember(
+  persistence: Persistence | PersistenceTransaction,
+  projectId: string,
+  actorId: string,
+): Promise<boolean> {
+  return Boolean(
+    await persistence.one("SELECT 1 FROM project_members WHERE project_id = $1 AND actor_id = $2", [
+      projectId,
+      actorId,
+    ]),
+  );
+}
+
 export async function canAccessPostgresProject(
   persistence: Persistence,
   viewer: Pick<ActorRow, "id" | "workspace_role">,
   projectId: string,
 ): Promise<boolean> {
   const teamIds = await listPostgresProjectTeamIds(persistence, projectId);
-  if (teamIds.length === 0) return false;
   if (viewer.workspace_role === "admin") return true;
+  if (await postgresProjectHasMember(persistence, projectId, viewer.id)) return true;
+  if (teamIds.length === 0) return false;
   for (const teamId of teamIds) {
     const team = await getPostgresTeam(persistence, { id: teamId });
     if (!team || !(await canDiscoverPostgresTeam(persistence, viewer, team))) return false;
@@ -174,6 +203,11 @@ export async function assertCanManagePostgresProject(
   const project = await getPostgresProject(persistence, projectId);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
   const teamIds = await listPostgresProjectTeamIds(persistence, projectId);
+  if (
+    viewer.workspace_role !== "admin" &&
+    (await postgresProjectHasMember(persistence, projectId, viewer.id))
+  )
+    return project;
   if (teamIds.length === 0) throw apiError("NOT_FOUND", "Project not found");
   if (viewer.workspace_role !== "admin") {
     for (const teamId of teamIds) {
@@ -185,6 +219,62 @@ export async function assertCanManagePostgresProject(
   return project;
 }
 
+export async function listPostgresProjectMemberIds(
+  persistence: Persistence | PersistenceTransaction,
+  projectId: string,
+): Promise<string[]> {
+  const rows = await persistence.many<{ actor_id: string }>(
+    "SELECT actor_id FROM project_members WHERE project_id = $1 ORDER BY actor_id",
+    [projectId],
+  );
+  return rows.map((row) => row.actor_id);
+}
+
+export async function listPostgresProjectDependencyRows(
+  persistence: Persistence | PersistenceTransaction,
+  projectId: string,
+): Promise<
+  readonly {
+    id: string;
+    project_id: string;
+    depends_on_project_id: string;
+    type: "blocks" | "related";
+    created_at: string;
+  }[]
+> {
+  return persistence.many(
+    "SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE project_id = $1 ORDER BY created_at, id",
+    [projectId],
+  );
+}
+
+async function validateProjectMembers(
+  persistence: Persistence | PersistenceTransaction,
+  memberIds: readonly string[],
+): Promise<string[]> {
+  const unique = [...new Set(memberIds)];
+  for (const actorId of unique) {
+    if (!(await getPostgresActor(persistence, actorId)))
+      throw apiError("NOT_FOUND", `Project member not found: ${actorId}`);
+  }
+  return unique;
+}
+
+async function validateProjectDependencies(
+  persistence: Persistence | PersistenceTransaction,
+  projectId: string,
+  dependencyIds: readonly string[],
+): Promise<string[]> {
+  const unique = [...new Set(dependencyIds)];
+  for (const dependencyId of unique) {
+    if (dependencyId === projectId)
+      throw apiError("VALIDATION_FAILED", "A project cannot depend on itself");
+    if (!(await getPostgresProject(persistence, dependencyId)))
+      throw apiError("NOT_FOUND", `Dependency project not found: ${dependencyId}`);
+  }
+  return unique;
+}
+
 export async function createPostgresProject(
   persistence: Persistence,
   viewer: ActorRow,
@@ -194,6 +284,12 @@ export async function createPostgresProject(
   if (!name) throw apiError("VALIDATION_FAILED", "Project name cannot be empty");
   validateProjectFields(input);
   await validateLead(persistence, input.leadId);
+  const members = await validateProjectMembers(persistence, input.memberIds ?? []);
+  const dependencies = await validateProjectDependencies(
+    persistence,
+    "",
+    input.dependencyIds ?? [],
+  );
   const teams =
     input.teamIds == null
       ? (await listPostgresTeams(persistence)).map((team) => team.id)
@@ -204,8 +300,8 @@ export async function createPostgresProject(
   await persistence.transaction(async (tx) => {
     await tx.execute(
       `INSERT INTO projects
-       (id, name, description, state, lead_id, target_date, created_at, updated_at, archived_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7, NULL)`,
+       (id, name, description, state, lead_id, target_date, start_date, created_at, updated_at, archived_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, NULL)`,
       [
         id,
         name,
@@ -213,6 +309,7 @@ export async function createPostgresProject(
         input.state ?? "backlog",
         input.leadId ?? null,
         input.targetDate ?? null,
+        input.startDate ?? null,
         timestamp,
       ],
     );
@@ -221,6 +318,18 @@ export async function createPostgresProject(
         id,
         teamId,
       ]);
+    }
+    for (const actorId of members) {
+      await tx.execute(
+        "INSERT INTO project_members (project_id, actor_id, created_at) VALUES ($1, $2, $3)",
+        [id, actorId, timestamp],
+      );
+    }
+    for (const dependencyId of dependencies) {
+      await tx.execute(
+        "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at) VALUES ($1, $2, $3, 'blocks', $4)",
+        [newId(), id, dependencyId, timestamp],
+      );
     }
   });
   const project = await getPostgresProject(persistence, id);
@@ -237,6 +346,14 @@ export async function updatePostgresProject(
   const existing = await assertCanManagePostgresProject(persistence, viewer, id);
   validateProjectFields(input);
   await validateLead(persistence, input.leadId);
+  const memberIds =
+    input.memberIds === undefined
+      ? null
+      : await validateProjectMembers(persistence, input.memberIds ?? []);
+  const dependencyIds =
+    input.dependencyIds === undefined
+      ? null
+      : await validateProjectDependencies(persistence, id, input.dependencyIds ?? []);
   const teamIds =
     input.teamIds === undefined
       ? null
@@ -252,6 +369,7 @@ export async function updatePostgresProject(
   if (input.state !== undefined && input.state !== null) push("state", input.state);
   if (input.leadId !== undefined) push("lead_id", input.leadId);
   if (input.targetDate !== undefined) push("target_date", input.targetDate);
+  if (input.startDate !== undefined) push("start_date", input.startDate);
   await persistence.transaction(async (tx) => {
     if (teamIds) {
       await tx.execute("DELETE FROM project_teams WHERE project_id = $1", [id]);
@@ -262,7 +380,23 @@ export async function updatePostgresProject(
         ]);
       }
     }
-    if (sets.length || teamIds) {
+    if (memberIds) {
+      await tx.execute("DELETE FROM project_members WHERE project_id = $1", [id]);
+      for (const actorId of memberIds)
+        await tx.execute(
+          "INSERT INTO project_members (project_id, actor_id, created_at) VALUES ($1, $2, $3)",
+          [id, actorId, now()],
+        );
+    }
+    if (dependencyIds) {
+      await tx.execute("DELETE FROM project_dependencies WHERE project_id = $1", [id]);
+      for (const dependencyId of dependencyIds)
+        await tx.execute(
+          "INSERT INTO project_dependencies (id, project_id, depends_on_project_id, type, created_at) VALUES ($1, $2, $3, 'blocks', $4)",
+          [newId(), id, dependencyId, now()],
+        );
+    }
+    if (sets.length || teamIds || memberIds || dependencyIds) {
       if (sets.length) {
         push("updated_at", now());
         params.push(id);

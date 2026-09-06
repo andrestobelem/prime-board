@@ -16,12 +16,25 @@ import {
 import type { ActorRow } from "../auth/viewer.ts";
 import type { InitiativeState } from "./initiatives.ts";
 
+function parseResources(value: string | null | undefined): unknown[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export interface PostgresInitiativeRow {
   id: string;
   name: string;
   description: string | null;
   state: InitiativeState;
+  priority: number;
   target_date: string | null;
+  lead_team_id: string | null;
+  resources_json: string;
   owner_id: string | null;
   created_at: string;
   updated_at: string;
@@ -34,7 +47,10 @@ export function mapPostgresInitiative(row: PostgresInitiativeRow) {
     name: row.name,
     description: row.description,
     state: row.state,
+    priority: row.priority,
     targetDate: row.target_date,
+    leadTeamId: row.lead_team_id,
+    resources: parseResources(row.resources_json),
     ownerId: row.owner_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -69,6 +85,48 @@ export async function listPostgresInitiativeProjectIds(
     [initiativeId],
   );
   return rows.map((row) => row.project_id);
+}
+
+export async function listPostgresInitiativeLabelIds(
+  persistence: Persistence | PersistenceTransaction,
+  initiativeId: string,
+): Promise<string[]> {
+  const rows = await persistence.many<{ label_id: string }>(
+    "SELECT label_id FROM initiative_labels WHERE initiative_id = $1 ORDER BY label_id",
+    [initiativeId],
+  );
+  return rows.map((row) => row.label_id);
+}
+
+export async function listPostgresInitiativeUpdates(
+  persistence: Persistence | PersistenceTransaction,
+  initiativeId: string,
+): Promise<readonly Record<string, unknown>[]> {
+  return persistence.many(
+    "SELECT * FROM initiative_updates WHERE initiative_id = $1 ORDER BY created_at DESC, id DESC",
+    [initiativeId],
+  );
+}
+
+async function validateInitiativeLabels(
+  persistence: Persistence | PersistenceTransaction,
+  labelIds: readonly string[],
+): Promise<string[]> {
+  const unique = [...new Set(labelIds)];
+  for (const labelId of unique) {
+    if (!(await persistence.one("SELECT id FROM labels WHERE id = $1", [labelId])))
+      throw apiError("NOT_FOUND", `Initiative label not found: ${labelId}`);
+  }
+  return unique;
+}
+
+function validateInitiativePriority(priority: number | null | undefined): void {
+  if (
+    priority !== undefined &&
+    priority !== null &&
+    (!Number.isInteger(priority) || priority < 0 || priority > 4)
+  )
+    throw apiError("VALIDATION_FAILED", "Initiative priority must be an integer between 0 and 4");
 }
 
 export async function listPostgresInitiativeScopeTeamIds(
@@ -199,7 +257,11 @@ export async function createPostgresInitiative(
     name: string;
     description?: string | null;
     state?: string | null;
+    priority?: number | null;
     targetDate?: string | null;
+    leadTeamId?: string | null;
+    labelIds?: readonly string[] | null;
+    resources?: readonly unknown[] | null;
     projectIds?: readonly string[] | null;
     teamIds?: readonly string[] | null;
   },
@@ -207,6 +269,9 @@ export async function createPostgresInitiative(
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Initiative name cannot be empty");
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
+  validateInitiativePriority(input.priority);
+  const labelIds = await validateInitiativeLabels(persistence, input.labelIds ?? []);
+  if (input.leadTeamId != null) await assertPostgresTeamActive(persistence, input.leadTeamId);
   const projectIds = await validateProjectIds(persistence, viewer, input.projectIds ?? []);
   const teamIds = await validateTeamIds(persistence, viewer, input.teamIds ?? []);
   const id = newId();
@@ -214,19 +279,27 @@ export async function createPostgresInitiative(
   await persistence.transaction(async (tx) => {
     await tx.execute(
       `INSERT INTO initiatives
-       (id, name, description, state, target_date, owner_id, created_at, updated_at, archived_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7, NULL)`,
+       (id, name, description, state, priority, target_date, lead_team_id, resources_json, owner_id, created_at, updated_at, archived_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, NULL)`,
       [
         id,
         name,
         input.description ?? null,
         input.state ? resolveState(input.state) : "planned",
+        input.priority ?? 0,
         input.targetDate ?? null,
+        input.leadTeamId ?? null,
+        JSON.stringify(input.resources ?? []),
         viewer.id,
         timestamp,
       ],
     );
     await replaceRelations(tx, id, projectIds, teamIds);
+    for (const labelId of labelIds)
+      await tx.execute("INSERT INTO initiative_labels (initiative_id, label_id) VALUES ($1, $2)", [
+        id,
+        labelId,
+      ]);
   });
   const row = await getPostgresInitiative(persistence, id);
   if (!row) throw new Error("PostgreSQL initiative insert returned no row");
@@ -241,7 +314,11 @@ export async function updatePostgresInitiative(
     name?: string | null;
     description?: string | null;
     state?: string | null;
+    priority?: number | null;
     targetDate?: string | null;
+    leadTeamId?: string | null;
+    labelIds?: readonly string[] | null;
+    resources?: readonly unknown[] | null;
     projectIds?: readonly string[] | null;
     teamIds?: readonly string[] | null;
     archived?: boolean | null;
@@ -251,6 +328,13 @@ export async function updatePostgresInitiative(
   if (!existing) throw apiError("NOT_FOUND", "Initiative not found");
   await assertCanMutatePostgresInitiative(persistence, viewer, existing);
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
+  validateInitiativePriority(input.priority);
+  const labelIds =
+    input.labelIds === undefined || input.labelIds === null
+      ? null
+      : await validateInitiativeLabels(persistence, input.labelIds);
+  if (input.leadTeamId !== undefined && input.leadTeamId !== null)
+    await assertPostgresTeamActive(persistence, input.leadTeamId);
   const projectIds =
     input.projectIds !== undefined && input.projectIds !== null
       ? await validateProjectIds(persistence, viewer, input.projectIds)
@@ -272,12 +356,16 @@ export async function updatePostgresInitiative(
   }
   if (input.description !== undefined) push("description", input.description);
   if (input.state !== undefined && input.state !== null) push("state", resolveState(input.state));
+  if (input.priority !== undefined && input.priority !== null) push("priority", input.priority);
   if (input.targetDate !== undefined) push("target_date", input.targetDate);
+  if (input.leadTeamId !== undefined) push("lead_team_id", input.leadTeamId);
+  if (input.resources !== undefined) push("resources_json", JSON.stringify(input.resources ?? []));
   if (input.archived === true) push("archived_at", now());
   if (input.archived === false) push("archived_at", null);
   const relationsChanged =
     (input.projectIds !== undefined && input.projectIds !== null) ||
-    (input.teamIds !== undefined && input.teamIds !== null);
+    (input.teamIds !== undefined && input.teamIds !== null) ||
+    labelIds !== null;
   await persistence.transaction(async (tx) => {
     if (sets.length || relationsChanged) {
       if (sets.length) {
@@ -290,10 +378,75 @@ export async function updatePostgresInitiative(
       } else {
         await tx.execute("UPDATE initiatives SET updated_at = $1 WHERE id = $2", [now(), id]);
       }
-      if (relationsChanged) await replaceRelations(tx, id, projectIds, teamIds);
+      if (relationsChanged) {
+        if (
+          (input.projectIds !== undefined && input.projectIds !== null) ||
+          (input.teamIds !== undefined && input.teamIds !== null)
+        )
+          await replaceRelations(tx, id, projectIds, teamIds);
+        if (labelIds !== null) {
+          await tx.execute("DELETE FROM initiative_labels WHERE initiative_id = $1", [id]);
+          for (const labelId of labelIds)
+            await tx.execute(
+              "INSERT INTO initiative_labels (initiative_id, label_id) VALUES ($1, $2)",
+              [id, labelId],
+            );
+        }
+      }
     }
   });
   return (await getPostgresInitiative(persistence, id))!;
+}
+
+export interface PostgresInitiativeUpdateRow {
+  id: string;
+  initiative_id: string;
+  author_id: string;
+  health: "on_track" | "at_risk" | "off_track";
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function createPostgresInitiativeUpdate(
+  persistence: Persistence,
+  viewer: ActorRow,
+  initiativeId: string,
+  input: { health: string; body: string },
+): Promise<PostgresInitiativeUpdateRow> {
+  const initiative = await getPostgresInitiative(persistence, initiativeId);
+  if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
+  await assertCanMutatePostgresInitiative(persistence, viewer, initiative);
+  const health = input.health.toLowerCase();
+  const allowedHealth = ["on_track", "at_risk", "off_track"];
+  if (!allowedHealth.includes(health))
+    throw apiError("VALIDATION_FAILED", "Invalid initiative update health");
+  const body = input.body.trim();
+  if (!body) throw apiError("VALIDATION_FAILED", "Initiative update body cannot be empty");
+  const timestamp = now();
+  const row = await persistence.one<PostgresInitiativeUpdateRow>(
+    "INSERT INTO initiative_updates (id, initiative_id, author_id, health, body, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING *",
+    [newId(), initiative.id, viewer.id, health, body, timestamp],
+  );
+  if (!row) throw new Error("PostgreSQL initiative update insert returned no row");
+  return row;
+}
+
+export async function deletePostgresInitiativeUpdate(
+  persistence: Persistence,
+  viewer: ActorRow,
+  id: string,
+): Promise<boolean> {
+  const row = await persistence.one<{ initiative_id: string }>(
+    "SELECT initiative_id FROM initiative_updates WHERE id = $1",
+    [id],
+  );
+  if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
+  const initiative = await getPostgresInitiative(persistence, row.initiative_id);
+  if (!initiative) throw apiError("NOT_FOUND", "Initiative update not found");
+  await assertCanMutatePostgresInitiative(persistence, viewer, initiative);
+  await persistence.execute("DELETE FROM initiative_updates WHERE id = $1", [id]);
+  return true;
 }
 
 export async function deletePostgresInitiative(
