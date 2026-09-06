@@ -316,6 +316,7 @@ export function IssueView({ issueRef }: { issueRef: string }) {
       }`,
         { input: { issueId: issue.id, body } },
       );
+      await result.refetch();
       setComment("");
       setSaveNotice("Comment added");
       window.setTimeout(() => setSaveNotice(null), 1800);
