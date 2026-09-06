@@ -229,8 +229,12 @@ import {
   deleteInitiative,
   getInitiative,
   initiativeProgress,
+  listInitiativeLabelIds,
   listInitiativeProjectIds,
   listInitiativeTeamIds,
+  listInitiativeUpdateRows,
+  createInitiativeUpdate,
+  deleteInitiativeUpdate,
   listInitiatives,
   mapInitiative,
   updateInitiative,
@@ -238,11 +242,15 @@ import {
 import {
   canAccessPostgresInitiative,
   createPostgresInitiative,
+  createPostgresInitiativeUpdate,
   deletePostgresInitiative,
+  deletePostgresInitiativeUpdate,
   getPostgresInitiative,
+  listPostgresInitiativeLabelIds,
   listPostgresInitiativeProjectIds,
   listPostgresInitiativeScopeTeamIds,
   listPostgresInitiativeTeamIds,
+  listPostgresInitiativeUpdates,
   listPostgresInitiatives,
   mapPostgresInitiative,
   postgresInitiativeProgress,
@@ -532,6 +540,11 @@ export const resolvers = {
     COMPLETED: "completed",
     CANCELED: "canceled",
   },
+  InitiativeUpdateHealth: {
+    ON_TRACK: "on_track",
+    AT_RISK: "at_risk",
+    OFF_TRACK: "off_track",
+  },
   TeamMembershipRole: {
     OWNER: "owner",
     MEMBER: "member",
@@ -677,8 +690,10 @@ export const resolvers = {
   Issue: issueResolvers.Issue,
   IssueRelation: issueResolvers.IssueRelation,
   Project: projectResolvers.Project,
+  ProjectDependency: projectResolvers.ProjectDependency,
   ProjectStatusUpdate: projectResolvers.ProjectStatusUpdate,
   ProjectUpdateHealth: projectResolvers.ProjectUpdateHealth,
+  ProjectDependencyType: projectResolvers.ProjectDependencyType,
   Milestone: projectResolvers.Milestone,
   Comment: issueResolvers.Comment,
   Activity: issueResolvers.Activity,
@@ -817,6 +832,63 @@ export const resolvers = {
   },
 
   Initiative: {
+    leadTeam: async (
+      initiative: { leadTeamId: string | null },
+      _args: unknown,
+      context: Context,
+    ) => {
+      if (!initiative.leadTeamId) return null;
+      if (context.persistence) {
+        const team = await getPostgresTeam(context.persistence, { id: initiative.leadTeamId });
+        return team ? mapPostgresTeam(team) : null;
+      }
+      const team = lookupTeam(context, { id: initiative.leadTeamId });
+      return team ? mapTeam(team) : null;
+    },
+    labels: async (initiative: { id: string }, _args: unknown, context: Context) => {
+      const ids = context.persistence
+        ? await listPostgresInitiativeLabelIds(context.persistence, initiative.id)
+        : listInitiativeLabelIds(context.db, initiative.id, context.workspace.workspaceId);
+      const labels = [];
+      for (const id of ids) {
+        const label = context.persistence
+          ? await context.persistence.one<{
+              id: string;
+              name: string;
+              color: string;
+              team_id: string | null;
+            }>("SELECT * FROM labels WHERE id = $1", [id])
+          : (context.db.query("SELECT * FROM labels WHERE id = ?1").get(id) as {
+              id: string;
+              name: string;
+              color: string;
+              team_id: string | null;
+            } | null);
+        if (label)
+          labels.push({
+            id: label.id,
+            name: label.name,
+            color: label.color,
+            teamId: label.team_id ?? null,
+          });
+      }
+      return labels;
+    },
+    updates: async (initiative: { id: string }, _args: unknown, context: Context) => {
+      const rows = context.persistence
+        ? await listPostgresInitiativeUpdates(context.persistence, initiative.id)
+        : listInitiativeUpdateRows(context.db, initiative.id, context.workspace.workspaceId);
+      return rows.map((row) => ({
+        id: row.id,
+        initiativeId: row.initiative_id,
+        authorId: row.author_id,
+        health: row.health,
+        body: row.body,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }));
+    },
+    resources: (initiative: { resources?: unknown[] }) => initiative.resources ?? [],
     projects: async (initiative: { id: string }, _args: unknown, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
@@ -888,6 +960,25 @@ export const resolvers = {
       context.persistence
         ? (await postgresInitiativeProgress(context.persistence, initiative.id)).totalIssues
         : initiativeProgress(context.db, initiative.id, context.workspace.workspaceId).totalIssues,
+  },
+
+  InitiativeStatusUpdate: {
+    initiative: async (update: { initiativeId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const row = await getPostgresInitiative(context.persistence, update.initiativeId);
+        return row ? mapPostgresInitiative(row) : null;
+      }
+      const row = getInitiative(context.db, update.initiativeId, context.workspace.workspaceId);
+      return row ? mapInitiative(row) : null;
+    },
+    author: async (update: { authorId: string }, _args: unknown, context: Context) => {
+      if (context.persistence) {
+        const actor = await getPostgresActor(context.persistence, update.authorId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      const actor = lookupActor(context, update.authorId);
+      return actor ? mapActor(actor) : null;
+    },
   },
 
   ApiKey: {
@@ -3002,7 +3093,11 @@ export const resolvers = {
               name: string;
               description?: string | null;
               state?: string | null;
+              priority?: number | null;
               targetDate?: string | null;
+              leadTeamId?: string | null;
+              labelIds?: string[] | null;
+              resources?: unknown[] | null;
               projectIds?: string[] | null;
               teamIds?: string[] | null;
             };
@@ -3035,7 +3130,11 @@ export const resolvers = {
               name?: string | null;
               description?: string | null;
               state?: string | null;
+              priority?: number | null;
               targetDate?: string | null;
+              leadTeamId?: string | null;
+              labelIds?: string[] | null;
+              resources?: unknown[] | null;
               projectIds?: string[] | null;
               teamIds?: string[] | null;
               archived?: boolean | null;
@@ -3066,6 +3165,87 @@ export const resolvers = {
             ),
           );
           return { success: true, initiative };
+        },
+        initiativeStatusUpdateCreate: async (
+          _parent: unknown,
+          args: { input: { initiativeId: string; health: string; body: string } },
+          context: Context,
+        ) => {
+          const viewer = requireViewer(context);
+          if (context.persistence) {
+            const update = await createPostgresInitiativeUpdate(
+              context.persistence,
+              viewer,
+              args.input.initiativeId,
+              { health: args.input.health, body: args.input.body },
+            );
+            return {
+              success: true,
+              initiativeUpdate: {
+                id: update!.id,
+                initiativeId: update!.initiative_id,
+                authorId: update!.author_id,
+                health: update!.health,
+                body: update!.body,
+                createdAt: update!.created_at,
+                updatedAt: update!.updated_at,
+              },
+            };
+          }
+          const initiative = getInitiative(
+            context.db,
+            args.input.initiativeId,
+            context.workspace.workspaceId,
+          );
+          if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
+          // updateInitiative's ACL is intentionally reused for Initiative only.
+          updateInitiative(context.db, initiative.id, viewer, {}, context.workspace.workspaceId);
+          const updateInput = { body: args.input.body, health: args.input.health.toLowerCase() };
+          const row = createInitiativeUpdate(
+            context.db,
+            initiative.id,
+            viewer.id,
+            updateInput,
+            context.workspace.workspaceId,
+          );
+          return {
+            success: true,
+            initiativeUpdate: {
+              id: row.id,
+              initiativeId: row.initiative_id,
+              authorId: row.author_id,
+              health: row.health,
+              body: row.body,
+              createdAt: row.created_at,
+              updatedAt: row.updated_at,
+            },
+          };
+        },
+        initiativeStatusUpdateDelete: async (
+          _parent: unknown,
+          args: { id: string },
+          context: Context,
+        ) => {
+          const viewer = requireViewer(context);
+          if (context.persistence) {
+            return {
+              success: await deletePostgresInitiativeUpdate(context.persistence, viewer, args.id),
+            };
+          }
+          const row = context.db
+            .query("SELECT initiative_id FROM initiative_updates WHERE id = ?1")
+            .get(args.id) as { initiative_id: string } | null;
+          if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
+          const initiative = getInitiative(
+            context.db,
+            row.initiative_id,
+            context.workspace.workspaceId,
+          );
+          if (!initiative) throw apiError("NOT_FOUND", "Initiative update not found");
+          updateInitiative(context.db, initiative.id, viewer, {}, context.workspace.workspaceId);
+          return {
+            success: deleteInitiativeUpdate(context.db, args.id, context.workspace.workspaceId),
+          };
         },
         initiativeDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);

@@ -1305,7 +1305,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       const data = await gqlRequest(
         sessionConfig,
         `query($includeArchived: Boolean) { initiatives(includeArchived: $includeArchived) {
-        id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
+        id name description state priority targetDate archivedAt progress completedIssues totalIssues resources leadTeam { id key name } labels { id name color } createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
       } }`,
         { includeArchived: Boolean(includeArchived) },
       );
@@ -1323,7 +1323,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       const data = await gqlRequest(
         sessionConfig,
         `query($id: ID!) { initiative(id: $id) {
-        id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
+        id name description state priority targetDate archivedAt progress completedIssues totalIssues resources leadTeam { id key name } labels { id name color } createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
       } }`,
         { id },
       );
@@ -1341,7 +1341,11 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         name: z.string().optional(),
         description: z.string().optional(),
         state: z.enum(["planned", "active", "completed", "canceled"]).optional(),
+        priority: z.number().int().min(0).max(4).optional(),
         targetDate: z.string().optional(),
+        leadTeam: z.string().optional().describe("Team key or ID"),
+        labels: z.array(z.string()).optional().describe("Label IDs"),
+        resources: z.array(z.unknown()).optional(),
         projects: z.array(z.string()).optional(),
         teams: z.array(z.string()).optional(),
         archived: z.boolean().optional(),
@@ -1352,7 +1356,12 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       if (args.name !== undefined) input.name = args.name;
       if (args.description !== undefined) input.description = args.description;
       if (args.state !== undefined) input.state = args.state.toUpperCase();
+      if (args.priority !== undefined) input.priority = args.priority;
       if (args.targetDate !== undefined) input.targetDate = args.targetDate;
+      if (args.leadTeam !== undefined)
+        input.leadTeamId = (await resolveTeam(sessionConfig, args.leadTeam)).id;
+      if (args.labels !== undefined) input.labelIds = args.labels;
+      if (args.resources !== undefined) input.resources = args.resources;
       if (args.projects !== undefined) input.projectIds = args.projects;
       if (args.teams !== undefined)
         input.teamIds = await Promise.all(
@@ -1363,7 +1372,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         const data = await gqlRequest(
           sessionConfig,
           `mutation($id: ID!, $input: InitiativeUpdateInput!) { initiativeUpdate(id: $id, input: $input) { initiative {
-          id name description state targetDate archivedAt progress completedIssues totalIssues createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
+          id name description state priority targetDate archivedAt progress completedIssues totalIssues resources leadTeam { id key name } labels { id name color } createdAt updatedAt owner { id name type } projects { id name } teams { id key name }
         } } }`,
           { id: args.id, input },
         );
@@ -1643,7 +1652,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         sessionConfig,
         `query($state: ProjectState, $team: ID, $includeArchived: Boolean) {
       projects(state: $state, team: $team, includeArchived: $includeArchived) {
-        id name description state targetDate archivedAt lead { id name } teams { key }
+        id name description state startDate targetDate archivedAt lead { id name } members { id name type } dependencies { dependsOnProject { id name } type } teams { key }
       }
     }`,
         {
@@ -1667,7 +1676,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         sessionConfig,
         `query($id: ID!) {
       project(id: $id) {
-        id name description state targetDate archivedAt lead { id name }
+        id name description state startDate targetDate archivedAt lead { id name } members { id name type } dependencies { dependsOnProject { id name } type }
         milestones { id name description targetDate position progress }
         updates { id health body risks createdAt updatedAt author { id name type } }
         issues(first: 100) { nodes { identifier title state { name type } assignee { name } milestone { name } } }
@@ -1693,7 +1702,10 @@ export function createServer(config: McpConfig | McpSession): McpServer {
           .enum(["backlog", "planned", "started", "paused", "completed", "canceled"])
           .optional(),
         lead: z.string().optional().describe('Actor ID, name or "me"'),
+        startDate: z.string().optional(),
         targetDate: z.string().optional(),
+        members: z.array(z.string()).optional().describe("Actor IDs, names or me"),
+        dependencies: z.array(z.string()).optional().describe("Project IDs"),
         teams: z.array(z.string()).optional().describe("Team keys or IDs"),
       },
     },
@@ -1708,14 +1720,20 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       if (args.description !== undefined) input.description = args.description;
       if (args.state !== undefined) input.state = args.state.toUpperCase();
       if (args.lead !== undefined) input.leadId = await resolveActor(sessionConfig, args.lead);
+      if (args.startDate !== undefined) input.startDate = args.startDate;
       if (args.targetDate !== undefined) input.targetDate = args.targetDate;
+      if (args.members !== undefined)
+        input.memberIds = await Promise.all(
+          args.members.map((member: string) => resolveActor(sessionConfig, member)),
+        );
+      if (args.dependencies !== undefined) input.dependencyIds = args.dependencies;
 
       if (args.id) {
         const data = await gqlRequest(
           sessionConfig,
           `mutation($id: ID!, $input: ProjectUpdateInput!) {
         projectUpdate(id: $id, input: $input) {
-          project { id name description state targetDate lead { id name } }
+          project { id name description state startDate targetDate lead { id name } members { id name type } dependencies { dependsOnProject { id name } type } }
         }
       }`,
           { id: args.id, input },
@@ -1727,7 +1745,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         sessionConfig,
         `mutation($input: ProjectCreateInput!) {
       projectCreate(input: $input) {
-        project { id name description state targetDate lead { id name } }
+        project { id name description state startDate targetDate lead { id name } members { id name type } dependencies { dependsOnProject { id name } type } }
       }
     }`,
         { input },

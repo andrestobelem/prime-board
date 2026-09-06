@@ -32,6 +32,7 @@ import migration0027 from "./migrations/0027_documents.sql" with { type: "text" 
 import migration0028 from "./migrations/0028_issue_subscribers.sql" with { type: "text" };
 import migration0029 from "./migrations/0029_comments_fts.sql" with { type: "text" };
 import migration0030 from "./migrations/0030_documents_retirement.sql" with { type: "text" };
+import migration0031 from "./migrations/0031_planning_settings.sql" with { type: "text" };
 import { verifyDocumentRows } from "../export/documents-archive.ts";
 import { newId, now } from "./util.ts";
 
@@ -72,6 +73,7 @@ const MIGRATIONS: Migration[] = [
   { version: 28, name: "issue_subscribers", sql: migration0028 },
   { version: 29, name: "comments_fts", sql: migration0029 },
   { version: 30, name: "documents_retirement", sql: migration0030 },
+  { version: 31, name: "planning_settings", sql: migration0031 },
 ];
 
 const WORKSPACE_ROOT_TABLES = [

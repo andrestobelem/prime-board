@@ -5,7 +5,7 @@ import type { ApiKeyScope } from "../domain/actors.ts";
 import type { Context } from "../graphql/context.ts";
 import { getApiKey } from "../domain/actors.ts";
 import { assertTeamActive, getTeam } from "../domain/teams.ts";
-import { getProject, listProjectTeamIds } from "../domain/projects.ts";
+import { getProject, listProjectTeamIds, projectHasMember } from "../domain/projects.ts";
 import { isTeamMember, isTeamOwner } from "../domain/team-memberships.ts";
 import { apiError } from "../graphql/errors.ts";
 
@@ -163,7 +163,9 @@ export function assertCanManageProject(db: Database, viewer: ActorRow, projectId
   if (isWorkspaceAdmin(viewer)) return;
   const project = getProject(db, projectId);
   if (!project) return;
-  const teamIds = listProjectTeamIds(db, projectId);
+  // Project members have Project ACL. Team membership still controls Team changes.
+  if (projectHasMember(db, projectId, viewer.id, project.workspace_id ?? undefined)) return;
+  const teamIds = listProjectTeamIds(db, projectId, project.workspace_id ?? undefined);
   for (const teamId of teamIds) assertCanAccessTeam(db, viewer, teamId);
   if (teamIds.length > 0 && teamIds.every((teamId) => canWriteTeam(db, viewer, teamId))) return;
   throw apiError("UNAUTHORIZED", "Project access policy does not allow this operation");
@@ -171,7 +173,11 @@ export function assertCanManageProject(db: Database, viewer: ActorRow, projectId
 
 /** Un Project heredado de varios Teams exige acceso a todos sus Teams. */
 export function canAccessProject(db: Database, viewer: ActorRow, projectId: string): boolean {
-  const teamIds = listProjectTeamIds(db, projectId);
+  const project = getProject(db, projectId);
+  if (!project) return false;
+  if (isWorkspaceAdmin(viewer)) return true;
+  if (projectHasMember(db, projectId, viewer.id, project.workspace_id ?? undefined)) return true;
+  const teamIds = listProjectTeamIds(db, projectId, project.workspace_id ?? undefined);
   return teamIds.length > 0 && teamIds.every((teamId) => canAccessTeam(db, viewer, teamId));
 }
 

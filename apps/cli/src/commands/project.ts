@@ -6,8 +6,8 @@ import { ApiError, UsageError } from "../errors.ts";
 import { issueLine, printJson } from "../format.ts";
 import { readBody, resolveTeam, resolveViewerId } from "../resolve.ts";
 
-const PROJECT_FIELDS = `id name description state targetDate archivedAt
-  lead { id name type } createdAt updatedAt`;
+const PROJECT_FIELDS = `id name description state startDate targetDate archivedAt
+  lead { id name type } members { id name type } createdAt updatedAt`;
 const MILESTONE_FIELDS = `id name description targetDate position createdAt project { id name }`;
 const PROJECT_UPDATE_FIELDS = `id health body risks createdAt updatedAt
   project { id name } author { id name type }`;
@@ -16,7 +16,11 @@ const USAGE = `Usage:
   pb project list [--state NAME] [--team KEY] [--include-archived] [--json]
   pb project view <ID> [--json]
   pb project create --name TEXT [--team KEY ...] [--description TEXT] [--state NAME]
-                    [--lead me|ID] [--target-date YYYY-MM-DD] [--json]
+                    [--lead me|ID] [--start-date YYYY-MM-DD] [--target-date YYYY-MM-DD]
+                    [--member ID ...] [--dependency ID ...] [--json]
+  pb project update <ID> [--name TEXT] [--description TEXT] [--state NAME]
+                    [--lead me|ID] [--start-date DATE] [--target-date DATE]
+                    [--member ID ...] [--dependency ID ...] [--json]
   pb project archive|unarchive <ID> [--json]
   pb project milestone-list <PROJECT_ID> [--json]
   pb project milestone-create --project ID --name TEXT [--description TEXT]
@@ -119,7 +123,10 @@ export async function projectCommand(argv: string[]): Promise<void> {
         description: { type: "string" },
         state: { type: "string" },
         lead: { type: "string" },
+        "start-date": { type: "string" },
         "target-date": { type: "string" },
+        member: { type: "string", multiple: true },
+        dependency: { type: "string", multiple: true },
         team: { type: "string", multiple: true },
         json: { type: "boolean" },
       },
@@ -136,7 +143,10 @@ export async function projectCommand(argv: string[]): Promise<void> {
     if (values.lead) {
       input.leadId = values.lead === "me" ? await resolveViewerId(config) : values.lead;
     }
+    if (values["start-date"]) input.startDate = values["start-date"];
     if (values["target-date"]) input.targetDate = values["target-date"];
+    if (values.member?.length) input.memberIds = values.member;
+    if (values.dependency?.length) input.dependencyIds = values.dependency;
 
     const data = await gqlRequest(
       config,
@@ -149,6 +159,44 @@ export async function projectCommand(argv: string[]): Promise<void> {
     console.log(
       `Created project: ${data.projectCreate.project.name} (${data.projectCreate.project.id})`,
     );
+    return;
+  }
+
+  if (action === "update") {
+    const id = argv[1];
+    if (!id) throw new UsageError(USAGE);
+    const { values } = parseArgs({
+      args: argv.slice(2),
+      options: {
+        name: { type: "string" },
+        description: { type: "string" },
+        state: { type: "string" },
+        lead: { type: "string" },
+        "start-date": { type: "string" },
+        "target-date": { type: "string" },
+        member: { type: "string", multiple: true },
+        dependency: { type: "string", multiple: true },
+        json: { type: "boolean" },
+      },
+    });
+    const input: Record<string, unknown> = {};
+    if (values.name !== undefined) input.name = values.name;
+    if (values.description !== undefined) input.description = values.description;
+    if (values.state !== undefined) input.state = values.state.toUpperCase();
+    if (values.lead !== undefined)
+      input.leadId = values.lead === "me" ? await resolveViewerId(config) : values.lead;
+    if (values["start-date"] !== undefined) input.startDate = values["start-date"];
+    if (values["target-date"] !== undefined) input.targetDate = values["target-date"];
+    if (values.member) input.memberIds = values.member;
+    if (values.dependency) input.dependencyIds = values.dependency;
+    if (!Object.keys(input).length) throw new UsageError(USAGE);
+    const data = await gqlRequest(
+      config,
+      `mutation($id: ID!, $input: ProjectUpdateInput!) { projectUpdate(id: $id, input: $input) { project { ${PROJECT_FIELDS} } } }`,
+      { id, input },
+    );
+    if (values.json) return printJson(data.projectUpdate.project);
+    console.log(`Updated project ${id}`);
     return;
   }
 

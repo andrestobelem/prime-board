@@ -675,7 +675,7 @@ export function exportBoard(
   const projects = db
     .query(
       `SELECT projects.id, projects.name, projects.description, projects.state, projects.lead_id,
-              projects.target_date, projects.archived_at
+              projects.start_date, projects.target_date, projects.archived_at
        FROM projects
        ${teamFilter ? "WHERE EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = projects.id AND project_teams.team_id = ?1)" : ""}
        ORDER BY projects.name, projects.id`,
@@ -689,8 +689,23 @@ export function exportBoard(
         description: project.description,
         state: project.state,
         lead: project.lead_id ? (lookups.actors.get(project.lead_id) ?? null) : null,
+        startDate: project.start_date,
         targetDate: project.target_date,
         archived: Boolean(project.archived_at),
+        members: db
+          .query(
+            `SELECT actors.name FROM project_members JOIN actors ON actors.id = project_members.actor_id
+             WHERE project_members.project_id = ?1 ORDER BY actors.name`,
+          )
+          .all(project.id)
+          .map((row) => (row as { name: string }).name),
+        dependencies: db
+          .query(
+            `SELECT p.name AS dependsOnProject, pd.type FROM project_dependencies pd
+             JOIN projects p ON p.id = pd.depends_on_project_id
+             WHERE pd.project_id = ?1 ORDER BY p.name, pd.type`,
+          )
+          .all(project.id),
         teams: db
           .query(
             `SELECT teams.key FROM project_teams JOIN teams ON teams.id = project_teams.team_id
@@ -883,9 +898,28 @@ export function exportBoard(
         name: initiative.name,
         description: initiative.description,
         state: initiative.state,
+        priority: initiative.priority ?? 0,
         targetDate: initiative.target_date,
+        leadTeam: initiative.lead_team_id
+          ? (context.teamKeys.get(initiative.lead_team_id) ?? null)
+          : null,
+        resources: initiative.resources_json ? JSON.parse(initiative.resources_json) : [],
         owner: initiative.owner_name ?? null,
         archived: Boolean(initiative.archived_at),
+        labels: db
+          .query(
+            `SELECT labels.name, teams.key AS team FROM initiative_labels JOIN labels ON labels.id = initiative_labels.label_id LEFT JOIN teams ON teams.id = labels.team_id WHERE initiative_labels.initiative_id = ?1 ORDER BY teams.key, labels.name`,
+          )
+          .all(initiative.id)
+          .map((row) => {
+            const label = row as { name: string; team: string | null };
+            return label.team ? `${label.team}/${label.name}` : `workspace/${label.name}`;
+          }),
+        updates: db
+          .query(
+            `SELECT actors.name AS author, initiative_updates.health, initiative_updates.body, initiative_updates.created_at AS createdAt, initiative_updates.updated_at AS updatedAt FROM initiative_updates JOIN actors ON actors.id = initiative_updates.author_id WHERE initiative_updates.initiative_id = ?1 ORDER BY initiative_updates.created_at, initiative_updates.id`,
+          )
+          .all(initiative.id),
         projects: db
           .query(
             `SELECT p.name FROM initiative_projects ip

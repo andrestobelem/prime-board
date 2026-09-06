@@ -482,10 +482,15 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     description: String
     state: InitiativeState!
+    priority: Int!
     targetDate: DateTime
+    leadTeam: Team
+    resources: JSON!
+    labels: [Label!]!
     projects: [Project!]!
     teams: [Team!]!
     owner: Actor
+    updates: [InitiativeStatusUpdate!]!
     """
     Completed / total issues in the initiative's projects.
     """
@@ -497,11 +502,31 @@ export const typeDefs = /* GraphQL */ `
     archivedAt: DateTime
   }
 
+  enum InitiativeUpdateHealth {
+    ON_TRACK
+    AT_RISK
+    OFF_TRACK
+  }
+
+  type InitiativeStatusUpdate {
+    id: ID!
+    initiative: Initiative!
+    author: Actor!
+    health: InitiativeUpdateHealth!
+    body: String!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
   input InitiativeCreateInput {
     name: String!
     description: String
     state: InitiativeState
+    priority: Int
     targetDate: DateTime
+    leadTeamId: ID
+    labelIds: [ID!]
+    resources: JSON
     projectIds: [ID!]
     teamIds: [ID!]
   }
@@ -510,10 +535,25 @@ export const typeDefs = /* GraphQL */ `
     name: String
     description: String
     state: InitiativeState
+    priority: Int
     targetDate: DateTime
+    leadTeamId: ID
+    labelIds: [ID!]
+    resources: JSON
     projectIds: [ID!]
     teamIds: [ID!]
     archived: Boolean
+  }
+
+  input InitiativeStatusUpdateCreateInput {
+    initiativeId: ID!
+    health: InitiativeUpdateHealth!
+    body: String!
+  }
+
+  type InitiativeStatusUpdatePayload {
+    success: Boolean!
+    initiativeUpdate: InitiativeStatusUpdate!
   }
 
   type InitiativePayload {
@@ -536,8 +576,11 @@ export const typeDefs = /* GraphQL */ `
     description: String
     state: ProjectState!
     lead: Actor
+    startDate: DateTime
     targetDate: DateTime
     teams: [Team!]!
+    members: [Actor!]!
+    dependencies: [ProjectDependency!]!
     milestones: [Milestone!]!
     issues(first: Int = 50, after: String): IssueConnection!
     """
@@ -547,6 +590,30 @@ export const typeDefs = /* GraphQL */ `
     createdAt: DateTime!
     updatedAt: DateTime!
     archivedAt: DateTime
+  }
+
+  enum ProjectDependencyType {
+    BLOCKS
+    RELATED
+  }
+
+  type ProjectDependency {
+    id: ID!
+    project: Project!
+    dependsOnProject: Project!
+    type: ProjectDependencyType!
+    createdAt: DateTime!
+  }
+
+  input ProjectDependencyCreateInput {
+    projectId: ID!
+    dependsOnProjectId: ID!
+    type: ProjectDependencyType
+  }
+
+  type ProjectDependencyPayload {
+    success: Boolean!
+    dependency: ProjectDependency!
   }
 
   enum ProjectUpdateHealth {
@@ -897,7 +964,10 @@ export const typeDefs = /* GraphQL */ `
     description: String
     state: ProjectState
     leadId: ID
+    startDate: DateTime
     targetDate: DateTime
+    memberIds: [ID!]
+    dependencyIds: [ID!]
     """
     Project Teams; omit = all current Teams (compatibility behavior).
     """
@@ -909,7 +979,10 @@ export const typeDefs = /* GraphQL */ `
     description: String
     state: ProjectState
     leadId: ID
+    startDate: DateTime
     targetDate: DateTime
+    memberIds: [ID!]
+    dependencyIds: [ID!]
     """
     Replaces the complete set of project Teams.
     """
@@ -1162,6 +1235,8 @@ export const typeDefs = /* GraphQL */ `
     issueRelationDelete(id: ID!): DeletePayload!
     projectCreate(input: ProjectCreateInput!): ProjectPayload!
     projectUpdate(id: ID!, input: ProjectUpdateInput!): ProjectPayload!
+    projectDependencyCreate(input: ProjectDependencyCreateInput!): ProjectDependencyPayload!
+    projectDependencyDelete(id: ID!): DeletePayload!
     projectArchive(id: ID!): ProjectPayload!
     projectUnarchive(id: ID!): ProjectPayload!
     milestoneCreate(input: MilestoneCreateInput!): MilestonePayload!
@@ -1189,6 +1264,10 @@ export const typeDefs = /* GraphQL */ `
     reviewDelete(id: ID!): DeletePayload!
     initiativeCreate(input: InitiativeCreateInput!): InitiativePayload!
     initiativeUpdate(id: ID!, input: InitiativeUpdateInput!): InitiativePayload!
+    initiativeStatusUpdateCreate(
+      input: InitiativeStatusUpdateCreateInput!
+    ): InitiativeStatusUpdatePayload!
+    initiativeStatusUpdateDelete(id: ID!): DeletePayload!
     initiativeDelete(id: ID!): DeletePayload!
     projectUpdateCreate(input: ProjectUpdateCreateInput!): ProjectStatusUpdatePayload!
     projectUpdateDelete(id: ID!): DeletePayload!
