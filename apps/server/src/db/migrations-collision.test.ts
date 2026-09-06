@@ -80,6 +80,34 @@ function seedLegacyNotificationAndViewData(db: Database): void {
   ).run(workspace.id, actor.id, timestamp);
 }
 
+function seedLegacyViewsMigrationMarker(db: Database): void {
+  bootstrap(db);
+  db.exec(`
+    INSERT INTO saved_views
+      (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+       created_at, updated_at, archived_at, columns_json, workspace_id)
+    SELECT 'view-legacy', 'Legacy View', 'team', teams.id, actors.id, '{}', 'CREATED_DESC', 'state',
+           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL, '[]', workspace.id
+      FROM workspace
+      JOIN actors ON actors.name = 'admin'
+      JOIN teams ON teams.workspace_id = workspace.id
+     LIMIT 1;
+    INSERT INTO favorites
+      (id, actor_id, project_id, saved_view_id, position, created_at, workspace_id)
+    SELECT 'favorite-legacy', actors.id, NULL, 'view-legacy', 0,
+           '2026-01-01T00:00:00.000Z', workspace.id
+      FROM workspace
+      JOIN actors ON actors.name = 'admin'
+     LIMIT 1;
+  `);
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec(readFileSync(join(import.meta.dir, "migrations", "0033_views_preferences.sql"), "utf8"));
+  db.exec("PRAGMA foreign_keys = ON");
+  db.query(
+    "INSERT INTO _migrations (version, name, applied_at) VALUES (32, 'views_preferences', ?1)",
+  ).run("2026-01-01T00:00:00.000Z");
+}
+
 describe("colisión de migraciones SQLite", () => {
   it("aplica Notifications y Views con versiones, tablas e índices únicos", () => {
     const db = openDatabase(":memory:");
@@ -105,6 +133,7 @@ describe("colisión de migraciones SQLite", () => {
         ).toEqual({ name: table });
       }
       for (const index of [
+        "idx_saved_views_workspace_id",
         "idx_notification_preferences_actor_workspace",
         "idx_view_preferences_key",
         "idx_view_preferences_view",
@@ -137,6 +166,7 @@ describe("colisión de migraciones SQLite", () => {
       const beforeNotification = db
         .query("SELECT * FROM notification_preferences WHERE category = 'mentions'")
         .get();
+      db.exec("CREATE UNIQUE INDEX idx_saved_views_name ON saved_views(name)");
 
       migrate(db);
 
@@ -166,6 +196,11 @@ describe("colisión de migraciones SQLite", () => {
           .query("SELECT project_id, initiative_id FROM saved_views WHERE id = 'view-legacy'")
           .get(),
       ).toEqual({ project_id: null, initiative_id: null });
+      for (const index of ["idx_saved_views_workspace_id", "idx_saved_views_name"]) {
+        expect(
+          db.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?1").get(index),
+        ).toEqual({ name: index });
+      }
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 
       const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
@@ -219,6 +254,191 @@ describe("colisión de migraciones SQLite", () => {
       expect(
         db.query("SELECT * FROM notification_preferences WHERE category = 'mentions'").get(),
       ).toEqual(beforeNotification);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reconcilia Views legacy marcadas como 0032, aplica Notifications y conserva metadata", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      const beforeView = db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get();
+      const beforeFavorite = db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get();
+      const beforeViewPreference = db
+        .query("SELECT * FROM view_preferences WHERE id = 'view-preference-legacy'")
+        .get();
+      const beforeViewSubscription = db
+        .query("SELECT * FROM view_subscriptions WHERE id = 'view-subscription-legacy'")
+        .get();
+
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_preferences'",
+          )
+          .get(),
+      ).toBeNull();
+      migrate(db);
+
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+      expect(db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get()).toEqual(
+        beforeView,
+      );
+      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
+        beforeFavorite,
+      );
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_preferences'",
+          )
+          .get(),
+      ).not.toBeNull();
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'view_preferences'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'view_subscriptions'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_saved_views_workspace_id'",
+          )
+          .get(),
+      ).toEqual({ name: "idx_saved_views_workspace_id" });
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+
+      const markers = db.query("SELECT version, name FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT version, name FROM _migrations ORDER BY version").all()).toEqual(
+        markers,
+      );
+      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
+        beforeFavorite,
+      );
+      expect(
+        db.query("SELECT * FROM view_preferences WHERE id = 'view-preference-legacy'").get(),
+      ).toEqual(beforeViewPreference);
+      expect(
+        db.query("SELECT * FROM view_subscriptions WHERE id = 'view-subscription-legacy'").get(),
+      ).toEqual(beforeViewSubscription);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("revierte la reconciliación legacy si Notifications falla y permite reintentar", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      db.exec("CREATE INDEX idx_notification_preferences_actor_workspace ON actors(name)");
+      const beforeView = db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get();
+      const beforeViewPreference = db
+        .query("SELECT * FROM view_preferences WHERE id = 'view-preference-legacy'")
+        .get();
+      const beforeMarkers = db
+        .query("SELECT version, name FROM _migrations ORDER BY version")
+        .all();
+
+      expect(() => migrate(db)).toThrow(/idx_notification_preferences_actor_workspace/);
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_preferences'",
+          )
+          .get(),
+      ).toBeNull();
+      expect(db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get()).toEqual(
+        beforeView,
+      );
+      expect(
+        db.query("SELECT * FROM view_preferences WHERE id = 'view-preference-legacy'").get(),
+      ).toEqual(beforeViewPreference);
+      expect(db.query("SELECT version, name FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+      db.exec("DROP INDEX idx_notification_preferences_actor_workspace");
+      migrate(db);
+      expect(db.query("SELECT name FROM _migrations WHERE version = 33").get()).toEqual({
+        name: "views_preferences",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado ante una Views legacy parcial sin cambiar datos ni markers", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      db.exec("DROP TABLE view_subscriptions");
+      const beforeView = db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get();
+      const beforeMarkers = db
+        .query("SELECT version, name FROM _migrations ORDER BY version")
+        .all();
+
+      expect(() => migrate(db)).toThrow(/legacy Views migration.*incomplete|incompatible/i);
+      expect(db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get()).toEqual(
+        beforeView,
+      );
+      expect(db.query("SELECT version, name FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'view_preferences'",
+          )
+          .get(),
+      ).not.toBeNull();
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'view_subscriptions'",
+          )
+          .get(),
+      ).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado ante un nombre de migration contradictorio", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      db.query("UPDATE _migrations SET name = 'notification_preferences' WHERE version = 32").run();
+      const beforeView = db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get();
+      const beforeMarkers = db
+        .query("SELECT version, name FROM _migrations ORDER BY version")
+        .all();
+
+      expect(() => migrate(db)).toThrow(/migration 0032.*marker.*Views|contradictory/i);
+      expect(db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get()).toEqual(
+        beforeView,
+      );
+      expect(db.query("SELECT version, name FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
     } finally {
       db.close();
     }

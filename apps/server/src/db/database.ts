@@ -1,5 +1,5 @@
 // Apertura de la base SQLite (WAL) y corrida de migraciones versionadas.
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import migration0001 from "./migrations/0001_init.sql" with { type: "text" };
@@ -327,16 +327,222 @@ const VIEWS_MIGRATION_REQUIRED_TABLES = [
   "workspace_memberships",
 ];
 
+const SAVED_VIEWS_TARGET_COLUMNS = [
+  "id",
+  "name",
+  "scope",
+  "team_id",
+  "project_id",
+  "initiative_id",
+  "owner_id",
+  "filter_json",
+  "order_by",
+  "group_by",
+  "created_at",
+  "updated_at",
+  "archived_at",
+  "columns_json",
+  "workspace_id",
+];
+
+const VIEW_PREFERENCES_TARGET_COLUMNS = [
+  "id",
+  "workspace_id",
+  "view_id",
+  "actor_id",
+  "view_type",
+  "scope",
+  "layout",
+  "order_by",
+  "group_by",
+  "columns_json",
+  "created_at",
+  "updated_at",
+];
+
+const VIEW_SUBSCRIPTIONS_TARGET_COLUMNS = [
+  "id",
+  "workspace_id",
+  "view_id",
+  "actor_id",
+  "issue_changes",
+  "slack",
+  "created_at",
+  "updated_at",
+];
+
+const NOTIFICATION_PREFERENCES_COLUMNS = [
+  "workspace_id",
+  "actor_id",
+  "category",
+  "channel",
+  "enabled",
+  "email_delivery",
+  "created_at",
+  "updated_at",
+];
+
+interface MigrationMarkerRow {
+  version: number;
+  name: string;
+  applied_at: string;
+}
+
+interface IndexDefinitionRow {
+  name: string;
+  sql: string;
+}
+
+interface IndexRow {
+  unique_value: number;
+}
+
+interface IndexColumnRow {
+  seqno: number;
+  name: string | null;
+}
+
+interface TableInfoRow {
+  name: string;
+  pk: number;
+}
+
+interface SqlDefinitionRow {
+  sql: string;
+}
+
+const VIEWS_MIGRATION_ARTIFACTS = [
+  "view_preferences",
+  "view_subscriptions",
+  "_prb390_saved_views",
+  "idx_view_preferences_key",
+  "idx_view_preferences_view",
+  "idx_view_preferences_actor",
+  "idx_view_subscriptions_view",
+  "idx_view_subscriptions_actor",
+];
+
 function hasTable(db: Database, table: string): boolean {
   return Boolean(
     db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1").get(table),
   );
 }
 
+function hasSchemaObject(db: Database, name: string): boolean {
+  return Boolean(db.query("SELECT 1 FROM sqlite_master WHERE name = ?1 LIMIT 1").get(name));
+}
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  return Boolean(
+    db.query(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?1 LIMIT 1`).get(column),
+  );
+}
+
+function hasPrimaryKey(db: Database, table: string, column: string): boolean {
+  return Boolean(
+    db
+      .query(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?1 AND pk = 1 LIMIT 1`)
+      .get(column),
+  );
+}
+
+function hasNamedIndexWithColumns(
+  db: Database,
+  table: string,
+  name: string,
+  columns: readonly string[],
+  unique: boolean,
+): boolean {
+  const index = db
+    .query<IndexRow, SQLQueryBindings[]>(
+      `SELECT "unique" AS unique_value FROM pragma_index_list('${table}') WHERE name = ?1`,
+    )
+    .get(name);
+  if (!index || index.unique_value !== (unique ? 1 : 0)) return false;
+
+  const indexColumns = db
+    .query<IndexColumnRow, SQLQueryBindings[]>(
+      `SELECT seqno, name FROM pragma_index_info('${name}') ORDER BY seqno`,
+    )
+    .all();
+  return (
+    indexColumns.length === columns.length &&
+    indexColumns.every(
+      (column, position) => column.seqno === position && column.name === columns[position],
+    )
+  );
+}
+
+function hasPrimaryKeyColumns(db: Database, table: string, columns: string[]): boolean {
+  const primaryKeyColumns = db
+    .query<TableInfoRow, SQLQueryBindings[]>(
+      `SELECT name, pk FROM pragma_table_info('${table}') WHERE pk > 0 ORDER BY pk`,
+    )
+    .all();
+  return (
+    primaryKeyColumns.length === columns.length &&
+    primaryKeyColumns.every((column, position) => {
+      const expected = columns[position];
+      return expected !== undefined && column.pk === position + 1 && column.name === expected;
+    })
+  );
+}
+
+function hasNamedIndex(db: Database, table: string, name: string): boolean {
+  return Boolean(
+    db.query(`SELECT 1 FROM pragma_index_list('${table}') WHERE name = ?1 LIMIT 1`).get(name),
+  );
+}
+
+function hasTrigger(db: Database, name: string): boolean {
+  return Boolean(
+    db.query("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?1 LIMIT 1").get(name),
+  );
+}
+
+function normalizedSql(sql: string): string {
+  return sql.toLowerCase().replace(/\s+/g, "");
+}
+
+function hasViewPreferencesKeyIndex(db: Database): boolean {
+  const definition = db
+    .query<SqlDefinitionRow, SQLQueryBindings[]>(
+      "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+    )
+    .get("idx_view_preferences_key");
+  if (!definition) return false;
+  const sql = normalizedSql(definition.sql);
+  return (
+    sql.includes("createuniqueindexidx_view_preferences_keyonview_preferences") &&
+    sql.includes("ifnull(view_id,'')") &&
+    sql.includes("ifnull(actor_id,'')")
+  );
+}
+
+function savedViewsIndexDefinitions(db: Database): IndexDefinitionRow[] {
+  return db
+    .query<IndexDefinitionRow, SQLQueryBindings[]>(
+      `SELECT indexes.name, sqlite_master.sql
+       FROM pragma_index_list('saved_views') AS indexes
+       JOIN sqlite_master
+         ON sqlite_master.type = 'index'
+        AND sqlite_master.name = indexes.name
+       WHERE sqlite_master.sql IS NOT NULL
+       ORDER BY indexes.name`,
+    )
+    .all();
+}
+
+function restoreSavedViewsIndexes(db: Database, definitions: IndexDefinitionRow[]): void {
+  for (const definition of definitions) {
+    if (!hasNamedIndex(db, "saved_views", definition.name)) db.exec(definition.sql);
+  }
+}
+
 function hasIndexWithColumns(
   db: Database,
   table: string,
-  columns: string[],
+  columns: readonly string[],
   unique: boolean,
 ): boolean {
   const columnJoins = columns
@@ -505,8 +711,272 @@ function validateViewsMigrationPrerequisites(db: Database): void {
   }
 }
 
+function viewsMigrationSchemaProblems(db: Database, requireWorkspaceIndex: boolean): string[] {
+  const problems: string[] = [];
+  const targetTables = [
+    ["saved_views", SAVED_VIEWS_TARGET_COLUMNS],
+    ["view_preferences", VIEW_PREFERENCES_TARGET_COLUMNS],
+    ["view_subscriptions", VIEW_SUBSCRIPTIONS_TARGET_COLUMNS],
+  ] as const;
+
+  for (const [table, columns] of targetTables) {
+    if (!hasTable(db, table)) {
+      problems.push(`missing table ${table}`);
+      continue;
+    }
+    const missingColumns = columns.filter((column) => !hasColumn(db, table, column));
+    if (missingColumns.length > 0) {
+      problems.push(`${table} missing columns: ${missingColumns.join(", ")}`);
+    }
+    if (!hasPrimaryKey(db, table, "id")) problems.push(`${table}.id is not a primary key`);
+  }
+
+  const savedViewsIndexes = [
+    ["idx_saved_views_scope", ["scope", "team_id"], false],
+    ["idx_saved_views_owner", ["owner_id"], false],
+    ["idx_saved_views_project", ["workspace_id", "project_id"], false],
+    ["idx_saved_views_initiative", ["workspace_id", "initiative_id"], false],
+  ] as const;
+  for (const [name, columns, unique] of savedViewsIndexes) {
+    if (!hasNamedIndexWithColumns(db, "saved_views", name, columns, unique)) {
+      problems.push(`missing or incompatible index ${name}`);
+    }
+  }
+  const hasWorkspaceIndex = hasNamedIndexWithColumns(
+    db,
+    "saved_views",
+    "idx_saved_views_workspace_id",
+    ["workspace_id", "id"],
+    true,
+  );
+  if (requireWorkspaceIndex && !hasWorkspaceIndex) {
+    problems.push("missing or incompatible index idx_saved_views_workspace_id");
+  } else if (
+    hasNamedIndex(db, "saved_views", "idx_saved_views_workspace_id") &&
+    !hasWorkspaceIndex
+  ) {
+    problems.push("incompatible index idx_saved_views_workspace_id");
+  }
+
+  const viewPreferencesIndexes = [
+    ["idx_view_preferences_view", ["workspace_id", "view_id"]],
+    ["idx_view_preferences_actor", ["workspace_id", "actor_id"]],
+  ] as const;
+  for (const [name, columns] of viewPreferencesIndexes) {
+    if (!hasNamedIndexWithColumns(db, "view_preferences", name, columns, false)) {
+      problems.push(`missing or incompatible index ${name}`);
+    }
+  }
+  if (!hasViewPreferencesKeyIndex(db)) {
+    problems.push("missing or incompatible index idx_view_preferences_key");
+  }
+
+  const viewSubscriptionsIndexes = [
+    ["idx_view_subscriptions_view", ["workspace_id", "view_id"]],
+    ["idx_view_subscriptions_actor", ["workspace_id", "actor_id"]],
+  ] as const;
+  for (const [name, columns] of viewSubscriptionsIndexes) {
+    if (!hasNamedIndexWithColumns(db, "view_subscriptions", name, columns, false)) {
+      problems.push(`missing or incompatible index ${name}`);
+    }
+  }
+
+  for (const trigger of [
+    "saved_views_workspace_scope_insert",
+    "saved_views_workspace_required_insert",
+    "saved_views_workspace_required_update",
+  ]) {
+    if (!hasTrigger(db, trigger)) problems.push(`missing trigger ${trigger}`);
+  }
+
+  return problems;
+}
+
+function validateViewsMigrationSchema(db: Database, requireWorkspaceIndex: boolean): void {
+  const problems = viewsMigrationSchemaProblems(db, requireWorkspaceIndex);
+  if (problems.length > 0) {
+    throw new Error(
+      `Views migration schema is incomplete or incompatible (${problems.join("; ")})`,
+    );
+  }
+}
+
+function notificationPreferencesSchemaProblems(db: Database): string[] {
+  const problems: string[] = [];
+  if (!hasTable(db, "notification_preferences")) {
+    return ["missing table notification_preferences"];
+  }
+  const missingColumns = NOTIFICATION_PREFERENCES_COLUMNS.filter(
+    (column) => !hasColumn(db, "notification_preferences", column),
+  );
+  if (missingColumns.length > 0) {
+    problems.push(`notification_preferences missing columns: ${missingColumns.join(", ")}`);
+  }
+  if (
+    !hasPrimaryKeyColumns(db, "notification_preferences", [
+      "workspace_id",
+      "actor_id",
+      "category",
+      "channel",
+    ])
+  ) {
+    problems.push("notification_preferences has an incompatible primary key");
+  }
+  if (
+    !hasNamedIndexWithColumns(
+      db,
+      "notification_preferences",
+      "idx_notification_preferences_actor_workspace",
+      ["actor_id", "workspace_id"],
+      false,
+    )
+  ) {
+    problems.push("missing or incompatible index idx_notification_preferences_actor_workspace");
+  }
+  return problems;
+}
+
+function validateNotificationPreferencesSchema(db: Database): void {
+  const problems = notificationPreferencesSchemaProblems(db);
+  if (problems.length > 0) {
+    throw new Error(
+      `Notification migration schema is incomplete or incompatible (${problems.join("; ")})`,
+    );
+  }
+}
+
+function migrationMarker(db: Database, version: number): MigrationMarkerRow | null {
+  return (
+    db
+      .query<MigrationMarkerRow, SQLQueryBindings[]>(
+        "SELECT version, name, applied_at FROM _migrations WHERE version = ?1",
+      )
+      .get(version) ?? null
+  );
+}
+
+function hasViewsMigrationArtifacts(db: Database): boolean {
+  return (
+    VIEWS_MIGRATION_ARTIFACTS.some((name) => hasSchemaObject(db, name)) ||
+    (hasTable(db, "saved_views") &&
+      (hasColumn(db, "saved_views", "project_id") || hasColumn(db, "saved_views", "initiative_id")))
+  );
+}
+
+function reconcileLegacyViewsMigration(db: Database, marker: MigrationMarkerRow): void {
+  if (marker.name !== "views_preferences" || marker.version !== 32) {
+    throw new Error("Cannot reconcile an unexpected Views migration marker");
+  }
+  const problems = viewsMigrationSchemaProblems(db, false);
+  if (problems.length > 0) {
+    throw new Error(
+      `Cannot reconcile legacy Views migration: incomplete or incompatible schema (${problems.join("; ")})`,
+    );
+  }
+
+  db.transaction(() => {
+    const appliedAt = now();
+    db.exec(migration0032);
+    db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_views_workspace_id ON saved_views(workspace_id, id)",
+    );
+    db.query("UPDATE _migrations SET name = ?1, applied_at = ?2 WHERE version = 32").run(
+      "notification_preferences",
+      appliedAt,
+    );
+    db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (33, ?1, ?2)").run(
+      "views_preferences",
+      appliedAt,
+    );
+    validateNotificationPreferencesSchema(db);
+    validateViewsMigrationSchema(db, true);
+    validateWorkspaceConstraints(db);
+  })();
+}
+
+function validateMigrationMarkersAndReconcile(db: Database): void {
+  const marker32 = migrationMarker(db, 32);
+  const marker33 = migrationMarker(db, 33);
+  const hasNotificationTable = hasTable(db, "notification_preferences");
+  const hasViewsArtifacts = hasViewsMigrationArtifacts(db);
+
+  if (marker32 && !["notification_preferences", "views_preferences"].includes(marker32.name)) {
+    throw new Error(
+      `Cannot reconcile migration 0032 marker: name ${marker32.name} is contradictory or unknown`,
+    );
+  }
+  if (marker33 && marker33.name !== "views_preferences") {
+    throw new Error(
+      `Cannot reconcile migration 0033 marker: name ${marker33.name} is contradictory or unknown`,
+    );
+  }
+
+  if (marker32?.name === "views_preferences") {
+    if (marker33) {
+      throw new Error("Cannot reconcile migration 0032 marker: Views is already marked as 0033");
+    }
+    if (hasNotificationTable) {
+      throw new Error(
+        "Cannot reconcile migration 0032 marker: Views marker contradicts notification_preferences",
+      );
+    }
+    reconcileLegacyViewsMigration(db, marker32);
+    return;
+  }
+
+  if (marker32?.name === "notification_preferences") {
+    if (!hasNotificationTable && hasViewsArtifacts) {
+      throw new Error(
+        "Cannot reconcile migration 0032 marker: notification name contradicts the legacy Views schema",
+      );
+    }
+    try {
+      validateNotificationPreferencesSchema(db);
+    } catch (error) {
+      throw new Error(
+        `Cannot apply migration 0032: marker is present but the schema is incomplete or incompatible. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (marker33) {
+      if (hasViewsArtifacts) {
+        try {
+          validateViewsMigrationSchema(db, true);
+        } catch (error) {
+          throw new Error(
+            `Cannot apply migration 0033: marker is present but the schema is incomplete or incompatible. ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      } else {
+        throw new Error(
+          "Cannot apply migration 0033: marker is present but Views schema is missing",
+        );
+      }
+    } else if (hasViewsArtifacts) {
+      throw new Error(
+        "Cannot apply migration 0033: Views schema is partially applied or its marker is missing",
+      );
+    }
+    return;
+  }
+
+  if (marker33) {
+    throw new Error("Cannot apply migration 0033: marker is present without migration 0032");
+  }
+  if (hasNotificationTable) {
+    throw new Error(
+      "Cannot apply migration 0032: notification_preferences exists without its migration marker",
+    );
+  }
+  if (hasViewsArtifacts) {
+    throw new Error(
+      "Cannot apply migration 0033: Views schema is partially applied or its marker is missing",
+    );
+  }
+}
+
 function validateViewsMigrationResult(db: Database): void {
   try {
+    validateViewsMigrationSchema(db, true);
     validateWorkspaceConstraints(db);
   } catch (error) {
     throw new Error(
@@ -521,6 +991,7 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
   db.exec(
     "CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)",
   );
+  validateMigrationMarkersAndReconcile(db);
   const applied = new Set(
     db
       .query("SELECT version FROM _migrations")
@@ -538,6 +1009,7 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
     // de una transacción activa. El runner desactiva las comprobaciones solo
     // alrededor de estas migraciones y las reactiva aun si una falla.
     const rebuild = migration.version === 25 || migration.version === 33;
+    const savedViewIndexes = migration.version === 33 ? savedViewsIndexDefinitions(db) : [];
     if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
@@ -545,6 +1017,7 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
         if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "before");
         if (migration.version === 30) verifyDocumentsBeforeRetirement(db, options);
         db.exec(migration.sql);
+        if (migration.version === 33) restoreSavedViewsIndexes(db, savedViewIndexes);
         if (migration.version === 24) {
           normalizeBackfilledMembershipIds(db);
           validateWorkspaceMigration(db, "after");

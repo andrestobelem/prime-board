@@ -41,6 +41,7 @@ FROM saved_views;
 DROP TABLE saved_views;
 ALTER TABLE _prb390_saved_views RENAME TO saved_views;
 
+CREATE UNIQUE INDEX idx_saved_views_workspace_id ON saved_views(workspace_id, id);
 CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
 CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
 CREATE INDEX idx_saved_views_project ON saved_views(workspace_id, project_id);
