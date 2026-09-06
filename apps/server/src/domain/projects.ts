@@ -356,29 +356,38 @@ function setProjectMembers(
     ).run(projectId, actorId, now(), workspaceId ?? null);
 }
 
-export function listProjectDependencyRows(
-  db: Database,
-  projectId: string,
-  workspaceId?: string,
-): Array<{
+export interface ProjectDependencyRow {
   id: string;
   project_id: string;
   depends_on_project_id: string;
   type: "blocks" | "related";
   created_at: string;
-}> {
+}
+
+export function getProjectDependency(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+): ProjectDependencyRow | null {
+  const query = workspaceId
+    ? `SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as ProjectDependencyRow | null;
+}
+
+export function listProjectDependencyRows(
+  db: Database,
+  projectId: string,
+  workspaceId?: string,
+): ProjectDependencyRow[] {
   const query = workspaceId
     ? `SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE project_id = ?1 AND ${workspaceClause("workspace_id", "?2")} ORDER BY created_at, id`
     : "SELECT id, project_id, depends_on_project_id, type, created_at FROM project_dependencies WHERE project_id = ?1 ORDER BY created_at, id";
   return (
     workspaceId ? db.query(query).all(projectId, workspaceId) : db.query(query).all(projectId)
-  ) as Array<{
-    id: string;
-    project_id: string;
-    depends_on_project_id: string;
-    type: "blocks" | "related";
-    created_at: string;
-  }>;
+  ) as ProjectDependencyRow[];
 }
 
 function setProjectDependencies(
@@ -422,10 +431,11 @@ export function createProjectDependency(
   const project = getProject(db, input.projectId, workspaceId);
   const target = getProject(db, input.dependsOnProjectId, workspaceId);
   if (!project || !target) throw apiError("NOT_FOUND", "Dependency project not found");
+  const normalizedType = input.type?.toLowerCase();
   const type =
-    input.type === "related"
+    normalizedType === "related"
       ? "related"
-      : input.type === "blocks" || input.type == null
+      : normalizedType === "blocks" || normalizedType == null
         ? "blocks"
         : null;
   if (!type) throw apiError("VALIDATION_FAILED", `Invalid project dependency type: ${input.type}`);

@@ -15,7 +15,22 @@ import { getCycle } from "../domain/cycles.ts";
 import { getReview } from "../domain/reviews.ts";
 import { getSavedView } from "../domain/saved-views.ts";
 import { getTeam } from "../domain/teams.ts";
-import { getProject, listProjectTeamIds } from "../domain/projects.ts";
+import {
+  getInitiative,
+  getInitiativeUpdate,
+  listInitiativeScopeTeamIds,
+} from "../domain/initiatives.ts";
+import { getProject, listProjectTeamIds, getProjectDependency } from "../domain/projects.ts";
+import {
+  getPostgresInitiative,
+  getPostgresInitiativeUpdate,
+  listPostgresInitiativeScopeTeamIds,
+} from "../domain/postgres-initiatives.ts";
+import {
+  getPostgresProject,
+  getPostgresProjectDependency,
+  listPostgresProjectTeamIds,
+} from "../domain/postgres-projects.ts";
 import { postgresInboxTeamId } from "../domain/postgres-inbox.ts";
 import { getPostgresTeam } from "../domain/postgres-teams.ts";
 
@@ -191,7 +206,11 @@ function teamIdsForProject(context: Context, projectId: unknown): string[] {
   const id = scalar(projectId);
   if (!id) return [];
   if (!getProject(context.db, id, context.workspace.workspaceId)) return ["__missing__"];
-  return scopedTeamIds(context, listProjectTeamIds(context.db, id, context.workspace.workspaceId));
+  const teamIds = scopedTeamIds(
+    context,
+    listProjectTeamIds(context.db, id, context.workspace.workspaceId),
+  );
+  return teamIds.length ? teamIds : ["__workspace__"];
 }
 
 function teamIdsForMilestone(context: Context, milestoneId: unknown): string[] {
@@ -240,11 +259,10 @@ async function operationTeamIdsForProject(context: Context, projectId: unknown):
   const id = scalar(projectId);
   if (!id) return [];
   if (!context.persistence) return teamIdsForProject(context, id);
-  const rows = await context.persistence.many<{ team_id: string }>(
-    "SELECT team_id FROM project_teams WHERE project_id = $1 ORDER BY team_id",
-    [id],
-  );
-  return rows.map((row) => row.team_id);
+  const project = await getPostgresProject(context.persistence, id);
+  if (!project) return ["__missing__"];
+  const teamIds = await listPostgresProjectTeamIds(context.persistence, project.id);
+  return teamIds.length ? teamIds : ["__workspace__"];
 }
 
 function initiativeRelationTeams(
@@ -290,6 +308,32 @@ function teamIdsForFavorite(context: Context, favoriteId: unknown): string[] {
   return row.project_id
     ? teamIdsForProject(context, row.project_id)
     : teamIdsForSavedView(context, row.saved_view_id);
+}
+
+async function operationTeamIdsForInitiative(
+  context: Context,
+  initiativeId: unknown,
+): Promise<string[]> {
+  const id = scalar(initiativeId);
+  if (!id) return [];
+  if (!context.persistence) {
+    const initiative = getInitiative(context.db, id, context.workspace.workspaceId);
+    if (!initiative) return ["__missing__"];
+    const teamIds = listInitiativeScopeTeamIds(
+      context.db,
+      initiative.id,
+      context.workspace.workspaceId,
+    );
+    return teamIds.length ? scopedTeamIds(context, teamIds) : ["__workspace__"];
+  }
+  const initiative = await getPostgresInitiative(
+    context.persistence,
+    id,
+    context.workspace.workspaceId,
+  );
+  if (!initiative) return ["__missing__"];
+  const teamIds = await listPostgresInitiativeScopeTeamIds(context.persistence, initiative.id);
+  return teamIds.length ? teamIds : ["__workspace__"];
 }
 
 async function operationTeamIdsForFavorite(
@@ -406,8 +450,7 @@ async function operationTeamIds(
       if (args.projectId) return teamIdsForProject(context, args.projectId);
       return null;
     case "initiative":
-      if (context.persistence) return [];
-      return teamIdsForInitiative(context, args.id);
+      return operationTeamIdsForInitiative(context, args.id);
     case "initiatives":
     case "webhooks":
     case "favorites":
@@ -527,18 +570,30 @@ async function operationTeamIds(
         : [...new Set([...current, ...scopedTeamIds(context, input.teamIds)])];
     }
     case "projectDependencyCreate":
-      if (context.persistence) return [];
-      return [
-        ...new Set([
-          ...teamIdsForProject(context, input.projectId),
-          ...teamIdsForProject(context, input.dependsOnProjectId),
-        ]),
-      ];
+      return Promise.all([
+        operationTeamIdsForProject(context, input.projectId),
+        operationTeamIdsForProject(context, input.dependsOnProjectId),
+      ]).then(([source, target]) => [...new Set([...source, ...target])]);
     case "projectDependencyDelete": {
-      if (context.persistence) return [];
-      const row = context.db
-        .query("SELECT project_id, depends_on_project_id FROM project_dependencies WHERE id = ?1")
-        .get(scalar(args.id)) as { project_id: string; depends_on_project_id: string } | null;
+      if (context.persistence) {
+        return getPostgresProjectDependency(
+          context.persistence,
+          scalar(args.id) ?? "",
+          context.workspace.workspaceId,
+        ).then(async (dependency) => {
+          if (!dependency) return ["__missing__"];
+          const [source, target] = await Promise.all([
+            operationTeamIdsForProject(context, dependency.project_id),
+            operationTeamIdsForProject(context, dependency.depends_on_project_id),
+          ]);
+          return [...new Set([...source, ...target])];
+        });
+      }
+      const row = getProjectDependency(
+        context.db,
+        scalar(args.id) ?? "",
+        context.workspace.workspaceId,
+      );
       return row
         ? [
             ...new Set([
@@ -631,13 +686,24 @@ async function operationTeamIds(
       return [...new Set([...current.direct, ...current.projects, ...targetTeams])];
     }
     case "initiativeStatusUpdateCreate":
-      if (context.persistence) return [];
-      return teamIdsForInitiative(context, input.initiativeId);
+      return operationTeamIdsForInitiative(context, input.initiativeId);
     case "initiativeStatusUpdateDelete":
-      if (context.persistence) return [];
-      const initiativeUpdate = context.db
-        .query("SELECT initiative_id FROM initiative_updates WHERE id = ?1")
-        .get(scalar(args.id)) as { initiative_id: string } | null;
+      if (context.persistence) {
+        return getPostgresInitiativeUpdate(
+          context.persistence,
+          scalar(args.id) ?? "",
+          context.workspace.workspaceId,
+        ).then((initiativeUpdate) =>
+          initiativeUpdate
+            ? operationTeamIdsForInitiative(context, initiativeUpdate.initiative_id)
+            : ["__missing__"],
+        );
+      }
+      const initiativeUpdate = getInitiativeUpdate(
+        context.db,
+        scalar(args.id) ?? "",
+        context.workspace.workspaceId,
+      );
       return initiativeUpdate
         ? teamIdsForInitiative(context, initiativeUpdate.initiative_id)
         : ["__missing__"];

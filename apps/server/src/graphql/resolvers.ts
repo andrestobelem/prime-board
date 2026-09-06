@@ -115,6 +115,7 @@ import {
   assertCanManageActor,
   assertCanManageApiKey,
   assertApiKeyScope,
+  assertApiKeyTeams,
   apiKeyTeamsWithinLimit,
   hasApiKeyTeamLimit,
   assertChildApiKey,
@@ -233,6 +234,8 @@ import {
   listInitiativeProjectIds,
   listInitiativeTeamIds,
   listInitiativeUpdateRows,
+  getInitiativeUpdate,
+  listInitiativeScopeTeamIds,
   createInitiativeUpdate,
   deleteInitiativeUpdate,
   listInitiatives,
@@ -245,6 +248,7 @@ import {
   createPostgresInitiativeUpdate,
   deletePostgresInitiative,
   deletePostgresInitiativeUpdate,
+  getPostgresInitiativeUpdate,
   getPostgresInitiative,
   listPostgresInitiativeLabelIds,
   listPostgresInitiativeProjectIds,
@@ -409,6 +413,17 @@ async function assertPostgresInitiativeKeyLimit(
   if (!apiKeyTeamsWithinLimit(context.auth, [...scope])) {
     throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
   }
+}
+
+function assertInitiativeKeyLimit(context: Context, initiativeId: string): void {
+  const initiative = getInitiative(context.db, initiativeId, context.workspace.workspaceId);
+  if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
+  const teamIds = listInitiativeScopeTeamIds(
+    context.db,
+    initiative.id,
+    context.workspace.workspaceId,
+  );
+  assertApiKeyTeams(context, teamIds.length > 0 ? teamIds : ["__workspace__"]);
 }
 
 async function requirePostgresReviewIssue(
@@ -3171,40 +3186,36 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           if (context.persistence) {
+            await assertPostgresInitiativeKeyLimit(context, args.input.initiativeId);
             const update = await createPostgresInitiativeUpdate(
               context.persistence,
               viewer,
               args.input.initiativeId,
               { health: args.input.health, body: args.input.body },
+              context.workspace.workspaceId,
             );
             return {
               success: true,
               initiativeUpdate: {
-                id: update!.id,
-                initiativeId: update!.initiative_id,
-                authorId: update!.author_id,
-                health: update!.health,
-                body: update!.body,
-                createdAt: update!.created_at,
-                updatedAt: update!.updated_at,
+                id: update.id,
+                initiativeId: update.initiative_id,
+                authorId: update.author_id,
+                health: update.health,
+                body: update.body,
+                createdAt: update.created_at,
+                updatedAt: update.updated_at,
               },
             };
           }
-          const initiative = getInitiative(
-            context.db,
-            args.input.initiativeId,
-            context.workspace.workspaceId,
-          );
-          if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
-          // updateInitiative's ACL is intentionally reused for Initiative only.
-          updateInitiative(context.db, initiative.id, viewer, {}, context.workspace.workspaceId);
+          assertInitiativeKeyLimit(context, args.input.initiativeId);
           const updateInput = { body: args.input.body, health: args.input.health.toLowerCase() };
           const row = createInitiativeUpdate(
             context.db,
-            initiative.id,
+            args.input.initiativeId,
             viewer.id,
             updateInput,
             context.workspace.workspaceId,
+            viewer,
           );
           return {
             success: true,
@@ -3226,23 +3237,32 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           if (context.persistence) {
+            const update = await getPostgresInitiativeUpdate(
+              context.persistence,
+              args.id,
+              context.workspace.workspaceId,
+            );
+            if (!update) throw apiError("NOT_FOUND", "Initiative update not found");
+            await assertPostgresInitiativeKeyLimit(context, update.initiative_id);
             return {
-              success: await deletePostgresInitiativeUpdate(context.persistence, viewer, args.id),
+              success: await deletePostgresInitiativeUpdate(
+                context.persistence,
+                viewer,
+                args.id,
+                context.workspace.workspaceId,
+              ),
             };
           }
-          const row = context.db
-            .query("SELECT initiative_id FROM initiative_updates WHERE id = ?1")
-            .get(args.id) as { initiative_id: string } | null;
-          if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
-          const initiative = getInitiative(
-            context.db,
-            row.initiative_id,
-            context.workspace.workspaceId,
-          );
-          if (!initiative) throw apiError("NOT_FOUND", "Initiative update not found");
-          updateInitiative(context.db, initiative.id, viewer, {}, context.workspace.workspaceId);
+          const update = getInitiativeUpdate(context.db, args.id, context.workspace.workspaceId);
+          if (!update) throw apiError("NOT_FOUND", "Initiative update not found");
+          assertInitiativeKeyLimit(context, update.initiative_id);
           return {
-            success: deleteInitiativeUpdate(context.db, args.id, context.workspace.workspaceId),
+            success: deleteInitiativeUpdate(
+              context.db,
+              args.id,
+              context.workspace.workspaceId,
+              viewer,
+            ),
           };
         },
         initiativeDelete: async (_parent: unknown, args: { id: string }, context: Context) => {

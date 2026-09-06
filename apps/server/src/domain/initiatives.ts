@@ -131,6 +131,19 @@ export function listInitiativeProjectIds(
   ).map((row) => row[0] as string);
 }
 
+/** Teams directos y heredados por los Projects de una Initiative. */
+export function listInitiativeScopeTeamIds(
+  db: Database,
+  initiativeId: string,
+  workspaceId?: string,
+): string[] {
+  const direct = listInitiativeTeamIds(db, initiativeId, workspaceId);
+  const projectTeams = listInitiativeProjectIds(db, initiativeId, workspaceId).flatMap(
+    (projectId) => listProjectTeamIds(db, projectId, workspaceId),
+  );
+  return [...new Set([...direct, ...projectTeams])];
+}
+
 function resolveState(state: string): InitiativeState {
   const normalized = state.toLowerCase() as InitiativeState;
   if (
@@ -301,6 +314,18 @@ function assertCanMutate(
   if (existing.owner_id && existing.owner_id !== viewerId(viewerRef)) {
     throw apiError("NOT_FOUND", "Initiative not found");
   }
+}
+
+export function assertCanManageInitiative(
+  db: Database,
+  id: string,
+  viewerRef: ViewerRef,
+  workspaceId?: string,
+): InitiativeRow {
+  const existing = getInitiative(db, id, workspaceId);
+  if (!existing) throw apiError("NOT_FOUND", "Initiative not found");
+  assertCanMutate(db, existing, viewerRef, workspaceId);
+  return existing;
 }
 
 export function updateInitiative(
@@ -500,17 +525,41 @@ export function listInitiativeLabelIds(
   ).map((row) => row[0] as string);
 }
 
+export interface InitiativeUpdateRow {
+  id: string;
+  initiative_id: string;
+  author_id: string;
+  health: "on_track" | "at_risk" | "off_track";
+  body: string;
+  created_at: string;
+  updated_at: string;
+  workspace_id: string | null;
+}
+
+export function getInitiativeUpdate(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+): InitiativeUpdateRow | null {
+  const query = workspaceId
+    ? `SELECT * FROM initiative_updates WHERE id = ?1 AND ${workspaceClause("workspace_id", "?2")}`
+    : "SELECT * FROM initiative_updates WHERE id = ?1";
+  return (
+    workspaceId ? db.query(query).get(id, workspaceId) : db.query(query).get(id)
+  ) as InitiativeUpdateRow | null;
+}
+
 export function listInitiativeUpdateRows(
   db: Database,
   initiativeId: string,
   workspaceId?: string,
-): Array<Record<string, unknown>> {
+): InitiativeUpdateRow[] {
   const query = workspaceId
     ? `SELECT * FROM initiative_updates WHERE initiative_id = ?1 AND ${workspaceClause("workspace_id", "?2")} ORDER BY created_at DESC, id DESC`
     : "SELECT * FROM initiative_updates WHERE initiative_id = ?1 ORDER BY created_at DESC, id DESC";
   return (
     workspaceId ? db.query(query).all(initiativeId, workspaceId) : db.query(query).all(initiativeId)
-  ) as Array<Record<string, unknown>>;
+  ) as InitiativeUpdateRow[];
 }
 
 export function createInitiativeUpdate(
@@ -519,9 +568,11 @@ export function createInitiativeUpdate(
   authorId: string,
   input: { body: string; health?: string | null },
   workspaceId?: string,
-): Record<string, unknown> {
+  viewerRef?: ViewerRef,
+): InitiativeUpdateRow {
   const initiative = getInitiative(db, initiativeId, workspaceId);
   if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
+  if (viewerRef !== undefined) assertCanMutate(db, initiative, viewerRef, workspaceId);
   const body = input.body.trim();
   if (!body) throw apiError("VALIDATION_FAILED", "Initiative update body cannot be empty");
   const health = input.health ?? "on_track";
@@ -532,13 +583,22 @@ export function createInitiativeUpdate(
   db.query(
     "INSERT INTO initiative_updates (id, initiative_id, author_id, health, body, created_at, updated_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
   ).run(id, initiativeId, authorId, health, body, timestamp, workspaceId ?? null);
-  return db.query("SELECT * FROM initiative_updates WHERE id = ?1").get(id) as Record<
-    string,
-    unknown
-  >;
+  return db.query("SELECT * FROM initiative_updates WHERE id = ?1").get(id) as InitiativeUpdateRow;
 }
 
-export function deleteInitiativeUpdate(db: Database, id: string, workspaceId?: string): boolean {
+export function deleteInitiativeUpdate(
+  db: Database,
+  id: string,
+  workspaceId?: string,
+  viewerRef?: ViewerRef,
+): boolean {
+  if (viewerRef !== undefined) {
+    const row = getInitiativeUpdate(db, id, workspaceId);
+    if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
+    const initiative = getInitiative(db, row.initiative_id, workspaceId);
+    if (!initiative) throw apiError("NOT_FOUND", "Initiative update not found");
+    assertCanMutate(db, initiative, viewerRef, workspaceId);
+  }
   const result = workspaceId
     ? db
         .query(

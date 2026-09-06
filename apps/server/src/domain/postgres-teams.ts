@@ -558,7 +558,7 @@ export async function deletePostgresTeam(
 }
 
 export async function canDiscoverPostgresTeam(
-  persistence: Persistence,
+  persistence: Persistence | PersistenceTransaction,
   viewer: { id: string; workspace_role: string },
   team: TeamRow,
 ): Promise<boolean> {
@@ -658,7 +658,7 @@ export async function canAccessPostgresTeam(
 }
 
 export async function canWritePostgresTeam(
-  persistence: Persistence,
+  persistence: Persistence | PersistenceTransaction,
   viewer: { id: string; workspace_role: string },
   teamId: string,
 ): Promise<boolean> {

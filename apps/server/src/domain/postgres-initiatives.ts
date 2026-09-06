@@ -4,6 +4,7 @@ import { newId, now } from "../db/util.ts";
 import { parseDateTime } from "./datetime.ts";
 import {
   assertCanManagePostgresProject,
+  assertPostgresWorkspace,
   canAccessPostgresProject,
   listPostgresProjectTeamIds,
 } from "./postgres-projects.ts";
@@ -61,7 +62,9 @@ export function mapPostgresInitiative(row: PostgresInitiativeRow) {
 export async function getPostgresInitiative(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  workspaceId?: string,
 ): Promise<PostgresInitiativeRow | null> {
+  if (workspaceId !== undefined) await assertPostgresWorkspace(persistence, workspaceId);
   return persistence.one<PostgresInitiativeRow>("SELECT * FROM initiatives WHERE id = $1", [id]);
 }
 
@@ -143,10 +146,12 @@ export async function listPostgresInitiativeScopeTeamIds(
 }
 
 export async function canAccessPostgresInitiative(
-  persistence: Persistence,
+  persistence: Persistence | PersistenceTransaction,
   viewer: ActorRow,
   initiativeId: string,
+  workspaceId?: string,
 ): Promise<boolean> {
+  if (workspaceId !== undefined) await assertPostgresWorkspace(persistence, workspaceId);
   const row = await getPostgresInitiative(persistence, initiativeId);
   if (!row) return false;
   const projectIds = await listPostgresInitiativeProjectIds(persistence, initiativeId);
@@ -166,11 +171,12 @@ export async function canAccessPostgresInitiative(
 }
 
 async function assertCanMutatePostgresInitiative(
-  persistence: Persistence,
+  persistence: Persistence | PersistenceTransaction,
   viewer: ActorRow,
   initiative: PostgresInitiativeRow,
+  workspaceId?: string,
 ): Promise<void> {
-  if (!(await canAccessPostgresInitiative(persistence, viewer, initiative.id))) {
+  if (!(await canAccessPostgresInitiative(persistence, viewer, initiative.id, workspaceId))) {
     throw apiError("NOT_FOUND", "Initiative not found");
   }
   if (initiative.owner_id && initiative.owner_id !== viewer.id) {
@@ -413,40 +419,64 @@ export async function createPostgresInitiativeUpdate(
   viewer: ActorRow,
   initiativeId: string,
   input: { health: string; body: string },
+  workspaceId?: string,
 ): Promise<PostgresInitiativeUpdateRow> {
-  const initiative = await getPostgresInitiative(persistence, initiativeId);
-  if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
-  await assertCanMutatePostgresInitiative(persistence, viewer, initiative);
-  const health = input.health.toLowerCase();
-  const allowedHealth = ["on_track", "at_risk", "off_track"];
-  if (!allowedHealth.includes(health))
-    throw apiError("VALIDATION_FAILED", "Invalid initiative update health");
-  const body = input.body.trim();
-  if (!body) throw apiError("VALIDATION_FAILED", "Initiative update body cannot be empty");
-  const timestamp = now();
-  const row = await persistence.one<PostgresInitiativeUpdateRow>(
-    "INSERT INTO initiative_updates (id, initiative_id, author_id, health, body, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING *",
-    [newId(), initiative.id, viewer.id, health, body, timestamp],
+  return persistence.transaction(async (tx) => {
+    await assertPostgresWorkspace(tx, workspaceId);
+    const initiative = await getPostgresInitiative(tx, initiativeId);
+    if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
+    await assertCanMutatePostgresInitiative(tx, viewer, initiative, workspaceId);
+    const health = input.health.toLowerCase();
+    const allowedHealth = ["on_track", "at_risk", "off_track"];
+    if (!allowedHealth.includes(health))
+      throw apiError("VALIDATION_FAILED", "Invalid initiative update health");
+    const body = input.body.trim();
+    if (!body) throw apiError("VALIDATION_FAILED", "Initiative update body cannot be empty");
+    const timestamp = now();
+    const row = await tx.one<PostgresInitiativeUpdateRow>(
+      "INSERT INTO initiative_updates (id, initiative_id, author_id, health, body, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING *",
+      [newId(), initiative.id, viewer.id, health, body, timestamp],
+    );
+    if (!row) throw new Error("PostgreSQL initiative update insert returned no row");
+    return row;
+  });
+}
+
+export async function getPostgresInitiativeUpdate(
+  persistence: Persistence | PersistenceTransaction,
+  id: string,
+  workspaceId?: string,
+): Promise<PostgresInitiativeUpdateRow | null> {
+  await assertPostgresWorkspace(persistence, workspaceId);
+  return persistence.one<PostgresInitiativeUpdateRow>(
+    "SELECT * FROM initiative_updates WHERE id = $1",
+    [id],
   );
-  if (!row) throw new Error("PostgreSQL initiative update insert returned no row");
-  return row;
 }
 
 export async function deletePostgresInitiativeUpdate(
   persistence: Persistence,
   viewer: ActorRow,
   id: string,
+  workspaceId?: string,
 ): Promise<boolean> {
-  const row = await persistence.one<{ initiative_id: string }>(
-    "SELECT initiative_id FROM initiative_updates WHERE id = $1",
-    [id],
-  );
-  if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
-  const initiative = await getPostgresInitiative(persistence, row.initiative_id);
-  if (!initiative) throw apiError("NOT_FOUND", "Initiative update not found");
-  await assertCanMutatePostgresInitiative(persistence, viewer, initiative);
-  await persistence.execute("DELETE FROM initiative_updates WHERE id = $1", [id]);
-  return true;
+  return persistence.transaction(async (tx) => {
+    await assertPostgresWorkspace(tx, workspaceId);
+    const row = await tx.one<PostgresInitiativeUpdateRow>(
+      "SELECT * FROM initiative_updates WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+    if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
+    const initiative = await getPostgresInitiative(tx, row.initiative_id);
+    if (!initiative) throw apiError("NOT_FOUND", "Initiative update not found");
+    await assertCanMutatePostgresInitiative(tx, viewer, initiative, workspaceId);
+    const result = await tx.execute<PostgresInitiativeUpdateRow>(
+      "DELETE FROM initiative_updates WHERE id = $1 RETURNING *",
+      [id],
+    );
+    if (result.rowCount !== 1) throw apiError("NOT_FOUND", "Initiative update not found");
+    return true;
+  });
 }
 
 export async function deletePostgresInitiative(

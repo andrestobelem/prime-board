@@ -191,7 +191,7 @@ async function postgresProjectHasMember(
 }
 
 export async function canAccessPostgresProject(
-  persistence: Persistence,
+  persistence: Persistence | PersistenceTransaction,
   viewer: Pick<ActorRow, "id" | "workspace_role">,
   projectId: string,
 ): Promise<boolean> {
@@ -207,7 +207,7 @@ export async function canAccessPostgresProject(
 }
 
 export async function assertCanManagePostgresProject(
-  persistence: Persistence,
+  persistence: Persistence | PersistenceTransaction,
   viewer: ActorRow,
   projectId: string,
 ): Promise<PostgresProjectRow> {
@@ -265,7 +265,7 @@ function resolvePostgresProjectDependencyType(
  * conserva el contrato de un único Workspace. Validar el contexto antes de
  * resolver IDs evita usar un selector vencido o de otro Workspace.
  */
-async function assertPostgresWorkspace(
+export async function assertPostgresWorkspace(
   persistence: Persistence | PersistenceTransaction,
   workspaceId?: string,
 ): Promise<void> {
@@ -315,6 +315,7 @@ export async function createPostgresProjectDependency(
   persistence: Persistence,
   input: { projectId: string; dependsOnProjectId: string; type?: string | null },
   workspaceId?: string,
+  viewer?: ActorRow,
 ): Promise<PostgresProjectDependencyRow> {
   return persistence.transaction(async (tx) => {
     await assertPostgresWorkspace(tx, workspaceId);
@@ -333,6 +334,10 @@ export async function createPostgresProjectDependency(
       [input.dependsOnProjectId],
     );
     if (!target) throw apiError("NOT_FOUND", "Dependency project not found");
+    if (viewer) {
+      await assertCanManagePostgresProject(tx, viewer, source.id);
+      await assertCanManagePostgresProject(tx, viewer, target.id);
+    }
 
     const id = newId();
     const timestamp = now();
@@ -352,10 +357,18 @@ export async function deletePostgresProjectDependency(
   persistence: Persistence,
   id: string,
   workspaceId?: string,
+  viewer?: ActorRow,
 ): Promise<boolean> {
   return persistence.transaction(async (tx) => {
     const dependency = await getPostgresProjectDependencyInWorkspace(tx, id, workspaceId, true);
     if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
+    if (viewer) {
+      const source = await getPostgresProject(tx, dependency.project_id);
+      const target = await getPostgresProject(tx, dependency.depends_on_project_id);
+      if (!source || !target) throw apiError("NOT_FOUND", "Project dependency not found");
+      await assertCanManagePostgresProject(tx, viewer, source.id);
+      await assertCanManagePostgresProject(tx, viewer, target.id);
+    }
 
     const result = await tx.execute<PostgresProjectDependencyRow>(
       `DELETE FROM project_dependencies WHERE id = $1
