@@ -769,7 +769,8 @@ export async function resolveInstanceStatus(
   if (
     status.state === "running" &&
     status.record?.serverPid !== undefined &&
-    !databaseReservationsMatchInstance(identity, status.record, processIsAlive)
+    (!databaseReservationsMatchInstance(identity, status.record, processIsAlive) ||
+      !portReservationMatchesInstance(identity, status.record, processIsAlive))
   ) {
     return { state: "blocked", record: status.record };
   }
@@ -806,6 +807,7 @@ export async function resolveInstanceStatus(
     const databaseLeaseToken = currentDatabaseLeaseToken(identity);
     if (databaseLeaseToken === null) throw new Error("Database reservation lease is inconsistent");
     promoteDatabaseReservationOwner(identity, owner, status.record.instanceId, databaseLeaseToken);
+    promotePortReservationOwner(identity, owner, status.record.port, status.record.instanceId);
   } catch {
     // Health confirma un server activo, pero una reserva sin promoción completa
     // no permite iniciar acciones ni un segundo escritor.
@@ -1073,7 +1075,13 @@ function currentDatabaseLeaseToken(identity: ProjectInstanceIdentity): string | 
   let sawLegacyRecord = false;
   for (const path of databaseReservationPathsForIdentity(identity)) {
     const record = readDatabaseReservation(path);
-    if (record === null || record === "invalid") return null;
+    if (
+      record === null ||
+      record === "invalid" ||
+      (record.leaseToken !== undefined && !hasOwnershipMarker(path, record.leaseToken))
+    ) {
+      return null;
+    }
     sawRecord = true;
     if (record.leaseToken === undefined) {
       if (token !== undefined) return null;
@@ -1124,7 +1132,8 @@ export function promoteDatabaseReservationOwner(
       if (
         (instanceId !== undefined && existing.instanceId !== instanceId) ||
         (instanceId === undefined && existing.instanceId !== undefined) ||
-        existing.leaseToken !== leaseToken
+        existing.leaseToken !== leaseToken ||
+        (existing.leaseToken !== undefined && !hasOwnershipMarker(path, existing.leaseToken))
       ) {
         throw new Error("Database reservation belongs to another launcher");
       }
@@ -1183,14 +1192,16 @@ function databaseReservationsMatchInstance(
   const reservations = paths.map((path) => readDatabaseReservation(path));
   let databaseLeaseToken: string | undefined;
   let sawLegacyReservation = false;
-  for (const reservation of reservations) {
+  for (const [index, reservation] of reservations.entries()) {
     if (
       reservation === null ||
       reservation === "invalid" ||
       reservation.projectRoot !== identity.projectRoot ||
       reservation.databasePath !== identity.databasePath ||
       reservation.instanceId !== instance.instanceId ||
-      !processOwnerIsAlive(reservation, probe)
+      !processOwnerIsAlive(reservation, probe) ||
+      (reservation.leaseToken !== undefined &&
+        !hasOwnershipMarker(paths[index]!, reservation.leaseToken))
     ) {
       return false;
     }
@@ -1208,6 +1219,59 @@ function databaseReservationsMatchInstance(
     }
   }
   return true;
+}
+
+function portReservationPathForIdentity(identity: ProjectInstanceIdentity, port: number): string {
+  const stateRoot = dirname(dirname(identity.databaseLockPath));
+  return join(stateRoot, "ports", `${port}.lock`);
+}
+
+function portReservationMatchesInstance(
+  identity: ProjectInstanceIdentity,
+  instance: InstanceRecord,
+  probe: ProcessProbe,
+): boolean {
+  const path = portReservationPathForIdentity(identity, instance.port);
+  const reservation = readPortReservation(path);
+  return (
+    reservation !== null &&
+    reservation !== "invalid" &&
+    reservation.port === instance.port &&
+    reservation.instanceId === instance.instanceId &&
+    (reservation.leaseToken === undefined || hasOwnershipMarker(path, reservation.leaseToken)) &&
+    processOwnerIsAlive(reservation, probe)
+  );
+}
+
+function promotePortReservationOwner(
+  identity: ProjectInstanceIdentity,
+  owner: ProcessOwnership,
+  port: number,
+  instanceId?: string,
+): void {
+  if (!isPositiveInteger(owner.pid)) throw new Error("Port owner PID is invalid");
+  const path = portReservationPathForIdentity(identity, port);
+  const promoted = withOwnershipTransition(path, () => {
+    const existing = readPortReservation(path);
+    if (
+      existing === null ||
+      existing === "invalid" ||
+      existing.port !== port ||
+      existing.instanceId !== instanceId ||
+      (existing.leaseToken !== undefined && !hasOwnershipMarker(path, existing.leaseToken))
+    ) {
+      throw new Error("Port reservation belongs to another launcher");
+    }
+    writeJsonAtomically(join(path, "reservation.json"), {
+      ...existing,
+      pid: owner.pid,
+      launcherPid: existing.launcherPid ?? existing.pid,
+      serverPid: owner.pid,
+      ...(owner.processGroupId === undefined ? {} : { processGroupId: owner.processGroupId }),
+    });
+    return true;
+  });
+  if (!promoted) throw new Error("Port reservation ownership transition is busy");
 }
 
 function retireIncompleteDatabaseReservation(path: string, recoveredTransition: boolean): boolean {
@@ -1270,6 +1334,32 @@ function databaseReservationSnapshotMatches(
   );
 }
 
+function legacyDatabaseOwnerNeedsProjectProtection(
+  path: string,
+  reservation: DatabaseReservationRecord,
+): boolean {
+  if (reservation.serverPid !== undefined) return false;
+  const stateRoot = dirname(dirname(path));
+  const ownerIdentity = deriveProjectIdentity(
+    reservation.projectRoot,
+    dirname(stateRoot),
+    reservation.databasePath,
+  );
+  if (!existsSync(ownerIdentity.lockPath)) return false;
+  const instance = readInstanceRecord(ownerIdentity);
+  if (!instance) return true;
+  if (
+    instance.projectRoot !== reservation.projectRoot ||
+    instance.databasePath !== reservation.databasePath ||
+    instance.instanceId !== reservation.instanceId
+  ) {
+    return false;
+  }
+  // Sin serverPid no hay una prueba local de que el child legacy haya muerto.
+  // Conserva la reserva hasta que el owner del proyecto resuelva su lock.
+  return instance.serverPid === undefined || processOwnerIsAlive(instance, processIsAlive);
+}
+
 function retireDatabaseReservation(
   path: string,
   expected?: DatabaseReservationRecord,
@@ -1277,6 +1367,13 @@ function retireDatabaseReservation(
 ): void {
   withOwnershipTransition(path, () => {
     const current = readDatabaseReservation(path);
+    if (
+      current !== null &&
+      current !== "invalid" &&
+      legacyDatabaseOwnerNeedsProjectProtection(path, current)
+    ) {
+      return;
+    }
     // Vuelve a comprobar el estado vivo mientras sostienes la transición. El
     // owner pudo promoverse después de la primera observación stale.
     if (current !== null && current !== "invalid" && processOwnerIsAlive(current, probe)) {

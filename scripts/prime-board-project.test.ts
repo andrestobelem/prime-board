@@ -99,6 +99,71 @@ describe("atomic project database reservations", () => {
     }
   });
 
+  test("keeps a legacy database reservation while its project lock is unresolved", async () => {
+    const home = `/tmp/prime-board-db-legacy-live-child-${crypto.randomUUID()}`;
+    const databasePath = `/tmp/prime-board-db-legacy-live-child-${crypto.randomUUID()}.db`;
+    writeFileSync(databasePath, "");
+    const ownerIdentity = deriveProjectIdentity("/tmp/projects/legacy-owner", home, databasePath);
+    const contenderIdentity = deriveProjectIdentity(
+      "/tmp/projects/legacy-contender",
+      home,
+      databasePath,
+    );
+    const instanceId = "legacy-child";
+    const legacyRecord = {
+      version: 1 as const,
+      projectRoot: ownerIdentity.projectRoot,
+      databasePath: ownerIdentity.databasePath,
+      pid: 999999,
+      instanceId,
+      reservedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ status: "ok", pid: process.pid }),
+    });
+    try {
+      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home)) {
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "reservation.json"), `${JSON.stringify(legacyRecord)}\n`);
+      }
+      mkdirSync(ownerIdentity.lockPath, { recursive: true });
+      writeFileSync(
+        ownerIdentity.metadataPath,
+        `${JSON.stringify({ ...legacyRecord, port: server.port })}\n`,
+      );
+      expect((await fetch(`http://127.0.0.1:${server.port}/health`)).ok).toBe(true);
+
+      let releaseContender: (() => void) | null = null;
+      try {
+        expect(() => {
+          releaseContender = acquireDatabaseReservation(
+            contenderIdentity,
+            {
+              ...legacyRecord,
+              projectRoot: contenderIdentity.projectRoot,
+              instanceId: "new-owner",
+            },
+            () => false,
+          );
+        }).toThrow("Database reservation is busy");
+      } finally {
+        releaseContender?.();
+      }
+      expect(existsSync(ownerIdentity.lockPath)).toBe(true);
+      for (const path of databaseReservationPaths(ownerIdentity.databasePath, home)) {
+        expect(JSON.parse(readFileSync(join(path, "reservation.json"), "utf8"))).toMatchObject({
+          projectRoot: ownerIdentity.projectRoot,
+          instanceId,
+        });
+      }
+    } finally {
+      server.stop(true);
+      rmSync(home, { recursive: true, force: true });
+      rmSync(databasePath, { force: true });
+    }
+  });
+
   test("reclaims a stale tokenized database reservation", () => {
     const home = `/tmp/prime-board-db-tokenized-stale-${crypto.randomUUID()}`;
     const databasePath = `/tmp/prime-board-db-tokenized-stale-${crypto.randomUUID()}.db`;
@@ -665,6 +730,139 @@ describe("project instance lock", () => {
     }
   });
 
+  test("blocks a live instance when port ownership is missing", async () => {
+    const home = `/tmp/prime-board-instance-missing-port-${crypto.randomUUID()}`;
+    const databasePath = `/tmp/prime-board-instance-missing-port-${crypto.randomUUID()}.db`;
+    const identity = deriveProjectIdentity("/tmp/projects/missing-port", home, databasePath);
+    const instanceId = "missing-port-owner";
+    const instanceRecord = {
+      version: 1 as const,
+      projectRoot: identity.projectRoot,
+      databasePath: identity.databasePath,
+      port: 3333,
+      pid: process.pid,
+      serverPid: process.pid,
+      instanceId,
+      leaseToken: crypto.randomUUID(),
+      startedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const databaseRecord = {
+      version: 1 as const,
+      projectRoot: identity.projectRoot,
+      databasePath: identity.databasePath,
+      pid: process.pid,
+      serverPid: process.pid,
+      instanceId,
+      leaseToken: crypto.randomUUID(),
+      reservedAt: instanceRecord.startedAt,
+    };
+    const releaseInstance = acquireInstanceLock(identity, instanceRecord);
+    let releaseDatabase: (() => void) | null = null;
+    try {
+      releaseDatabase = acquireDatabaseReservation(identity, databaseRecord);
+      const status = await resolveInstanceStatus(identity);
+      const repeatedStatus = await resolveInstanceStatus(identity);
+
+      expect(status.state).toBe("blocked");
+      expect(repeatedStatus.state).toBe("blocked");
+    } finally {
+      releaseDatabase?.();
+      releaseInstance();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(databasePath, { force: true });
+    }
+  });
+
+  test("promotes the port reservation during health recovery", async () => {
+    const home = `/tmp/prime-board-instance-port-recovery-${crypto.randomUUID()}`;
+    const databasePath = `/tmp/prime-board-instance-port-recovery-${crypto.randomUUID()}.db`;
+    const identity = deriveProjectIdentity("/tmp/projects/port-recovery", home, databasePath);
+    const instanceId = "port-recovery-owner";
+    const instanceLeaseToken = crypto.randomUUID();
+    const databaseLeaseToken = crypto.randomUUID();
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        Response.json({
+          status: "ok",
+          pid: process.pid,
+          processGroupId: process.pid,
+          projectRoot: identity.projectRoot,
+          databasePath: identity.databasePath,
+          instanceId,
+          leaseToken: instanceLeaseToken,
+        }),
+    });
+    const instanceRecord = {
+      version: 1 as const,
+      projectRoot: identity.projectRoot,
+      databasePath: identity.databasePath,
+      port: server.port,
+      pid: 999999,
+      launcherPid: 999998,
+      instanceId,
+      leaseToken: instanceLeaseToken,
+      startedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const databaseRecord = {
+      version: 1 as const,
+      projectRoot: identity.projectRoot,
+      databasePath: identity.databasePath,
+      pid: 999999,
+      launcherPid: 999998,
+      instanceId,
+      leaseToken: databaseLeaseToken,
+      reservedAt: instanceRecord.startedAt,
+    };
+    let releasePort: (() => void) | null = null;
+    let releaseInstance: (() => void) | null = null;
+    let releaseDatabase: (() => void) | null = null;
+    try {
+      const portReservation = await reserveAvailablePort(
+        server.port,
+        true,
+        home,
+        async () => true,
+        instanceId,
+      );
+      releasePort = portReservation.release;
+      const portRecord = JSON.parse(readFileSync(portReservation.metadataPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      delete portRecord.serverPid;
+      delete portRecord.processGroupId;
+      portRecord.pid = 999999;
+      portRecord.launcherPid = 999998;
+      writeFileSync(portReservation.metadataPath, `${JSON.stringify(portRecord)}\n`);
+
+      releaseInstance = acquireInstanceLock(identity, instanceRecord);
+      releaseDatabase = acquireDatabaseReservation(identity, databaseRecord);
+
+      const status = await resolveInstanceStatus(identity);
+      const repeatedStatus = await resolveInstanceStatus(identity);
+      const promotedPort = JSON.parse(readFileSync(portReservation.metadataPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+
+      expect(status.state).toBe("running");
+      expect(repeatedStatus.state).toBe("running");
+      expect(promotedPort).toMatchObject({
+        pid: process.pid,
+        serverPid: process.pid,
+        instanceId,
+      });
+    } finally {
+      releasePort?.();
+      releaseDatabase?.();
+      releaseInstance?.();
+      server.stop(true);
+      rmSync(home, { recursive: true, force: true });
+      rmSync(databasePath, { force: true });
+    }
+  });
+
   test("does not take over while a launcher transition is live", () => {
     const home = `/tmp/prime-board-instance-transition-${crypto.randomUUID()}`;
     const identity = deriveProjectIdentity("/tmp/projects/transition", home);
@@ -803,6 +1001,54 @@ describe("project instance lock", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+});
+
+test("promotes legacy ownership with an instance ID and no lease token", () => {
+  const home = `/tmp/prime-board-legacy-promote-${crypto.randomUUID()}`;
+  const databasePath = `/tmp/prime-board-legacy-promote-${crypto.randomUUID()}.db`;
+  const identity = deriveProjectIdentity("/tmp/projects/legacy-promote", home, databasePath);
+  const instanceId = "legacy-promote-owner";
+  const instanceRecord = {
+    version: 1 as const,
+    projectRoot: identity.projectRoot,
+    databasePath: identity.databasePath,
+    port: 3333,
+    pid: 999999,
+    instanceId,
+    startedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const databaseRecord = {
+    version: 1 as const,
+    projectRoot: identity.projectRoot,
+    databasePath: identity.databasePath,
+    pid: 999999,
+    instanceId,
+    reservedAt: instanceRecord.startedAt,
+  };
+  mkdirSync(identity.lockPath, { recursive: true });
+  writeFileSync(identity.metadataPath, `${JSON.stringify(instanceRecord)}\n`);
+  for (const path of databaseReservationPaths(identity.databasePath, home)) {
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, "reservation.json"), `${JSON.stringify(databaseRecord)}\n`);
+  }
+  try {
+    promoteInstanceOwner(identity, { pid: process.pid }, instanceId);
+    promoteDatabaseReservationOwner(identity, { pid: process.pid }, instanceId);
+
+    expect(JSON.parse(readFileSync(identity.metadataPath, "utf8"))).toMatchObject({
+      pid: process.pid,
+      instanceId,
+    });
+    for (const path of databaseReservationPaths(identity.databasePath, home)) {
+      expect(JSON.parse(readFileSync(join(path, "reservation.json"), "utf8"))).toMatchObject({
+        pid: process.pid,
+        instanceId,
+      });
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(databasePath, { force: true });
+  }
 });
 
 test("transfers project and database ownership to the child", () => {
