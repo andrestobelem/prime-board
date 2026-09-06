@@ -7,7 +7,7 @@ import type {
 } from "../db/persistence.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 import type { IssueRow } from "./issues.ts";
-import { unarchivePostgresIssue } from "./postgres-issues.ts";
+import { getPostgresIssue, unarchivePostgresIssue } from "./postgres-issues.ts";
 
 const viewer: ActorRow = {
   id: "actor-1",
@@ -45,10 +45,12 @@ const issue: IssueRow = {
 function fakePersistence(synchronizeReads = false): {
   persistence: Persistence;
   activities: string[];
+  queries: string[];
   updates: number;
 } {
   let current = { ...issue };
   const activities: string[] = [];
+  const queries: string[] = [];
   let updates = 0;
   let issueReads = 0;
   let releaseIssueReads: () => void = () => undefined;
@@ -57,6 +59,7 @@ function fakePersistence(synchronizeReads = false): {
   });
   const transaction: PersistenceTransaction = {
     one: async <Row extends object>(sql: string): Promise<Row | null> => {
+      queries.push(sql);
       if (sql.includes("FROM teams")) return { id: current.team_id, archived_at: null } as Row;
       if (sql.includes("SELECT issues.*")) {
         const snapshot = { ...current };
@@ -90,6 +93,7 @@ function fakePersistence(synchronizeReads = false): {
       close: async () => undefined,
     },
     activities,
+    queries,
     get updates() {
       return updates;
     },
@@ -97,6 +101,14 @@ function fakePersistence(synchronizeReads = false): {
 }
 
 describe("issues PostgreSQL", () => {
+  it("carga team_key junto al Issue para los payloads de Webhooks", async () => {
+    const fake = fakePersistence();
+    const loaded = await getPostgresIssue(fake.persistence, "issue-1");
+
+    expect(loaded?.team_key).toBe("PB");
+    expect(fake.queries.some((query) => query.includes("teams.key AS team_key"))).toBe(true);
+  });
+
   it("restaura de forma idempotente y registra una sola Activity", async () => {
     const fake = fakePersistence();
     const restored = await unarchivePostgresIssue(fake.persistence, viewer, "PB-1");

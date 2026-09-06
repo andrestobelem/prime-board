@@ -81,7 +81,20 @@ describe("PostgreSQL labels and relations", () => {
       ],
     );
 
-    const app = createApp({ db, config, persistence });
+    const deliveries: string[] = [];
+    const fetchFn = Object.assign(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        deliveries.push(String(init?.body));
+        return new Response("ok");
+      },
+      { preconnect: fetch.preconnect },
+    );
+    const app = createApp({
+      db,
+      config,
+      persistence,
+      webhookOptions: { retryDelays: [], fetchFn },
+    });
     stop = () => app.server.stop();
     close = async () => {
       db.close();
@@ -150,6 +163,12 @@ describe("PostgreSQL labels and relations", () => {
       };
     };
     const blocked = await createIssue("PRB-437 blocked", [globalLabelId, teamLabelId]);
+    const webhook = await request(
+      `mutation { webhookCreate(input: { url: "https://example.test/prb-581", events: ["issue.updated"] }) { webhook { id } } }`,
+    );
+    expect(webhook.errors).toBeUndefined();
+    const webhookId = webhook.data!.webhookCreate.webhook.id as string;
+    deliveries.length = 0;
     const blocker = await createIssue("PRB-437 blocker");
     const third = await createIssue("PRB-437 third");
     const foreignAssignment = await request(
@@ -318,12 +337,19 @@ describe("PostgreSQL labels and relations", () => {
       payload: { type: "blocked_by", issue: blocker.identifier },
     });
 
+    await app.events.idle();
+    deliveries.length = 0;
     const labelDeleted = await request(
       `mutation($id: ID!) { labelDelete(id: $id) { success affectedIssues } }`,
       { id: teamLabelId },
     );
     expect(labelDeleted.errors).toBeUndefined();
     expect(labelDeleted.data!.labelDelete).toEqual({ success: true, affectedIssues: 1 });
+    await app.events.idle();
+    expect(deliveries).toHaveLength(1);
+    const labelDeletePayload = JSON.parse(deliveries[0]!);
+    expect(labelDeletePayload.data.identifier).toBe(blocked.identifier);
+    expect(labelDeletePayload.data.identifier).not.toContain("undefined-");
     const afterLabelDelete = await request(
       `query($id: ID!) { issue(id: $id) { labels { id } activity { type payload } } }`,
       { id: blocked.id },
@@ -334,6 +360,11 @@ describe("PostgreSQL labels and relations", () => {
       type: "unlabeled",
       payload: { label: "PRB-437 team", reason: "label_deleted" },
     });
+    const webhookDeleted = await request(
+      `mutation($id: ID!) { webhookDelete(id: $id) { success } }`,
+      { id: webhookId },
+    );
+    expect(webhookDeleted.errors).toBeUndefined();
 
     const relationConstraints = await persistence.many<{ constraint_name: string }>(
       `SELECT constraint_name

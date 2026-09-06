@@ -364,9 +364,7 @@ async function emitPostgresBulkIssueUpdates(
 ): Promise<void> {
   if (!context.persistence) return;
   for (const issueId of issueIds) {
-    const issue = await context.persistence.one<IssueRow>("SELECT * FROM issues WHERE id = $1", [
-      issueId,
-    ]);
+    const issue = await getPostgresIssue(context.persistence, issueId);
     if (issue) context.events.emit("issue.updated", viewer, issueEventData(issue), changes);
   }
 }
