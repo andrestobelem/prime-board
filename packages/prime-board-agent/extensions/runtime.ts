@@ -265,7 +265,7 @@ function parseStatusOutput(
   const line = output
     .split(/\r?\n/)
     .map((value) => value.trim())
-    .find((value) => /^(running|not-running|stale)\s/.test(value));
+    .find((value) => /^(running|not-running|stale|blocked)\s/.test(value));
   if (!line) {
     return {
       projectRoot,
@@ -276,7 +276,7 @@ function parseStatusOutput(
       credentialPath,
     };
   }
-  const state = line.match(/^(running|not-running|stale)/)?.[1];
+  const state = line.match(/^(running|not-running|stale|blocked)/)?.[1];
   const port = Number(line.match(/\bport=(\d+)/)?.[1]);
   const pid = Number(line.match(/\bpid=(\d+)/)?.[1]);
   const host = line.match(/\bhost=(\S+)/)?.[1] ?? "127.0.0.1";
@@ -300,6 +300,16 @@ function parseStatusOutput(
       url: null,
       state: "error",
       detail: "The runtime lock is stale; retrying will repair it",
+      logPath,
+      credentialPath,
+    };
+  }
+  if (state === "blocked") {
+    return {
+      projectRoot,
+      url: null,
+      state: "error",
+      detail: "The runtime ownership handoff is incomplete; retrying is blocked",
       logPath,
       credentialPath,
     };

@@ -120,6 +120,9 @@ export function createApp({
             projectRoot: config.repoRoot ?? "",
             databasePath: config.dbPath,
             instanceId,
+            ...(process.env.PRIME_BOARD_INSTANCE_LEASE_TOKEN === undefined
+              ? {}
+              : { leaseToken: process.env.PRIME_BOARD_INSTANCE_LEASE_TOKEN }),
           });
         }
         return Response.json({ status: "ok" });

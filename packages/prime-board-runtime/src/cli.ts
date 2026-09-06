@@ -16,15 +16,16 @@ import {
   acquireDatabaseReservation,
   acquireInstanceLock,
   chooseAvailablePort,
-  classifyInstance,
-  databaseReservationPaths,
+  databaseReservationPathsForIdentity,
   deriveProjectIdentity,
   promoteDatabaseReservationOwner,
   promoteInstanceOwner,
   reserveAvailablePort,
   resolveInstanceStatus,
   retireInstanceLock,
+  type DatabaseReservationRecord,
   type InstanceRecord,
+  type InstanceStatus,
   type ProjectInstanceIdentity,
 } from "./project.ts";
 
@@ -80,16 +81,13 @@ function healthUrl(host: string, port: number): string {
   return `http://${hostForUrl(host)}:${port}/health`;
 }
 
-function statusExitCode(state: ReturnType<typeof classifyInstance>["state"]): number {
+function statusExitCode(state: InstanceStatus["state"]): number {
   if (state === "running") return 0;
   if (state === "not-running") return 1;
   return 2;
 }
 
-function describeStatus(
-  identity: ProjectInstanceIdentity,
-  status: ReturnType<typeof classifyInstance>,
-): void {
+function describeStatus(identity: ProjectInstanceIdentity, status: InstanceStatus): void {
   const record = status.record;
   const details = record
     ? ` host=${record.host ?? DEFAULT_HOST} port=${record.port} pid=${record.pid} db=${record.databasePath}`
@@ -99,7 +97,7 @@ function describeStatus(
 
 function assertDatabaseCompatibility(
   identity: ProjectInstanceIdentity,
-  status: ReturnType<typeof classifyInstance>,
+  status: InstanceStatus,
 ): void {
   if (
     status.record &&
@@ -108,6 +106,14 @@ function assertDatabaseCompatibility(
   ) {
     throw new Error(
       `Project instance already uses database ${status.record.databasePath}; refusing to start with ${identity.databasePath}`,
+    );
+  }
+}
+
+function assertRuntimeHandoffComplete(status: InstanceStatus): void {
+  if (status.state === "blocked") {
+    throw new Error(
+      "Runtime ownership handoff is incomplete; refusing to start or modify the project.",
     );
   }
 }
@@ -264,10 +270,11 @@ if (parsed.update && status.state === "running") {
 }
 if (parsed.status) await classifyAndDescribe(identity);
 if (parsed.backupPath || parsed.restorePath) {
+  assertRuntimeHandoffComplete(status);
   if (status.state === "running" && parsed.restorePath) {
     throw new Error("Cannot restore while the project instance is running");
   }
-  if (status.state === "stale") retireInstanceLock(identity);
+  if (status.state === "stale") retireInstanceLock(identity, status.record ?? undefined);
   const releaseActionReservation =
     status.state === "running" ? null : reserveDatabaseForAction(identity, projectRoot);
   try {
@@ -303,7 +310,7 @@ if (parsed.printEnv) {
     );
     process.exit(0);
   }
-  if (status.state === "stale") {
+  if (status.state === "stale" || status.state === "blocked") {
     describeStatus(identity, status);
     process.exit(statusExitCode(status.state));
   }
@@ -312,13 +319,15 @@ if (parsed.printEnv) {
   process.exit(0);
 }
 
+assertRuntimeHandoffComplete(status);
+
 if (status.state === "running" && status.record) {
   const runningHost = status.record.host ?? host;
   await waitForHealth(runningHost, status.record.port, null);
   console.log(`prime-board ready: http://${hostForUrl(runningHost)}:${status.record.port}`);
   process.exit(0);
 }
-if (status.state === "stale") retireInstanceLock(identity);
+if (status.state === "stale") retireInstanceLock(identity, status.record ?? undefined);
 
 let server: ChildProcess | null = null;
 let receivedSignal: NodeJS.Signals | null = null;
@@ -331,9 +340,15 @@ const onSigterm = () => onSignal("SIGTERM");
 process.once("SIGINT", onSigint);
 process.once("SIGTERM", onSigterm);
 
-const portReservation = await reserveAvailablePort(requestedPort, portIsExplicit, home);
-let releasePortReservation: (() => void) | null = portReservation.release;
 const instanceId = randomUUID();
+const portReservation = await reserveAvailablePort(
+  requestedPort,
+  portIsExplicit,
+  home,
+  undefined,
+  instanceId,
+);
+let releasePortReservation: (() => void) | null = portReservation.release;
 const instanceRecord: InstanceRecord = {
   version: 1,
   projectRoot,
@@ -342,6 +357,7 @@ const instanceRecord: InstanceRecord = {
   pid: process.pid,
   launcherPid: process.pid,
   instanceId,
+  leaseToken: randomUUID(),
   host,
   startedAt: new Date().toISOString(),
 };
@@ -349,17 +365,19 @@ let releaseDatabaseReservation: (() => void) | null = null;
 let releaseLock: (() => void) | null = null;
 let preUpdateBackup: BackupResult | null = null;
 const databaseExistedBeforeStart = existsSync(identity.databasePath);
+const databaseRecord: DatabaseReservationRecord = {
+  version: 1,
+  projectRoot,
+  databasePath: identity.databasePath,
+  pid: process.pid,
+  launcherPid: process.pid,
+  instanceId,
+  leaseToken: randomUUID(),
+  reservedAt: instanceRecord.startedAt,
+};
 try {
-  releaseDatabaseReservation = acquireDatabaseReservation(identity, {
-    version: 1,
-    projectRoot,
-    databasePath: identity.databasePath,
-    pid: process.pid,
-    launcherPid: process.pid,
-    instanceId,
-    reservedAt: instanceRecord.startedAt,
-  });
   releaseLock = acquireInstanceLock(identity, instanceRecord);
+  releaseDatabaseReservation = acquireDatabaseReservation(identity, databaseRecord);
   try {
     preUpdateBackup = createSqliteBackupIfPresent({
       databasePath: identity.databasePath,
@@ -392,13 +410,15 @@ try {
     PRIME_BOARD_WEB_DIST: webDist,
     PRIME_BOARD_PERSISTENCE: "sqlite",
     PRIME_BOARD_INSTANCE_ID: instanceId,
+    PRIME_BOARD_INSTANCE_LEASE_TOKEN: instanceRecord.leaseToken,
     PRIME_BOARD_INSTANCE_METADATA: identity.metadataPath,
     PRIME_BOARD_LAUNCHER_PID: String(process.pid),
     PRIME_BOARD_DATABASE_RESERVATION_METADATA: JSON.stringify(
-      databaseReservationPaths(identity.databasePath, home).map((path) =>
-        join(path, "reservation.json"),
-      ),
+      databaseReservationPathsForIdentity(identity).map((path) => join(path, "reservation.json")),
     ),
+    PRIME_BOARD_DATABASE_LEASE_TOKEN: databaseRecord.leaseToken,
+    PRIME_BOARD_PORT_RESERVATION_METADATA: portReservation.metadataPath,
+    PRIME_BOARD_PORT_LEASE_TOKEN: portReservation.leaseToken,
   };
   server = spawn(process.execPath, [join(import.meta.dir, "server.js")], {
     env: environment,
@@ -409,8 +429,9 @@ try {
   const owner = { pid: server.pid, processGroupId: server.pid };
   // Publica primero el owner del proyecto. Si el launcher muere en esta
   // ventana, un launcher nuevo ve el hijo saludable y no toma la DB.
-  promoteInstanceOwner(identity, owner, instanceId);
-  promoteDatabaseReservationOwner(identity, owner, instanceId);
+  promoteInstanceOwner(identity, owner, instanceId, instanceRecord.leaseToken);
+  promoteDatabaseReservationOwner(identity, owner, instanceId, databaseRecord.leaseToken);
+  portReservation.promoteOwner(owner);
   const serverExit = new Promise<number>((resolveExit) => {
     server?.once("exit", (code, signal) => resolveExit(code ?? (signal ? 1 : 0)));
   });

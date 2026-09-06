@@ -19,13 +19,14 @@ import {
   acquireDatabaseReservation,
   acquireInstanceLock,
   chooseAvailablePort,
-  databaseReservationPaths,
+  databaseReservationPathsForIdentity,
   deriveProjectIdentity,
   promoteDatabaseReservationOwner,
   promoteInstanceOwner,
   reserveAvailablePort,
   resolveInstanceStatus,
   retireInstanceLock,
+  type DatabaseReservationRecord,
   type InstanceRecord,
   type InstanceStatus,
   type ProjectInstanceIdentity,
@@ -115,6 +116,14 @@ function assertDatabaseCompatibility(
   }
 }
 
+function assertRuntimeHandoffComplete(status: InstanceStatus): void {
+  if (status.state === "blocked") {
+    throw new Error(
+      "Runtime ownership handoff is incomplete; refusing to start or modify the project.",
+    );
+  }
+}
+
 function printEnvironment(
   identity: ProjectInstanceIdentity,
   projectRoot: string,
@@ -197,7 +206,7 @@ if (values["print-env"]) {
     printEnvironment(identity, projectRoot, host, status.record.port, bootstrap, webDist);
     process.exit(0);
   }
-  if (status.state === "stale") {
+  if (status.state === "stale" || status.state === "blocked") {
     describeStatus(identity, status);
     process.exit(statusExitCode(status));
   }
@@ -206,13 +215,15 @@ if (values["print-env"]) {
   process.exit(0);
 }
 
+assertRuntimeHandoffComplete(status);
+
 if (status.state === "running" && status.record) {
   console.error(
     `prime-board already running for ${projectRoot} at http://${hostForUrl(status.record.host ?? host)}:${status.record.port}`,
   );
   process.exit(0);
 }
-if (status.state === "stale") retireInstanceLock(identity);
+if (status.state === "stale") retireInstanceLock(identity, status.record ?? undefined);
 
 let server: ReturnType<typeof Bun.spawn> | null = null;
 let receivedSignal: "SIGINT" | "SIGTERM" | null = null;
@@ -226,10 +237,16 @@ const onSignal = (signal: "SIGINT" | "SIGTERM") => {
 process.once("SIGINT", onSignal);
 process.once("SIGTERM", onSignal);
 
-const portReservation = await reserveAvailablePort(requestedPort, portIsExplicit, homedir());
+const instanceId = randomUUID();
+const portReservation = await reserveAvailablePort(
+  requestedPort,
+  portIsExplicit,
+  homedir(),
+  undefined,
+  instanceId,
+);
 let releasePortReservation: (() => void) | null = portReservation.release;
 const port = portReservation.port;
-const instanceId = randomUUID();
 const instanceRecord: InstanceRecord = {
   version: 1,
   projectRoot,
@@ -238,6 +255,7 @@ const instanceRecord: InstanceRecord = {
   pid: process.pid,
   launcherPid: process.pid,
   instanceId,
+  leaseToken: randomUUID(),
   host,
   startedAt: new Date().toISOString(),
 };
@@ -245,18 +263,21 @@ let releaseDatabaseReservation: (() => void) | null = null;
 let releaseLock: (() => void) | null = null;
 let preUpdateBackup: BackupResult | null = null;
 const databaseExistedBeforeStart = existsSync(identity.databasePath);
+const databaseRecord: DatabaseReservationRecord = {
+  version: 1,
+  projectRoot,
+  databasePath: identity.databasePath,
+  pid: process.pid,
+  launcherPid: process.pid,
+  instanceId,
+  leaseToken: randomUUID(),
+  reservedAt: instanceRecord.startedAt,
+};
 try {
-  releaseDatabaseReservation = acquireDatabaseReservation(identity, {
-    version: 1,
-    projectRoot,
-    databasePath: identity.databasePath,
-    pid: process.pid,
-    launcherPid: process.pid,
-    instanceId,
-    reservedAt: instanceRecord.startedAt,
-  });
   releaseLock = acquireInstanceLock(identity, instanceRecord);
+  releaseDatabaseReservation = acquireDatabaseReservation(identity, databaseRecord);
 } catch (error) {
+  releaseLock?.();
   releaseDatabaseReservation?.();
   portReservation.release();
   const concurrent = await resolveInstanceStatus(identity);
@@ -321,18 +342,22 @@ const environment = {
   PRIME_BOARD_TEAM_NAME: bootstrap.teamName,
   PRIME_BOARD_TEAM_KEY: bootstrap.teamKey,
   PRIME_BOARD_INSTANCE_ID: instanceId,
+  PRIME_BOARD_INSTANCE_LEASE_TOKEN: instanceRecord.leaseToken,
   PRIME_BOARD_INSTANCE_METADATA: identity.metadataPath,
   PRIME_BOARD_LAUNCHER_PID: String(process.pid),
   PRIME_BOARD_DATABASE_RESERVATION_METADATA: JSON.stringify(
-    databaseReservationPaths(identity.databasePath, homedir()).map((path) =>
-      join(path, "reservation.json"),
-    ),
+    databaseReservationPathsForIdentity(identity).map((path) => join(path, "reservation.json")),
   ),
+  PRIME_BOARD_DATABASE_LEASE_TOKEN: databaseRecord.leaseToken,
+  PRIME_BOARD_PORT_RESERVATION_METADATA: portReservation.metadataPath,
+  PRIME_BOARD_PORT_LEASE_TOKEN: portReservation.leaseToken,
 };
 let exitCode = 1;
 try {
-  server = Bun.spawn([process.execPath, "run", "--cwd", "apps/server", "start"], {
-    cwd: PRIME_BOARD_ROOT,
+  // Ejecuta el entrypoint directamente para que el PID publicado sea el PID
+  // real del server y el child pueda validar su lease antes de abrir SQLite.
+  server = Bun.spawn([process.execPath, "src/index.ts"], {
+    cwd: join(PRIME_BOARD_ROOT, "apps", "server"),
     env: environment,
     detached: true,
     stdin: "inherit",
@@ -341,8 +366,11 @@ try {
   });
   if (server.pid === undefined) throw new Error("prime-board server did not expose a PID");
   const owner = { pid: server.pid, processGroupId: server.pid };
-  promoteDatabaseReservationOwner(identity, owner, instanceId);
-  promoteInstanceOwner(identity, owner, instanceId);
+  // Publica primero el owner del proyecto. Un launcher nuevo no debe tomar
+  // la reserva de DB mientras el hijo completa el handoff.
+  promoteInstanceOwner(identity, owner, instanceId, instanceRecord.leaseToken);
+  promoteDatabaseReservationOwner(identity, owner, instanceId, databaseRecord.leaseToken);
+  portReservation.promoteOwner(owner);
   await waitForHealth(host, port, server);
   console.error(`prime-board ready: http://${hostForUrl(host)}:${port}`);
   exitCode = await server.exited;

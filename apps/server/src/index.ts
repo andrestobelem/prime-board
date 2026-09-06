@@ -15,7 +15,9 @@ const credentialDatabasePath =
   config.persistenceBackend === "postgres" && config.postgresUrl
     ? `${config.dbPath}|postgres:${config.postgresUrl}`
     : config.dbPath;
-claimRuntimeOwnership(config.repoRoot ?? "", config.dbPath);
+if (!(await claimRuntimeOwnership(config.repoRoot ?? "", config.dbPath, config.port))) {
+  throw new Error("Runtime ownership claim failed; the instance or database reservation changed");
+}
 if (config.authMode !== "local") {
   // Valida y prepara el almacenamiento externo antes de sembrar la base.
   prepareBootstrapCredentialPath(config.repoRoot, credentialDatabasePath);

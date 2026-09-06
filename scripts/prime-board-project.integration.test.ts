@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyInstance, deriveProjectIdentity } from "./prime-board-project-lib.ts";
@@ -130,6 +130,73 @@ describe("project launcher lifecycle", () => {
       launcher.kill("SIGTERM");
       await launcher.exited;
       await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("aborts a blocked handoff before reserving a port or spawning a child", async () => {
+    const root = mkdtempSync(join(tmpdir(), "prime-board-blocked-handoff-"));
+    const home = join(root, "home");
+    const project = join(root, "project");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    Bun.spawnSync(["git", "init", "-q", project]);
+    const projectRoot = realpathSync(project);
+    const databasePath = join(home, ".prime-board", "projects", "blocked.db");
+    const healthServer = Bun.serve({
+      port: 0,
+      fetch: () =>
+        Response.json({
+          status: "ok",
+          pid: process.pid,
+          projectRoot,
+          databasePath,
+          instanceId: "blocked-owner",
+          leaseToken: "blocked-instance-token",
+        }),
+    });
+    const identity = deriveProjectIdentity(projectRoot, home, databasePath);
+    mkdirSync(identity.lockPath, { recursive: true });
+    writeFileSync(
+      identity.metadataPath,
+      `${JSON.stringify({
+        version: 1,
+        projectRoot,
+        databasePath,
+        port: healthServer.port,
+        pid: 999999,
+        launcherPid: 999998,
+        instanceId: "blocked-owner",
+        leaseToken: "blocked-instance-token",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+    );
+    const launcher = Bun.spawn(
+      [
+        process.execPath,
+        "scripts/prime-board-project.ts",
+        "--project",
+        project,
+        "--db",
+        databasePath,
+        "--port",
+        String(healthServer.port),
+      ],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, HOME: home, PRIME_BOARD_AUTH_MODE: "local" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    try {
+      const output = `${await streamText(launcher.stdout)}${await streamText(launcher.stderr)}`;
+      expect(await launcher.exited).not.toBe(0);
+      expect(output).toContain("ownership handoff is incomplete");
+      expect(existsSync(databasePath)).toBe(false);
+      expect(existsSync(join(home, ".prime-board", "ports"))).toBe(false);
+    } finally {
+      healthServer.stop(true);
       rmSync(root, { recursive: true, force: true });
     }
   }, 15_000);

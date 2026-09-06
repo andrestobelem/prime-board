@@ -59,7 +59,7 @@ hijo después del handoff. También registran el grupo de procesos y una identid
 SIGKILL sobre el launcher no permite iniciar otro server mientras el hijo huérfano siga saludable.
 Las señales `SIGINT` y `SIGTERM` se reenvían al server y liberan el lock, la reserva de DB y la
 reserva de puerto. `--status` conserva los códigos `0` (running), `1` (not-running) y `2`
-(stale). El estado operativo no se escribe en el package: SQLite queda fuera de `dist/` y
+(stale o blocked). `blocked` indica un server saludable con un handoff de ownership incompleto. El estado operativo no se escribe en el package: SQLite queda fuera de `dist/` y
 `PRIME_BOARD_REPO` apunta a la Repository Replica del proyecto (`.prime-board/`). La réplica se
 genera por la API y no contiene API keys ni secretos de webhooks. Los logs de una extensión deben
 guardarse fuera del proyecto con modo `0600` y redacción de bearer/API keys.
