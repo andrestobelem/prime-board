@@ -105,6 +105,8 @@ function validateAppliedRows(
 export interface PostgresMigrationOptions {
   /** Archivo externo ya creado por el operador, fuera de la réplica. */
   readonly documentsArchivePath?: string;
+  /** Raíz del repositorio que no puede contener el archivo externo. */
+  readonly repositoryRoot?: string;
 }
 
 function configuredDocumentsArchivePath(options: PostgresMigrationOptions): string | undefined {
@@ -122,6 +124,7 @@ async function verifyPostgresDocuments(
   tx: Bun.SQL | Bun.TransactionSQL,
   archivePath: string | undefined,
   lockTable = false,
+  repositoryRoot?: string,
 ): Promise<void> {
   const table = (await tx<Array<{ exists: boolean }>>`
     SELECT EXISTS (
@@ -143,7 +146,7 @@ async function verifyPostgresDocuments(
       "Cannot retire PostgreSQL Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
     );
   }
-  verifyDocumentRows(rows, archivePath, "postgres");
+  verifyDocumentRows(rows, archivePath, "postgres", repositoryRoot);
 }
 
 /**
@@ -154,8 +157,9 @@ async function verifyPostgresDocuments(
 export async function preflightPostgresDocumentRetirement(
   sql: PostgresSql,
   archivePath?: string,
+  repositoryRoot?: string,
 ): Promise<void> {
-  await verifyPostgresDocuments(sql, archivePath);
+  await verifyPostgresDocuments(sql, archivePath, false, repositoryRoot);
 }
 
 /**
@@ -176,7 +180,11 @@ export async function migratePostgres(
       (migration) => migration.version === 11 && migration.name === "documents_retirement",
     )
   ) {
-    await preflightPostgresDocumentRetirement(sql, configuredDocumentsArchivePath(options));
+    await preflightPostgresDocumentRetirement(
+      sql,
+      configuredDocumentsArchivePath(options),
+      options.repositoryRoot,
+    );
   }
   await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
@@ -200,7 +208,12 @@ export async function migratePostgres(
       if (appliedVersions.has(migration.version)) continue;
       try {
         if (migration.version === 11 && migration.name === "documents_retirement") {
-          await verifyPostgresDocuments(tx, configuredDocumentsArchivePath(options), true);
+          await verifyPostgresDocuments(
+            tx,
+            configuredDocumentsArchivePath(options),
+            true,
+            options.repositoryRoot,
+          );
         }
         await tx.unsafe(migration.sql).simple();
         await tx`

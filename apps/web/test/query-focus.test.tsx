@@ -31,14 +31,14 @@ let updateSearch: ((value: string) => void) | undefined;
 function SearchHarness() {
   const [search, setSearch] = useState("");
   updateSearch = setSearch;
-  const query = useQuery<{ documents: string[] }>(
-    "query($search: String) { documents(search: $search) }",
+  const query = useQuery<{ issues: { nodes: Array<{ title: string }> } }>(
+    "query($search: String) { issues(filter: { search: $search }, first: 8) { nodes { title } } }",
     { search },
   );
   if (query.loading && !query.data) return <div>Loading…</div>;
   return (
     <input
-      aria-label="Search documents"
+      aria-label="Search issues"
       value={search}
       onChange={(event) => setSearch(event.target.value)}
     />
@@ -56,7 +56,7 @@ describe("query input focus", () => {
     const response = () =>
       ({
         ok: true,
-        json: async () => ({ data: { documents: [] } }),
+        json: async () => ({ data: { issues: { nodes: [] } } }),
       }) as Response;
     globalThis.fetch = (async () => {
       requestCount += 1;

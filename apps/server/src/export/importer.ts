@@ -51,7 +51,7 @@ export function preflightRetiredDocuments(rootDir: string, documentsArchivePath?
   }
   // This is an explicit operator opt-in. Remove the source only after the
   // external bundle has been written and parsed back with its checksum.
-  archiveDocumentSnapshot(snapshotPath, trimmed, "replica");
+  archiveDocumentSnapshot(snapshotPath, trimmed, "replica", rootDir);
   unlinkSync(snapshotPath);
 }
 

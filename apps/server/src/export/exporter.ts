@@ -450,7 +450,11 @@ function writeIssue(
   return lines.length;
 }
 
-function archiveRetiredSqliteDocuments(db: Database, archivePath?: string): void {
+function archiveRetiredSqliteDocuments(
+  db: Database,
+  archivePath: string | undefined,
+  repoRoot: string,
+): void {
   const table = db
     .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'documents' LIMIT 1")
     .get() as { name?: string } | null;
@@ -465,7 +469,7 @@ function archiveRetiredSqliteDocuments(db: Database, archivePath?: string): void
       "Cannot export SQLite Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
     );
   }
-  archiveDocumentRows(rows, trimmed, "sqlite");
+  archiveDocumentRows(rows, trimmed, "sqlite", repoRoot);
 }
 
 export interface ExportOptions {
@@ -488,7 +492,7 @@ export function exportBoard(
 ): ExportResult {
   const base = join(rootDir, ".prime-board");
   const archivePath = options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
-  archiveRetiredSqliteDocuments(db, archivePath);
+  archiveRetiredSqliteDocuments(db, archivePath, rootDir);
   const documentsSnapshot = join(base, "meta", "documents.json");
   if (existsSync(documentsSnapshot)) {
     const trimmedArchivePath = archivePath?.trim();
@@ -499,7 +503,7 @@ export function exportBoard(
     }
     // The source is removed only after the external archive is written and
     // verified. Without this explicit option, export and RepoSync fail closed.
-    archiveDocumentSnapshot(documentsSnapshot, trimmedArchivePath, "replica");
+    archiveDocumentSnapshot(documentsSnapshot, trimmedArchivePath, "replica", rootDir);
     unlinkSync(documentsSnapshot);
   }
   // No se borra todo de entrada: se escribe lo que cambió y al final se barren
@@ -1032,7 +1036,7 @@ export function exportBoard(
 /** Exporta un solo issue (AT-166): el camino caliente de cada mutación. */
 export function exportIssue(db: Database, rootDir: string, issueId: string): boolean {
   const base = join(rootDir, ".prime-board");
-  archiveRetiredSqliteDocuments(db, process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE);
+  archiveRetiredSqliteDocuments(db, process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE, rootDir);
   const issue = db
     .query(
       "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id WHERE issues.id = ?1",

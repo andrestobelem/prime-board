@@ -205,6 +205,8 @@ function hardenDatabaseFiles(path: string): void {
 export interface DatabaseOptions {
   /** Archivo externo ya verificado antes de retirar Documents. */
   documentsArchivePath?: string;
+  /** Raíz del repositorio que no puede contener el archivo externo. */
+  repositoryRoot?: string;
 }
 
 export interface MigrationOptions extends DatabaseOptions {}
@@ -239,7 +241,7 @@ function verifyDocumentsBeforeRetirement(db: Database, options: MigrationOptions
     );
   }
   try {
-    verifyDocumentRows(rows, archivePath, "sqlite");
+    verifyDocumentRows(rows, archivePath, "sqlite", options.repositoryRoot);
   } catch (error) {
     throw new Error(
       `Cannot retire Documents safely: ${error instanceof Error ? error.message : String(error)}`,

@@ -8,16 +8,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export const DOCUMENT_ARCHIVE_FORMAT = "prime-board.documents-archive" as const;
 export const DOCUMENT_ARCHIVE_VERSION = 1 as const;
@@ -108,8 +112,13 @@ function manifestFor(sources: Readonly<Record<string, DocumentArchiveSourceData>
   };
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error) || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
 function isMissingPath(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
+  return errorCode(error) === "ENOENT";
 }
 
 function existingPath(path: string): string {
@@ -122,17 +131,41 @@ function existingPath(path: string): string {
   return resolve(realpathSync(candidate));
 }
 
-function validateArchiveDestination(outputPath: string): string {
+function detectRepositoryRoot(): string | undefined {
+  const configured = process.env.PRIME_BOARD_REPO?.trim();
+  if (configured) return configured;
+  try {
+    const result = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd: process.cwd() });
+    if (result.exitCode !== 0) return undefined;
+    const root = result.stdout.toString().trim();
+    return root || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function pathInside(root: string, candidate: string): boolean {
+  const child = relative(root, candidate);
+  return child === "" || (!isAbsolute(child) && child !== ".." && !child.startsWith(`..${sep}`));
+}
+
+function validateArchiveDestination(outputPath: string, repoRoot?: string): string {
   const trimmed = outputPath.trim();
   if (!trimmed) throw new Error("Document archive output path is required");
   const path = resolve(trimmed);
+  const parent = existingPath(dirname(path));
   // A path inside any `.prime-board` directory could be committed by mistake.
-  // Reject it even when the caller does not know the repository root.
-  if (
-    path.split(sep).includes(".prime-board") ||
-    existingPath(dirname(path)).split(sep).includes(".prime-board")
-  ) {
+  if (path.split(sep).includes(".prime-board") || parent.split(sep).includes(".prime-board")) {
     throw new Error("Document archive must be outside the .prime-board directory");
+  }
+  const repository = repoRoot?.trim() || detectRepositoryRoot();
+  if (repository) {
+    const repositoryPath = resolve(realpathSync(repository));
+    // Check both the lexical destination and its resolved parent. The latter
+    // catches a new file below a symlinked directory inside the repository.
+    if (pathInside(repositoryPath, path) || pathInside(repositoryPath, parent)) {
+      throw new Error("Document archive must be outside the repository");
+    }
   }
   let outputStat: ReturnType<typeof lstatSync> | null = null;
   try {
@@ -239,11 +272,12 @@ export function verifyDocumentRows(
   rows: readonly DocumentArchiveRecord[],
   archivePath: string,
   source: string,
+  repoRoot?: string,
 ): DocumentArchiveResult {
   if (!/^[a-z][a-z0-9_-]*$/u.test(source)) {
     throw new Error(`Invalid document archive source: ${source}`);
   }
-  const path = validateArchiveDestination(archivePath);
+  const path = validateArchiveDestination(archivePath, repoRoot);
   if (!existsSync(path)) {
     throw new Error(`Document archive does not exist: ${path}`);
   }
@@ -274,11 +308,12 @@ export function archiveDocumentRows(
   rows: readonly DocumentArchiveRecord[],
   outputPath: string,
   source: string,
+  repoRoot?: string,
 ): DocumentArchiveResult {
   if (!/^[a-z][a-z0-9_-]*$/u.test(source)) {
     throw new Error(`Invalid document archive source: ${source}`);
   }
-  const path = validateArchiveDestination(outputPath);
+  const path = validateArchiveDestination(outputPath, repoRoot);
   const documents = normalizedDocuments(rows);
   let archive: DocumentArchiveFile;
   if (existsSync(path)) {
@@ -338,11 +373,33 @@ export function archiveDocumentRows(
 export function readDocumentSnapshot(path: string): DocumentArchiveRecord[] {
   let value: unknown;
   try {
-    value = JSON.parse(readFileSync(path, "utf8"));
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) {
+      throw new Error("Documents snapshot must not be a symbolic link");
+    }
+    if (!stat.isFile()) {
+      throw new Error("Documents snapshot must be a regular file");
+    }
+    // O_NOFOLLOW closes the check/read race: a replacement symlink cannot make
+    // this read leave the repository after lstatSync has succeeded.
+    const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const openedStat = fstatSync(descriptor);
+      if (!openedStat.isFile()) {
+        throw new Error("Documents snapshot must be a regular file");
+      }
+      value = JSON.parse(readFileSync(descriptor, "utf8"));
+    } finally {
+      closeSync(descriptor);
+    }
   } catch (error) {
-    throw new Error(
-      `Cannot read Documents snapshot ${path}: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const message =
+      errorCode(error) === "ELOOP"
+        ? "Documents snapshot must not be a symbolic link"
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    throw new Error(`Cannot read Documents snapshot ${path}: ${message}`);
   }
   if (!Array.isArray(value)) throw new Error(`Documents snapshot must be an array: ${path}`);
   return normalizedDocuments(value);
@@ -353,6 +410,7 @@ export function archiveDocumentSnapshot(
   snapshotPath: string,
   outputPath: string,
   source: DocumentArchiveSource | string = "replica",
+  repoRoot?: string,
 ): DocumentArchiveResult {
-  return archiveDocumentRows(readDocumentSnapshot(snapshotPath), outputPath, source);
+  return archiveDocumentRows(readDocumentSnapshot(snapshotPath), outputPath, source, repoRoot);
 }

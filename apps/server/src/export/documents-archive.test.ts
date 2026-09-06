@@ -54,20 +54,57 @@ describe("retired Documents archive", () => {
     }
   });
 
-  it("rechaza destinos dentro de .prime-board y checksum incorrecto", () => {
+  it("rechaza destinos dentro del repositorio y checksum incorrecto", () => {
     const root = tempDirectory();
     try {
-      const snapshot = join(root, ".prime-board", "meta", "documents.json");
+      const repositoryRoot = join(root, "repository");
+      const snapshot = join(repositoryRoot, ".prime-board", "meta", "documents.json");
       const archivePath = join(root, "documents.archive.json");
-      mkdirSync(join(root, ".prime-board", "meta"), { recursive: true });
+      mkdirSync(join(repositoryRoot, ".prime-board", "meta"), { recursive: true });
       writeFileSync(snapshot, '[{"title":"runbook","content":"secret"}]\n');
       expect(() =>
-        archiveDocumentSnapshot(snapshot, join(root, ".prime-board", "archive.json")),
+        archiveDocumentSnapshot(
+          snapshot,
+          join(repositoryRoot, "backup", "archive.json"),
+          "replica",
+          repositoryRoot,
+        ),
+      ).toThrow(/repository/);
+      expect(() =>
+        archiveDocumentSnapshot(
+          snapshot,
+          join(repositoryRoot, ".prime-board", "archive.json"),
+          "replica",
+          repositoryRoot,
+        ),
       ).toThrow(/outside/);
-      archiveDocumentSnapshot(snapshot, archivePath);
-      expect(() => verifyDocumentRows([{ title: "changed" }], archivePath, "replica")).toThrow(
-        /does not match/,
-      );
+      archiveDocumentSnapshot(snapshot, archivePath, "replica", repositoryRoot);
+      expect(() =>
+        verifyDocumentRows([{ title: "changed" }], archivePath, "replica", repositoryRoot),
+      ).toThrow(/does not match/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza capturas de réplica que sean enlaces simbólicos", () => {
+    const root = tempDirectory();
+    try {
+      const repositoryRoot = join(root, "repository");
+      const snapshot = join(repositoryRoot, ".prime-board", "meta", "documents.json");
+      const secretPath = join(root, "secret.json");
+      mkdirSync(join(repositoryRoot, ".prime-board", "meta"), { recursive: true });
+      writeFileSync(secretPath, '[{"title":"SECRET"}]\n');
+      symlinkSync(secretPath, snapshot, "file");
+
+      expect(() =>
+        archiveDocumentSnapshot(
+          snapshot,
+          join(root, "documents.archive.json"),
+          "replica",
+          repositoryRoot,
+        ),
+      ).toThrow(/symbolic link/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

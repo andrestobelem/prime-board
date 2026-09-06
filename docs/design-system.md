@@ -95,19 +95,19 @@ La tabla completa (sidebar, hover, muted, statuses) está en `styles.css` y en l
 Inter con fallback `-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
 sans-serif`; base 16px / line-height 1.4, antialiased. PRB-557 subió la escala visible.
 
-| Tamaño | Peso      | Uso                                                                                                                                                                             |
-| ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 28px   | 700 / 600 | Título de documento (`.document-page h1`, editor 600)                                                                                                                           |
-| 22px   | 700       | Encabezado de settings (`letter-spacing: -0.2px`)                                                                                                                               |
-| 20px   | 600       | Título de issue (`.issue-title-input`); h1 de página                                                                                                                            |
-| 16px   | 700       | Títulos de modal y de panel (`.modal-header h2`, `.settings-panel-header h2`)                                                                                                   |
-| 16px   | 400       | **Base**: body, filas de issues, navegación del sidebar, formularios                                                                                                            |
-| 15px   | 400–500   | **Controles**: `.btn`, tabs, menús, toolbars, switcher, palette                                                                                                                 |
-| 14px   | 400–600   | **Metadatos y encabezados de grupo**: identifiers, `.comment .meta`, `.state-group-header`, `.board-column .col-header`, `.section-title`, actividad, descripciones de settings |
-| 13px   | 500       | `.btn.compact`, `.board-card .card-title`                                                                                                                                       |
-| 12px   | 400–600   | Código inline Markdown y labels de propiedades compactos                                                                                                                        |
-| 11px   | 500       | Labels compactos: `.label-chip`, `.sidebar .section` (uppercase, ls 0.4px), `.nav-count`                                                                                        |
-| 10px   | 600       | `kbd`, `.workspace-team-key` (mono: `ui-monospace, SFMono-Regular, Menlo, …`)                                                                                                   |
+| Tamaño | Peso    | Uso                                                                                                                                                                             |
+| ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 28px   | 700     | Títulos de página (`.teams-page h1`, `.projects-page h1`, `.team-home-header h1`)                                                                                               |
+| 22px   | 700     | Encabezado de settings (`letter-spacing: -0.2px`)                                                                                                                               |
+| 20px   | 600     | Título de issue (`.issue-title-input`); h1 de página                                                                                                                            |
+| 16px   | 700     | Títulos de modal y de panel (`.modal-header h2`, `.settings-panel-header h2`)                                                                                                   |
+| 16px   | 400     | **Base**: body, filas de issues, navegación del sidebar, formularios                                                                                                            |
+| 15px   | 400–500 | **Controles**: `.btn`, tabs, menús, toolbars, switcher, palette                                                                                                                 |
+| 14px   | 400–600 | **Metadatos y encabezados de grupo**: identifiers, `.comment .meta`, `.state-group-header`, `.board-column .col-header`, `.section-title`, actividad, descripciones de settings |
+| 13px   | 500     | `.btn.compact`, `.board-card .card-title`                                                                                                                                       |
+| 12px   | 400–600 | Código inline Markdown y labels de propiedades compactos                                                                                                                        |
+| 11px   | 500     | Labels compactos: `.label-chip`, `.sidebar .section` (uppercase, ls 0.4px), `.nav-count`                                                                                        |
+| 10px   | 600     | `kbd`, `.workspace-team-key` (mono: `ui-monospace, SFMono-Regular, Menlo, …`)                                                                                                   |
 
 El Board conserva una densidad intencional para facilitar el escaneo de muchas tarjetas:
 `.board-card` usa 13px para el título, 11px para el identifier y chips, y la escala de 12px

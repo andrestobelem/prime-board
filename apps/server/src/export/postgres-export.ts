@@ -42,6 +42,7 @@ function quoteIdentifier(identifier: string): string {
 async function archiveRetiredPostgresDocuments(
   persistence: Persistence,
   archivePath: string | undefined,
+  repoRoot: string,
 ): Promise<void> {
   // Query information_schema instead of selecting the table directly. This
   // keeps exports compatible with databases that already ran the retirement
@@ -63,7 +64,7 @@ async function archiveRetiredPostgresDocuments(
       "Cannot export PostgreSQL Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
     );
   }
-  archiveDocumentRows(rows, trimmed, "postgres");
+  archiveDocumentRows(rows, trimmed, "postgres", repoRoot);
 }
 
 async function copyTable(persistence: Persistence, db: Database, table: string): Promise<void> {
@@ -131,6 +132,7 @@ export async function exportPostgresBoard(
   await archiveRetiredPostgresDocuments(
     persistence,
     options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE,
+    rootDir,
   );
   const db = openDatabase(":memory:");
   try {

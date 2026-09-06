@@ -29,7 +29,10 @@ const documentsArchivePath =
 // Inspect and archive the source before opening the operational DB. This keeps
 // an old documents.json from reaching a destructive rebuild by accident.
 preflightRetiredDocuments(sourceRoot, documentsArchivePath);
-const db = openDatabase(config.dbPath, { documentsArchivePath });
+const db = openDatabase(config.dbPath, {
+  documentsArchivePath,
+  repositoryRoot: config.repoRoot ?? undefined,
+});
 const result = rebuildFromRepo(db, sourceRoot, {
   allowPartial: values["allow-partial"] ?? false,
   documentsArchivePath,

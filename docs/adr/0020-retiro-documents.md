@@ -17,8 +17,8 @@ bun run --cwd apps/server archive:documents --out /ruta/externa/prime-board-docu
 bun run --cwd apps/server archive:documents --from-repo /ruta/proyecto --out /ruta/externa/prime-board-documents.archive.json
 ```
 
-El bundle JSON contiene fuentes, cantidad y SHA-256. El archivo usa permisos `0600` y no puede
-estar dentro de `.prime-board`. La migración no crea el archivo. Si Documents tiene filas y el
+El bundle JSON contiene fuentes, cantidad y SHA-256. El archivo usa permisos `0600` y debe
+estar fuera del repositorio (incluido `.prime-board`). La migración no crea el archivo. Si Documents tiene filas y el
 manifest no existe o no coincide, el proceso falla antes de `DROP TABLE`. Las instalaciones
 nuevas ejecutan las migraciones históricas y retiran la tabla vacía al terminar.
 

@@ -49,7 +49,9 @@ if (config.persistenceBackend === "postgres") {
     throw new Error("PRIME_BOARD_POSTGRES_URL is required when PRIME_BOARD_PERSISTENCE=postgres");
   }
   const sql = new Bun.SQL({ url: config.postgresUrl, max: 10, connectionTimeout: 5 });
-  await migratePostgres(sql);
+  await migratePostgres(sql, undefined, undefined, {
+    repositoryRoot: config.repoRoot ?? undefined,
+  });
   const persistence = createPostgresPersistence(sql);
   const result = await bootstrapPostgres(persistence, config.bootstrap);
   reportBootstrap(result.created, result.adminApiKey);
@@ -70,7 +72,9 @@ if (config.persistenceBackend === "postgres") {
   console.log(`GraphQL endpoint: ${serverUrl(server.port)}/graphql`);
   console.log("database: PostgreSQL");
 } else {
-  const db = openDatabase(config.dbPath);
+  const db = openDatabase(config.dbPath, {
+    repositoryRoot: config.repoRoot ?? undefined,
+  });
   const result = bootstrap(db, config.bootstrap);
   reportBootstrap(result.created, result.adminApiKey);
 

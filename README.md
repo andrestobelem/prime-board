@@ -179,7 +179,8 @@ bun run --cwd apps/server archive:documents --from-repo /ruta/proyecto \
   --out /ruta/externa/prime-board-documents.archive.json
 ```
 
-El archivo contiene un manifest con cantidad y SHA-256 por fuente y usa permisos `0600`. Configura
+El archivo contiene un manifest con cantidad y SHA-256 por fuente, usa permisos `0600` y debe
+quedar fuera del repositorio. Configura
 `PRIME_BOARD_DOCUMENTS_ARCHIVE` o pasa `--documents-archive` a `export`/`rebuild`. Las migraciones
 `0030` (SQLite) y `0011` (PostgreSQL) fallan cerrado si el archivo no coincide. Un `documents.json`
 histórico también se rechaza hasta archivarlo. El contenido no se convierte en descripciones de Issues.

@@ -105,6 +105,7 @@ describe("exportBoard", () => {
 
   it("archiva Documents legacy antes de exportar y falla sin destino", () => {
     const legacyRoot = mkdtempSync(join(tmpdir(), "pb-export-legacy-documents-"));
+    const archiveRoot = mkdtempSync(join(tmpdir(), "pb-export-document-archive-"));
     try {
       app.db.exec(`
         CREATE TABLE documents (
@@ -120,16 +121,17 @@ describe("exportBoard", () => {
         (app.db.query("SELECT count(*) AS count FROM documents").get() as { count: number }).count,
       ).toBe(1);
 
-      const archivePath = join(legacyRoot, "backup", "documents.archive.json");
+      const archivePath = join(archiveRoot, "documents.archive.json");
       const rows = app.db.query("SELECT * FROM documents ORDER BY id").all() as Array<
         Record<string, unknown>
       >;
-      archiveDocumentRows(rows, archivePath, "sqlite");
+      archiveDocumentRows(rows, archivePath, "sqlite", legacyRoot);
       exportBoard(app.db, legacyRoot, { documentsArchivePath: archivePath });
       expect(JSON.parse(readFileSync(archivePath, "utf8"))).toMatchObject({ count: 1 });
     } finally {
       app.db.exec("DROP TABLE IF EXISTS documents");
       rmSync(legacyRoot, { recursive: true, force: true });
+      rmSync(archiveRoot, { recursive: true, force: true });
     }
   });
 

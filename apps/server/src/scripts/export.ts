@@ -49,6 +49,7 @@ if (config.persistenceBackend === "postgres") {
 } else {
   const db = openDatabase(config.dbPath, {
     documentsArchivePath: options.documentsArchivePath,
+    repositoryRoot: config.repoRoot ?? undefined,
   });
   try {
     const result = exportBoard(db, outDir, options);

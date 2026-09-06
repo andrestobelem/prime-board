@@ -1,4 +1,6 @@
-// Snapshot de introspección del SDL legacy del commit 4295813.
+// Snapshot histórico de introspección del SDL legacy del commit 4295813.
+// Conserva deliberadamente campos `document`/`documents` para probar la
+// compatibilidad con ese SDL; no describe el contrato vigente sin Documents.
 // Query.workspaces existe, pero los tipos de recursos no exponen workspaceId.
 export const LEGACY_SCHEMA_INTROSPECTION = {
   __schema: {
