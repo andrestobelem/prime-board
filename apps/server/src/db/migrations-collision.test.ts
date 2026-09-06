@@ -118,6 +118,142 @@ function restoreSavedViewsAfterRejectedSchema(db: Database): void {
   `);
 }
 
+function addLegacySavedViewsNameConstraint(db: Database): void {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP INDEX IF EXISTS idx_saved_views_workspace_id;
+    DROP INDEX IF EXISTS idx_saved_views_scope;
+    DROP INDEX IF EXISTS idx_saved_views_owner;
+    ALTER TABLE saved_views RENAME TO _prb633_saved_views;
+    CREATE TABLE saved_views (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('personal', 'team', 'workspace')),
+      team_id TEXT,
+      owner_id TEXT NOT NULL REFERENCES actors(id),
+      filter_json TEXT NOT NULL DEFAULT '{}',
+      order_by TEXT NOT NULL DEFAULT 'CREATED_DESC',
+      group_by TEXT NOT NULL DEFAULT 'state',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      workspace_id TEXT REFERENCES workspace(id) ON DELETE CASCADE,
+      UNIQUE (workspace_id, id),
+      UNIQUE (workspace_id, name),
+      CHECK ((scope = 'team' AND team_id IS NOT NULL) OR (scope != 'team' AND team_id IS NULL)),
+      FOREIGN KEY (workspace_id, team_id) REFERENCES teams(workspace_id, id)
+    );
+    INSERT INTO saved_views
+      (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+       created_at, updated_at, archived_at, columns_json, workspace_id)
+    SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+           created_at, updated_at, archived_at, columns_json, workspace_id
+      FROM _prb633_saved_views;
+    DROP TABLE _prb633_saved_views;
+    CREATE UNIQUE INDEX idx_saved_views_workspace_id ON saved_views(workspace_id, id);
+    CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
+    CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+function removeViewPreferencesScopeCheck(db: Database): void {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP INDEX IF EXISTS idx_view_preferences_key;
+    DROP INDEX IF EXISTS idx_view_preferences_view;
+    DROP INDEX IF EXISTS idx_view_preferences_actor;
+    ALTER TABLE view_preferences RENAME TO _prb633_view_preferences;
+    CREATE TABLE view_preferences (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+      view_id TEXT,
+      actor_id TEXT,
+      view_type TEXT NOT NULL DEFAULT 'issue' CHECK (view_type IN ('issue', 'project', 'initiative', 'feed')),
+      scope TEXT NOT NULL CHECK (scope IN ('actor', 'workspace')),
+      layout TEXT NOT NULL DEFAULT 'list' CHECK (layout IN ('list', 'board')),
+      order_by TEXT NOT NULL DEFAULT 'UPDATED_DESC' CHECK (order_by IN ('CREATED_ASC', 'CREATED_DESC', 'UPDATED_ASC', 'UPDATED_DESC')),
+      group_by TEXT NOT NULL DEFAULT 'state' CHECK (group_by IN ('state', 'milestone', 'assignee', 'priority')),
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (workspace_id, id),
+      FOREIGN KEY (workspace_id, view_id) REFERENCES saved_views(workspace_id, id) ON DELETE CASCADE,
+      FOREIGN KEY (workspace_id, actor_id) REFERENCES workspace_memberships(workspace_id, actor_id) ON DELETE CASCADE
+    );
+    INSERT INTO view_preferences
+      SELECT * FROM _prb633_view_preferences;
+    DROP TABLE _prb633_view_preferences;
+    CREATE UNIQUE INDEX idx_view_preferences_key
+      ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, ''));
+    CREATE INDEX idx_view_preferences_view ON view_preferences(workspace_id, view_id);
+    CREATE INDEX idx_view_preferences_actor ON view_preferences(workspace_id, actor_id);
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+function removeViewPreferencesActorForeignKey(db: Database): void {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP INDEX IF EXISTS idx_view_preferences_key;
+    DROP INDEX IF EXISTS idx_view_preferences_view;
+    DROP INDEX IF EXISTS idx_view_preferences_actor;
+    ALTER TABLE view_preferences RENAME TO _prb633_view_preferences;
+    CREATE TABLE view_preferences (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+      view_id TEXT,
+      actor_id TEXT,
+      view_type TEXT NOT NULL DEFAULT 'issue' CHECK (view_type IN ('issue', 'project', 'initiative', 'feed')),
+      scope TEXT NOT NULL CHECK (scope IN ('actor', 'workspace')),
+      layout TEXT NOT NULL DEFAULT 'list' CHECK (layout IN ('list', 'board')),
+      order_by TEXT NOT NULL DEFAULT 'UPDATED_DESC' CHECK (order_by IN ('CREATED_ASC', 'CREATED_DESC', 'UPDATED_ASC', 'UPDATED_DESC')),
+      group_by TEXT NOT NULL DEFAULT 'state' CHECK (group_by IN ('state', 'milestone', 'assignee', 'priority')),
+      columns_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (workspace_id, id),
+      CHECK ((scope = 'actor' AND actor_id IS NOT NULL) OR (scope = 'workspace' AND actor_id IS NULL)),
+      FOREIGN KEY (workspace_id, view_id) REFERENCES saved_views(workspace_id, id) ON DELETE CASCADE
+    );
+    INSERT INTO view_preferences SELECT * FROM _prb633_view_preferences;
+    DROP TABLE _prb633_view_preferences;
+    CREATE UNIQUE INDEX idx_view_preferences_key
+      ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, ''));
+    CREATE INDEX idx_view_preferences_view ON view_preferences(workspace_id, view_id);
+    CREATE INDEX idx_view_preferences_actor ON view_preferences(workspace_id, actor_id);
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+function removeViewSubscriptionsActorForeignKey(db: Database): void {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP INDEX IF EXISTS idx_view_subscriptions_view;
+    DROP INDEX IF EXISTS idx_view_subscriptions_actor;
+    ALTER TABLE view_subscriptions RENAME TO _prb633_view_subscriptions;
+    CREATE TABLE view_subscriptions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      view_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      issue_changes INTEGER NOT NULL DEFAULT 1 CHECK (issue_changes IN (0, 1)),
+      slack INTEGER NOT NULL DEFAULT 1 CHECK (slack IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (workspace_id, view_id, actor_id),
+      CHECK (issue_changes = 1 OR slack = 1),
+      FOREIGN KEY (workspace_id, view_id) REFERENCES saved_views(workspace_id, id) ON DELETE CASCADE
+    );
+    INSERT INTO view_subscriptions SELECT * FROM _prb633_view_subscriptions;
+    DROP TABLE _prb633_view_subscriptions;
+    CREATE INDEX idx_view_subscriptions_view ON view_subscriptions(workspace_id, view_id);
+    CREATE INDEX idx_view_subscriptions_actor ON view_subscriptions(workspace_id, actor_id);
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
 function seedLegacyNotificationAndViewData(db: Database): void {
   bootstrap(db);
   const workspace = db.query("SELECT id FROM workspace LIMIT 1").get() as { id: string };
@@ -820,6 +956,253 @@ describe("colisión de migraciones SQLite", () => {
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();
+    }
+  });
+
+  it("falla cerrado en una Views legacy marcada como 0032 con CHECK eliminado y actor_id NULL", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      removeViewPreferencesScopeCheck(db);
+      db.query(
+        "UPDATE view_preferences SET actor_id = NULL WHERE id = 'view-preference-legacy'",
+      ).run();
+      const beforeRows = db.query("SELECT * FROM view_preferences ORDER BY id").all();
+      const beforeSchema = db
+        .query(
+          `SELECT type, name, sql FROM sqlite_master
+           WHERE tbl_name = 'view_preferences' OR name = 'view_preferences'
+           ORDER BY type, name`,
+        )
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      let firstError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(/legacy Views migration.*CHECK|actor scope/i);
+      expect(db.query("SELECT * FROM view_preferences ORDER BY id").all()).toEqual(beforeRows);
+      expect(
+        db
+          .query(
+            `SELECT type, name, sql FROM sqlite_master
+             WHERE tbl_name = 'view_preferences' OR name = 'view_preferences'
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+
+      let secondError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        secondError = error instanceof Error ? error.message : String(error);
+      }
+      expect(secondError).toBe(firstError);
+      expect(db.query("SELECT * FROM view_preferences ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("conserva una UNIQUE de tabla representada por sqlite_autoindex durante el rebuild", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      bootstrap(db);
+      db.exec(`
+        INSERT INTO saved_views
+          (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+           created_at, updated_at, archived_at, columns_json, workspace_id)
+        SELECT 'view-unique', 'Unique legacy view', 'team', teams.id, actors.id, '{}',
+               'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', workspace.id
+          FROM workspace
+          JOIN actors ON actors.name = 'admin'
+          JOIN teams ON teams.workspace_id = workspace.id
+         LIMIT 1;
+      `);
+      addLegacySavedViewsNameConstraint(db);
+      expect(
+        db
+          .query(
+            `SELECT 1 FROM pragma_index_list('saved_views')
+             WHERE origin = 'u' AND name LIKE 'sqlite_autoindex_saved_views_%'
+             LIMIT 1`,
+          )
+          .get(),
+      ).not.toBeNull();
+
+      migrate(db);
+      expect(
+        db
+          .query(
+            `SELECT 1 FROM pragma_index_list('saved_views')
+             WHERE name = 'idx_saved_views_legacy_unique_workspace_id_name'
+               AND "unique" = 1
+             LIMIT 1`,
+          )
+          .get(),
+      ).not.toBeNull();
+
+      expect(() =>
+        db
+          .query(
+            `INSERT INTO saved_views
+            (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+             created_at, updated_at, archived_at, columns_json, workspace_id)
+          SELECT 'view-unique-duplicate', 'Unique legacy view', 'team', teams.id, actors.id, '{}',
+                 'CREATED_DESC', 'state', '2026-01-02', '2026-01-02', NULL, '[]', workspace.id
+            FROM workspace
+            JOIN actors ON actors.name = 'admin'
+            JOIN teams ON teams.workspace_id = workspace.id
+           LIMIT 1`,
+          )
+          .run(),
+      ).toThrow();
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("valida datos cuando los markers 32/33 ya existen y repite el mismo fallo sin DDL", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      migrate(db);
+      db.exec("PRAGMA ignore_check_constraints = ON");
+      db.query(
+        "UPDATE view_subscriptions SET issue_changes = 0, slack = 0 WHERE id = 'view-subscription-legacy'",
+      ).run();
+      db.exec("PRAGMA ignore_check_constraints = OFF");
+
+      const beforeRows = db.query("SELECT * FROM view_subscriptions ORDER BY id").all();
+      const beforeSchema = db
+        .query(
+          `SELECT type, name, sql FROM sqlite_master
+           WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+              OR name IN ('idx_view_preferences_key', 'idx_view_preferences_view',
+                          'idx_view_preferences_actor', 'idx_view_subscriptions_view',
+                          'idx_view_subscriptions_actor')
+           ORDER BY type, name`,
+        )
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      let firstError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(/migration 0033.*incompatible|invalid channel/i);
+      expect(db.query("SELECT * FROM view_subscriptions ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db
+          .query(
+            `SELECT type, name, sql FROM sqlite_master
+             WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+                OR name IN ('idx_view_preferences_key', 'idx_view_preferences_view',
+                            'idx_view_preferences_actor', 'idx_view_subscriptions_view',
+                            'idx_view_subscriptions_actor')
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual(beforeSchema);
+
+      let secondError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        secondError = error instanceof Error ? error.message : String(error);
+      }
+      expect(secondError).toBe(firstError);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+
+      db.query(
+        "UPDATE view_subscriptions SET issue_changes = 1 WHERE id = 'view-subscription-legacy'",
+      ).run();
+      migrate(db);
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza FKs y defaults alterados en cada tabla de Views antes de aceptar 0033", () => {
+    const cases = [
+      {
+        alter: removeViewPreferencesActorForeignKey,
+        table: "view_preferences",
+        expected: /view_preferences.*missing foreign keys/i,
+      },
+      {
+        alter: removeViewSubscriptionsActorForeignKey,
+        table: "view_subscriptions",
+        expected: /view_subscriptions.*missing foreign keys/i,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const db = openDatabase(":memory:");
+      try {
+        testCase.alter(db);
+        const beforeSchema = db
+          .query(
+            `SELECT type, name, sql FROM sqlite_master
+             WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+                OR name IN ('idx_view_preferences_key', 'idx_view_preferences_view',
+                            'idx_view_preferences_actor', 'idx_view_subscriptions_view',
+                            'idx_view_subscriptions_actor')
+             ORDER BY type, name`,
+          )
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+        expect(() => migrate(db)).toThrow(testCase.expected);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(
+          db
+            .query(
+              `SELECT type, name, sql FROM sqlite_master
+               WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+                  OR name IN ('idx_view_preferences_key', 'idx_view_preferences_view',
+                              'idx_view_preferences_actor', 'idx_view_subscriptions_view',
+                              'idx_view_subscriptions_actor')
+               ORDER BY type, name`,
+            )
+            .all(),
+        ).toEqual(beforeSchema);
+        expect(
+          db
+            .query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1`)
+            .get(testCase.table),
+        ).toEqual({ name: testCase.table });
+        expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      } finally {
+        db.close();
+      }
     }
   });
 });

@@ -311,6 +311,7 @@ interface SavedViewsForeignKeyDefinition {
   columns: readonly SavedViewsForeignKeyColumn[];
   onUpdate: string;
   onDelete: string;
+  match?: string;
 }
 
 interface SavedViewsForeignKeyRow extends SavedViewsForeignKeyColumn {
@@ -319,6 +320,7 @@ interface SavedViewsForeignKeyRow extends SavedViewsForeignKeyColumn {
   table: string;
   on_update: string;
   on_delete: string;
+  match: string;
 }
 
 const SAVED_VIEWS_REQUIRED_FOREIGN_KEYS = [
@@ -327,12 +329,14 @@ const SAVED_VIEWS_REQUIRED_FOREIGN_KEYS = [
     columns: [{ from: "owner_id", to: "id" }],
     onUpdate: "NO ACTION",
     onDelete: "NO ACTION",
+    match: "NONE",
   },
   {
     table: "workspace",
     columns: [{ from: "workspace_id", to: "id" }],
     onUpdate: "NO ACTION",
     onDelete: "CASCADE",
+    match: "NONE",
   },
   {
     table: "teams",
@@ -342,6 +346,7 @@ const SAVED_VIEWS_REQUIRED_FOREIGN_KEYS = [
     ],
     onUpdate: "NO ACTION",
     onDelete: "NO ACTION",
+    match: "NONE",
   },
 ] satisfies readonly SavedViewsForeignKeyDefinition[];
 
@@ -364,49 +369,73 @@ const VIEWS_MIGRATION_REQUIRED_TABLES = [
   "workspace_memberships",
 ];
 
-const SAVED_VIEWS_TARGET_COLUMNS = [
-  "id",
-  "name",
-  "scope",
-  "team_id",
-  "project_id",
-  "initiative_id",
-  "owner_id",
-  "filter_json",
-  "order_by",
-  "group_by",
-  "created_at",
-  "updated_at",
-  "archived_at",
-  "columns_json",
-  "workspace_id",
-];
+interface ColumnContract {
+  name: string;
+  type: string;
+  notNull: number;
+  defaultValue: string | null;
+  primaryKey: number;
+}
 
-const VIEW_PREFERENCES_TARGET_COLUMNS = [
-  "id",
-  "workspace_id",
-  "view_id",
-  "actor_id",
-  "view_type",
-  "scope",
-  "layout",
-  "order_by",
-  "group_by",
-  "columns_json",
-  "created_at",
-  "updated_at",
-];
+const LEGACY_SAVED_VIEWS_COLUMN_CONTRACT = [
+  { name: "id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 1 },
+  { name: "name", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "scope", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "team_id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+  { name: "owner_id", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "filter_json", type: "TEXT", notNull: 1, defaultValue: "'{}'", primaryKey: 0 },
+  { name: "order_by", type: "TEXT", notNull: 1, defaultValue: "'CREATED_DESC'", primaryKey: 0 },
+  { name: "group_by", type: "TEXT", notNull: 1, defaultValue: "'state'", primaryKey: 0 },
+  { name: "created_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "updated_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "archived_at", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+  { name: "columns_json", type: "TEXT", notNull: 1, defaultValue: "'[]'", primaryKey: 0 },
+  { name: "workspace_id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+] satisfies readonly ColumnContract[];
 
-const VIEW_SUBSCRIPTIONS_TARGET_COLUMNS = [
-  "id",
-  "workspace_id",
-  "view_id",
-  "actor_id",
-  "issue_changes",
-  "slack",
-  "created_at",
-  "updated_at",
-];
+const SAVED_VIEWS_TARGET_COLUMN_CONTRACT = [
+  { name: "id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 1 },
+  { name: "name", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "scope", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "team_id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+  { name: "project_id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+  { name: "initiative_id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+  { name: "owner_id", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "filter_json", type: "TEXT", notNull: 1, defaultValue: "'{}'", primaryKey: 0 },
+  { name: "order_by", type: "TEXT", notNull: 1, defaultValue: "'CREATED_DESC'", primaryKey: 0 },
+  { name: "group_by", type: "TEXT", notNull: 1, defaultValue: "'state'", primaryKey: 0 },
+  { name: "created_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "updated_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "archived_at", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+  { name: "columns_json", type: "TEXT", notNull: 1, defaultValue: "'[]'", primaryKey: 0 },
+  { name: "workspace_id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+] satisfies readonly ColumnContract[];
+
+const VIEW_PREFERENCES_COLUMN_CONTRACT = [
+  { name: "id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 1 },
+  { name: "workspace_id", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "view_id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+  { name: "actor_id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+  { name: "view_type", type: "TEXT", notNull: 1, defaultValue: "'issue'", primaryKey: 0 },
+  { name: "scope", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "layout", type: "TEXT", notNull: 1, defaultValue: "'list'", primaryKey: 0 },
+  { name: "order_by", type: "TEXT", notNull: 1, defaultValue: "'UPDATED_DESC'", primaryKey: 0 },
+  { name: "group_by", type: "TEXT", notNull: 1, defaultValue: "'state'", primaryKey: 0 },
+  { name: "columns_json", type: "TEXT", notNull: 1, defaultValue: "'[]'", primaryKey: 0 },
+  { name: "created_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "updated_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+] satisfies readonly ColumnContract[];
+
+const VIEW_SUBSCRIPTIONS_COLUMN_CONTRACT = [
+  { name: "id", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 1 },
+  { name: "workspace_id", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "view_id", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "actor_id", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "issue_changes", type: "INTEGER", notNull: 1, defaultValue: "1", primaryKey: 0 },
+  { name: "slack", type: "INTEGER", notNull: 1, defaultValue: "0", primaryKey: 0 },
+  { name: "created_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "updated_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+] satisfies readonly ColumnContract[];
 
 const NOTIFICATION_PREFERENCES_COLUMNS = [
   "workspace_id",
@@ -425,27 +454,42 @@ interface MigrationMarkerRow {
   applied_at: string;
 }
 
-interface IndexDefinitionRow {
+interface IndexListRow {
   name: string;
-  sql: string;
-}
-
-interface IndexRow {
   unique_value: number;
+  origin: string;
+  partial: number;
 }
 
-interface IndexColumnRow {
+interface IndexTermRow {
   seqno: number;
   name: string | null;
+  desc: number;
+  coll: string;
+  key: number;
+}
+
+/**
+ * SQLite no conserva SQL para los índices de PRIMARY KEY/UNIQUE de tabla.
+ * Los términos de PRAGMA son la representación canónica que permite
+ * reconstruir una unicidad arbitraria sin interpolar SQL legacy.
+ */
+interface SavedViewsIndexDefinition extends IndexListRow {
+  sql: string | null;
+  terms: readonly IndexTermRow[];
 }
 
 interface TableInfoRow {
+  cid: number;
   name: string;
+  type: string;
+  notnull: number;
+  dflt_value: string | null;
   pk: number;
 }
 
 interface SqlDefinitionRow {
-  sql: string;
+  sql: string | null;
 }
 
 const VIEWS_MIGRATION_ARTIFACTS = [
@@ -459,6 +503,114 @@ const VIEWS_MIGRATION_ARTIFACTS = [
   "idx_view_subscriptions_actor",
 ];
 
+const SAVED_VIEWS_TARGET_FOREIGN_KEYS = [
+  ...SAVED_VIEWS_REQUIRED_FOREIGN_KEYS,
+  {
+    table: "projects",
+    columns: [
+      { from: "workspace_id", to: "workspace_id" },
+      { from: "project_id", to: "id" },
+    ],
+    onUpdate: "NO ACTION",
+    onDelete: "NO ACTION",
+    match: "NONE",
+  },
+  {
+    table: "initiatives",
+    columns: [
+      { from: "workspace_id", to: "workspace_id" },
+      { from: "initiative_id", to: "id" },
+    ],
+    onUpdate: "NO ACTION",
+    onDelete: "NO ACTION",
+    match: "NONE",
+  },
+] satisfies readonly SavedViewsForeignKeyDefinition[];
+
+const VIEW_PREFERENCES_REQUIRED_FOREIGN_KEYS = [
+  {
+    table: "workspace",
+    columns: [{ from: "workspace_id", to: "id" }],
+    onUpdate: "NO ACTION",
+    onDelete: "CASCADE",
+    match: "NONE",
+  },
+  {
+    table: "saved_views",
+    columns: [
+      { from: "workspace_id", to: "workspace_id" },
+      { from: "view_id", to: "id" },
+    ],
+    onUpdate: "NO ACTION",
+    onDelete: "CASCADE",
+    match: "NONE",
+  },
+  {
+    table: "workspace_memberships",
+    columns: [
+      { from: "workspace_id", to: "workspace_id" },
+      { from: "actor_id", to: "actor_id" },
+    ],
+    onUpdate: "NO ACTION",
+    onDelete: "CASCADE",
+    match: "NONE",
+  },
+] satisfies readonly SavedViewsForeignKeyDefinition[];
+
+const VIEW_SUBSCRIPTIONS_REQUIRED_FOREIGN_KEYS = [
+  {
+    table: "saved_views",
+    columns: [
+      { from: "workspace_id", to: "workspace_id" },
+      { from: "view_id", to: "id" },
+    ],
+    onUpdate: "NO ACTION",
+    onDelete: "CASCADE",
+    match: "NONE",
+  },
+  {
+    table: "workspace_memberships",
+    columns: [
+      { from: "workspace_id", to: "workspace_id" },
+      { from: "actor_id", to: "actor_id" },
+    ],
+    onUpdate: "NO ACTION",
+    onDelete: "CASCADE",
+    match: "NONE",
+  },
+] satisfies readonly SavedViewsForeignKeyDefinition[];
+
+const VIEWS_MIGRATION_CHECKS = {
+  saved_views: [
+    "scope IN ('personal', 'team', 'workspace', 'project', 'initiative')",
+    "(scope = 'team' AND team_id IS NOT NULL AND project_id IS NULL AND initiative_id IS NULL) OR (scope = 'project' AND project_id IS NOT NULL AND team_id IS NULL AND initiative_id IS NULL) OR (scope = 'initiative' AND initiative_id IS NOT NULL AND team_id IS NULL AND project_id IS NULL) OR (scope IN ('personal', 'workspace') AND team_id IS NULL AND project_id IS NULL AND initiative_id IS NULL)",
+  ],
+  view_preferences: [
+    "view_type IN ('issue', 'project', 'initiative', 'feed')",
+    "scope IN ('actor', 'workspace')",
+    "layout IN ('list', 'board')",
+    "order_by IN ('CREATED_ASC', 'CREATED_DESC', 'UPDATED_ASC', 'UPDATED_DESC')",
+    "group_by IN ('state', 'milestone', 'assignee', 'priority')",
+    "(scope = 'actor' AND actor_id IS NOT NULL) OR (scope = 'workspace' AND actor_id IS NULL)",
+  ],
+  view_subscriptions: [
+    "issue_changes IN (0, 1)",
+    "slack IN (0, 1)",
+    "issue_changes = 1 OR slack = 1",
+  ],
+} satisfies Record<string, readonly string[]>;
+
+const LEGACY_SAVED_VIEWS_CHECKS = [
+  "scope IN ('personal', 'team', 'workspace')",
+  "(scope = 'team' AND team_id IS NOT NULL) OR (scope != 'team' AND team_id IS NULL)",
+] satisfies readonly string[];
+
+const VIEWS_MIGRATION_UNIQUE_CONSTRAINTS = {
+  saved_views: ["workspace_id", "id"],
+  view_preferences: ["workspace_id", "id"],
+  view_subscriptions: ["workspace_id", "view_id", "actor_id"],
+} satisfies Record<string, readonly string[]>;
+
 function hasTable(db: Database, table: string): boolean {
   return Boolean(
     db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1").get(table),
@@ -469,17 +621,51 @@ function hasSchemaObject(db: Database, name: string): boolean {
   return Boolean(db.query("SELECT 1 FROM sqlite_master WHERE name = ?1 LIMIT 1").get(name));
 }
 
-function hasColumn(db: Database, table: string, column: string): boolean {
-  return Boolean(
-    db.query(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?1 LIMIT 1`).get(column),
-  );
+function tableInfo(db: Database, table: string): TableInfoRow[] {
+  return db
+    .query<TableInfoRow, SQLQueryBindings[]>(
+      'SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info(?1) ORDER BY cid',
+    )
+    .all(table);
 }
 
-function hasPrimaryKey(db: Database, table: string, column: string): boolean {
-  return Boolean(
-    db
-      .query(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?1 AND pk = 1 LIMIT 1`)
-      .get(column),
+function hasColumn(db: Database, table: string, column: string): boolean {
+  return tableInfo(db, table).some((value) => value.name === column);
+}
+
+function indexList(db: Database, table: string): IndexListRow[] {
+  return db
+    .query<IndexListRow, SQLQueryBindings[]>(
+      'SELECT name, "unique" AS unique_value, origin, partial FROM pragma_index_list(?1) ORDER BY seq',
+    )
+    .all(table);
+}
+
+function indexTerms(db: Database, name: string): IndexTermRow[] {
+  return db
+    .query<IndexTermRow, SQLQueryBindings[]>(
+      "SELECT seqno, name, desc, coll, key FROM pragma_index_xinfo(?1) WHERE key = 1 ORDER BY seqno",
+    )
+    .all(name);
+}
+
+function indexHasColumns(
+  index: IndexListRow,
+  terms: readonly IndexTermRow[],
+  columns: readonly string[],
+  unique: boolean,
+): boolean {
+  return (
+    index.unique_value === (unique ? 1 : 0) &&
+    index.partial === 0 &&
+    terms.length === columns.length &&
+    terms.every(
+      (term, position) =>
+        term.seqno === position &&
+        term.name === columns[position] &&
+        term.desc === 0 &&
+        term.coll === "BINARY",
+    )
   );
 }
 
@@ -490,32 +676,34 @@ function hasNamedIndexWithColumns(
   columns: readonly string[],
   unique: boolean,
 ): boolean {
-  const index = db
-    .query<IndexRow, SQLQueryBindings[]>(
-      `SELECT "unique" AS unique_value FROM pragma_index_list('${table}') WHERE name = ?1`,
-    )
-    .get(name);
-  if (!index || index.unique_value !== (unique ? 1 : 0)) return false;
+  const index = indexList(db, table).find((value) => value.name === name);
+  return Boolean(index && indexHasColumns(index, indexTerms(db, name), columns, unique));
+}
 
-  const indexColumns = db
-    .query<IndexColumnRow, SQLQueryBindings[]>(
-      `SELECT seqno, name FROM pragma_index_info('${name}') ORDER BY seqno`,
-    )
-    .all();
-  return (
-    indexColumns.length === columns.length &&
-    indexColumns.every(
-      (column, position) => column.seqno === position && column.name === columns[position],
-    )
+function hasIndexWithColumns(
+  db: Database,
+  table: string,
+  columns: readonly string[],
+  unique: boolean,
+): boolean {
+  return indexList(db, table).some((index) =>
+    indexHasColumns(index, indexTerms(db, index.name), columns, unique),
   );
 }
 
-function hasPrimaryKeyColumns(db: Database, table: string, columns: string[]): boolean {
-  const primaryKeyColumns = db
-    .query<TableInfoRow, SQLQueryBindings[]>(
-      `SELECT name, pk FROM pragma_table_info('${table}') WHERE pk > 0 ORDER BY pk`,
-    )
-    .all();
+function hasUniqueConstraintWithColumns(
+  db: Database,
+  table: string,
+  columns: readonly string[],
+): boolean {
+  return indexList(db, table).some(
+    (index) =>
+      index.origin === "u" && indexHasColumns(index, indexTerms(db, index.name), columns, true),
+  );
+}
+
+function hasPrimaryKeyColumns(db: Database, table: string, columns: readonly string[]): boolean {
+  const primaryKeyColumns = tableInfo(db, table).filter((column) => column.pk > 0);
   return (
     primaryKeyColumns.length === columns.length &&
     primaryKeyColumns.every((column, position) => {
@@ -526,9 +714,7 @@ function hasPrimaryKeyColumns(db: Database, table: string, columns: string[]): b
 }
 
 function hasNamedIndex(db: Database, table: string, name: string): boolean {
-  return Boolean(
-    db.query(`SELECT 1 FROM pragma_index_list('${table}') WHERE name = ?1 LIMIT 1`).get(name),
-  );
+  return indexList(db, table).some((index) => index.name === name);
 }
 
 function hasTrigger(db: Database, name: string): boolean {
@@ -542,67 +728,132 @@ function normalizedSql(sql: string): string {
 }
 
 function hasViewPreferencesKeyIndex(db: Database): boolean {
+  const index = indexList(db, "view_preferences").find(
+    (value) => value.name === "idx_view_preferences_key",
+  );
   const definition = db
     .query<SqlDefinitionRow, SQLQueryBindings[]>(
       "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
     )
     .get("idx_view_preferences_key");
-  if (!definition) return false;
+  if (!index || index.unique_value !== 1 || index.partial !== 0 || !definition?.sql) return false;
   const sql = normalizedSql(definition.sql);
-  return (
-    sql.includes("createuniqueindexidx_view_preferences_keyonview_preferences") &&
-    sql.includes("ifnull(view_id,'')") &&
-    sql.includes("ifnull(actor_id,'')")
+  return sql.includes(
+    normalizedSql(
+      "ON view_preferences(workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, ''))",
+    ),
   );
 }
 
-function savedViewsIndexDefinitions(db: Database): IndexDefinitionRow[] {
-  return db
-    .query<IndexDefinitionRow, SQLQueryBindings[]>(
-      `SELECT indexes.name, sqlite_master.sql
-       FROM pragma_index_list('saved_views') AS indexes
-       JOIN sqlite_master
-         ON sqlite_master.type = 'index'
-        AND sqlite_master.name = indexes.name
-       WHERE sqlite_master.sql IS NOT NULL
-       ORDER BY indexes.name`,
-    )
-    .all();
+function savedViewsIndexDefinitions(db: Database): SavedViewsIndexDefinition[] {
+  return indexList(db, "saved_views").map((index) => {
+    const definition = db
+      .query<SqlDefinitionRow, SQLQueryBindings[]>(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+      )
+      .get(index.name);
+    return {
+      ...index,
+      sql: definition?.sql ?? null,
+      terms: indexTerms(db, index.name),
+    };
+  });
 }
 
-function restoreSavedViewsIndexes(db: Database, definitions: IndexDefinitionRow[]): void {
-  for (const definition of definitions) {
-    if (!hasNamedIndex(db, "saved_views", definition.name)) db.exec(definition.sql);
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+function equivalentIndex(
+  db: Database,
+  table: string,
+  terms: readonly IndexTermRow[],
+  unique: boolean,
+  origin?: string,
+): boolean {
+  return indexList(db, table).some((index) => {
+    if (origin !== undefined && index.origin !== origin) return false;
+    const actualTerms = indexTerms(db, index.name);
+    return (
+      index.unique_value === (unique ? 1 : 0) &&
+      actualTerms.length === terms.length &&
+      actualTerms.every((term, position) => {
+        const expected = terms[position];
+        return (
+          expected !== undefined &&
+          term.seqno === expected.seqno &&
+          term.name === expected.name &&
+          term.desc === expected.desc &&
+          term.coll === expected.coll
+        );
+      })
+    );
+  });
+}
+
+function generatedLegacyIndexName(db: Database, terms: readonly IndexTermRow[]): string {
+  const suffix =
+    terms
+      .map((term) => term.name ?? "expression")
+      .join("_")
+      .replace(/[^a-zA-Z0-9_]/g, "_")
+      .replace(/^_+|_+$/g, "") || "columns";
+  const base = `idx_saved_views_legacy_unique_${suffix}`;
+  if (!hasSchemaObject(db, base)) return base;
+  for (let suffixNumber = 2; ; suffixNumber += 1) {
+    const candidate = `${base}_${suffixNumber}`;
+    if (!hasSchemaObject(db, candidate)) return candidate;
   }
 }
 
-function hasIndexWithColumns(
+function savedViewsIndexProblems(definitions: readonly SavedViewsIndexDefinition[]): string[] {
+  return definitions
+    .filter(
+      (definition) =>
+        definition.sql === null &&
+        (definition.partial !== 0 ||
+          definition.terms.length === 0 ||
+          definition.terms.some((term) => term.name === null)),
+    )
+    .map((definition) => `index ${definition.name} has no recoverable column definition`);
+}
+
+function restoreSavedViewsIndexes(
   db: Database,
-  table: string,
-  columns: readonly string[],
-  unique: boolean,
-): boolean {
-  const columnJoins = columns
-    .map(
-      (_, position) => `
-        JOIN pragma_index_info(indexes.name) AS index_column_${position}
-          ON index_column_${position}.seqno = ${position}
-         AND index_column_${position}.name = ?${position + 3}`,
-    )
-    .join("\n");
-  const result = db
-    .query(
-      `SELECT 1
-       FROM pragma_index_list('${table}') AS indexes
-       ${columnJoins}
-       WHERE indexes."unique" = ?1
-         AND NOT EXISTS (
-           SELECT 1 FROM pragma_index_info(indexes.name) WHERE seqno >= ?2
-         )
-       LIMIT 1`,
-    )
-    .get(unique ? 1 : 0, columns.length, ...columns);
-  return Boolean(result);
+  definitions: readonly SavedViewsIndexDefinition[],
+): void {
+  for (const definition of definitions) {
+    // Las constraints de tabla llegan con sql=NULL y origin u/pk. Si la tabla
+    // canónica ya provee ese índice, se conserva su contrato; las demás se
+    // materializan como índices explícitos con columnas de PRAGMA.
+
+    const unique = definition.unique_value === 1;
+    if (definition.sql !== null) {
+      if (!hasSchemaObject(db, definition.name)) db.exec(definition.sql);
+      continue;
+    }
+    if (equivalentIndex(db, "saved_views", definition.terms, unique)) continue;
+    if (definition.partial !== 0 || definition.terms.length === 0) {
+      throw new Error(`Cannot restore saved_views index ${definition.name} safely`);
+    }
+    if (definition.terms.some((term) => term.name === null)) {
+      throw new Error(`Cannot restore saved_views index ${definition.name} safely`);
+    }
+    const indexName = definition.name.startsWith("sqlite_autoindex_")
+      ? generatedLegacyIndexName(db, definition.terms)
+      : definition.name;
+    if (hasSchemaObject(db, indexName)) continue;
+    const terms = definition.terms
+      .map((term) => {
+        const column = quoteIdentifier(term.name ?? "");
+        const collation = quoteIdentifier(term.coll);
+        return `${column} COLLATE ${collation}${term.desc === 1 ? " DESC" : ""}`;
+      })
+      .join(", ");
+    db.exec(
+      `CREATE ${unique ? "UNIQUE " : ""}INDEX ${quoteIdentifier(indexName)} ON saved_views(${terms})`,
+    );
+  }
 }
 
 function isSavedViewsForeignKeyRow(value: unknown): value is SavedViewsForeignKeyRow {
@@ -614,7 +865,8 @@ function isSavedViewsForeignKeyRow(value: unknown): value is SavedViewsForeignKe
     !("from" in value) ||
     !("to" in value) ||
     !("on_update" in value) ||
-    !("on_delete" in value)
+    !("on_delete" in value) ||
+    !("match" in value)
   ) {
     return false;
   }
@@ -625,13 +877,14 @@ function isSavedViewsForeignKeyRow(value: unknown): value is SavedViewsForeignKe
     typeof value.from === "string" &&
     typeof value.to === "string" &&
     typeof value.on_update === "string" &&
-    typeof value.on_delete === "string"
+    typeof value.on_delete === "string" &&
+    typeof value.match === "string"
   );
 }
 
-function savedViewsForeignKeyGroups(db: Database): SavedViewsForeignKeyRow[][] {
+function foreignKeyGroups(db: Database, table: string): SavedViewsForeignKeyRow[][] {
   const groups = new Map<number, SavedViewsForeignKeyRow[]>();
-  for (const value of db.query("PRAGMA foreign_key_list('saved_views')").all()) {
+  for (const value of db.query("SELECT * FROM pragma_foreign_key_list(?1)").all(table)) {
     if (!isSavedViewsForeignKeyRow(value)) return [];
     const group = groups.get(value.id);
     if (group) {
@@ -643,6 +896,10 @@ function savedViewsForeignKeyGroups(db: Database): SavedViewsForeignKeyRow[][] {
   return [...groups.values()].map((group) =>
     [...group].sort((left, right) => left.seq - right.seq),
   );
+}
+
+function savedViewsForeignKeyGroups(db: Database): SavedViewsForeignKeyRow[][] {
+  return foreignKeyGroups(db, "saved_views");
 }
 
 function matchesSavedViewsForeignKey(
@@ -659,7 +916,8 @@ function matchesSavedViewsForeignKey(
       row.from === expectedColumn.from &&
       row.to === expectedColumn.to &&
       row.on_update === expected.onUpdate &&
-      row.on_delete === expected.onDelete
+      row.on_delete === expected.onDelete &&
+      (expected.match === undefined || row.match === expected.match)
     );
   });
 }
@@ -676,11 +934,104 @@ function describeSavedViewsForeignKey(rows: readonly SavedViewsForeignKeyRow[]):
 function hasSavedViewsForeignKey(
   db: Database,
   foreignKey: SavedViewsForeignKeyDefinition,
+  groups = savedViewsForeignKeyGroups(db),
 ): boolean {
-  const matchingGroups = savedViewsForeignKeyGroups(db).filter((rows) =>
-    matchesSavedViewsForeignKey(rows, foreignKey),
-  );
+  const matchingGroups = groups.filter((rows) => matchesSavedViewsForeignKey(rows, foreignKey));
   return matchingGroups.length === 1;
+}
+
+function normalizedContractValue(value: string | null): string | null {
+  return value === null ? null : normalizedSql(value);
+}
+
+function tableSql(db: Database, table: string): string | null {
+  return (
+    db
+      .query<SqlDefinitionRow, SQLQueryBindings[]>(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+      )
+      .get(table)?.sql ?? null
+  );
+}
+
+function columnContractProblems(
+  db: Database,
+  table: string,
+  expected: readonly ColumnContract[],
+): string[] {
+  if (!hasTable(db, table)) return [`missing table ${table}`];
+  const actual = tableInfo(db, table);
+  const problems: string[] = [];
+  if (actual.length !== expected.length) {
+    const expectedNames = new Set(expected.map((column) => column.name));
+    const unexpected = actual
+      .filter((column) => !expectedNames.has(column.name))
+      .map((column) => column.name);
+    if (unexpected.length > 0)
+      problems.push(`${table} has unexpected columns: ${unexpected.join(", ")}`);
+    if (actual.length < expected.length) {
+      const actualNames = new Set(actual.map((column) => column.name));
+      const missing = expected
+        .filter((column) => !actualNames.has(column.name))
+        .map((column) => column.name);
+      if (missing.length > 0) problems.push(`${table} missing columns: ${missing.join(", ")}`);
+    }
+  }
+  for (const [position, contract] of expected.entries()) {
+    const column = actual[position];
+    if (!column) {
+      if (actual.length >= expected.length) {
+        problems.push(`${table}.${contract.name} is missing from its canonical position`);
+      }
+      continue;
+    }
+    if (column.name !== contract.name) {
+      problems.push(`${table}.${contract.name} has an incompatible column order`);
+      continue;
+    }
+    if (column.type.trim().toUpperCase() !== contract.type) {
+      problems.push(`${table}.${contract.name} has type ${column.type}, expected ${contract.type}`);
+    }
+    if (column.notnull !== contract.notNull) {
+      problems.push(
+        `${table}.${contract.name} has NOT NULL=${column.notnull}, expected ${contract.notNull}`,
+      );
+    }
+    if (
+      normalizedContractValue(column.dflt_value) !== normalizedContractValue(contract.defaultValue)
+    ) {
+      problems.push(
+        `${table}.${contract.name} has default ${column.dflt_value ?? "NULL"}, expected ${contract.defaultValue ?? "NULL"}`,
+      );
+    }
+    if (column.pk !== contract.primaryKey) {
+      problems.push(
+        `${table}.${contract.name} has primary-key position ${column.pk}, expected ${contract.primaryKey}`,
+      );
+    }
+  }
+  return problems;
+}
+
+function checkConstraintProblems(db: Database, table: string, checks: readonly string[]): string[] {
+  const definition = tableSql(db, table);
+  if (definition === null) return [`missing table ${table}`];
+  const normalized = normalizedSql(definition);
+  return checks
+    .filter((expression) => !normalized.includes(normalizedSql(`CHECK (${expression})`)))
+    .map((expression) => `${table} is missing CHECK (${expression})`);
+}
+
+function canonicalTableProblems(
+  db: Database,
+  table: string,
+  columns: readonly ColumnContract[],
+  checks: readonly string[],
+): string[] {
+  return [
+    ...columnContractProblems(db, table, columns),
+    ...checkConstraintProblems(db, table, checks),
+  ];
 }
 
 function invalidSavedViewRows(db: Database): string[] {
@@ -721,6 +1072,12 @@ function invalidSavedViewRows(db: Database): string[] {
               LIMIT 1`,
     },
     {
+      description: "workspace context is missing in a multi-Workspace database",
+      query: `SELECT 1 FROM saved_views
+              WHERE workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+              LIMIT 1`,
+    },
+    {
       description: "team_id crosses the saved view Workspace",
       query: `SELECT 1 FROM saved_views
               WHERE team_id IS NOT NULL
@@ -747,8 +1104,7 @@ function validateViewsMigrationPrerequisites(db: Database): void {
   }
 
   const missingColumns = SAVED_VIEWS_MIGRATION_COLUMNS.filter(
-    (column) =>
-      !db.query("SELECT 1 FROM pragma_table_info('saved_views') WHERE name = ?1").get(column),
+    (column) => !hasColumn(db, "saved_views", column),
   );
   if (missingColumns.length > 0) {
     throw new Error(
@@ -767,43 +1123,25 @@ function validateViewsMigrationPrerequisites(db: Database): void {
     );
   }
 
-  const foreignKeyGroups = savedViewsForeignKeyGroups(db);
-  const missingForeignKeys = SAVED_VIEWS_REQUIRED_FOREIGN_KEYS.filter(
-    (foreignKey) => !hasSavedViewsForeignKey(db, foreignKey),
+  const schemaProblems = canonicalTableProblems(
+    db,
+    "saved_views",
+    LEGACY_SAVED_VIEWS_COLUMN_CONTRACT,
+    LEGACY_SAVED_VIEWS_CHECKS,
   );
-  const unexpectedForeignKeys = foreignKeyGroups.filter(
-    (rows) =>
-      !SAVED_VIEWS_REQUIRED_FOREIGN_KEYS.some((foreignKey) =>
-        matchesSavedViewsForeignKey(rows, foreignKey),
-      ),
+  const foreignKeySchemaProblems = foreignKeyProblems(
+    db,
+    "saved_views",
+    SAVED_VIEWS_REQUIRED_FOREIGN_KEYS,
   );
   const missingIndexes = VIEWS_MIGRATION_REQUIRED_INDEXES.filter(
     (index) => !hasIndexWithColumns(db, index.table, index.columns, index.unique),
   );
-  const missingPrimaryKey = !db
-    .query("SELECT 1 FROM pragma_table_info('saved_views') WHERE name = 'id' AND pk = 1")
-    .get();
   const invalidRows = invalidSavedViewRows(db);
+  const indexProblems = savedViewsIndexProblems(savedViewsIndexDefinitions(db));
   const problems = [
-    ...(missingPrimaryKey ? ["saved_views.id is not a primary key"] : []),
-    ...(missingForeignKeys.length > 0
-      ? [
-          `missing foreign keys: ${missingForeignKeys
-            .map(
-              (foreignKey) =>
-                `(${foreignKey.columns.map((column) => column.from).join(", ")}) -> ` +
-                `${foreignKey.table}(${foreignKey.columns.map((column) => column.to).join(", ")})`,
-            )
-            .join(", ")}`,
-        ]
-      : []),
-    ...(unexpectedForeignKeys.length > 0
-      ? [
-          `unexpected foreign keys: ${unexpectedForeignKeys
-            .map((rows) => describeSavedViewsForeignKey(rows))
-            .join(", ")}`,
-        ]
-      : []),
+    ...schemaProblems,
+    ...foreignKeySchemaProblems,
     ...(missingIndexes.length > 0
       ? [
           `missing indexes: ${missingIndexes
@@ -815,6 +1153,7 @@ function validateViewsMigrationPrerequisites(db: Database): void {
         ]
       : []),
     ...(invalidRows.length > 0 ? [`invalid rows: ${invalidRows.join(", ")}`] : []),
+    ...indexProblems,
   ];
   if (problems.length > 0) {
     throw new Error(
@@ -825,24 +1164,77 @@ function validateViewsMigrationPrerequisites(db: Database): void {
   }
 }
 
+function foreignKeyProblems(
+  db: Database,
+  table: string,
+  expected: readonly SavedViewsForeignKeyDefinition[],
+): string[] {
+  const groups =
+    table === "saved_views" ? savedViewsForeignKeyGroups(db) : foreignKeyGroups(db, table);
+  const missing = expected.filter((foreignKey) => !hasSavedViewsForeignKey(db, foreignKey, groups));
+  const unexpected = groups.filter(
+    (rows) => !expected.some((foreignKey) => matchesSavedViewsForeignKey(rows, foreignKey)),
+  );
+  return [
+    ...(missing.length > 0
+      ? [
+          `${table} missing foreign keys: ${missing
+            .map(
+              (foreignKey) =>
+                `(${foreignKey.columns.map((column) => column.from).join(", ")}) -> ` +
+                `${foreignKey.table}(${foreignKey.columns.map((column) => column.to).join(", ")})`,
+            )
+            .join(", ")}`,
+        ]
+      : []),
+    ...(unexpected.length > 0
+      ? [
+          `${table} has unexpected foreign keys: ${unexpected
+            .map((rows) => describeSavedViewsForeignKey(rows))
+            .join(", ")}`,
+        ]
+      : []),
+  ];
+}
+
+function triggerProblems(db: Database, expected: Readonly<Record<string, string>>): string[] {
+  return Object.entries(expected).flatMap(([name, fragment]) => {
+    const definition = db
+      .query<SqlDefinitionRow, SQLQueryBindings[]>(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+      )
+      .get(name);
+    if (!definition?.sql || !normalizedSql(definition.sql).includes(normalizedSql(fragment))) {
+      return [`missing or incompatible trigger ${name}`];
+    }
+    return [];
+  });
+}
+
 function viewsMigrationSchemaProblems(db: Database, requireWorkspaceIndex: boolean): string[] {
   const problems: string[] = [];
+  if (hasTable(db, "_prb390_saved_views")) {
+    problems.push("stale table _prb390_saved_views");
+  }
   const targetTables = [
-    ["saved_views", SAVED_VIEWS_TARGET_COLUMNS],
-    ["view_preferences", VIEW_PREFERENCES_TARGET_COLUMNS],
-    ["view_subscriptions", VIEW_SUBSCRIPTIONS_TARGET_COLUMNS],
+    ["saved_views", SAVED_VIEWS_TARGET_COLUMN_CONTRACT, VIEWS_MIGRATION_CHECKS.saved_views],
+    ["view_preferences", VIEW_PREFERENCES_COLUMN_CONTRACT, VIEWS_MIGRATION_CHECKS.view_preferences],
+    [
+      "view_subscriptions",
+      VIEW_SUBSCRIPTIONS_COLUMN_CONTRACT,
+      VIEWS_MIGRATION_CHECKS.view_subscriptions,
+    ],
   ] as const;
 
-  for (const [table, columns] of targetTables) {
+  for (const [table, columns, checks] of targetTables) {
     if (!hasTable(db, table)) {
       problems.push(`missing table ${table}`);
       continue;
     }
-    const missingColumns = columns.filter((column) => !hasColumn(db, table, column));
-    if (missingColumns.length > 0) {
-      problems.push(`${table} missing columns: ${missingColumns.join(", ")}`);
-    }
-    if (!hasPrimaryKey(db, table, "id")) problems.push(`${table}.id is not a primary key`);
+    problems.push(...canonicalTableProblems(db, table, columns, checks));
+  }
+  for (const table of VIEWS_MIGRATION_REQUIRED_TABLES) {
+    if (!hasTable(db, table)) problems.push(`missing table ${table}`);
   }
 
   const savedViewsIndexes = [
@@ -855,6 +1247,15 @@ function viewsMigrationSchemaProblems(db: Database, requireWorkspaceIndex: boole
     if (!hasNamedIndexWithColumns(db, "saved_views", name, columns, unique)) {
       problems.push(`missing or incompatible index ${name}`);
     }
+  }
+  if (
+    !hasUniqueConstraintWithColumns(
+      db,
+      "saved_views",
+      VIEWS_MIGRATION_UNIQUE_CONSTRAINTS.saved_views,
+    )
+  ) {
+    problems.push("missing or incompatible UNIQUE constraint saved_views(workspace_id, id)");
   }
   const hasWorkspaceIndex = hasNamedIndexWithColumns(
     db,
@@ -871,6 +1272,7 @@ function viewsMigrationSchemaProblems(db: Database, requireWorkspaceIndex: boole
   ) {
     problems.push("incompatible index idx_saved_views_workspace_id");
   }
+  problems.push(...foreignKeyProblems(db, "saved_views", SAVED_VIEWS_TARGET_FOREIGN_KEYS));
 
   const viewPreferencesIndexes = [
     ["idx_view_preferences_view", ["workspace_id", "view_id"]],
@@ -884,6 +1286,18 @@ function viewsMigrationSchemaProblems(db: Database, requireWorkspaceIndex: boole
   if (!hasViewPreferencesKeyIndex(db)) {
     problems.push("missing or incompatible index idx_view_preferences_key");
   }
+  if (
+    !hasUniqueConstraintWithColumns(
+      db,
+      "view_preferences",
+      VIEWS_MIGRATION_UNIQUE_CONSTRAINTS.view_preferences,
+    )
+  ) {
+    problems.push("missing or incompatible UNIQUE constraint view_preferences(workspace_id, id)");
+  }
+  problems.push(
+    ...foreignKeyProblems(db, "view_preferences", VIEW_PREFERENCES_REQUIRED_FOREIGN_KEYS),
+  );
 
   const viewSubscriptionsIndexes = [
     ["idx_view_subscriptions_view", ["workspace_id", "view_id"]],
@@ -894,23 +1308,319 @@ function viewsMigrationSchemaProblems(db: Database, requireWorkspaceIndex: boole
       problems.push(`missing or incompatible index ${name}`);
     }
   }
-
-  for (const trigger of [
-    "saved_views_workspace_scope_insert",
-    "saved_views_workspace_required_insert",
-    "saved_views_workspace_required_update",
-  ]) {
-    if (!hasTrigger(db, trigger)) problems.push(`missing trigger ${trigger}`);
+  if (
+    !hasUniqueConstraintWithColumns(
+      db,
+      "view_subscriptions",
+      VIEWS_MIGRATION_UNIQUE_CONSTRAINTS.view_subscriptions,
+    )
+  ) {
+    problems.push(
+      "missing or incompatible UNIQUE constraint view_subscriptions(workspace_id, view_id, actor_id)",
+    );
   }
+  problems.push(
+    ...foreignKeyProblems(db, "view_subscriptions", VIEW_SUBSCRIPTIONS_REQUIRED_FOREIGN_KEYS),
+  );
+
+  for (const index of VIEWS_MIGRATION_REQUIRED_INDEXES) {
+    if (index.table === "saved_views") continue;
+    if (!hasIndexWithColumns(db, index.table, index.columns, index.unique)) {
+      problems.push(
+        `missing or incompatible index ${index.unique ? "UNIQUE " : ""}${index.table}(${index.columns.join(", ")})`,
+      );
+    }
+  }
+  problems.push(
+    ...triggerProblems(db, {
+      saved_views_workspace_scope_insert:
+        "AFTER INSERT ON saved_views WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1 BEGIN UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id; END",
+      saved_views_workspace_required_insert:
+        "BEFORE INSERT ON saved_views WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1 BEGIN SELECT RAISE(ABORT, 'Workspace context is required for saved_views'); END",
+      saved_views_workspace_required_update:
+        "BEFORE UPDATE OF workspace_id ON saved_views WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1 BEGIN SELECT RAISE(ABORT, 'Workspace context is required for saved_views'); END",
+    }),
+  );
 
   return problems;
 }
 
+function hasAllColumns(db: Database, table: string, columns: readonly string[]): boolean {
+  if (!hasTable(db, table)) return false;
+  const actual = new Set(tableInfo(db, table).map((column) => column.name));
+  return columns.every((column) => actual.has(column));
+}
+
+function hasRows(db: Database, query: string): boolean {
+  return Boolean(db.query(query).get());
+}
+
+function viewsMigrationDataProblems(db: Database): string[] {
+  const problems: string[] = [];
+  if (
+    VIEWS_MIGRATION_REQUIRED_TABLES.every((table) => hasTable(db, table)) &&
+    hasAllColumns(db, "saved_views", [
+      "id",
+      "name",
+      "scope",
+      "team_id",
+      "project_id",
+      "initiative_id",
+      "owner_id",
+      "filter_json",
+      "order_by",
+      "group_by",
+      "created_at",
+      "updated_at",
+      "columns_json",
+      "workspace_id",
+    ])
+  ) {
+    const savedViewsChecks = [
+      [
+        "saved_views has NULL in a required column",
+        `SELECT 1 FROM saved_views
+         WHERE id IS NULL OR name IS NULL OR scope IS NULL OR owner_id IS NULL
+            OR filter_json IS NULL OR order_by IS NULL OR group_by IS NULL
+            OR created_at IS NULL OR updated_at IS NULL OR columns_json IS NULL
+         LIMIT 1`,
+      ],
+      [
+        "saved_views has duplicate ids",
+        "SELECT 1 FROM saved_views GROUP BY id HAVING count(*) > 1 LIMIT 1",
+      ],
+      [
+        "saved_views has an invalid scope relationship",
+        `SELECT 1 FROM saved_views
+         WHERE scope NOT IN ('personal', 'team', 'workspace', 'project', 'initiative')
+            OR (scope = 'team' AND (team_id IS NULL OR project_id IS NOT NULL OR initiative_id IS NOT NULL))
+            OR (scope = 'project' AND (project_id IS NULL OR team_id IS NOT NULL OR initiative_id IS NOT NULL))
+            OR (scope = 'initiative' AND (initiative_id IS NULL OR team_id IS NOT NULL OR project_id IS NOT NULL))
+            OR (scope IN ('personal', 'workspace') AND (team_id IS NOT NULL OR project_id IS NOT NULL OR initiative_id IS NOT NULL))
+         LIMIT 1`,
+      ],
+      [
+        "saved_views references a missing Workspace",
+        `SELECT 1 FROM saved_views
+         WHERE workspace_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM workspace WHERE workspace.id = saved_views.workspace_id)
+         LIMIT 1`,
+      ],
+      [
+        "saved_views has no Workspace context in a multi-Workspace database",
+        `SELECT 1 FROM saved_views
+         WHERE workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+         LIMIT 1`,
+      ],
+      [
+        "saved_views references a missing Actor",
+        `SELECT 1 FROM saved_views
+         WHERE NOT EXISTS (SELECT 1 FROM actors WHERE actors.id = saved_views.owner_id)
+         LIMIT 1`,
+      ],
+      [
+        "saved_views team reference is missing or crosses its Workspace",
+        `SELECT 1 FROM saved_views
+         WHERE team_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM teams
+              WHERE teams.id = saved_views.team_id
+                AND teams.workspace_id IS saved_views.workspace_id
+           )
+         LIMIT 1`,
+      ],
+      [
+        "saved_views project reference is missing or crosses its Workspace",
+        `SELECT 1 FROM saved_views
+         WHERE project_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM projects
+              WHERE projects.id = saved_views.project_id
+                AND projects.workspace_id IS saved_views.workspace_id
+           )
+         LIMIT 1`,
+      ],
+      [
+        "saved_views initiative reference is missing or crosses its Workspace",
+        `SELECT 1 FROM saved_views
+         WHERE initiative_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM initiatives
+              WHERE initiatives.id = saved_views.initiative_id
+                AND initiatives.workspace_id IS saved_views.workspace_id
+           )
+         LIMIT 1`,
+      ],
+    ] as const;
+    for (const [description, query] of savedViewsChecks) {
+      if (hasRows(db, query)) problems.push(description);
+    }
+  }
+
+  if (
+    ["workspace", "saved_views", "workspace_memberships"].every((table) => hasTable(db, table)) &&
+    hasAllColumns(db, "view_preferences", [
+      "id",
+      "workspace_id",
+      "view_id",
+      "actor_id",
+      "view_type",
+      "scope",
+      "layout",
+      "order_by",
+      "group_by",
+      "columns_json",
+      "created_at",
+      "updated_at",
+    ])
+  ) {
+    const preferenceChecks = [
+      [
+        "view_preferences has NULL in a required column",
+        `SELECT 1 FROM view_preferences
+         WHERE id IS NULL OR workspace_id IS NULL OR view_type IS NULL OR scope IS NULL
+            OR layout IS NULL OR order_by IS NULL OR group_by IS NULL
+            OR columns_json IS NULL OR created_at IS NULL OR updated_at IS NULL
+         LIMIT 1`,
+      ],
+      [
+        "view_preferences has an invalid enum value",
+        `SELECT 1 FROM view_preferences
+         WHERE view_type NOT IN ('issue', 'project', 'initiative', 'feed')
+            OR scope NOT IN ('actor', 'workspace')
+            OR layout NOT IN ('list', 'board')
+            OR order_by NOT IN ('CREATED_ASC', 'CREATED_DESC', 'UPDATED_ASC', 'UPDATED_DESC')
+            OR group_by NOT IN ('state', 'milestone', 'assignee', 'priority')
+         LIMIT 1`,
+      ],
+      [
+        "view_preferences has an invalid actor scope",
+        `SELECT 1 FROM view_preferences
+         WHERE (scope = 'actor' AND actor_id IS NULL)
+            OR (scope = 'workspace' AND actor_id IS NOT NULL)
+         LIMIT 1`,
+      ],
+      [
+        "view_preferences references a missing Workspace",
+        `SELECT 1 FROM view_preferences
+         WHERE NOT EXISTS (SELECT 1 FROM workspace WHERE workspace.id = view_preferences.workspace_id)
+         LIMIT 1`,
+      ],
+      [
+        "view_preferences references a missing or cross-Workspace SavedView",
+        `SELECT 1 FROM view_preferences
+         WHERE view_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM saved_views
+              WHERE saved_views.id = view_preferences.view_id
+                AND saved_views.workspace_id IS view_preferences.workspace_id
+           )
+         LIMIT 1`,
+      ],
+      [
+        "view_preferences actor is missing or outside its Workspace",
+        `SELECT 1 FROM view_preferences
+         WHERE actor_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM workspace_memberships
+              WHERE workspace_memberships.workspace_id = view_preferences.workspace_id
+                AND workspace_memberships.actor_id = view_preferences.actor_id
+           )
+         LIMIT 1`,
+      ],
+      [
+        "view_preferences has duplicate keys",
+        `SELECT 1 FROM view_preferences
+         GROUP BY workspace_id, ifnull(view_id, ''), view_type, ifnull(actor_id, '')
+         HAVING count(*) > 1 LIMIT 1`,
+      ],
+    ] as const;
+    for (const [description, query] of preferenceChecks) {
+      if (hasRows(db, query)) problems.push(description);
+    }
+  }
+
+  if (
+    ["saved_views", "workspace_memberships", "workspace"].every((table) => hasTable(db, table)) &&
+    hasAllColumns(db, "view_subscriptions", [
+      "id",
+      "workspace_id",
+      "view_id",
+      "actor_id",
+      "issue_changes",
+      "slack",
+      "created_at",
+      "updated_at",
+    ])
+  ) {
+    const subscriptionChecks = [
+      [
+        "view_subscriptions has NULL in a required column",
+        `SELECT 1 FROM view_subscriptions
+         WHERE id IS NULL OR workspace_id IS NULL OR view_id IS NULL OR actor_id IS NULL
+            OR issue_changes IS NULL OR slack IS NULL OR created_at IS NULL OR updated_at IS NULL
+         LIMIT 1`,
+      ],
+      [
+        "view_subscriptions has invalid channel values",
+        `SELECT 1 FROM view_subscriptions
+         WHERE typeof(issue_changes) <> 'integer' OR issue_changes NOT IN (0, 1)
+            OR typeof(slack) <> 'integer' OR slack NOT IN (0, 1)
+            OR (issue_changes = 0 AND slack = 0)
+         LIMIT 1`,
+      ],
+      [
+        "view_subscriptions references a missing Workspace",
+        `SELECT 1 FROM view_subscriptions
+         WHERE NOT EXISTS (SELECT 1 FROM workspace WHERE workspace.id = view_subscriptions.workspace_id)
+         LIMIT 1`,
+      ],
+      [
+        "view_subscriptions references a missing or cross-Workspace SavedView",
+        `SELECT 1 FROM view_subscriptions
+         WHERE NOT EXISTS (
+             SELECT 1 FROM saved_views
+              WHERE saved_views.id = view_subscriptions.view_id
+                AND saved_views.workspace_id IS view_subscriptions.workspace_id
+           )
+         LIMIT 1`,
+      ],
+      [
+        "view_subscriptions actor is missing or outside its Workspace",
+        `SELECT 1 FROM view_subscriptions
+         WHERE NOT EXISTS (
+             SELECT 1 FROM workspace_memberships
+              WHERE workspace_memberships.workspace_id = view_subscriptions.workspace_id
+                AND workspace_memberships.actor_id = view_subscriptions.actor_id
+           )
+         LIMIT 1`,
+      ],
+      [
+        "view_subscriptions has duplicate keys",
+        `SELECT 1 FROM view_subscriptions
+         GROUP BY workspace_id, view_id, actor_id HAVING count(*) > 1 LIMIT 1`,
+      ],
+    ] as const;
+    for (const [description, query] of subscriptionChecks) {
+      if (hasRows(db, query)) problems.push(description);
+    }
+  }
+
+  const foreignKeyViolations = db.query("PRAGMA foreign_key_check").all();
+  if (foreignKeyViolations.length > 0) {
+    problems.push("Views tables have foreign-key violations");
+  }
+  return problems;
+}
+
 function validateViewsMigrationSchema(db: Database, requireWorkspaceIndex: boolean): void {
-  const problems = viewsMigrationSchemaProblems(db, requireWorkspaceIndex);
+  const problems = [
+    ...viewsMigrationSchemaProblems(db, requireWorkspaceIndex),
+    ...viewsMigrationDataProblems(db),
+  ];
   if (problems.length > 0) {
     throw new Error(
-      `Views migration schema is incomplete or incompatible (${problems.join("; ")})`,
+      `Views migration schema or data is incomplete or incompatible (${problems.join("; ")})`,
     );
   }
 }
@@ -981,10 +1691,11 @@ function reconcileLegacyViewsMigration(db: Database, marker: MigrationMarkerRow)
   if (marker.name !== "views_preferences" || marker.version !== 32) {
     throw new Error("Cannot reconcile an unexpected Views migration marker");
   }
-  const problems = viewsMigrationSchemaProblems(db, false);
-  if (problems.length > 0) {
+  try {
+    validateViewsMigrationSchema(db, false);
+  } catch (error) {
     throw new Error(
-      `Cannot reconcile legacy Views migration: incomplete or incompatible schema (${problems.join("; ")})`,
+      `Cannot reconcile legacy Views migration: incomplete or incompatible schema or data. ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
