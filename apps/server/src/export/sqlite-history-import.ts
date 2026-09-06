@@ -165,11 +165,18 @@ interface RowIdentity {
   readonly sourceId: string;
 }
 
+type WorkspaceMembershipMetadataState = "found" | "missing" | "ambiguous" | "invalid";
+
+interface WorkspaceMembershipMetadata {
+  readonly state: WorkspaceMembershipMetadataState;
+}
+
 interface RowIndexes {
   readonly byTable: ReadonlyMap<string, ReadonlyMap<string, SourceRow>>;
   readonly workspaceByTable: ReadonlyMap<string, ReadonlyMap<string, string>>;
   readonly actorWorkspaceIds: ReadonlyMap<string, ReadonlySet<string>>;
   readonly duplicateIdsByTable: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly workspaceMembershipMetadata: WorkspaceMembershipMetadata;
 }
 
 interface RowScope {
@@ -633,10 +640,31 @@ function directWorkspace(
     : { workspaceId: value, explicitNull: false, invalid: false };
 }
 
+function workspaceMembershipMetadata(
+  db: Database,
+  tables: ReadonlyMap<string, RawTable>,
+): WorkspaceMembershipMetadata {
+  const memberships = tables.get("workspace_memberships");
+  if (memberships === undefined) return { state: "missing" };
+  const actorLookup = sqliteColumnName(db, memberships.physicalName, "actor_id");
+  const workspaceLookup = sqliteColumnName(db, memberships.physicalName, "workspace_id");
+  const lookups = [actorLookup, workspaceLookup];
+  if (lookups.some((lookup) => lookup.kind === "invalid")) return { state: "invalid" };
+  if (lookups.some((lookup) => lookup.kind === "ambiguous")) return { state: "ambiguous" };
+  if (lookups.some((lookup) => lookup.kind === "missing")) return { state: "missing" };
+  // Una fila malformada impide probar a qué Actor pertenece la metadata. No
+  // reconstruyas un mapa parcial con las filas restantes ni trates ese mapa
+  // incompleto como una autoridad.
+  if (memberships.malformed > 0) return { state: "invalid" };
+  return { state: "found" };
+}
+
 function workspaceIndexes(
+  db: Database,
   tables: ReadonlyMap<string, RawTable>,
   byId: ReadonlyMap<string, ReadonlyMap<string, SourceRow>>,
 ): RowIndexes {
+  const membershipMetadata = workspaceMembershipMetadata(db, tables);
   const direct = new Map<string, Map<string, string>>();
   const duplicateIdsByTable = new Map<string, Set<string>>();
   const actorWorkspaceIds = new Map<string, Set<string>>();
@@ -656,15 +684,18 @@ function workspaceIndexes(
     if (duplicateIds.size > 0) duplicateIdsByTable.set(table, duplicateIds);
   }
   // Los Actors son identidades globales. Las membresías indican en qué
-  // Workspaces seleccionados se puede recibir el evento de identidad.
-  const memberships = tables.get("workspace_memberships")?.rows ?? [];
-  for (const row of memberships) {
-    const actorId = textValue(row.actor_id);
-    const workspaceId = textValue(row.workspace_id);
-    if (actorId !== undefined && workspaceId !== undefined) {
-      const values = actorWorkspaceIds.get(actorId) ?? new Set<string>();
-      values.add(workspaceId);
-      actorWorkspaceIds.set(actorId, values);
+  // Workspaces seleccionados se puede recibir el evento de identidad. Un
+  // esquema ambiguo o inválido no produce un mapa parcial que parezca fiable.
+  if (membershipMetadata.state === "found") {
+    const memberships = tables.get("workspace_memberships")?.rows ?? [];
+    for (const row of memberships) {
+      const actorId = textValue(row.actor_id);
+      const workspaceId = textValue(row.workspace_id);
+      if (actorId !== undefined && workspaceId !== undefined) {
+        const values = actorWorkspaceIds.get(actorId) ?? new Set<string>();
+        values.add(workspaceId);
+        actorWorkspaceIds.set(actorId, values);
+      }
     }
   }
   // Deriva alcances hasta alcanzar un punto fijo. Cada fila se agrega como
@@ -693,7 +724,13 @@ function workspaceIndexes(
     }
   }
   // Conserva la forma de tipos y mantiene los mapas inmutables para los callers.
-  return { byTable: byId, workspaceByTable: direct, actorWorkspaceIds, duplicateIdsByTable };
+  return {
+    byTable: byId,
+    workspaceByTable: direct,
+    actorWorkspaceIds,
+    duplicateIdsByTable,
+    workspaceMembershipMetadata: membershipMetadata,
+  };
 }
 
 function referencedWorkspaceIds(
@@ -744,6 +781,16 @@ function referencedWorkspaceIds(
       const actor = indexes.byTable.get("actors")?.get(value);
       if (!actor) {
         missing = true;
+        continue;
+      }
+      if (
+        indexes.workspaceMembershipMetadata.state === "ambiguous" ||
+        indexes.workspaceMembershipMetadata.state === "invalid"
+      ) {
+        // Una referencia a Actor no es segura si la metadata de Membership no
+        // prueba su Workspace. Conserva el alcance directo de la fila, pero
+        // cierra la decisión en lugar de usarlo como prueba del Actor.
+        ambiguous = true;
         continue;
       }
       const actorWorkspaces = indexes.actorWorkspaceIds.get(value);
@@ -1154,7 +1201,7 @@ export function importSqliteHistory(
   const warnings: string[] = [];
   const tables = tableRows(options.db, reports);
   const byId = buildById(tables);
-  const indexes = workspaceIndexes(tables, byId);
+  const indexes = workspaceIndexes(options.db, tables, byId);
   const writer = new EventLogWriter({ rootDir: options.rootDir });
   // Solo una importación real puede reparar un tail truncado; el dry-run no
   // debe modificar el Log y falla cerrado si el stream no es legible.

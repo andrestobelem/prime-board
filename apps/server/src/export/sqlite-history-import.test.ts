@@ -600,6 +600,90 @@ describe("complete SQLite history import", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("fails closed when Membership metadata is Unicode-ambiguous in dry-run and apply", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-ambiguous-"));
+    try {
+      db.query(
+        "INSERT INTO workspace VALUES ('w2', 'Other', 'other', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+      ).run();
+      db.query("UPDATE workspace_memberships SET workspace_id = 'w2' WHERE id = 'wm1'").run();
+      db.exec(
+        'ALTER TABLE workspace_memberships ADD COLUMN "İD" TEXT; ALTER TABLE workspace_memberships ADD COLUMN "i̇d" TEXT;',
+      );
+
+      const dry = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+        includeSnapshots: false,
+      });
+      expect(dry).toMatchObject({ emitted: 0, written: 0, rejected: 1 });
+      expect(dry.ambiguous).toBeGreaterThan(0);
+      expect(dry.tables.workspace_memberships).toMatchObject({ rejected: 1 });
+      expect(dry.tables.activity).toMatchObject({ emitted: 0, ambiguous: 1 });
+      expect(dry.warnings).toContain("ambiguous:activity:ac1");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: false,
+      });
+      expect(applied).toMatchObject({ emitted: 0, written: 0, rejected: 1 });
+      expect(applied.ambiguous).toBeGreaterThan(0);
+      expect(readEventLog(root).some((event) => event.eventId === "ac1")).toBe(false);
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts legitimate uppercase Membership columns", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-uppercase-"));
+    try {
+      db.exec(
+        'ALTER TABLE workspace_memberships RENAME COLUMN id TO "ID"; ALTER TABLE workspace_memberships RENAME COLUMN workspace_id TO "WORKSPACE_ID"; ALTER TABLE workspace_memberships RENAME COLUMN actor_id TO "ACTOR_ID";',
+      );
+      const result = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+        includeSnapshots: false,
+      });
+      expect(result).toMatchObject({ emitted: 1, ambiguous: 0, rejected: 0 });
+      expect(result.tables.activity).toMatchObject({ emitted: 1, ambiguous: 0 });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps singleton Activity import when the Membership table is absent", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-membership-missing-"));
+    try {
+      db.exec("DROP TABLE workspace_memberships");
+      const result = importSqliteHistory({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+        includeSnapshots: false,
+      });
+      expect(result).toMatchObject({ emitted: 1, ambiguous: 0, rejected: 0 });
+      expect(result.tables.activity).toMatchObject({ emitted: 1, ambiguous: 0 });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 expect(SQLITE_HISTORY_TABLES.length).toBeGreaterThan(0);
