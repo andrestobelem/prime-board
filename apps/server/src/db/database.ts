@@ -997,6 +997,7 @@ interface IndexedByCteScope {
   start: number;
   end: number;
   names: ReadonlySet<string>;
+  namePositions: ReadonlySet<number>;
 }
 
 function sqlParenthesisPairs(tokens: readonly SqlToken[]): SqlParenthesisPairs | null {
@@ -1103,10 +1104,13 @@ function indexedByCteScopeAt(
   let cursor = position + 1;
   if (isSqlKeyword(tokens[cursor], "recursive")) cursor += 1;
   const names = new Set<string>();
+  const namePositions = new Set<number>();
   while (true) {
-    const name = tokens[cursor];
+    const namePosition = cursor;
+    const name = tokens[namePosition];
     if (!isSqlNameToken(name)) return null;
     names.add(name.value.toLowerCase());
+    namePositions.add(namePosition);
     cursor += 1;
     if (tokens[cursor]?.value === "(") {
       const columnsClose = parentheses.matchingClose.get(cursor);
@@ -1140,7 +1144,7 @@ function indexedByCteScopeAt(
       : semicolon < 0 || semicolon > enclosingClose
         ? enclosingClose
         : semicolon;
-  return { start: position, end, names };
+  return { start: position, end, names, namePositions };
 }
 
 function indexedByCteScopes(
@@ -1148,11 +1152,13 @@ function indexedByCteScopes(
   parentheses: SqlParenthesisPairs,
 ): readonly IndexedByCteScope[] | null {
   const scopes: IndexedByCteScope[] = [];
+  const cteNamePositions = new Set<number>();
   for (let position = 0; position < tokens.length; position += 1) {
-    if (!isSqlKeyword(tokens[position], "with")) continue;
+    if (!isSqlKeyword(tokens[position], "with") || cteNamePositions.has(position)) continue;
     const scope = indexedByCteScopeAt(tokens, parentheses, position);
     if (scope !== null) {
       scopes.push(scope);
+      for (const namePosition of scope.namePositions) cteNamePositions.add(namePosition);
     } else if (indexedByWithTokenIsCteStart(tokens, position)) {
       // Unparseable WITH clauses are unsafe. A bare WITH can also be a SQLite
       // identifier in a source or expression, so keep that valid form.

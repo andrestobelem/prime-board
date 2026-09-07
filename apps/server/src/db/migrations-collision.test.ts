@@ -3497,6 +3497,16 @@ describe("colisión de migraciones SQLite", () => {
           SELECT id FROM with INDEXED BY idx_notification_preferences_actor_workspace;
         CREATE VIEW dependent_with_alias AS
           SELECT id FROM with AS with INDEXED BY idx_notification_preferences_actor_workspace;
+        CREATE VIEW dependent_with_cte AS
+          WITH with AS (SELECT 'cte-row' AS id)
+          SELECT id FROM with;
+        CREATE VIEW dependent_with_recursive_cte AS
+          WITH RECURSIVE with(id) AS (SELECT 'recursive-row' AS id)
+          SELECT id FROM with;
+        CREATE VIEW dependent_with_cte_list AS
+          WITH helper AS (SELECT 'helper-row' AS id),
+            with AS (SELECT 'list-row' AS id)
+          SELECT id FROM with;
         CREATE VIEW dependent_with_column_name (with) AS
           SELECT id FROM with INDEXED BY idx_notification_preferences_actor_workspace;
         CREATE TABLE with_column (id TEXT PRIMARY KEY, with TEXT);
@@ -3504,6 +3514,12 @@ describe("colisión de migraciones SQLite", () => {
         CREATE INDEX idx_view_preferences_key ON with_column(id);
         CREATE VIEW dependent_with_column AS
           SELECT with FROM with_column INDEXED BY idx_view_preferences_key;
+        CREATE VIEW dependent_with_nested_cte AS
+          SELECT id FROM with_column INDEXED BY idx_view_preferences_key
+          WHERE id IN (
+            WITH with AS (SELECT 'column-row' AS id)
+            SELECT id FROM with
+          );
         CREATE TRIGGER dependent_with_update AFTER INSERT ON actors
         BEGIN
           UPDATE OR ABORT with SET id = id WHERE id = 'with-row';
@@ -3515,11 +3531,21 @@ describe("colisión de migraciones SQLite", () => {
 
       expect(db.query("SELECT id FROM dependent_with_table").all()).toEqual([{ id: "with-row" }]);
       expect(db.query("SELECT id FROM dependent_with_alias").all()).toEqual([{ id: "with-row" }]);
+      expect(db.query("SELECT id FROM dependent_with_cte").all()).toEqual([{ id: "cte-row" }]);
+      expect(db.query("SELECT id FROM dependent_with_recursive_cte").all()).toEqual([
+        { id: "recursive-row" },
+      ]);
+      expect(db.query("SELECT id FROM dependent_with_cte_list").all()).toEqual([
+        { id: "list-row" },
+      ]);
       expect(db.query("SELECT with FROM dependent_with_column_name").all()).toEqual([
         { with: "with-row" },
       ]);
       expect(db.query("SELECT with FROM dependent_with_column").all()).toEqual([
         { with: "column-value" },
+      ]);
+      expect(db.query("SELECT id FROM dependent_with_nested_cte").all()).toEqual([
+        { id: "column-row" },
       ]);
       expect(
         db
@@ -3553,6 +3579,9 @@ describe("colisión de migraciones SQLite", () => {
         CREATE VIEW dependent_cte AS
           WITH actors AS (SELECT 'cte-row' AS id)
           SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+        CREATE VIEW dependent_cte_keyword AS
+          WITH with AS (SELECT 'cte-row' AS id)
+          SELECT id FROM with INDEXED BY idx_view_preferences_view;
         CREATE VIEW dependent_nested_cte AS
           SELECT id FROM actors INDEXED BY idx_view_preferences_view
           WHERE id IN (
@@ -3585,6 +3614,8 @@ describe("colisión de migraciones SQLite", () => {
       });
 
       db.exec("DROP VIEW dependent_cte");
+      expect(() => migrate(db)).toThrow(/CTE/i);
+      db.exec("DROP VIEW dependent_cte_keyword");
       db.exec(`
         CREATE VIEW dependent_cte AS
           WITH helper AS (SELECT 'cte-row' AS id)
