@@ -3407,4 +3407,487 @@ describe("colisión de migraciones SQLite", () => {
       db.close();
     }
   });
+
+  it("protege Views y Triggers main y TEMP al renombrar un índice legacy", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_view ON actors(name);
+        CREATE VIEW dependent_actor_trigger_view AS
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+        CREATE TRIGGER dependent_actor_trigger
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+        END;
+        CREATE TEMP VIEW dependent_actor_temp_view AS
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+        CREATE TEMP TRIGGER dependent_actor_temp_trigger
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+        END;
+      `);
+
+      migrate(db);
+
+      for (const view of ["dependent_actor_trigger_view", "dependent_actor_temp_view"]) {
+        expect(db.query(`SELECT id FROM ${view}`).all()).toEqual(
+          db.query("SELECT id FROM actors ORDER BY id").all(),
+        );
+      }
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_actor_trigger_view'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_actor_trigger_view AS
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy"`,
+      });
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_temp_master WHERE type = 'view' AND name = 'dependent_actor_temp_view'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_actor_temp_view AS
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy"`,
+      });
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'dependent_actor_trigger'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE TRIGGER dependent_actor_trigger
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy";
+        END`,
+      });
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_temp_master WHERE type = 'trigger' AND name = 'dependent_actor_temp_trigger'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE TRIGGER dependent_actor_temp_trigger
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy";
+        END`,
+      });
+      db.query(
+        `INSERT INTO actors (id, name, type, created_at, updated_at)
+         VALUES ('dependent-trigger-actor', 'dependent-trigger-actor', 'human', '2026-01-01', '2026-01-01')`,
+      ).run();
+      expect(db.query("SELECT 1 FROM dependent_actor_temp_view LIMIT 1").get()).toEqual({ 1: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("combina el renombre de un Trigger bloqueador con su dependencia INDEXED BY", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        DROP TRIGGER saved_views_workspace_scope_insert;
+        CREATE UNIQUE INDEX idx_view_preferences_view ON actors(name);
+        CREATE TRIGGER saved_views_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+        END;
+      `);
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'saved_views_workspace_scope_insert_legacy'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE TRIGGER "saved_views_workspace_scope_insert_legacy"
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy";
+        END`,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("combina el renombre de una View bloqueadora con su dependencia INDEXED BY", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_view ON actors(name);
+        CREATE VIEW view_preferences AS
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM view_preferences_legacy").all()).toEqual(
+        db.query("SELECT id FROM actors ORDER BY id").all(),
+      );
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'view_preferences_legacy'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW "view_preferences_legacy" AS
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy"`,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reescribe todas las referencias de una View una sola vez", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE INDEX idx_view_preferences_view ON actors(name);
+        CREATE INDEX idx_view_preferences_actor ON actors(type);
+        CREATE VIEW dependent_actor_multiple_indexes AS
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view
+          UNION ALL
+          SELECT id FROM actors INDEXED BY idx_view_preferences_actor;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM dependent_actor_multiple_indexes").all()).toEqual([
+        ...db.query("SELECT id FROM actors ORDER BY id").all(),
+        ...db.query("SELECT id FROM actors ORDER BY id").all(),
+      ]);
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_actor_multiple_indexes'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_actor_multiple_indexes AS
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy"
+          UNION ALL
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_actor_legacy"`,
+      });
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("resuelve INDEXED BY con casing y quoting sin falsos positivos de comentarios o literales", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE UNIQUE INDEX "IDX_VIEW_PREFERENCES_VIEW" ON actors(name);
+        CREATE VIEW dependent_actor_quoted AS
+          SELECT id FROM actors INDEXED BY [idx_view_preferences_view];
+        CREATE VIEW dependent_actor_false_positive AS
+          SELECT 'INDEXED BY IDX_VIEW_PREFERENCES_VIEW' AS value, id
+            FROM actors /* INDEXED BY IDX_VIEW_PREFERENCES_VIEW */;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM dependent_actor_quoted").all()).toEqual(
+        db.query("SELECT id FROM actors ORDER BY id").all(),
+      );
+      expect(
+        db.query("SELECT value FROM dependent_actor_false_positive ORDER BY id").all(),
+      ).toEqual(
+        db
+          .query("SELECT 'INDEXED BY IDX_VIEW_PREFERENCES_VIEW' AS value FROM actors ORDER BY id")
+          .all(),
+      );
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_actor_quoted'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_actor_quoted AS
+          SELECT id FROM actors INDEXED BY "IDX_VIEW_PREFERENCES_VIEW_legacy"`,
+      });
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_actor_false_positive'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_actor_false_positive AS
+          SELECT 'INDEXED BY IDX_VIEW_PREFERENCES_VIEW' AS value, id
+            FROM actors /* INDEXED BY IDX_VIEW_PREFERENCES_VIEW */`,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reescribe dependencias de índices UNIQUE legacy materializados durante restore", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      addLegacySavedViewsNameConstraint(db);
+      db.exec(`
+        CREATE VIEW dependent_saved_view_unique AS
+          SELECT id FROM saved_views INDEXED BY sqlite_autoindex_saved_views_3;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM dependent_saved_view_unique").all()).toEqual(
+        db.query("SELECT id FROM saved_views ORDER BY id").all(),
+      );
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_saved_view_unique'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_saved_view_unique AS
+          SELECT id FROM saved_views INDEXED BY "idx_saved_views_legacy_unique_workspace_id_name"`,
+      });
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'idx_saved_views_legacy_unique_workspace_id_name'",
+          )
+          .get(),
+      ).toEqual({
+        name: "idx_saved_views_legacy_unique_workspace_id_name",
+        tbl_name: "saved_views",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reescribe una TEMP View cuando restore materializa su índice legacy", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      addLegacySavedViewsNameConstraint(db);
+      db.exec(`
+        CREATE TEMP VIEW dependent_saved_view_temp_unique AS
+          SELECT id FROM saved_views INDEXED BY sqlite_autoindex_saved_views_3;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM dependent_saved_view_temp_unique").all()).toEqual(
+        db.query("SELECT id FROM saved_views ORDER BY id").all(),
+      );
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_temp_master WHERE type = 'view' AND name = 'dependent_saved_view_temp_unique'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_saved_view_temp_unique AS
+          SELECT id FROM saved_views INDEXED BY "idx_saved_views_legacy_unique_workspace_id_name"`,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("protege dependencias INDEXED BY durante la restauración de índices de saved_views", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_view ON saved_views(name);
+        CREATE VIEW dependent_saved_view AS
+          SELECT id FROM saved_views INDEXED BY idx_view_preferences_view;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM dependent_saved_view").all()).toEqual(
+        db.query("SELECT id FROM saved_views ORDER BY id").all(),
+      );
+      expect(
+        db
+          .query(
+            `SELECT sqlite_master.name, sqlite_master.tbl_name, "unique" AS unique_value FROM sqlite_master JOIN pragma_index_list('saved_views') ON pragma_index_list.name = sqlite_master.name WHERE sqlite_master.type = 'index' AND sqlite_master.name = 'idx_view_preferences_view_legacy'`,
+          )
+          .get(),
+      ).toEqual({
+        name: "idx_view_preferences_view_legacy",
+        tbl_name: "saved_views",
+        unique_value: 1,
+      });
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_saved_view'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_saved_view AS
+          SELECT id FROM saved_views INDEXED BY "idx_view_preferences_view_legacy"`,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado y permite reintentar si INDEXED BY no tiene un identificador seguro", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_view ON actors(name);
+        CREATE VIEW dependent_actor_invalid_index_token AS
+          SELECT id FROM actors INDEXED BY 'idx_view_preferences_view';
+      `);
+      const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(/invalid definition|INDEXED BY/i);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+
+      db.exec(`
+        DROP VIEW dependent_actor_invalid_index_token;
+        CREATE VIEW dependent_actor_invalid_index_token AS
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view";
+      `);
+      migrate(db);
+      expect(db.query("SELECT id FROM dependent_actor_invalid_index_token").all()).toEqual(
+        db.query("SELECT id FROM actors ORDER BY id").all(),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("protege INDEXED BY en una instalación fresh", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      bootstrap(db);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_view ON actors(name);
+        CREATE VIEW dependent_actor_fresh AS
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM dependent_actor_fresh").all()).toEqual(
+        db.query("SELECT id FROM actors ORDER BY id").all(),
+      );
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_actor_fresh'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_actor_fresh AS
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy"`,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("protege INDEXED BY al reconciliar el marker legacy de Views", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      db.exec(`
+        DROP INDEX idx_saved_views_workspace_id;
+        CREATE UNIQUE INDEX idx_saved_views_workspace_id ON actors(name);
+        CREATE VIEW dependent_actor_reconcile AS
+          SELECT id FROM actors INDEXED BY idx_saved_views_workspace_id;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM dependent_actor_reconcile").all()).toEqual(
+        db.query("SELECT id FROM actors ORDER BY id").all(),
+      );
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_actor_reconcile'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_actor_reconcile AS
+          SELECT id FROM actors INDEXED BY "idx_saved_views_workspace_id_legacy"`,
+      });
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("protege una View que usa INDEXED BY al renombrar un índice legacy", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_view ON actors(name);
+        CREATE VIEW dependent_actor AS
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM dependent_actor").all()).toEqual(
+        db.query("SELECT id FROM actors ORDER BY id").all(),
+      );
+      expect(
+        db
+          .query("SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_actor'")
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_actor AS
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy"`,
+      });
+    } finally {
+      db.close();
+    }
+  });
 });

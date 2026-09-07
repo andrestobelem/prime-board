@@ -962,6 +962,43 @@ function sqliteTokens(sql: string): SqlToken[] | null {
   return tokens;
 }
 
+/**
+ * Extrae los nombres de índice que aparecen en cláusulas `INDEXED BY`. El
+ * tokenizer descarta comentarios y conserva los literales como un solo token,
+ * por lo que solo una secuencia SQL real puede producir una referencia.
+ */
+function indexedByReferenceTokens(sql: string): readonly SqlToken[] | null {
+  const tokens = sqliteTokens(sql);
+  if (tokens === null) return null;
+  const references: SqlToken[] = [];
+  for (let position = 0; position < tokens.length; position += 1) {
+    if (!isSqlKeyword(tokens[position], "indexed")) continue;
+    if (!isSqlKeyword(tokens[position + 1], "by")) continue;
+    const indexToken = tokens[position + 2];
+    if (!isSqlNameToken(indexToken)) return null;
+    references.push(indexToken);
+  }
+  return references;
+}
+
+function rewriteIndexedBySql(
+  definition: string,
+  replacements: ReadonlyMap<string, string>,
+): string | null {
+  const references = indexedByReferenceTokens(definition);
+  if (references === null) return null;
+  const replacementsToApply = references
+    .map((token) => ({ token, name: replacements.get(token.value.toLowerCase()) }))
+    .filter((value): value is { token: SqlToken; name: string } => value.name !== undefined);
+  if (replacementsToApply.length === 0) return definition;
+
+  let rewritten = definition;
+  for (const { token, name } of [...replacementsToApply].reverse()) {
+    rewritten = `${rewritten.slice(0, token.start)}${quoteIdentifier(name)}${rewritten.slice(token.end)}`;
+  }
+  return rewritten;
+}
+
 function singleSqlStatement(tokens: readonly SqlToken[]): readonly SqlToken[] | null {
   const semicolon = tokens.findIndex((token) => token.value === ";");
   if (semicolon < 0) return tokens;
@@ -1178,6 +1215,7 @@ function triggerDefinitionFromSql(definition: string): ParsedTriggerDefinition |
   let position = 0;
   if (!isSqlKeyword(tokens[position], "create")) return null;
   position += 1;
+  if (isSqlKeyword(tokens[position], "temp")) position += 1;
   if (!isSqlKeyword(tokens[position], "trigger")) return null;
   position += 1;
   if (isSqlKeyword(tokens[position], "if")) {
@@ -1288,8 +1326,11 @@ function renamedTriggerSql(
 ): string | null {
   const parsed = triggerStatementTokens(definition);
   if (parsed === null) return null;
-  if (!isSqlKeyword(parsed[0], "create") || !isSqlKeyword(parsed[1], "trigger")) return null;
-  let position = 2;
+  if (!isSqlKeyword(parsed[0], "create")) return null;
+  let position = 1;
+  if (isSqlKeyword(parsed[position], "temp")) position += 1;
+  if (!isSqlKeyword(parsed[position], "trigger")) return null;
+  position += 1;
   if (isSqlKeyword(parsed[position], "if")) {
     if (!isSqlKeyword(parsed[position + 1], "not")) return null;
     if (!isSqlKeyword(parsed[position + 2], "exists")) return null;
@@ -1383,6 +1424,68 @@ function schemaObjectsWithDependencies(
     .all()
     .map((object) => ({ object, temporary: true }));
   return [...mainObjects, ...temporaryObjects];
+}
+
+function temporarySchemaDefinition(definition: string, type: "view" | "trigger"): string | null {
+  const tokens = sqliteTokens(definition);
+  if (tokens === null) return null;
+  const createToken = tokens[0];
+  if (createToken === undefined || !isSqlKeyword(createToken, "create")) return null;
+  if (isSqlKeyword(tokens[1], "temp")) return definition;
+  if (!isSqlKeyword(tokens[1], type)) return null;
+  return `${definition.slice(0, createToken.end)} TEMP${definition.slice(createToken.end)}`;
+}
+
+function schemaObjectsWithIndexedByDependencies(db: Database): IndexedByDependency[] {
+  const objects = [
+    ...db
+      .query<SchemaObjectRow, SQLQueryBindings[]>(
+        "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('view', 'trigger')",
+      )
+      .all()
+      .map((object) => ({ object, temporary: false })),
+    ...db
+      .query<SchemaObjectRow, SQLQueryBindings[]>(
+        "SELECT type, name, tbl_name, sql FROM sqlite_temp_master WHERE type IN ('view', 'trigger')",
+      )
+      .all()
+      .map((object) => ({ object, temporary: true })),
+  ];
+  const dependencies: IndexedByDependency[] = [];
+  for (const { object, temporary } of objects) {
+    if (object.type !== "view" && object.type !== "trigger") continue;
+    if (object.sql === null) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: ${temporary ? "temporary " : ""}${object.type} ` +
+          `${object.name} has no recoverable definition`,
+      );
+    }
+    const references = indexedByReferenceTokens(object.sql);
+    if (references === null) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: ${temporary ? "temporary " : ""}${object.type} ` +
+          `${object.name} has an invalid definition`,
+      );
+    }
+    if (references.length === 0) continue;
+    const type = object.type === "view" ? "view" : "trigger";
+    const executable = temporary ? temporarySchemaDefinition(object.sql, type) : object.sql;
+    if (
+      executable === null ||
+      !executableIndexedByDependencyDefinition(db, { object, temporary }, executable)
+    ) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: cannot recreate ${temporary ? "temporary " : ""}` +
+          `${type} ${object.name} with its INDEXED BY dependency`,
+      );
+    }
+    dependencies.push({
+      object,
+      temporary,
+      indexNames: references.map((reference) => reference.value),
+    });
+  }
+  return dependencies;
 }
 
 function schemaObjectsWithName(
@@ -1681,6 +1784,37 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
+function equivalentIndexName(
+  db: Database,
+  table: string,
+  terms: readonly IndexTermRow[],
+  unique: boolean,
+  origin?: string,
+  partial = 0,
+): string | null {
+  return (
+    indexList(db, table).find((index) => {
+      if (origin !== undefined && index.origin !== origin) return false;
+      const actualTerms = indexTerms(db, index.name);
+      return (
+        index.unique_value === (unique ? 1 : 0) &&
+        index.partial === partial &&
+        actualTerms.length === terms.length &&
+        actualTerms.every((term, position) => {
+          const expected = terms[position];
+          return (
+            expected !== undefined &&
+            term.seqno === expected.seqno &&
+            term.name === expected.name &&
+            term.desc === expected.desc &&
+            term.coll === expected.coll
+          );
+        })
+      );
+    })?.name ?? null
+  );
+}
+
 function equivalentIndex(
   db: Database,
   table: string,
@@ -1689,25 +1823,7 @@ function equivalentIndex(
   origin?: string,
   partial = 0,
 ): boolean {
-  return indexList(db, table).some((index) => {
-    if (origin !== undefined && index.origin !== origin) return false;
-    const actualTerms = indexTerms(db, index.name);
-    return (
-      index.unique_value === (unique ? 1 : 0) &&
-      index.partial === partial &&
-      actualTerms.length === terms.length &&
-      actualTerms.every((term, position) => {
-        const expected = terms[position];
-        return (
-          expected !== undefined &&
-          term.seqno === expected.seqno &&
-          term.name === expected.name &&
-          term.desc === expected.desc &&
-          term.coll === expected.coll
-        );
-      })
-    );
-  });
+  return equivalentIndexName(db, table, terms, unique, origin, partial) !== null;
 }
 
 function generatedLegacyIndexName(db: Database, terms: readonly IndexTermRow[]): string {
@@ -1823,7 +1939,14 @@ interface MigrationNameCollision {
   table: string;
   replacementName: string;
   sql: string;
+  temporary: boolean;
 }
+
+type IndexedByDependency = {
+  object: SchemaObjectRow;
+  temporary: boolean;
+  indexNames: readonly string[];
+};
 
 function migrationObjectNameInUse(db: Database, name: string): boolean {
   return schemaObjectsWithName(db, name).some(({ object }) => object.type !== "trigger");
@@ -1957,6 +2080,7 @@ function migrationNameCollisionPlan(
           table: object.tbl_name,
           replacementName,
           sql,
+          temporary: false,
         });
         continue;
       }
@@ -2003,6 +2127,7 @@ function migrationNameCollisionPlan(
         table: object.tbl_name,
         replacementName,
         sql,
+        temporary: false,
       });
     }
   }
@@ -2013,6 +2138,7 @@ function migrationNameCollisionPlan(
 function viewsMigrationNameCollisionPlan(
   db: Database,
   includeCreatedTables = true,
+  dependencies?: readonly IndexedByDependency[],
 ): MigrationNameCollision[] {
   const indexByName = new Map(
     VIEWS_MIGRATION_NAMED_INDEXES.map((index) => [index.name.toLowerCase(), index]),
@@ -2092,8 +2218,112 @@ function viewsMigrationNameCollisionPlan(
         table: object.tbl_name,
         replacementName,
         sql,
+        temporary: false,
       });
     }
+  }
+
+  return indexedByDependencyCollisions(db, collisions, dependencies);
+}
+
+function executableIndexedByDependencyDefinition(
+  db: Database,
+  dependency: { object: SchemaObjectRow; temporary: boolean },
+  definition: string,
+): boolean {
+  const probeInUse =
+    dependency.object.type === "trigger"
+      ? (name: string) =>
+          schemaObjectsWithName(db, name).some(
+            (candidate) =>
+              candidate.temporary === dependency.temporary && candidate.object.type === "trigger",
+          )
+      : (name: string) => migrationObjectNameInUse(db, name);
+  let probeName = `__prb656_${dependency.object.type}_probe`;
+  for (let suffix = 2; probeInUse(probeName); suffix += 1) {
+    probeName = `__prb656_${dependency.object.type}_probe_${suffix}`;
+  }
+  const probe =
+    dependency.object.type === "view"
+      ? renamedViewSql(definition, probeName, dependency.object.name)
+      : renamedTriggerSql(
+          definition,
+          probeName,
+          dependency.object.tbl_name,
+          dependency.object.name,
+        );
+  return probe !== null && executableSchemaDefinition(db, probe);
+}
+
+function indexedByDependencyCollisions(
+  db: Database,
+  collisions: MigrationNameCollision[],
+  dependencies: readonly IndexedByDependency[] = schemaObjectsWithIndexedByDependencies(db),
+): MigrationNameCollision[] {
+  const indexReplacements = new Map(
+    collisions
+      .filter((collision) => collision.type === "index")
+      .map((collision) => [collision.name.toLowerCase(), collision.replacementName]),
+  );
+  if (indexReplacements.size === 0) return collisions;
+
+  for (const dependency of dependencies) {
+    const replacements = new Map<string, string>();
+    for (const indexName of dependency.indexNames) {
+      const replacementName = indexReplacements.get(indexName.toLowerCase());
+      if (replacementName !== undefined) {
+        replacements.set(indexName.toLowerCase(), replacementName);
+      }
+    }
+    if (replacements.size === 0) continue;
+
+    const rewritten = rewriteIndexedBySql(dependency.object.sql ?? "", replacements);
+    if (rewritten === null) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: ${dependency.temporary ? "temporary " : ""}` +
+          `${dependency.object.type} ${dependency.object.name} has an invalid INDEXED BY dependency`,
+      );
+    }
+    const type = dependency.object.type === "view" ? "view" : "trigger";
+    const executable = dependency.temporary
+      ? temporarySchemaDefinition(rewritten, type)
+      : rewritten;
+    if (
+      executable === null ||
+      !executableIndexedByDependencyDefinition(db, dependency, executable)
+    ) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: cannot rewrite ${dependency.temporary ? "temporary " : ""}` +
+          `${dependency.object.type} ${dependency.object.name} without changing its behavior`,
+      );
+    }
+
+    const collision = collisions.find(
+      (candidate) =>
+        candidate.type === dependency.object.type &&
+        candidate.temporary === dependency.temporary &&
+        candidate.name.toLowerCase() === dependency.object.name.toLowerCase(),
+    );
+    if (collision !== undefined) {
+      const collisionSql = rewriteIndexedBySql(collision.sql, replacements);
+      if (collisionSql === null) {
+        throw new Error(
+          `Cannot apply migration 0033 safely: cannot rewrite ${dependency.object.type} ` +
+            `${dependency.object.name} after its rename`,
+        );
+      }
+      collision.sql = collisionSql;
+      continue;
+    }
+
+    collisions.push({
+      type,
+      name: dependency.object.name,
+      table: dependency.object.tbl_name,
+      replacementName: dependency.object.name,
+      sql: executable,
+      temporary: dependency.temporary,
+    });
   }
 
   return collisions;
@@ -2116,12 +2346,13 @@ function applyMigrationNameCollisions(
   collisions: readonly MigrationNameCollision[],
 ): void {
   for (const collision of collisions) {
+    const schema = collision.temporary ? "temp." : "";
     if (collision.type === "index") {
-      db.exec(`DROP INDEX ${quoteIdentifier(collision.name)}`);
+      db.exec(`DROP INDEX ${schema}${quoteIdentifier(collision.name)}`);
     } else if (collision.type === "trigger") {
-      db.exec(`DROP TRIGGER ${quoteIdentifier(collision.name)}`);
+      db.exec(`DROP TRIGGER ${schema}${quoteIdentifier(collision.name)}`);
     } else {
-      db.exec(`DROP VIEW ${quoteIdentifier(collision.name)}`);
+      db.exec(`DROP VIEW ${schema}${quoteIdentifier(collision.name)}`);
     }
     db.exec(collision.sql);
   }
@@ -2139,19 +2370,169 @@ function savedViewsIndexProblems(definitions: readonly SavedViewsIndexDefinition
     .map((definition) => `index ${definition.name} has no recoverable column definition`);
 }
 
+function schemaObjectWithTypeAndName(
+  db: Database,
+  type: string,
+  name: string,
+  temporary: boolean,
+): { object: SchemaObjectRow; temporary: boolean } | null {
+  return (
+    schemaObjectsWithName(db, name).find(
+      (candidate) => candidate.temporary === temporary && candidate.object.type === type,
+    ) ?? null
+  );
+}
+
+function findIndexedByDependencyObject(
+  db: Database,
+  dependency: IndexedByDependency,
+  renamedObjects: readonly MigrationNameCollision[],
+): { object: SchemaObjectRow; temporary: boolean } | null {
+  const names = [dependency.object.name];
+  const renamed = renamedObjects.find(
+    (collision) =>
+      collision.type === dependency.object.type &&
+      collision.temporary === dependency.temporary &&
+      collision.name.toLowerCase() === dependency.object.name.toLowerCase(),
+  );
+  if (renamed !== undefined && renamed.replacementName !== dependency.object.name) {
+    names.push(renamed.replacementName);
+  }
+  for (const name of names) {
+    const current = schemaObjectWithTypeAndName(
+      db,
+      dependency.object.type,
+      name,
+      dependency.temporary,
+    );
+    if (current !== null) return current;
+  }
+  return null;
+}
+
+function dropSchemaObject(db: Database, type: string, name: string, temporary: boolean): void {
+  const schema = temporary ? "temp." : "";
+  if (type === "index") {
+    db.exec(`DROP INDEX ${schema}${quoteIdentifier(name)}`);
+  } else if (type === "trigger") {
+    db.exec(`DROP TRIGGER ${schema}${quoteIdentifier(name)}`);
+  } else {
+    db.exec(`DROP VIEW ${schema}${quoteIdentifier(name)}`);
+  }
+}
+
+function applyIndexedByDependencyRewrites(
+  db: Database,
+  dependencies: readonly IndexedByDependency[],
+  replacements: ReadonlyMap<string, string>,
+  renamedObjects: readonly MigrationNameCollision[],
+): void {
+  if (replacements.size === 0) return;
+  const operations: Array<{
+    current: { object: SchemaObjectRow; temporary: boolean } | null;
+    type: "view" | "trigger";
+    name: string;
+    temporary: boolean;
+    sql: string;
+  }> = [];
+
+  for (const dependency of dependencies) {
+    const dependencyReplacements = new Map<string, string>();
+    for (const indexName of dependency.indexNames) {
+      const replacementName = replacements.get(indexName.toLowerCase());
+      if (replacementName !== undefined) {
+        dependencyReplacements.set(indexName.toLowerCase(), replacementName);
+      }
+    }
+    if (dependencyReplacements.size === 0) continue;
+
+    const current = findIndexedByDependencyObject(db, dependency, renamedObjects);
+    const renamed = renamedObjects.find(
+      (collision) =>
+        collision.type === dependency.object.type &&
+        collision.temporary === dependency.temporary &&
+        collision.name.toLowerCase() === dependency.object.name.toLowerCase(),
+    );
+    if (current === null && renamed !== undefined && renamed.replacementName !== renamed.name) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: ${dependency.object.type} ${dependency.object.name} ` +
+          `was renamed but its dependent definition is unavailable`,
+      );
+    }
+
+    const object = current?.object ?? dependency.object;
+    const definition = object.sql;
+    if (definition === null) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: ${dependency.object.type} ${object.name} ` +
+          `has no recoverable definition`,
+      );
+    }
+    const rewritten = rewriteIndexedBySql(definition, dependencyReplacements);
+    if (rewritten === null) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: cannot rewrite ${dependency.object.type} ` +
+          `${object.name} INDEXED BY dependency`,
+      );
+    }
+    if (rewritten === definition) continue;
+
+    const type = object.type === "view" ? "view" : "trigger";
+    const temporary = current?.temporary ?? dependency.temporary;
+    const executable = temporary ? temporarySchemaDefinition(rewritten, type) : rewritten;
+    const executableDependency = { object, temporary };
+    if (
+      executable === null ||
+      !executableIndexedByDependencyDefinition(db, executableDependency, executable)
+    ) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: cannot recreate ${temporary ? "temporary " : ""}` +
+          `${type} ${object.name} after its INDEXED BY rewrite`,
+      );
+    }
+    operations.push({
+      current,
+      type,
+      name: object.name,
+      temporary,
+      sql: executable,
+    });
+  }
+
+  for (const operation of operations) {
+    if (operation.current !== null) {
+      dropSchemaObject(db, operation.type, operation.name, operation.temporary);
+    }
+    db.exec(operation.sql);
+  }
+}
+
 function restoreSavedViewsIndexes(
   db: Database,
   definitions: readonly SavedViewsIndexDefinition[],
+  dependencies: readonly IndexedByDependency[] = [],
+  renamedObjects: readonly MigrationNameCollision[] = [],
+  previousReplacements: ReadonlyMap<string, string> = new Map(),
 ): void {
+  const replacements = new Map(previousReplacements);
   for (const definition of definitions) {
     // Las constraints de tabla llegan con sql=NULL y origin u/pk. Si la tabla
     // canónica ya provee ese índice, se conserva su contrato; las demás se
     // materializan como índices explícitos con columnas de PRAGMA.
 
     const unique = definition.unique_value === 1;
-    if (
-      equivalentIndex(db, "saved_views", definition.terms, unique, undefined, definition.partial)
-    ) {
+    const equivalentName = equivalentIndexName(
+      db,
+      "saved_views",
+      definition.terms,
+      unique,
+      undefined,
+      definition.partial,
+    );
+    if (equivalentName !== null) {
+      if (definition.name.toLowerCase() !== equivalentName.toLowerCase()) {
+        replacements.set(definition.name.toLowerCase(), equivalentName);
+      }
       continue;
     }
     if (definition.sql !== null) {
@@ -2162,6 +2543,9 @@ function restoreSavedViewsIndexes(
         indexName === definition.name ? definition.sql : renamedIndexSql(definition.sql, indexName);
       if (sql === null) {
         throw new Error(`Cannot restore saved_views index ${definition.name} safely`);
+      }
+      if (definition.name.toLowerCase() !== indexName.toLowerCase()) {
+        replacements.set(definition.name.toLowerCase(), indexName);
       }
       db.exec(sql);
       continue;
@@ -2189,10 +2573,14 @@ function restoreSavedViewsIndexes(
         return `${column} COLLATE ${collation}${term.desc === 1 ? " DESC" : ""}`;
       })
       .join(", ");
+    if (definition.name.toLowerCase() !== indexName.toLowerCase()) {
+      replacements.set(definition.name.toLowerCase(), indexName);
+    }
     db.exec(
       `CREATE ${unique ? "UNIQUE " : ""}INDEX ${quoteIdentifier(indexName)} ON saved_views(${terms})`,
     );
   }
+  applyIndexedByDependencyRewrites(db, dependencies, replacements, renamedObjects);
 }
 
 function isSavedViewsForeignKeyRow(value: unknown): value is SavedViewsForeignKeyRow {
@@ -3109,7 +3497,8 @@ function reconcileLegacyViewsMigration(db: Database, marker: MigrationMarkerRow)
       `Cannot reconcile legacy Views migration: incomplete or incompatible schema or data. ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const nameCollisionPlan = viewsMigrationNameCollisionPlan(db, false);
+  const indexedByDependencies = schemaObjectsWithIndexedByDependencies(db);
+  const nameCollisionPlan = viewsMigrationNameCollisionPlan(db, false, indexedByDependencies);
   const notificationNameCollisionPlan = notificationMigrationNameCollisionPlan(db);
 
   db.transaction(() => {
@@ -3244,15 +3633,25 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
     // El preflight ocurre antes de desactivar las FKs o abrir la transacción para
     // que una base incompatible falle sin escrituras parciales y pueda repararse.
     if (migration.version === 33) validateViewsMigrationPrerequisites(db);
+    const indexedByDependencies =
+      migration.version === 33 ? schemaObjectsWithIndexedByDependencies(db) : [];
     // PRB-472 y PRB-390 reconstruyen el grafo de tablas para reemplazar FKs
     // simples por FKs compuestas. SQLite no permite cambiar foreign_keys dentro
     // de una transacción activa. El runner desactiva las comprobaciones solo
     // alrededor de estas migraciones y las reactiva aun si una falla.
     const rebuild = migration.version === 25 || migration.version === 33;
     const savedViewIndexes = migration.version === 33 ? savedViewsIndexDefinitions(db) : [];
-    const nameCollisionPlan = migration.version === 33 ? viewsMigrationNameCollisionPlan(db) : [];
+    const nameCollisionPlan =
+      migration.version === 33
+        ? viewsMigrationNameCollisionPlan(db, true, indexedByDependencies)
+        : [];
     const notificationNameCollisionPlan =
       migration.version === 32 ? notificationMigrationNameCollisionPlan(db) : [];
+    const previousIndexReplacements = new Map(
+      nameCollisionPlan
+        .filter((collision) => collision.type === "index")
+        .map((collision) => [collision.name.toLowerCase(), collision.replacementName]),
+    );
     if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
@@ -3264,7 +3663,15 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
         }
         if (migration.version === 33) applyMigrationNameCollisions(db, nameCollisionPlan);
         db.exec(migration.sql);
-        if (migration.version === 33) restoreSavedViewsIndexes(db, savedViewIndexes);
+        if (migration.version === 33) {
+          restoreSavedViewsIndexes(
+            db,
+            savedViewIndexes,
+            indexedByDependencies,
+            nameCollisionPlan,
+            previousIndexReplacements,
+          );
+        }
         if (migration.version === 24) {
           normalizeBackfilledMembershipIds(db);
           validateWorkspaceMigration(db, "after");
