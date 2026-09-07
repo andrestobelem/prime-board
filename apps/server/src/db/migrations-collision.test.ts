@@ -350,6 +350,103 @@ function seedLegacyViewsMigrationMarker(db: Database): void {
   ).run("2026-01-01T00:00:00.000Z");
 }
 
+function replaceSavedViewsTrigger(db: Database, name: string, definition: string | null): void {
+  switch (name) {
+    case "saved_views_workspace_scope_insert":
+      db.exec("DROP TRIGGER IF EXISTS saved_views_workspace_scope_insert");
+      break;
+    case "saved_views_workspace_required_insert":
+      db.exec("DROP TRIGGER IF EXISTS saved_views_workspace_required_insert");
+      break;
+    case "saved_views_workspace_required_update":
+      db.exec("DROP TRIGGER IF EXISTS saved_views_workspace_required_update");
+      break;
+    default:
+      throw new Error(`Unsupported Views trigger ${name}`);
+  }
+  if (definition !== null) db.exec(definition);
+}
+
+function assertSavedViewsTriggerBehavior(db: Database): void {
+  const workspaceValue = db.query("SELECT id FROM workspace LIMIT 1").values()[0]?.[0];
+  const actorValue = db.query("SELECT id FROM actors LIMIT 1").values()[0]?.[0];
+  if (typeof workspaceValue !== "string" || typeof actorValue !== "string") {
+    throw new Error("Trigger behavior fixture is missing its Workspace or Actor");
+  }
+
+  db.query(
+    `INSERT INTO saved_views
+      (id, name, scope, team_id, project_id, initiative_id, owner_id, filter_json, order_by,
+       group_by, created_at, updated_at, archived_at, columns_json, workspace_id)
+     VALUES ('view-trigger-behavior', 'Trigger behavior', 'personal', NULL, NULL, NULL, ?1, '{}',
+       'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', NULL)`,
+  ).run(actorValue);
+  expect(
+    db
+      .query("SELECT workspace_id FROM saved_views WHERE id = 'view-trigger-behavior'")
+      .values()[0]?.[0],
+  ).toBe(workspaceValue);
+  db.query(
+    `INSERT INTO saved_views
+      (id, name, scope, team_id, project_id, initiative_id, owner_id, filter_json, order_by,
+       group_by, created_at, updated_at, archived_at, columns_json, workspace_id)
+     VALUES ('view-trigger-explicit', 'Trigger explicit', 'personal', NULL, NULL, NULL, ?1, '{}',
+       'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', ?2)`,
+  ).run(actorValue, workspaceValue);
+  expect(
+    db
+      .query("SELECT workspace_id FROM saved_views WHERE id = 'view-trigger-explicit'")
+      .values()[0]?.[0],
+  ).toBe(workspaceValue);
+
+  db.query(
+    `INSERT INTO workspace (id, name, url_key, created_at, updated_at)
+     VALUES ('workspace-trigger-second', 'Trigger second', 'workspace-trigger-second',
+       '2026-01-01', '2026-01-01')`,
+  ).run();
+  db.query(
+    `INSERT INTO saved_views
+      (id, name, scope, team_id, project_id, initiative_id, owner_id, filter_json, order_by,
+       group_by, created_at, updated_at, archived_at, columns_json, workspace_id)
+     VALUES ('view-trigger-cross-workspace', 'Trigger cross Workspace', 'personal', NULL, NULL,
+       NULL, ?1, '{}', 'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', ?2)`,
+  ).run(actorValue, "workspace-trigger-second");
+  expect(
+    db
+      .query("SELECT workspace_id FROM saved_views WHERE id = 'view-trigger-cross-workspace'")
+      .values()[0]?.[0],
+  ).toBe("workspace-trigger-second");
+  db.query(
+    "UPDATE saved_views SET name = 'Trigger behavior updated' WHERE id = 'view-trigger-behavior'",
+  ).run();
+  expect(
+    db.query("SELECT name FROM saved_views WHERE id = 'view-trigger-behavior'").values()[0]?.[0],
+  ).toBe("Trigger behavior updated");
+
+  const beforeRejectedInsert = db.query("SELECT count(*) FROM saved_views").values()[0]?.[0];
+  expect(() =>
+    db
+      .query(
+        `INSERT INTO saved_views
+        (id, name, scope, team_id, project_id, initiative_id, owner_id, filter_json, order_by,
+         group_by, created_at, updated_at, archived_at, columns_json, workspace_id)
+       VALUES ('view-trigger-rejected', 'Rejected trigger insert', 'personal', NULL, NULL, NULL,
+         ?1, '{}', 'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', NULL)`,
+      )
+      .run(actorValue),
+  ).toThrow(/Workspace context is required for saved_views/);
+  expect(db.query("SELECT count(*) FROM saved_views").values()[0]?.[0]).toBe(beforeRejectedInsert);
+
+  expect(() =>
+    db.query("UPDATE saved_views SET workspace_id = NULL WHERE id = 'view-trigger-behavior'").run(),
+  ).toThrow(/Workspace context is required for saved_views/);
+  expect(
+    db
+      .query("SELECT workspace_id FROM saved_views WHERE id = 'view-trigger-behavior'")
+      .values()[0]?.[0],
+  ).toBe(workspaceValue);
+}
+
 describe("colisión de migraciones SQLite", () => {
   it("aplica Notifications y Views con versiones, tablas e índices únicos", () => {
     const db = openDatabase(":memory:");
@@ -1764,6 +1861,277 @@ describe("colisión de migraciones SQLite", () => {
       } finally {
         db.close();
       }
+    }
+  });
+
+  it("rechaza triggers Views falsos en comentarios o literales y permite reparar", () => {
+    const scopeFragment =
+      "AFTER INSERT ON saved_views WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1 BEGIN UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id; END";
+    const requiredInsertFragment =
+      "BEFORE INSERT ON saved_views WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1 BEGIN SELECT RAISE(ABORT, 'Workspace context is required for saved_views'); END";
+    const requiredUpdateFragment =
+      "BEFORE UPDATE OF workspace_id ON saved_views WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1 BEGIN SELECT RAISE(ABORT, 'Workspace context is required for saved_views'); END";
+    const canonicalScopeTrigger = `CREATE TRIGGER saved_views_workspace_scope_insert ${scopeFragment}`;
+    const canonicalRequiredInsertTrigger = `CREATE TRIGGER saved_views_workspace_required_insert ${requiredInsertFragment}`;
+    const canonicalRequiredUpdateTrigger = `CREATE TRIGGER saved_views_workspace_required_update ${requiredUpdateFragment}`;
+    const cases = [
+      {
+        name: "saved_views_workspace_scope_insert",
+        malformed: null,
+        repair: canonicalScopeTrigger,
+      },
+      {
+        name: "saved_views_workspace_scope_insert",
+        malformed: `CREATE TRIGGER saved_views_workspace_scope_insert
+          BEFORE INSERT ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+          BEGIN
+            SELECT 1;
+            /* ${scopeFragment} */
+          END`,
+        repair: canonicalScopeTrigger,
+      },
+      {
+        name: "saved_views_workspace_scope_insert",
+        malformed: `CREATE TRIGGER saved_views_workspace_scope_insert
+          AFTER INSERT ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+          BEGIN
+            SELECT '${scopeFragment}';
+          END`,
+        repair: canonicalScopeTrigger,
+      },
+      {
+        name: "saved_views_workspace_required_insert",
+        malformed: `CREATE TRIGGER saved_views_workspace_required_insert
+          AFTER INSERT ON teams
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+          BEGIN
+            SELECT 1;
+            /* ${requiredInsertFragment} */
+          END`,
+        repair: canonicalRequiredInsertTrigger,
+      },
+      {
+        name: "saved_views_workspace_required_insert",
+        malformed: `CREATE TRIGGER saved_views_workspace_required_insert
+          BEFORE UPDATE OF workspace_id ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+          BEGIN
+            SELECT 1;
+            /* ${requiredInsertFragment} */
+          END`,
+        repair: canonicalRequiredInsertTrigger,
+      },
+      {
+        name: "saved_views_workspace_required_update",
+        malformed: `CREATE TRIGGER saved_views_workspace_required_update
+          BEFORE UPDATE OF name ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+          BEGIN
+            /* ${requiredUpdateFragment} */
+            SELECT 1;
+          END`,
+        repair: canonicalRequiredUpdateTrigger,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const db = databaseWithMigrationsThrough(30);
+      try {
+        seedLegacyViewsMigrationMarker(db);
+        replaceSavedViewsTrigger(db, testCase.name, testCase.malformed);
+        const beforeRows = db
+          .query(
+            `SELECT 'saved_views' AS table_name, id, workspace_id FROM saved_views
+             UNION ALL
+             SELECT 'view_preferences', id, workspace_id FROM view_preferences
+             UNION ALL
+             SELECT 'view_subscriptions', id, workspace_id FROM view_subscriptions
+             ORDER BY table_name, id`,
+          )
+          .all();
+        const beforeSchema = db
+          .query(
+            `SELECT type, name, tbl_name, sql FROM sqlite_master
+             WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions', 'teams')
+                OR name IN ('saved_views_workspace_scope_insert',
+                            'saved_views_workspace_required_insert',
+                            'saved_views_workspace_required_update')
+             ORDER BY type, name`,
+          )
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const runMigration = () => migrate(db);
+
+        let firstError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          firstError = error instanceof Error ? error.message : String(error);
+        }
+        expect(firstError).toMatch(/legacy Views migration.*incompatible/i);
+        expect(firstError).toContain(testCase.name);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+        expect(
+          db
+            .query(
+              `SELECT 'saved_views' AS table_name, id, workspace_id FROM saved_views
+               UNION ALL
+               SELECT 'view_preferences', id, workspace_id FROM view_preferences
+               UNION ALL
+               SELECT 'view_subscriptions', id, workspace_id FROM view_subscriptions
+               ORDER BY table_name, id`,
+            )
+            .all(),
+        ).toEqual(beforeRows);
+        expect(
+          db
+            .query(
+              `SELECT type, name, tbl_name, sql FROM sqlite_master
+               WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions', 'teams')
+                  OR name IN ('saved_views_workspace_scope_insert',
+                              'saved_views_workspace_required_insert',
+                              'saved_views_workspace_required_update')
+               ORDER BY type, name`,
+            )
+            .all(),
+        ).toEqual(beforeSchema);
+
+        let secondError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          secondError = error instanceof Error ? error.message : String(error);
+        }
+        expect(secondError).toBe(firstError);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+        replaceSavedViewsTrigger(db, testCase.name, testCase.repair);
+        runMigration();
+        expect(
+          db
+            .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+            .all(),
+        ).toEqual([
+          { version: 32, name: "notification_preferences" },
+          { version: 33, name: "views_preferences" },
+        ]);
+        assertSavedViewsTriggerBehavior(db);
+        const migrationMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        runMigration();
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+          migrationMarkers,
+        );
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("revalida triggers con markers 32 y 33 sin DDL ni datos parciales", () => {
+    const canonical = `BEFORE UPDATE OF workspace_id ON saved_views
+      WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+      BEGIN
+        SELECT RAISE(ABORT, 'Workspace context is required for saved_views');
+      END`;
+    const malformed = `BEFORE UPDATE OF workspace_id ON saved_views
+      WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+      BEGIN
+        SELECT 1;
+        /* ${canonical} */
+      END`;
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      migrate(db);
+      replaceSavedViewsTrigger(
+        db,
+        "saved_views_workspace_required_update",
+        `CREATE TRIGGER saved_views_workspace_required_update ${malformed}`,
+      );
+      const beforeRows = db
+        .query(
+          `SELECT 'saved_views' AS table_name, id, workspace_id FROM saved_views
+           UNION ALL
+           SELECT 'view_preferences', id, workspace_id FROM view_preferences
+           UNION ALL
+           SELECT 'view_subscriptions', id, workspace_id FROM view_subscriptions
+           ORDER BY table_name, id`,
+        )
+        .all();
+      const beforeSchema = db
+        .query(
+          `SELECT type, name, tbl_name, sql FROM sqlite_master
+           WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+              OR name IN ('saved_views_workspace_scope_insert',
+                          'saved_views_workspace_required_insert',
+                          'saved_views_workspace_required_update')
+           ORDER BY type, name`,
+        )
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      let firstError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(/migration 0033.*incompatible/i);
+      expect(firstError).toContain("saved_views_workspace_required_update");
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db
+          .query(
+            `SELECT 'saved_views' AS table_name, id, workspace_id FROM saved_views
+             UNION ALL
+             SELECT 'view_preferences', id, workspace_id FROM view_preferences
+             UNION ALL
+             SELECT 'view_subscriptions', id, workspace_id FROM view_subscriptions
+             ORDER BY table_name, id`,
+          )
+          .all(),
+      ).toEqual(beforeRows);
+      expect(
+        db
+          .query(
+            `SELECT type, name, tbl_name, sql FROM sqlite_master
+             WHERE tbl_name IN ('saved_views', 'view_preferences', 'view_subscriptions')
+                OR name IN ('saved_views_workspace_scope_insert',
+                            'saved_views_workspace_required_insert',
+                            'saved_views_workspace_required_update')
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual(beforeSchema);
+
+      let secondError = "";
+      try {
+        runMigration();
+      } catch (error) {
+        secondError = error instanceof Error ? error.message : String(error);
+      }
+      expect(secondError).toBe(firstError);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+      replaceSavedViewsTrigger(
+        db,
+        "saved_views_workspace_required_update",
+        `CREATE TRIGGER saved_views_workspace_required_update ${canonical}`,
+      );
+      runMigration();
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      assertSavedViewsTriggerBehavior(db);
+      const migrationMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      runMigration();
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        migrationMarkers,
+      );
+    } finally {
+      db.close();
     }
   });
 });

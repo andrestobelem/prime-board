@@ -492,6 +492,12 @@ interface SqlDefinitionRow {
   sql: string | null;
 }
 
+interface TriggerDefinitionRow {
+  name: string | null;
+  tbl_name: string | null;
+  sql: string | null;
+}
+
 interface SchemaObjectRow {
   type: string;
   name: string;
@@ -1057,6 +1063,199 @@ function isSqlNameToken(token: SqlToken | undefined): token is SqlToken {
 
 function isSqlKeyword(token: SqlToken | undefined, keyword: string): boolean {
   return token?.kind === "identifier" && token.value.toLowerCase() === keyword;
+}
+
+type TriggerTiming = "before" | "after" | "instead of";
+
+type TriggerEvent =
+  { kind: "insert" } | { kind: "delete" } | { kind: "update"; columns: readonly string[] };
+
+interface ParsedTriggerDefinition {
+  name: string;
+  table: string;
+  timing: TriggerTiming;
+  event: TriggerEvent;
+  forEachRow: boolean;
+  when: readonly SqlToken[];
+  body: readonly SqlToken[];
+}
+
+interface TriggerContract {
+  name: string;
+  table: string;
+  timing: TriggerTiming;
+  event: TriggerEvent;
+  forEachRow: boolean;
+  when: string;
+  body: string;
+}
+
+const VIEWS_MIGRATION_TRIGGER_CONTRACTS = [
+  {
+    name: "saved_views_workspace_scope_insert",
+    table: "saved_views",
+    timing: "after",
+    event: { kind: "insert" },
+    forEachRow: false,
+    when: "NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1",
+    body: "UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id;",
+  },
+  {
+    name: "saved_views_workspace_required_insert",
+    table: "saved_views",
+    timing: "before",
+    event: { kind: "insert" },
+    forEachRow: false,
+    when: "NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1",
+    body: "SELECT RAISE(ABORT, 'Workspace context is required for saved_views');",
+  },
+  {
+    name: "saved_views_workspace_required_update",
+    table: "saved_views",
+    timing: "before",
+    event: { kind: "update", columns: ["workspace_id"] },
+    forEachRow: false,
+    when: "NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1",
+    body: "SELECT RAISE(ABORT, 'Workspace context is required for saved_views');",
+  },
+] satisfies readonly TriggerContract[];
+
+/**
+ * Los triggers contienen sentencias separadas por `;` dentro de BEGIN/END.
+ * El tokenizer de PRB-641 ya excluye comentarios y conserva literales; aquí se
+ * elimina solo el punto y coma final opcional antes de analizar la definición.
+ */
+function triggerStatementTokens(definition: string): readonly SqlToken[] | null {
+  const parsed = sqliteTokens(definition);
+  if (parsed === null) return null;
+  const last = parsed[parsed.length - 1];
+  return last?.value === ";" ? parsed.slice(0, -1) : parsed;
+}
+
+function triggerBeginPosition(tokens: readonly SqlToken[], start: number): number | null {
+  let depth = 0;
+  for (let position = start; position < tokens.length; position += 1) {
+    const token = tokens[position];
+    if (token?.value === "(") {
+      depth += 1;
+      continue;
+    }
+    if (token?.value === ")") {
+      if (depth === 0) return null;
+      depth -= 1;
+      continue;
+    }
+    if (depth === 0 && isSqlKeyword(token, "begin")) return position;
+  }
+  return null;
+}
+
+function triggerDefinitionFromSql(definition: string): ParsedTriggerDefinition | null {
+  const tokens = triggerStatementTokens(definition);
+  if (tokens === null) return null;
+
+  let position = 0;
+  if (!isSqlKeyword(tokens[position], "create")) return null;
+  position += 1;
+  if (!isSqlKeyword(tokens[position], "trigger")) return null;
+  position += 1;
+
+  const nameToken = tokens[position];
+  if (!isSqlNameToken(nameToken)) return null;
+  position += 1;
+
+  let timing: TriggerTiming;
+  if (isSqlKeyword(tokens[position], "before")) {
+    timing = "before";
+    position += 1;
+  } else if (isSqlKeyword(tokens[position], "after")) {
+    timing = "after";
+    position += 1;
+  } else if (isSqlKeyword(tokens[position], "instead")) {
+    if (!isSqlKeyword(tokens[position + 1], "of")) return null;
+    timing = "instead of";
+    position += 2;
+  } else {
+    return null;
+  }
+
+  let event: TriggerEvent;
+  if (isSqlKeyword(tokens[position], "insert")) {
+    event = { kind: "insert" };
+    position += 1;
+  } else if (isSqlKeyword(tokens[position], "delete")) {
+    event = { kind: "delete" };
+    position += 1;
+  } else if (isSqlKeyword(tokens[position], "update")) {
+    position += 1;
+    const columns: string[] = [];
+    if (isSqlKeyword(tokens[position], "of")) {
+      position += 1;
+      const firstColumn = tokens[position];
+      if (!isSqlNameToken(firstColumn)) return null;
+      columns.push(firstColumn.value);
+      position += 1;
+      while (tokens[position]?.value === ",") {
+        position += 1;
+        const column = tokens[position];
+        if (!isSqlNameToken(column)) return null;
+        columns.push(column.value);
+        position += 1;
+      }
+    }
+    event = { kind: "update", columns };
+  } else {
+    return null;
+  }
+
+  if (!isSqlKeyword(tokens[position], "on")) return null;
+  position += 1;
+  const tableToken = tokens[position];
+  if (!isSqlNameToken(tableToken)) return null;
+  position += 1;
+
+  let forEachRow = false;
+  if (isSqlKeyword(tokens[position], "for")) {
+    if (!isSqlKeyword(tokens[position + 1], "each") || !isSqlKeyword(tokens[position + 2], "row")) {
+      return null;
+    }
+    forEachRow = true;
+    position += 3;
+  }
+
+  let when: readonly SqlToken[] = [];
+  if (isSqlKeyword(tokens[position], "when")) {
+    position += 1;
+    const begin = triggerBeginPosition(tokens, position);
+    if (begin === null || begin === position) return null;
+    when = tokens.slice(position, begin);
+    position = begin;
+  }
+
+  if (!isSqlKeyword(tokens[position], "begin")) return null;
+  const end = tokens.length - 1;
+  if (!isSqlKeyword(tokens[end], "end") || end <= position + 1) return null;
+
+  return {
+    name: nameToken.value,
+    table: tableToken.value,
+    timing,
+    event,
+    forEachRow,
+    when,
+    body: tokens.slice(position + 1, end),
+  };
+}
+
+function sameTriggerEvent(left: TriggerEvent, right: TriggerEvent): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind !== "update" || right.kind !== "update") return true;
+  return (
+    left.columns.length === right.columns.length &&
+    left.columns.every(
+      (column, position) => column.toLowerCase() === right.columns[position]?.toLowerCase(),
+    )
+  );
 }
 
 /**
@@ -1734,17 +1933,43 @@ function foreignKeyProblems(
   ];
 }
 
-function triggerProblems(db: Database, expected: Readonly<Record<string, string>>): string[] {
-  return Object.entries(expected).flatMap(([name, fragment]) => {
+/**
+ * Valida la identidad y las operaciones ejecutables del trigger. No usa una
+ * coincidencia textual: comentarios se descartan y literales permanecen como
+ * un token, por lo que ninguno puede satisfacer el contrato por accidente.
+ */
+function triggerProblems(db: Database, expected: readonly TriggerContract[]): string[] {
+  return expected.flatMap((contract) => {
     const definition = db
-      .query<SqlDefinitionRow, SQLQueryBindings[]>(
-        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+      .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+        "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
       )
-      .get(name);
-    if (!definition?.sql || !normalizedSql(definition.sql).includes(normalizedSql(fragment))) {
-      return [`missing or incompatible trigger ${name}`];
-    }
-    return [];
+      .get(contract.name);
+    const actual =
+      definition !== null && definition !== undefined && typeof definition.sql === "string"
+        ? triggerDefinitionFromSql(definition.sql)
+        : null;
+    const expectedWhen = sqliteTokens(contract.when);
+    const expectedBody = sqliteTokens(contract.body);
+    const valid =
+      definition !== null &&
+      definition !== undefined &&
+      typeof definition.name === "string" &&
+      typeof definition.tbl_name === "string" &&
+      typeof definition.sql === "string" &&
+      definition.name.toLowerCase() === contract.name.toLowerCase() &&
+      definition.tbl_name.toLowerCase() === contract.table.toLowerCase() &&
+      actual !== null &&
+      actual.name.toLowerCase() === contract.name.toLowerCase() &&
+      actual.table.toLowerCase() === contract.table.toLowerCase() &&
+      actual.timing === contract.timing &&
+      sameTriggerEvent(actual.event, contract.event) &&
+      actual.forEachRow === contract.forEachRow &&
+      expectedWhen !== null &&
+      sameSqlTokens(comparableSqlTokens(actual.when), comparableSqlTokens(expectedWhen)) &&
+      expectedBody !== null &&
+      sameSqlTokens(comparableSqlTokens(actual.body), comparableSqlTokens(expectedBody));
+    return valid ? [] : [`missing or incompatible trigger ${contract.name}`];
   });
 }
 
@@ -1868,16 +2093,7 @@ function viewsMigrationSchemaProblems(db: Database, requireWorkspaceIndex: boole
       );
     }
   }
-  problems.push(
-    ...triggerProblems(db, {
-      saved_views_workspace_scope_insert:
-        "AFTER INSERT ON saved_views WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1 BEGIN UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id; END",
-      saved_views_workspace_required_insert:
-        "BEFORE INSERT ON saved_views WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1 BEGIN SELECT RAISE(ABORT, 'Workspace context is required for saved_views'); END",
-      saved_views_workspace_required_update:
-        "BEFORE UPDATE OF workspace_id ON saved_views WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1 BEGIN SELECT RAISE(ABORT, 'Workspace context is required for saved_views'); END",
-    }),
-  );
+  problems.push(...triggerProblems(db, VIEWS_MIGRATION_TRIGGER_CONTRACTS));
 
   return problems;
 }
