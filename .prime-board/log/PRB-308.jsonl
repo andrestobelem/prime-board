@@ -3,3 +3,4 @@
 {"actor":"admin","issue":"PRB-308","payload":{"from":null,"to":"admin"},"ts":"2026-08-18T04:51:50.099Z","type":"assigned"}
 {"actor":"admin","issue":"PRB-308","payload":{"type":"duplicate_of","issue":"PRB-333"},"ts":"2026-08-18T04:54:43.778Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-308","payload":{"from":"PRB/In Progress","to":"PRB/Canceled"},"ts":"2026-08-18T04:54:43.816Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-308","payload":{"type":"related","issue":"PRB-334"},"ts":"2026-09-06T17:22:10.184Z","type":"relation_added"}

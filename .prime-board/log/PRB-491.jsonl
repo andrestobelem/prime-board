@@ -14,3 +14,5 @@
 {"actor":"admin","issue":"PRB-491","payload":{"label":"db"},"ts":"2026-08-21T19:25:57.264Z","type":"labeled"}
 {"actor":"admin","issue":"PRB-491","payload":{"label":"cli"},"ts":"2026-08-21T19:25:57.655Z","type":"unlabeled"}
 {"actor":"admin","issue":"PRB-491","payload":{"label":"db"},"ts":"2026-08-21T19:25:58.063Z","type":"unlabeled"}
+{"actor":"admin","issue":"PRB-491","payload":{"body":"## Triage\n\nRevisada. Tiene criterios suficientes, pero queda bloqueada por PRB-488, PRB-489 y PRB-490; se mantiene en Backlog hasta completar la matriz QA."},"ts":"2026-08-26T07:04:33.999Z","type":"commented"}
+{"actor":"admin","issue":"PRB-491","payload":{"from":"Needs Triage","to":"PRB/Backlog"},"ts":"2026-08-26T07:04:34.403Z","type":"state_changed"}

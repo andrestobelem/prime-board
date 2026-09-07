@@ -3,3 +3,4 @@
 {"actor":"admin","issue":"PRB-344","payload":{"from":null,"to":"admin"},"ts":"2026-08-18T05:42:41.027Z","type":"assigned"}
 {"actor":"admin","issue":"PRB-344","payload":{"body":"Corregido updated_at en ambos extremos de relaciones al crear y borrar. Regresiones de relaciones pasan; suite completa 339 pass."},"ts":"2026-08-18T06:00:56.860Z","type":"commented"}
 {"actor":"admin","issue":"PRB-344","payload":{"from":"PRB/In Progress","to":"PRB/Done"},"ts":"2026-08-18T06:00:56.895Z","type":"state_changed"}
+{"actor":"admin","issue":"PRB-344","payload":{"type":"related","issue":"PRB-307"},"ts":"2026-09-06T17:22:09.775Z","type":"relation_added"}

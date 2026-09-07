@@ -7,3 +7,4 @@
 {"actor":"admin","issue":"PRB-307","payload":{"type":"duplicate_of","issue":"PRB-322"},"ts":"2026-08-18T04:54:43.700Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-307","payload":{"from":"PRB/In Progress","to":"PRB/Canceled"},"ts":"2026-08-18T04:54:43.741Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-307","payload":{"type":"related","issue":"PRB-469"},"ts":"2026-08-21T18:06:11.054Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-307","payload":{"type":"related","issue":"PRB-344"},"ts":"2026-09-06T17:22:09.775Z","type":"relation_added"}

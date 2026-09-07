@@ -14,3 +14,5 @@
 {"actor":"admin","issue":"PRB-444","payload":{"from":"PRB/Needs Info","to":"PRB/Done"},"ts":"2026-08-23T04:13:13.223Z","type":"state_changed"}
 {"actor":"admin","issue":"PRB-444","payload":{"body":"Aprobado por revisión humana. La implementación de Webhooks y dispatcher queda aceptada con la evidencia del commit `7a8e722`: 356 tests del servidor, typecheck, Prettier y `git diff --check` pasan. La brecha de tests externos del launcher queda documentada."},"ts":"2026-08-23T04:13:43.773Z","type":"commented"}
 {"actor":"admin","issue":"PRB-444","payload":{"label":"pausa"},"ts":"2026-08-25T03:57:34.544Z","type":"labeled"}
+{"actor":"admin","issue":"PRB-444","payload":{"type":"related","issue":"PRB-602"},"ts":"2026-09-06T18:30:47.352Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-444","payload":{"type":"related","issue":"PRB-603"},"ts":"2026-09-06T18:30:48.669Z","type":"relation_added"}

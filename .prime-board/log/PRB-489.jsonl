@@ -4,3 +4,5 @@
 {"actor":"admin","issue":"PRB-489","payload":{"type":"blocked_by","issue":"PRB-419"},"ts":"2026-08-21T18:34:57.458Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-489","payload":{"type":"blocks","issue":"PRB-491"},"ts":"2026-08-21T18:34:57.774Z","type":"relation_added"}
 {"actor":"admin","issue":"PRB-489","payload":{"type":"blocks","issue":"PRB-420"},"ts":"2026-08-21T18:37:21.409Z","type":"relation_added"}
+{"actor":"admin","issue":"PRB-489","payload":{"body":"## Triage\n\nRevisada. Tiene criterios suficientes, pero queda bloqueada por PRB-415, PRB-418 y PRB-419; se mantiene en Backlog hasta completar clientes/UI/GraphQL."},"ts":"2026-08-26T07:04:35.618Z","type":"commented"}
+{"actor":"admin","issue":"PRB-489","payload":{"from":"Needs Triage","to":"PRB/Backlog"},"ts":"2026-08-26T07:04:36.021Z","type":"state_changed"}
