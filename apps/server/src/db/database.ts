@@ -1785,16 +1785,32 @@ function temporarySchemaDefinition(definition: string, type: "view" | "trigger")
   return `${definition.slice(0, createToken.end)} TEMP${definition.slice(createToken.end)}`;
 }
 
-function renamedSchemaObjectSql(
-  type: RecreatedSchemaObjectType,
-  definition: string,
-  name: string,
-  expectedTable: string,
-  expectedName: string,
-): string | null {
-  return type === "view"
-    ? renamedViewSql(definition, name, expectedName)
-    : renamedTriggerSql(definition, name, expectedTable, expectedName);
+type RenamedSchemaObjectSqlOptions =
+  | { type: "view"; definition: string; name: string; expectedName: string }
+  | {
+      type: "trigger";
+      definition: string;
+      name: string;
+      expectedTable: string;
+      expectedName: string;
+    };
+
+function renamedSchemaObjectSql(options: RenamedSchemaObjectSqlOptions): string | null {
+  switch (options.type) {
+    case "view":
+      return renamedViewSql(options.definition, options.name, options.expectedName);
+    case "trigger":
+      return renamedTriggerSql(
+        options.definition,
+        options.name,
+        options.expectedTable,
+        options.expectedName,
+      );
+    default: {
+      const _exhaustive: never = options;
+      return _exhaustive;
+    }
+  }
 }
 
 function indexedByReferenceUsesExistingIndex(db: Database, reference: IndexedByReference): boolean {
@@ -2667,12 +2683,18 @@ function recreatedSchemaObjectNameInUse(
   temporary: boolean,
   name: string,
 ): boolean {
-  if (type === "trigger") {
-    return schemaObjectsWithName(db, name).some(
-      (candidate) => candidate.temporary === temporary && candidate.object.type === "trigger",
-    );
+  switch (type) {
+    case "trigger":
+      return schemaObjectsWithName(db, name).some(
+        (candidate) => candidate.temporary === temporary && candidate.object.type === "trigger",
+      );
+    case "view":
+      return migrationObjectNameInUse(db, name);
+    default: {
+      const _exhaustive: never = type;
+      return _exhaustive;
+    }
   }
-  return migrationObjectNameInUse(db, name);
 }
 
 function executableIndexedByDependencyDefinition(
@@ -2686,13 +2708,21 @@ function executableIndexedByDependencyDefinition(
   for (let suffix = 2; probeInUse(probeName); suffix += 1) {
     probeName = `__prb656_${dependency.object.type}_probe_${suffix}`;
   }
-  const probe = renamedSchemaObjectSql(
-    dependency.object.type,
-    definition,
-    probeName,
-    dependency.object.tbl_name,
-    dependency.object.name,
-  );
+  const probe =
+    dependency.object.type === "view"
+      ? renamedSchemaObjectSql({
+          type: "view",
+          definition,
+          name: probeName,
+          expectedName: dependency.object.name,
+        })
+      : renamedSchemaObjectSql({
+          type: "trigger",
+          definition,
+          name: probeName,
+          expectedTable: dependency.object.tbl_name,
+          expectedName: dependency.object.name,
+        });
   return probe !== null && executableSchemaDefinition(db, probe);
 }
 
@@ -2866,11 +2896,18 @@ function dropSchemaObject(
   temporary: boolean,
 ): void {
   const schema = temporary ? "temp." : "";
-  if (type === "trigger") {
-    db.exec(`DROP TRIGGER ${schema}${quoteIdentifier(name)}`);
-    return;
+  switch (type) {
+    case "trigger":
+      db.exec(`DROP TRIGGER ${schema}${quoteIdentifier(name)}`);
+      return;
+    case "view":
+      db.exec(`DROP VIEW ${schema}${quoteIdentifier(name)}`);
+      return;
+    default: {
+      const _exhaustive: never = type;
+      return _exhaustive;
+    }
   }
-  db.exec(`DROP VIEW ${schema}${quoteIdentifier(name)}`);
 }
 
 function applyIndexedByDependencyRewrites(
