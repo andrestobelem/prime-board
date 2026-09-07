@@ -197,11 +197,30 @@ describe("mcp tools", () => {
     expect(restored.archivedAt).toBeNull();
   });
 
+  it("crea el horizonte inicial de cycles desde save_team", async () => {
+    const team = parseResult(
+      await client.callTool({
+        name: "save_team",
+        arguments: {
+          name: "MCP cycle horizon",
+          key: "HMC",
+          cyclesEnabled: true,
+          cycleUpcomingCount: 2,
+        },
+      }),
+    );
+    const cycles = parseResult(
+      await client.callTool({ name: "list_cycles", arguments: { team: team.id } }),
+    );
+    expect(cycles).toHaveLength(2);
+    expect(cycles.every((cycle: any) => cycle.cadenceSource === "CADENCE")).toBe(true);
+  });
+
   it("borra definitivamente un Team vacío con confirmación explícita", async () => {
     const team = parseResult(
       await client.callTool({
         name: "save_team",
-        arguments: { name: "MCP disposable", key: "MDL" },
+        arguments: { name: "MCP disposable", key: "MDL", cyclesEnabled: false },
       }),
     );
     const mismatch = await client.callTool({

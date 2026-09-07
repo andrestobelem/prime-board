@@ -10,6 +10,7 @@ import {
   type TeamRow,
   type WorkflowStateRow,
 } from "./teams.ts";
+import { ensureUpcomingPostgresCadenceCyclesInTransaction } from "./postgres-cycles.ts";
 
 const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"] as const;
 type StateType = (typeof STATE_TYPES)[number];
@@ -227,6 +228,11 @@ export async function createPostgresTeam(
         ],
       );
       await seedPostgresWorkflow(tx, id, timestamp);
+      if (settings.cyclesEnabled) {
+        const created = await getPostgresTeam(tx, { id });
+        if (!created) throw new Error("PostgreSQL team insert returned no row");
+        await ensureUpcomingPostgresCadenceCyclesInTransaction(tx, created);
+      }
       if (ownerId) {
         await tx.execute(
           "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES ($1, $2, $3, 'owner', $4)",
