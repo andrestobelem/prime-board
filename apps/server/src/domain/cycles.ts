@@ -5,9 +5,14 @@ import { newId, now } from "../db/util.ts";
 import { parseDateTime } from "./datetime.ts";
 import { recordActivity } from "./activity.ts";
 import { mapTeamPlanningSettings, type CycleCadenceSource } from "./teams.ts";
-import { cadenceDates as computeCadenceDates, type CycleCadenceSettings } from "./cycle-cadence.ts";
+import {
+  addCalendarDays as addCycleCalendarDays,
+  cadenceDates as computeCadenceDates,
+  type CycleCadenceSettings,
+} from "./cycle-cadence.ts";
 
 export type CycleState = "upcoming" | "active" | "completed";
+export type AutoAddStateType = "unstarted" | "started" | "completed";
 
 function workspaceClause(column: string, parameter: string): string {
   return `(${column} = ${parameter} OR (${column} IS NULL AND (SELECT count(*) FROM workspace) = 1))`;
@@ -103,12 +108,6 @@ function databaseBoolean(value: unknown): boolean {
   return value === true || value === 1;
 }
 
-function addCalendarDays(value: string, days: number, field: string): string {
-  const date = new Date(parseDateTime(value, field));
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString();
-}
-
 function cadenceSettings(team: import("./teams.ts").TeamRow): CycleCadenceSettings {
   const settings = mapTeamPlanningSettings(team);
   return {
@@ -166,6 +165,121 @@ function resolveState(state: string): CycleState {
   return normalized;
 }
 
+function findCurrentAutoAddCycle(
+  db: Database,
+  teamId: string,
+  workspaceId?: string,
+): CycleRow | null {
+  const workspace = workspaceId ? ` AND ${workspaceClause("workspace_id", "?2")}` : "";
+  const query = `SELECT * FROM cycles
+    WHERE team_id = ?1 AND state = 'active' AND archived_at IS NULL${workspace}
+    ORDER BY number DESC LIMIT 1`;
+  const active = (
+    workspaceId ? db.query(query).get(teamId, workspaceId) : db.query(query).get(teamId)
+  ) as CycleRow | null;
+  if (active) return active;
+
+  const upcomingQuery = `SELECT * FROM cycles
+    WHERE team_id = ?1 AND state = 'upcoming' AND archived_at IS NULL${workspace}
+    ORDER BY number LIMIT 1`;
+  return (
+    workspaceId
+      ? db.query(upcomingQuery).get(teamId, workspaceId)
+      : db.query(upcomingQuery).get(teamId)
+  ) as CycleRow | null;
+}
+
+function findPreviousCompletedCycle(
+  db: Database,
+  cycle: CycleRow,
+  workspaceId?: string,
+): CycleRow | null {
+  const workspace = workspaceId ? ` AND ${workspaceClause("workspace_id", "?3")}` : "";
+  const query = `SELECT * FROM cycles
+    WHERE team_id = ?1 AND number < ?2 AND state = 'completed' AND archived_at IS NULL${workspace}
+    ORDER BY number DESC LIMIT 1`;
+  return (
+    workspaceId
+      ? db.query(query).get(cycle.team_id, cycle.number, workspaceId)
+      : db.query(query).get(cycle.team_id, cycle.number)
+  ) as CycleRow | null;
+}
+
+function findNextUpcomingCycle(
+  db: Database,
+  cycle: CycleRow,
+  workspaceId?: string,
+): CycleRow | null {
+  const workspace = workspaceId ? ` AND ${workspaceClause("workspace_id", "?3")}` : "";
+  const query = `SELECT * FROM cycles
+    WHERE team_id = ?1 AND number > ?2 AND state = 'upcoming' AND archived_at IS NULL${workspace}
+    ORDER BY number LIMIT 1`;
+  return (
+    workspaceId
+      ? db.query(query).get(cycle.team_id, cycle.number, workspaceId)
+      : db.query(query).get(cycle.team_id, cycle.number)
+  ) as CycleRow | null;
+}
+
+function isCycleCooldown(
+  team: import("./teams.ts").TeamRow,
+  previous: CycleRow | null,
+  next: CycleRow,
+  referenceAt: number,
+): boolean {
+  const cooldownDays = Number(team.cycle_cooldown_days ?? 0);
+  if (!previous || cooldownDays <= 0) return false;
+  const previousEndsAt = parseDateTime(previous.ends_at, "Cycle endsAt");
+  const nextStartsAt = parseDateTime(next.starts_at, "Cycle startsAt");
+  if (referenceAt < previousEndsAt || referenceAt >= nextStartsAt) return false;
+  // The configured cooldown is the upper bound. A manually adjusted cycle can
+  // start earlier, but must not extend the cooldown beyond the configured gap.
+  const configuredEnd = parseDateTime(
+    addCycleCalendarDays(previous.ends_at, cooldownDays + 1, team.timezone),
+    "Cycle cooldown end",
+  );
+  return referenceAt < Math.min(nextStartsAt, configuredEnd);
+}
+
+/**
+ * Selecciona el Cycle que debe recibir una Issue sin asignar.
+ *
+ * `unstarted` y `started` usan el Cycle ACTIVE actual, o el próximo UPCOMING
+ * cuando el Team todavía está entre Cycles. `completed` usa el Cycle anterior
+ * solo durante el cooldown; fuera de ese intervalo usa el Cycle ACTIVE actual.
+ * Devuelve null si Cycles o la automatización están deshabilitados.
+ */
+export function findAutoAddCycle(
+  db: Database,
+  teamId: string,
+  stateType: AutoAddStateType,
+  workspaceId?: string,
+  referenceAt = Date.now(),
+): CycleRow | null {
+  const team = getTeamSettings(db, teamId, workspaceId);
+  if (!databaseBoolean(team.cycles_enabled) || !databaseBoolean(team.cycle_auto_add_enabled)) {
+    return null;
+  }
+  const current = findCurrentAutoAddCycle(db, teamId, workspaceId);
+  if (!current) return null;
+  const active = current.state === "active" ? current : null;
+  const next = active ? findNextUpcomingCycle(db, active, workspaceId) : null;
+  if (stateType !== "completed") {
+    // An ACTIVE cycle whose end has passed is still represented as ACTIVE until
+    // the next advance. During that gap, Started issues belong to the next
+    // UPCOMING cycle instead of the closed cycle.
+    if (active && next && isCycleCooldown(team, active, next, referenceAt)) return next;
+    return current;
+  }
+
+  // In a cooldown after an ACTIVE cycle, Completed issues belong to that
+  // closing cycle even before the advance mutation marks it completed.
+  if (active && next && isCycleCooldown(team, active, next, referenceAt)) return active;
+  const previous = findPreviousCompletedCycle(db, current, workspaceId);
+  if (isCycleCooldown(team, previous, current, referenceAt)) return previous;
+  return active;
+}
+
 export function createCycle(
   db: Database,
   input: {
@@ -178,6 +292,7 @@ export function createCycle(
     cadenceSource?: string | null;
   },
   workspaceId?: string,
+  actorId?: string,
 ): CycleRow {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
@@ -268,6 +383,10 @@ export function createCycle(
       ensureUpcomingCadenceCycles(db, input.teamId, workspaceId);
     }
     result = getCycle(db, id, workspaceId)!;
+    if (actorId && state === "active" && databaseBoolean(team.cycle_auto_add_enabled)) {
+      autoAddActiveIssues(db, actorId, result, workspaceId);
+      result = getCycle(db, id, workspaceId)!;
+    }
   })();
   return result!;
 }
@@ -281,6 +400,7 @@ export function createCycleFromCadence(
     state?: string | null;
   },
   workspaceId?: string,
+  actorId?: string,
 ): CycleRow {
   return createCycle(
     db,
@@ -292,6 +412,7 @@ export function createCycleFromCadence(
       fromCadence: true,
     },
     workspaceId,
+    actorId,
   );
 }
 
@@ -470,19 +591,24 @@ function rolloverCycleIssues(
   return rows.length;
 }
 
-function autoAddActiveIssues(
+function autoAddIssuesToCycle(
   db: Database,
   actorId: string,
   cycle: CycleRow,
+  stateTypes: readonly AutoAddStateType[],
   workspaceId?: string,
 ): number {
+  if (!stateTypes.length) return 0;
+  const stateFilter = stateTypes.map((state) => `'${state}'`).join(", ");
   const workspace = workspaceId ? ` AND ${workspaceClause("issues.workspace_id", "?2")}` : "";
   const rows = db
     .query(
       `SELECT id, workspace_id FROM issues
        WHERE team_id = ?1 AND cycle_id IS NULL${workspace}
          AND archived_at IS NULL
-         AND state_id IN (SELECT id FROM workflow_states WHERE team_id = ?1 AND type IN ('unstarted', 'started'))`,
+         AND state_id IN (
+           SELECT id FROM workflow_states WHERE team_id = ?1 AND type IN (${stateFilter})
+         )`,
     )
     .all(...(workspaceId ? [cycle.team_id, workspaceId] : [cycle.team_id])) as Array<{
     id: string;
@@ -491,9 +617,11 @@ function autoAddActiveIssues(
   const timestamp = now();
   db.query(
     `UPDATE issues SET cycle_id = ?1, updated_at = ?2
-     WHERE team_id = ?3 AND cycle_id IS NULL${workspaceId ? ` AND ${workspaceClause("workspace_id", "?4")}` : ""}
+     WHERE team_id = ?3 AND cycle_id IS NULL${workspaceId ? ` AND ${workspaceClause("issues.workspace_id", "?4")}` : ""}
        AND archived_at IS NULL
-       AND state_id IN (SELECT id FROM workflow_states WHERE team_id = ?3 AND type IN ('unstarted', 'started'))`,
+       AND state_id IN (
+         SELECT id FROM workflow_states WHERE team_id = ?3 AND type IN (${stateFilter})
+       )`,
   ).run(
     ...(workspaceId
       ? [cycle.id, timestamp, cycle.team_id, workspaceId]
@@ -511,6 +639,104 @@ function autoAddActiveIssues(
     );
   }
   return rows.length;
+}
+
+/**
+ * Asigna una Issue sin Cycle al destino que corresponde a su estado.
+ * La operación es idempotente: solo actualiza filas con `cycle_id IS NULL`.
+ * Debe ejecutarse dentro de la transacción de la mutación que crea o cambia
+ * la Issue para conservar la Activity con la asignación.
+ */
+export function autoAddIssue(
+  db: Database,
+  actorId: string,
+  issueId: string,
+  stateType: AutoAddStateType,
+  workspaceId?: string,
+  referenceAt = Date.now(),
+): boolean {
+  const issueQuery = workspaceId
+    ? `SELECT issues.id, issues.team_id, issues.state_id, issues.cycle_id,
+              issues.archived_at, issues.workspace_id, workflow_states.type AS state_type
+       FROM issues JOIN workflow_states ON workflow_states.id = issues.state_id
+       WHERE issues.id = ?1 AND issues.workspace_id = ?2`
+    : `SELECT issues.id, issues.team_id, issues.state_id, issues.cycle_id,
+              issues.archived_at, issues.workspace_id, workflow_states.type AS state_type
+       FROM issues JOIN workflow_states ON workflow_states.id = issues.state_id
+       WHERE issues.id = ?1`;
+  const issue = (
+    workspaceId ? db.query(issueQuery).get(issueId, workspaceId) : db.query(issueQuery).get(issueId)
+  ) as {
+    id: string;
+    team_id: string;
+    state_id: string;
+    cycle_id: string | null;
+    archived_at: string | null;
+    workspace_id?: string | null;
+    state_type: AutoAddStateType;
+  } | null;
+  if (!issue || issue.cycle_id !== null || issue.archived_at !== null) return false;
+  if (issue.state_type !== stateType) return false;
+  const target = findAutoAddCycle(db, issue.team_id, stateType, workspaceId, referenceAt);
+  if (!target) return false;
+
+  const timestamp = now();
+  const result = workspaceId
+    ? db
+        .query(
+          `UPDATE issues SET cycle_id = ?1, updated_at = ?2
+           WHERE id = ?3 AND workspace_id = ?4 AND cycle_id IS NULL
+             AND archived_at IS NULL AND state_id = ?5`,
+        )
+        .run(target.id, timestamp, issue.id, workspaceId, issue.state_id)
+    : db
+        .query(
+          `UPDATE issues SET cycle_id = ?1, updated_at = ?2
+           WHERE id = ?3 AND cycle_id IS NULL AND archived_at IS NULL AND state_id = ?4`,
+        )
+        .run(target.id, timestamp, issue.id, issue.state_id);
+  if (result.changes !== 1) return false;
+  recordActivity(
+    db,
+    issue.id,
+    actorId,
+    "cycle_changed",
+    { from: null, to: target.id, reason: "cycle_auto_add" },
+    undefined,
+    issue.workspace_id ?? workspaceId,
+  );
+  return true;
+}
+
+/**
+ * Agrega las Issues activas al Cycle recién activado.
+ * Las Issues Completed se dirigen al Cycle anterior durante el cooldown.
+ */
+export function autoAddActiveIssues(
+  db: Database,
+  actorId: string,
+  cycle: CycleRow,
+  workspaceId?: string,
+  referenceAt = Date.now(),
+): number {
+  const activeCount = autoAddIssuesToCycle(
+    db,
+    actorId,
+    cycle,
+    ["unstarted", "started"],
+    workspaceId,
+  );
+  const completedTarget = findAutoAddCycle(
+    db,
+    cycle.team_id,
+    "completed",
+    workspaceId,
+    referenceAt,
+  );
+  const completedCount = completedTarget
+    ? autoAddIssuesToCycle(db, actorId, completedTarget, ["completed"], workspaceId)
+    : 0;
+  return activeCount + completedCount;
 }
 
 /**
