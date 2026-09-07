@@ -3485,6 +3485,48 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("falla cerrado ante INDEXED BY sobre una CTE sombreada y permite reparar", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      bootstrap(db);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_view ON actors(name);
+        CREATE VIEW dependent_cte AS
+          WITH actors AS (SELECT 'cte-row' AS id)
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+      `);
+
+      expect(() => migrate(db)).toThrow(/CTE/i);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 32").get()).toBeNull();
+      expect(
+        db
+          .query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?1")
+          .get("idx_view_preferences_view"),
+      ).toEqual({ name: "idx_view_preferences_view" });
+      expect(
+        db
+          .query("SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_cte'")
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_cte AS
+          WITH actors AS (SELECT 'cte-row' AS id)
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view`,
+      });
+
+      db.exec("DROP VIEW dependent_cte");
+      db.exec(`
+        CREATE VIEW dependent_cte AS
+          SELECT id FROM main.actors INDEXED BY idx_view_preferences_view;
+      `);
+      migrate(db);
+      expect(db.query("SELECT id FROM dependent_cte").all()).toEqual(
+        db.query("SELECT id FROM actors ORDER BY id").all(),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it("protege dependencias INDEXED BY durante el renombre de índices de 0032", () => {
     const db = databaseWithMigrationsThrough(31);
     try {

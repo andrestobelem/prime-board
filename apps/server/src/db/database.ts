@@ -988,6 +988,100 @@ const INDEXED_BY_SOURCE_BOUNDARIES = new Set([
 ]);
 const INDEXED_BY_UPDATE_MODIFIERS = new Set(["rollback", "abort", "replace", "fail", "ignore"]);
 
+interface SqlParenthesisPairs {
+  matchingClose: ReadonlyMap<number, number>;
+  enclosingOpen: readonly (number | undefined)[];
+}
+
+interface IndexedByCteScope {
+  start: number;
+  end: number;
+  names: ReadonlySet<string>;
+}
+
+function sqlParenthesisPairs(tokens: readonly SqlToken[]): SqlParenthesisPairs | null {
+  const openings: number[] = [];
+  const matchingClose = new Map<number, number>();
+  const enclosingOpen: Array<number | undefined> = [];
+  for (let position = 0; position < tokens.length; position += 1) {
+    const token = tokens[position];
+    enclosingOpen[position] = openings[openings.length - 1];
+    if (token?.value === "(") {
+      openings.push(position);
+    } else if (token?.value === ")") {
+      const opening = openings.pop();
+      if (opening === undefined) return null;
+      matchingClose.set(opening, position);
+    }
+  }
+  return openings.length === 0 ? { matchingClose, enclosingOpen } : null;
+}
+
+function indexedByCteScopes(
+  tokens: readonly SqlToken[],
+  parentheses: SqlParenthesisPairs,
+): readonly IndexedByCteScope[] | null {
+  const scopes: IndexedByCteScope[] = [];
+  for (let position = 0; position < tokens.length; position += 1) {
+    if (!isSqlKeyword(tokens[position], "with")) continue;
+    let cursor = position + 1;
+    if (isSqlKeyword(tokens[cursor], "recursive")) cursor += 1;
+    const names = new Set<string>();
+    while (true) {
+      const name = tokens[cursor];
+      if (!isSqlNameToken(name)) return null;
+      names.add(name.value.toLowerCase());
+      cursor += 1;
+      if (tokens[cursor]?.value === "(") {
+        const columnsClose = parentheses.matchingClose.get(cursor);
+        if (columnsClose === undefined) return null;
+        cursor = columnsClose + 1;
+      }
+      if (!isSqlKeyword(tokens[cursor], "as")) return null;
+      cursor += 1;
+      if (isSqlKeyword(tokens[cursor], "not")) {
+        if (!isSqlKeyword(tokens[cursor + 1], "materialized")) return null;
+        cursor += 2;
+      } else if (isSqlKeyword(tokens[cursor], "materialized")) {
+        cursor += 1;
+      }
+      if (tokens[cursor]?.value !== "(") return null;
+      const queryClose = parentheses.matchingClose.get(cursor);
+      if (queryClose === undefined) return null;
+      cursor = queryClose + 1;
+      if (tokens[cursor]?.value !== ",") break;
+      cursor += 1;
+    }
+    const enclosingOpen = parentheses.enclosingOpen[position];
+    const enclosingClose =
+      enclosingOpen === undefined ? undefined : parentheses.matchingClose.get(enclosingOpen);
+    const semicolon = tokens.findIndex((token, index) => index > position && token.value === ";");
+    const end =
+      enclosingClose === undefined
+        ? semicolon < 0
+          ? tokens.length
+          : semicolon
+        : semicolon < 0 || semicolon > enclosingClose
+          ? enclosingClose
+          : semicolon;
+    scopes.push({ start: position, end, names });
+  }
+  return scopes;
+}
+
+function indexedByReferenceUsesCte(
+  scopes: readonly IndexedByCteScope[],
+  position: number,
+  tableName: string,
+  tableSchema: string | undefined,
+): boolean {
+  if (tableSchema !== undefined) return false;
+  const normalizedName = tableName.toLowerCase();
+  return scopes.some(
+    (scope) => position >= scope.start && position < scope.end && scope.names.has(normalizedName),
+  );
+}
+
 type IndexedBySourceScope =
   | { phase: "none" }
   | {
@@ -1014,11 +1108,14 @@ type IndexedBySourceScope =
       inheritsSourceContext: boolean;
     };
 
+type IndexedByReferenceSource = { kind: "table" } | { kind: "cte" };
+
 interface IndexedByReference {
   token: SqlToken;
   indexName: string;
   tableName: string;
   tableSchema: string | undefined;
+  source: IndexedByReferenceSource;
 }
 
 function inheritsIndexedBySourceContext(scope: IndexedBySourceScope): boolean {
@@ -1047,6 +1144,10 @@ function expectIndexedByTable(
 function indexedByReferences(sql: string): readonly IndexedByReference[] | null {
   const tokens = sqliteTokens(sql);
   if (tokens === null) return null;
+  const parentheses = sqlParenthesisPairs(tokens);
+  if (parentheses === null) return null;
+  const cteScopes = indexedByCteScopes(tokens, parentheses);
+  if (cteScopes === null) return null;
   const references: IndexedByReference[] = [];
   const scopes: IndexedBySourceScope[] = [{ phase: "none" }];
   for (let position = 0; position < tokens.length; position += 1) {
@@ -1141,6 +1242,9 @@ function indexedByReferences(sql: string): readonly IndexedByReference[] | null 
           indexName: indexToken.value,
           tableName: scope.tableName,
           tableSchema: scope.tableSchema,
+          source: indexedByReferenceUsesCte(cteScopes, position, scope.tableName, scope.tableSchema)
+            ? { kind: "cte" }
+            : { kind: "table" },
         });
       } else if (scope.phase === "expect_table") {
         scopes[scopeIndex] = {
@@ -1694,6 +1798,7 @@ function renamedSchemaObjectSql(
 }
 
 function indexedByReferenceUsesExistingIndex(db: Database, reference: IndexedByReference): boolean {
+  if (reference.source.kind === "cte") return false;
   const schema = reference.tableSchema?.toLowerCase();
   if (schema !== undefined && schema !== "main" && schema !== "temp") return false;
   const schemas =
@@ -1748,6 +1853,12 @@ function schemaObjectsWithIndexedByDependencies(
       );
     }
     for (const reference of references) {
+      if (reference.source.kind === "cte") {
+        throw new Error(
+          `Cannot apply migration ${migrationVersion} safely: ${temporary ? "temporary " : ""}${object.type} ` +
+            `${object.name} uses INDEXED BY ${reference.indexName} on CTE ${reference.tableName}`,
+        );
+      }
       if (!indexedByReferenceUsesExistingIndex(db, reference)) {
         throw new Error(
           `Cannot apply migration ${migrationVersion} safely: ${temporary ? "temporary " : ""}${object.type} ` +
