@@ -3516,7 +3516,8 @@ describe("colisión de migraciones SQLite", () => {
       db.exec("DROP VIEW dependent_cte");
       db.exec(`
         CREATE VIEW dependent_cte AS
-          SELECT id FROM main.actors INDEXED BY idx_view_preferences_view;
+          WITH helper AS (SELECT 'cte-row' AS id)
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
       `);
       migrate(db);
       expect(db.query("SELECT id FROM dependent_cte").all()).toEqual(
