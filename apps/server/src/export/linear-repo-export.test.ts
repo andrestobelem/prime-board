@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { migrate } from "../db/database.ts";
 import { rebuildFromRepo } from "./importer.ts";
+import { exportBoard } from "./exporter.ts";
 import { writeLinearExportToRepo, type LinearExport } from "./linear-repo-export.ts";
 
 const source: LinearExport = {
@@ -182,6 +183,212 @@ describe("writeLinearExportToRepo", () => {
       expect(readFileSync(join(root, ".prime-board", "issues", "AT-1.md"), "utf8")).toContain(
         "https://example.test/a",
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("validación del plan Linear", () => {
+  it("rechaza referencias desconocidas y no escribe durante el dry-run", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-invalid-ref-"));
+    try {
+      const invalid: LinearExport = {
+        ...source,
+        teams: [{ ...source.teams[0]!, defaultStateId: "missing-state" }],
+        projects: [{ ...source.projects[0]!, leadId: "missing-actor", teamIds: ["missing-team"] }],
+      };
+      const result = writeLinearExportToRepo(invalid, root, { dryRun: true });
+      expect(result.conflicts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "UNKNOWN_DEFAULT_STATE" }),
+          expect.objectContaining({ code: "UNKNOWN_PROJECT_LEAD" }),
+          expect.objectContaining({ code: "UNKNOWN_PROJECT_TEAM" }),
+        ]),
+      );
+      expect(existsSync(join(root, ".prime-board"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza relaciones self y ciclos de bloqueo antes del staging", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-invalid-rel-"));
+    try {
+      const invalid: LinearExport = {
+        ...source,
+        relations: [
+          { issueId: "issue-1", relatedIssueId: "issue-1", type: "related" },
+          { issueId: "issue-1", relatedIssueId: "issue-2", type: "blocks" },
+          { issueId: "issue-2", relatedIssueId: "issue-1", type: "blocks" },
+        ],
+      };
+      const result = writeLinearExportToRepo(invalid, root, { dryRun: true });
+      expect(result.conflicts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "SELF_RELATION" }),
+          expect.objectContaining({ code: "BLOCKING_RELATION_CYCLE" }),
+        ]),
+      );
+      expect(existsSync(join(root, ".prime-board"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cancela el issue duplicado y registra state_changed durante el rebuild", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-duplicate-"));
+    const db = new Database(":memory:", { strict: true });
+    try {
+      const duplicate: LinearExport = {
+        ...source,
+        teams: [
+          {
+            ...source.teams[0]!,
+            states: [
+              ...source.teams[0]!.states,
+              { id: "state-3", name: "Canceled", type: "canceled", position: 2 },
+            ],
+          },
+        ],
+        relations: [{ issueId: "issue-1", relatedIssueId: "issue-2", type: "duplicate_of" }],
+      };
+      const result = writeLinearExportToRepo(duplicate, root);
+      expect(result.conflicts).toEqual([]);
+      db.exec("PRAGMA foreign_keys = ON;");
+      migrate(db);
+      rebuildFromRepo(db, root);
+      const state = db
+        .query(
+          `SELECT workflow_states.type FROM issues
+           JOIN workflow_states ON workflow_states.id = issues.state_id
+           JOIN teams ON teams.id = issues.team_id
+           WHERE teams.key = 'AT' AND issues.number = 1`,
+        )
+        .get() as { type: string };
+      expect(state.type).toBe("canceled");
+      expect(db.query("SELECT type FROM issue_relations").get()).toEqual({ type: "duplicate_of" });
+      expect(
+        db
+          .query(
+            `SELECT count(*) AS n FROM activity
+             JOIN issues ON issues.id = activity.issue_id
+             JOIN teams ON teams.id = issues.team_id
+             WHERE activity.type = 'state_changed' AND teams.key = 'AT' AND issues.number = 1`,
+          )
+          .get(),
+      ).toEqual({ n: 1 });
+      expect(
+        db.query("SELECT count(*) AS n FROM activity WHERE type = 'relation_added'").get(),
+      ).toEqual({ n: 2 });
+      expect(db.query("SELECT payload FROM activity WHERE type = 'relation_added'").all()).toEqual(
+        expect.arrayContaining([
+          { payload: JSON.stringify({ type: "duplicate_of", issue: "AT-2" }) },
+          { payload: JSON.stringify({ type: "duplicated_by", issue: "AT-1" }) },
+        ]),
+      );
+      const teamsPath = join(root, ".prime-board", "meta", "teams.json");
+      const teams = JSON.parse(readFileSync(teamsPath, "utf8")) as Array<Record<string, any>>;
+      teams[0]!.states = teams[0]!.states.filter(
+        (workflowState: Record<string, unknown>) => workflowState.name !== "Canceled",
+      );
+      writeFileSync(teamsPath, JSON.stringify(teams));
+      expect(() => rebuildFromRepo(db, root)).toThrow(/no canceled state/);
+      expect(db.query("SELECT count(*) AS n FROM issues").get()).toEqual({ n: 2 });
+      const roundtrip = mkdtempSync(join(process.cwd(), "scratchpad-linear-duplicate-roundtrip-"));
+      try {
+        exportBoard(db, roundtrip);
+        expect(
+          readFileSync(join(roundtrip, ".prime-board", "log", "AT-1.jsonl"), "utf8"),
+        ).toContain('"type":"state_changed"');
+      } finally {
+        rmSync(roundtrip, { recursive: true, force: true });
+      }
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza referencias que existen pero pertenecen a otro Team o Project", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-cross-ref-"));
+    try {
+      const cross: LinearExport = {
+        ...source,
+        teams: [
+          source.teams[0]!,
+          {
+            id: "team-2",
+            key: "BT",
+            name: "Otro",
+            states: [{ id: "state-b", name: "Todo", type: "unstarted" }],
+          },
+        ],
+        labels: [...source.labels, { id: "label-b", name: "Feature", teamId: "team-2" }],
+        projects: [
+          source.projects[0]!,
+          {
+            id: "project-b",
+            name: "Otro proyecto",
+            state: "started",
+            teamIds: ["team-2"],
+            milestones: [{ id: "milestone-b", name: "M1" }],
+          },
+        ],
+        issues: [
+          {
+            ...source.issues[0]!,
+            stateId: "state-b",
+            parentId: "issue-b",
+            projectId: "project-b",
+            milestoneId: "milestone-1",
+            labelIds: ["label-b"],
+          },
+          {
+            ...source.issues[1]!,
+            id: "issue-b",
+            identifier: "BT-1",
+            number: 1,
+            teamId: "team-2",
+            stateId: "state-b",
+            stateHistory: [{ stateId: "state-b", startedAt: "2026-01-02T00:00:00.000Z" }],
+            parentId: null,
+            projectId: null,
+            milestoneId: null,
+            labelIds: [],
+          },
+        ],
+        relations: [],
+      };
+      const result = writeLinearExportToRepo(cross, root, { dryRun: true });
+      expect(result.conflicts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "CROSS_TEAM_ISSUE_STATE" }),
+          expect.objectContaining({ code: "CROSS_TEAM_ISSUE_LABEL" }),
+          expect.objectContaining({ code: "CROSS_TEAM_ISSUE_PROJECT" }),
+          expect.objectContaining({ code: "CROSS_PROJECT_ISSUE_MILESTONE" }),
+          expect.objectContaining({ code: "CROSS_TEAM_PARENT" }),
+        ]),
+      );
+      expect(existsSync(join(root, ".prime-board"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("normaliza cero en períodos de automatización sin conflicto", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-automation-"));
+    try {
+      const automation: LinearExport = {
+        ...source,
+        teams: [{ ...source.teams[0]!, autoClosePeriod: 0, autoArchivePeriod: 0 }],
+      };
+      const result = writeLinearExportToRepo(automation, root);
+      expect(result.conflicts).toEqual([]);
+      const teams = JSON.parse(
+        readFileSync(join(root, ".prime-board", "meta", "teams.json"), "utf8"),
+      ) as Array<Record<string, unknown>>;
+      expect(teams[0]).toMatchObject({ autoClosePeriod: null, autoArchivePeriod: null });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

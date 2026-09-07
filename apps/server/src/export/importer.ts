@@ -202,6 +202,249 @@ function readIssueMarkdown(path: string): Record<string, any> {
   return { ...meta, description: body.length > 0 ? body : null };
 }
 
+function validateRepoIssueReferences(base: string, snapshots: Array<Record<string, any>>): void {
+  const actors = readJson(join(base, "meta", "actors.json")) as unknown;
+  if (!Array.isArray(actors)) throw new Error("Repo actors metadata must be an array");
+  const actorNames = new Set<string>();
+  for (const actor of actors) {
+    if (!actor || typeof actor !== "object" || Array.isArray(actor))
+      throw new Error("Repo actor metadata must be an object");
+    const name = String(actor.name ?? "");
+    if (!name || actorNames.has(name))
+      throw new Error(`Ambiguous actor reference in repo: ${name}`);
+    actorNames.add(name);
+  }
+  const teams = readJson(join(base, "meta", "teams.json")) as unknown;
+  if (!Array.isArray(teams)) throw new Error("Repo teams metadata must be an array");
+  const teamKeys = new Set<string>();
+  const stateKeys = new Set<string>();
+  const canceledStateByTeam = new Map<string, string>();
+  const labelKeys = new Set<string>();
+  for (const team of teams) {
+    if (!team || typeof team !== "object" || Array.isArray(team))
+      throw new Error("Repo team metadata must be an object");
+    if (!Array.isArray(team.states) || (team.labels != null && !Array.isArray(team.labels)))
+      throw new Error(
+        `Repo team ${String(team.key ?? "")} must contain valid states and labels arrays`,
+      );
+    const key = String(team.key ?? "");
+    if (!key || teamKeys.has(key)) throw new Error(`Ambiguous team reference in repo: ${key}`);
+    teamKeys.add(key);
+    const stateNames = new Set<string>();
+    for (const state of Array.isArray(team.states) ? team.states : []) {
+      const name = String(state.name ?? "");
+      if (!name || stateNames.has(name))
+        throw new Error(`Ambiguous state reference in repo: ${key}/${name}`);
+      stateNames.add(name);
+      stateKeys.add(`${key}/${name}`);
+      if (state.type === "canceled") canceledStateByTeam.set(key, name);
+    }
+    if (team.defaultState != null && !stateNames.has(String(team.defaultState)))
+      throw new Error(`Team ${key} references unknown default state ${team.defaultState}`);
+    if (team.autoCloseState != null && !stateNames.has(String(team.autoCloseState)))
+      throw new Error(`Team ${key} references unknown auto-close state ${team.autoCloseState}`);
+    for (const label of Array.isArray(team.labels) ? team.labels : []) {
+      const name = String(label.name ?? "");
+      if (!name) throw new Error(`Team ${key} contains a label without a name`);
+      const labelKey = `${key}/${name}`;
+      if (labelKeys.has(labelKey))
+        throw new Error(`Ambiguous label reference in repo: ${labelKey}`);
+      labelKeys.add(labelKey);
+    }
+  }
+  const workspaceLabels = readJson(join(base, "meta", "workspace-labels.json")) as unknown;
+  if (!Array.isArray(workspaceLabels))
+    throw new Error("Repo workspace labels metadata must be an array");
+  for (const label of workspaceLabels) {
+    if (!label || typeof label !== "object" || Array.isArray(label))
+      throw new Error("Repo workspace label metadata must be an object");
+    const name = String(label.name ?? "");
+    if (!name) throw new Error("Workspace label is missing a name");
+    const labelKey = `workspace/${name}`;
+    if (labelKeys.has(labelKey)) throw new Error(`Ambiguous label reference in repo: ${labelKey}`);
+    labelKeys.add(labelKey);
+  }
+  const projects = readJson(join(base, "meta", "projects.json")) as unknown;
+  if (!Array.isArray(projects)) throw new Error("Repo projects metadata must be an array");
+  const projectTeams = new Map<string, Set<string>>();
+  const milestoneKeys = new Set<string>();
+  for (const project of projects) {
+    if (!project || typeof project !== "object" || Array.isArray(project))
+      throw new Error("Repo project metadata must be an object");
+    if (
+      !Array.isArray(project.teams) ||
+      (project.milestones != null && !Array.isArray(project.milestones))
+    )
+      throw new Error(
+        `Repo project ${String(project.name ?? "")} must contain teams and milestones arrays`,
+      );
+    const name = String(project.name ?? "");
+    if (!name) throw new Error("Project is missing a name");
+    if (projectTeams.has(name)) throw new Error(`Ambiguous project reference in repo: ${name}`);
+    if (project.lead != null && !actorNames.has(String(project.lead)))
+      throw new Error(`Project ${name} references unknown lead ${String(project.lead)}`);
+    const projectTeamReferences: string[] = (Array.isArray(project.teams) ? project.teams : []).map(
+      (team: unknown) => String(team),
+    );
+    const teamsForProject = new Set<string>(projectTeamReferences);
+    if (teamsForProject.size !== projectTeamReferences.length)
+      throw new Error(`Project ${name} repeats a team reference`);
+    if (teamsForProject.size === 0)
+      throw new Error(`Project ${name} must belong to at least one team`);
+    for (const team of teamsForProject)
+      if (!teamKeys.has(team)) throw new Error(`Project ${name} references unknown team ${team}`);
+    projectTeams.set(name, teamsForProject);
+    const milestones = Array.isArray(project.milestones) ? project.milestones : [];
+    const milestoneNames = new Set<string>();
+    for (const milestone of milestones) {
+      const milestoneName = String(milestone.name ?? "");
+      if (!milestoneName || milestoneNames.has(milestoneName))
+        throw new Error(`Ambiguous milestone reference in repo: ${name}/${milestoneName}`);
+      milestoneNames.add(milestoneName);
+      milestoneKeys.add(`${name}/${milestoneName}`);
+    }
+  }
+  const issueById = new Map<string, Record<string, any>>();
+  const issueIdentifiers = new Set<string>();
+  for (const issue of snapshots) {
+    const id = String(issue.id ?? "");
+    if (!id) throw new Error("Issue is missing an id");
+    if (issueById.has(id)) throw new Error(`Ambiguous issue reference in repo: ${id}`);
+    const identifier = id;
+    if (issueIdentifiers.has(identifier))
+      throw new Error(`Duplicate issue reference in repo: ${identifier}`);
+    issueIdentifiers.add(identifier);
+    issueById.set(id, issue);
+  }
+  const parentGraph = new Map<string, Set<string>>();
+  const blockGraph = new Map<string, Set<string>>();
+  for (const issue of snapshots) {
+    const id = String(issue.id ?? "");
+    parentGraph.set(id, new Set());
+    blockGraph.set(id, new Set());
+  }
+  for (const issue of snapshots) {
+    const id = String(issue.id ?? "");
+    const team = String(issue.team ?? "");
+    if (!teamKeys.has(team)) throw new Error(`Issue ${id} references unknown team ${team}`);
+    const creator = String(issue.creator ?? "");
+    if (!actorNames.has(creator))
+      throw new Error(`Issue ${id} references unknown creator ${creator}`);
+    if (issue.assignee != null && !actorNames.has(String(issue.assignee)))
+      throw new Error(`Issue ${id} references unknown assignee ${String(issue.assignee)}`);
+    for (const subscriber of Array.isArray(issue.subscribers) ? issue.subscribers : [])
+      if (!actorNames.has(String(subscriber)))
+        throw new Error(`Issue ${id} references unknown subscriber ${String(subscriber)}`);
+    if (issue.subscribers != null && !Array.isArray(issue.subscribers))
+      throw new Error(`Issue ${id} field subscribers must be an array`);
+    if (!stateKeys.has(`${team}/${String(issue.state ?? "")}`))
+      throw new Error(`Issue ${id} references unknown state ${team}/${String(issue.state ?? "")}`);
+    for (const field of ["blockedBy", "related", "duplicateOf"] as const) {
+      if (issue[field] != null && !Array.isArray(issue[field]))
+        throw new Error(`Issue ${id} field ${field} must be an array`);
+    }
+    if (issue.parent != null) {
+      const parentId = String(issue.parent);
+      const parent = issueById.get(parentId);
+      if (!parent) throw new Error(`Issue ${id} references unknown parent ${parentId}`);
+      if (String(parent.team) !== team)
+        throw new Error(`Issue ${id} parent ${parentId} belongs to another team`);
+      parentGraph.get(id)?.add(parentId);
+    }
+    if (issue.project != null) {
+      const project = String(issue.project);
+      if (!projectTeams.has(project))
+        throw new Error(`Issue ${id} references unknown project ${project}`);
+      if (!projectTeams.get(project)?.has(team))
+        throw new Error(`Project ${project} does not include issue team ${team}`);
+    }
+    if (issue.milestone != null) {
+      const milestone = String(issue.milestone);
+      const qualified = milestone.includes("/")
+        ? milestone
+        : `${String(issue.project ?? "")}/${milestone}`;
+      if (!issue.project) throw new Error(`Issue ${id} milestone requires a project`);
+      if (!milestoneKeys.has(qualified))
+        throw new Error(`Issue ${id} references unknown milestone ${qualified}`);
+    }
+    const issueLabelKeys = new Set<string>();
+    for (const reference of Array.isArray(issue.labels) ? issue.labels : []) {
+      let key: string;
+      if (reference && typeof reference === "object") {
+        const label = reference as { name?: unknown; team?: unknown };
+        key = `${label.team ? String(label.team) : "workspace"}/${String(label.name ?? "")}`;
+      } else {
+        const value = String(reference);
+        key = value.includes("/") ? value : `${team}/${value}`;
+        if (!labelKeys.has(key) && !value.includes("/") && labelKeys.has(`workspace/${value}`))
+          key = `workspace/${value}`;
+      }
+      if (!labelKeys.has(key)) throw new Error(`Issue ${id} references unknown label ${key}`);
+      if (issueLabelKeys.has(key)) throw new Error(`Issue ${id} repeats label ${key}`);
+      issueLabelKeys.add(key);
+      const labelScope = key.split("/", 1)[0];
+      if (labelScope !== "workspace" && labelScope !== team)
+        throw new Error(`Issue ${id} label ${key} belongs to another team`);
+    }
+    for (const reference of Array.isArray(issue.blockedBy) ? issue.blockedBy : []) {
+      const blocker = String(reference);
+      if (!issueById.has(blocker))
+        throw new Error(`Issue ${id} references unknown blocker ${blocker}`);
+      if (blocker === id) throw new Error(`Issue ${id} cannot block itself`);
+      blockGraph.get(blocker)?.add(id);
+    }
+    for (const field of ["related", "duplicateOf"] as const) {
+      for (const reference of Array.isArray(issue[field]) ? issue[field] : []) {
+        const related = String(reference);
+        if (!issueById.has(related))
+          throw new Error(`Issue ${id} references unknown related issue ${related}`);
+        if (related === id) throw new Error(`Issue ${id} cannot relate to itself`);
+      }
+    }
+    if (
+      Array.isArray(issue.duplicateOf) &&
+      issue.duplicateOf.length > 0 &&
+      !canceledStateByTeam.has(team)
+    )
+      throw new Error(`Team ${team} has no canceled state for duplicate-of issue ${id}`);
+  }
+  const relationKeys = new Set<string>();
+  for (const issue of snapshots) {
+    const id = String(issue.id);
+    for (const reference of Array.isArray(issue.related) ? issue.related : []) {
+      const other = String(reference);
+      const key = id < other ? `related:${id}:${other}` : `related:${other}:${id}`;
+      if (relationKeys.has(key)) throw new Error(`Duplicate relation ${key}`);
+      relationKeys.add(key);
+    }
+    for (const reference of Array.isArray(issue.duplicateOf) ? issue.duplicateOf : []) {
+      const key = `duplicate_of:${id}:${String(reference)}`;
+      if (relationKeys.has(key)) throw new Error(`Duplicate relation ${key}`);
+      relationKeys.add(key);
+    }
+    for (const reference of Array.isArray(issue.blockedBy) ? issue.blockedBy : []) {
+      const key = `blocks:${String(reference)}:${id}`;
+      if (relationKeys.has(key)) throw new Error(`Duplicate relation ${key}`);
+      relationKeys.add(key);
+    }
+  }
+  const assertAcyclic = (graph: Map<string, Set<string>>, kind: string): void => {
+    const active = new Set<string>();
+    const done = new Set<string>();
+    const visit = (node: string): void => {
+      if (active.has(node)) throw new Error(`${kind} contains a cycle at ${node}`);
+      if (done.has(node)) return;
+      active.add(node);
+      for (const next of graph.get(node) ?? []) visit(next);
+      active.delete(node);
+      done.add(node);
+    };
+    for (const node of graph.keys()) visit(node);
+  };
+  assertAcyclic(parentGraph, "Parent relationships");
+  assertAcyclic(blockGraph, "Blocking relations");
+}
+
 export function rebuildFromRepo(
   db: Database,
   rootDir: string,
@@ -376,6 +619,11 @@ export function rebuildFromRepo(
     preservedKeys: 0,
     warnings: [],
   };
+  const snapshots = readdirSync(join(base, "issues"))
+    .filter((file) => file.endsWith(".md"))
+    .map((file) => readIssueMarkdown(join(base, "issues", file)))
+    .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+  validateRepoIssueReferences(base, snapshots);
 
   db.transaction(() => {
     // `teams.default_state_id` apunta a workflow_states; limpiar la referencia
@@ -465,6 +713,16 @@ export function rebuildFromRepo(
       entries.push({ id, team });
       legacyLabelIds.set(name, entries);
     };
+    const teamColumns = new Set(
+      (db.query("PRAGMA table_info(teams)").all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    );
+    const stateColumns = new Set(
+      (db.query("PRAGMA table_info(workflow_states)").all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    );
     for (const team of readJson(join(base, "meta", "teams.json")) as Array<Record<string, any>>) {
       const teamId = newId();
       teamIds.set(team.key, teamId);
@@ -473,26 +731,97 @@ export function rebuildFromRepo(
         team.accessPolicy === "workspace_members" || team.accessPolicy === "team_members"
           ? team.accessPolicy
           : "team_members";
-      db.query(
-        `INSERT INTO teams
-         (id, name, key, description, visibility, access_policy, created_at, updated_at, archived_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
-      ).run(
+      const teamInsertColumns = [
+        "id",
+        "name",
+        "key",
+        "description",
+        "visibility",
+        "access_policy",
+        ...(teamColumns.has("auto_close_period") ? ["auto_close_period"] : []),
+        ...(teamColumns.has("auto_archive_period") ? ["auto_archive_period"] : []),
+        ...(teamColumns.has("auto_close_parent_issues") ? ["auto_close_parent_issues"] : []),
+        ...(teamColumns.has("auto_close_child_issues") ? ["auto_close_child_issues"] : []),
+        "created_at",
+        "updated_at",
+        "archived_at",
+      ];
+      const teamInsertValues = [
         teamId,
         team.name,
         team.key,
         team.description ?? null,
         visibility,
         visibility === "private" ? "team_members" : accessPolicy,
+        ...(teamColumns.has("auto_close_period")
+          ? [
+              typeof team.autoClosePeriod === "number" && team.autoClosePeriod > 0
+                ? team.autoClosePeriod
+                : null,
+            ]
+          : []),
+        ...(teamColumns.has("auto_archive_period")
+          ? [
+              typeof team.autoArchivePeriod === "number" && team.autoArchivePeriod > 0
+                ? team.autoArchivePeriod
+                : null,
+            ]
+          : []),
+        ...(teamColumns.has("auto_close_parent_issues")
+          ? [
+              typeof team.autoCloseParentIssues === "boolean"
+                ? team.autoCloseParentIssues
+                  ? 1
+                  : 0
+                : null,
+            ]
+          : []),
+        ...(teamColumns.has("auto_close_child_issues")
+          ? [
+              typeof team.autoCloseChildIssues === "boolean"
+                ? team.autoCloseChildIssues
+                  ? 1
+                  : 0
+                : null,
+            ]
+          : []),
+        timestamp,
         timestamp,
         team.archived ? timestamp : null,
-      );
+      ];
+      const teamPlaceholders = teamInsertValues.map((_, index) => `?${index + 1}`).join(", ");
+      db.query(
+        `INSERT INTO teams (${teamInsertColumns.join(", ")}) VALUES (${teamPlaceholders})`,
+      ).run(...(teamInsertValues as never[]));
       for (const state of team.states ?? []) {
         const stateId = newId();
         stateIds.set(`${team.key}/${state.name}`, stateId);
+        const stateInsertColumns = [
+          "id",
+          "team_id",
+          "name",
+          "type",
+          "color",
+          "position",
+          ...(stateColumns.has("description") ? ["description"] : []),
+          "created_at",
+          "updated_at",
+        ];
+        const stateInsertValues = [
+          stateId,
+          teamId,
+          state.name,
+          state.type,
+          state.color,
+          state.position,
+          ...(stateColumns.has("description") ? [state.description ?? null] : []),
+          timestamp,
+          timestamp,
+        ];
+        const statePlaceholders = stateInsertValues.map((_, index) => `?${index + 1}`).join(", ");
         db.query(
-          "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-        ).run(stateId, teamId, state.name, state.type, state.color, state.position, timestamp);
+          `INSERT INTO workflow_states (${stateInsertColumns.join(", ")}) VALUES (${statePlaceholders})`,
+        ).run(...(stateInsertValues as never[]));
       }
       for (const label of team.labels ?? []) {
         const labelId = newId();
@@ -510,10 +839,19 @@ export function rebuildFromRepo(
       const firstState = team.states?.[0]
         ? (stateIds.get(`${team.key}/${team.states[0].name}`) ?? null)
         : null;
-      db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(
-        defaultState ?? firstState,
-        teamId,
-      );
+      if (teamColumns.has("auto_close_state_id")) {
+        const autoCloseState = team.autoCloseState
+          ? (stateIds.get(`${team.key}/${String(team.autoCloseState)}`) ?? null)
+          : null;
+        db.query(
+          "UPDATE teams SET default_state_id = ?1, auto_close_state_id = ?2 WHERE id = ?3",
+        ).run(defaultState ?? firstState, autoCloseState, teamId);
+      } else {
+        db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(
+          defaultState ?? firstState,
+          teamId,
+        );
+      }
 
       const members = Array.isArray(team.members)
         ? team.members
@@ -734,11 +1072,6 @@ export function rebuildFromRepo(
 
     // 6. Issues: primera pasada sin parent (se resuelve después).
     const issueIds = new Map<string, string>();
-    const snapshots = readdirSync(join(base, "issues"))
-      .filter((file) => file.endsWith(".md"))
-      .map((file) => readIssueMarkdown(join(base, "issues", file)))
-      .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
-
     for (const issue of snapshots) {
       const [teamKey, numberText] = String(issue.id).split("-");
       const teamId = teamIds.get(teamKey!);
@@ -907,6 +1240,22 @@ export function rebuildFromRepo(
     }
 
     // 7. Segunda pasada: parents y relaciones (necesitan todos los issues creados).
+    const duplicateTransitions: Array<{
+      identifier: string;
+      issueId: string;
+      actorId: string;
+      fromStateId: string;
+      toStateId: string;
+      createdAt: string;
+    }> = [];
+    const duplicateRelationEvents: Array<{
+      sourceIssueId: string;
+      targetIssueId: string;
+      sourceIdentifier: string;
+      targetIdentifier: string;
+      actorId: string;
+      createdAt: string;
+    }> = [];
     for (const issue of snapshots) {
       if (!issue.parent) continue;
       const child = issueIds.get(issue.id);
@@ -935,7 +1284,45 @@ export function rebuildFromRepo(
       }
       for (const ref of issue.duplicateOf ?? []) {
         const canonical = issueIds.get(ref);
-        if (canonical) insertRelation(self, canonical, "duplicate_of");
+        if (!canonical) continue;
+        insertRelation(self, canonical, "duplicate_of");
+        duplicateRelationEvents.push({
+          sourceIssueId: self,
+          targetIssueId: canonical,
+          sourceIdentifier: issue.id,
+          targetIdentifier: String(ref),
+          actorId: actorIds.get(String(issue.creator)) ?? [...actorIds.values()][0]!,
+          createdAt: timestamp,
+        });
+        const source = db.query("SELECT team_id, state_id FROM issues WHERE id = ?1").get(self) as {
+          team_id: string;
+          state_id: string;
+        } | null;
+        if (!source) throw new Error(`Duplicate issue ${issue.id} disappeared during rebuild`);
+        const canceled = db
+          .query(
+            "SELECT id FROM workflow_states WHERE team_id = ?1 AND type = 'canceled' ORDER BY position, id LIMIT 1",
+          )
+          .get(source.team_id) as { id: string } | null;
+        if (!canceled)
+          throw new Error(
+            `Team ${issue.team} has no canceled state for duplicate-of issue ${issue.id}`,
+          );
+        if (source.state_id !== canceled.id) {
+          duplicateTransitions.push({
+            identifier: issue.id,
+            issueId: self,
+            actorId: actorIds.get(String(issue.creator)) ?? [...actorIds.values()][0]!,
+            fromStateId: source.state_id,
+            toStateId: canceled.id,
+            createdAt: String(issue.updatedAt ?? timestamp),
+          });
+          db.query("UPDATE issues SET state_id = ?1, updated_at = ?2 WHERE id = ?3").run(
+            canceled.id,
+            String(issue.updatedAt ?? timestamp),
+            self,
+          );
+        }
       }
     }
 
@@ -1129,6 +1516,103 @@ export function rebuildFromRepo(
     for (const [identifier, events] of canonicalByIssue) {
       const issueId = issueIds.get(identifier);
       if (issueId) processHistory(identifier, issueId, events, false);
+    }
+    // Una captura editada manualmente puede declarar duplicateOf sin haber generado los
+    // eventos de la mutación. Completa relation_added en ambos extremos solo si
+    // el historial no los trae.
+    const relationActivityId = (
+      issueId: string,
+      actorId: string,
+      type: "duplicate_of" | "duplicated_by",
+      relatedIdentifier: string,
+      relatedSourceId: string,
+      createdAt: string,
+    ): string | null => {
+      const activities = db
+        .query("SELECT payload FROM activity WHERE issue_id = ?1 AND type = 'relation_added'")
+        .all(issueId) as Array<{ payload: string }>;
+      const alreadyRecorded = activities.some((activity) => {
+        try {
+          const payload = JSON.parse(activity.payload) as Record<string, unknown>;
+          return (
+            payload.type === type &&
+            (payload.issue === relatedIdentifier || payload.issue === relatedSourceId)
+          );
+        } catch {
+          return false;
+        }
+      });
+      if (alreadyRecorded) return null;
+      const activityId = newId();
+      db.query(
+        "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, 'relation_added', ?4, ?5)",
+      ).run(
+        activityId,
+        issueId,
+        actorId,
+        JSON.stringify({ type, issue: relatedIdentifier }),
+        createdAt,
+      );
+      result.events += 1;
+      return activityId;
+    };
+    for (const relation of duplicateRelationEvents) {
+      const sourceActivityId = relationActivityId(
+        relation.sourceIssueId,
+        relation.actorId,
+        "duplicate_of",
+        relation.targetIdentifier,
+        relation.targetIssueId,
+        relation.createdAt,
+      );
+      if (sourceActivityId) {
+        const activityIds = activityIdsByIssue.get(relation.sourceIdentifier) ?? [];
+        activityIds.push(sourceActivityId);
+        activityIdsByIssue.set(relation.sourceIdentifier, activityIds);
+      }
+      const targetActivityId = relationActivityId(
+        relation.targetIssueId,
+        relation.actorId,
+        "duplicated_by",
+        relation.sourceIdentifier,
+        relation.sourceIssueId,
+        relation.createdAt,
+      );
+      if (targetActivityId) {
+        const activityIds = activityIdsByIssue.get(relation.targetIdentifier) ?? [];
+        activityIds.push(targetActivityId);
+        activityIdsByIssue.set(relation.targetIdentifier, activityIds);
+      }
+    }
+    // Una captura editada manualmente puede declarar duplicateOf sin haber generado un
+    // evento state_changed en el log. Registra la transición solo si el historial no la trae.
+    for (const transition of duplicateTransitions) {
+      const activities = db
+        .query("SELECT payload FROM activity WHERE issue_id = ?1 AND type = 'state_changed'")
+        .all(transition.issueId) as Array<{ payload: string }>;
+      const alreadyRecorded = activities.some((activity) => {
+        try {
+          const payload = JSON.parse(activity.payload) as Record<string, unknown>;
+          return payload.from === transition.fromStateId && payload.to === transition.toStateId;
+        } catch {
+          return false;
+        }
+      });
+      if (alreadyRecorded) continue;
+      const activityId = newId();
+      db.query(
+        "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, 'state_changed', ?4, ?5)",
+      ).run(
+        activityId,
+        transition.issueId,
+        transition.actorId,
+        JSON.stringify({ from: transition.fromStateId, to: transition.toStateId }),
+        transition.createdAt,
+      );
+      result.events += 1;
+      const activityIds = activityIdsByIssue.get(transition.identifier) ?? [];
+      activityIds.push(activityId);
+      activityIdsByIssue.set(transition.identifier, activityIds);
     }
 
     // 9b. Inbox receipts (PRB-224); ausente en exports viejos.
