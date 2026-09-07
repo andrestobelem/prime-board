@@ -9,7 +9,7 @@ describe("team delete", () => {
   it("requires an exact key confirmation and removes internal dependencies atomically", async () => {
     const created = await gql(
       app,
-      `mutation { teamCreate(input: { name: "Disposable", key: "DEL" }) { team { id key states { id } } } }`,
+      `mutation { teamCreate(input: { name: "Disposable", key: "DEL", cyclesEnabled: false }) { team { id key states { id } } } }`,
     );
     expect(created.errors).toBeUndefined();
     const teamId = created.data!.teamCreate.team.id as string;

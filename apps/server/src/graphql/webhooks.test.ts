@@ -406,7 +406,7 @@ describe("webhooks", () => {
     );
     const created = await gql(
       app,
-      `mutation { teamCreate(input: { name: "Lifecycle team", key: "LIFE" }) { team { id key } } }`,
+      `mutation { teamCreate(input: { name: "Lifecycle team", key: "LIFE", cyclesEnabled: false }) { team { id key } } }`,
     );
     expect(created.errors).toBeUndefined();
     await app.events.idle();
@@ -463,7 +463,7 @@ describe("webhooks", () => {
     received.length = 0;
     const team = await gql(
       app,
-      `mutation { teamCreate(input: { name: "Deletion event", key: "del" }) { team { id } } }`,
+      `mutation { teamCreate(input: { name: "Deletion event", key: "del", cyclesEnabled: false }) { team { id } } }`,
     );
     const webhook = await gql(
       app,
