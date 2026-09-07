@@ -1329,6 +1329,251 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("restaura un índice cross-table cuando 0033 reutiliza su nombre", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec("CREATE UNIQUE INDEX idx_view_preferences_view ON saved_views(name)");
+
+      migrate(db);
+
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('saved_views')
+             WHERE name = 'idx_view_preferences_view_legacy'`,
+          )
+          .get(),
+      ).toEqual({ name: "idx_view_preferences_view_legacy", unique_value: 1 });
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('view_preferences')
+             WHERE name = 'idx_view_preferences_view'`,
+          )
+          .get(),
+      ).toEqual({ name: "idx_view_preferences_view", unique_value: 0 });
+      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).not.toBeNull();
+
+      const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
+      migrate(db);
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(migrationCount);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("restaura una UNIQUE aunque un trigger de otra tabla use el mismo nombre", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_saved_views_legacy_unique_workspace_id_name
+          ON saved_views(workspace_id, name);
+        CREATE TRIGGER idx_saved_views_legacy_unique_workspace_id_name
+          AFTER INSERT ON actors BEGIN SELECT 1; END;
+      `);
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('saved_views')
+             WHERE name = 'idx_saved_views_legacy_unique_workspace_id_name'`,
+          )
+          .get(),
+      ).toEqual({
+        name: "idx_saved_views_legacy_unique_workspace_id_name",
+        unique_value: 1,
+      });
+      expect(
+        db
+          .query(
+            `SELECT type, tbl_name
+             FROM sqlite_master
+             WHERE name = 'idx_saved_views_legacy_unique_workspace_id_name'
+             ORDER BY type`,
+          )
+          .all(),
+      ).toEqual([
+        { type: "index", tbl_name: "saved_views" },
+        { type: "trigger", tbl_name: "actors" },
+      ]);
+      expect(() =>
+        db
+          .query(
+            `INSERT INTO saved_views
+             (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+              created_at, updated_at, archived_at, columns_json, workspace_id)
+             SELECT 'view-duplicate-name', name, scope, team_id, owner_id, filter_json,
+                    order_by, group_by, created_at, updated_at, archived_at, columns_json,
+                    workspace_id
+               FROM saved_views
+              WHERE id = 'view-legacy'`,
+          )
+          .run(),
+      ).toThrow();
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado ante una definición same-table incompatible y permite reparar", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        DROP INDEX idx_saved_views_scope;
+        CREATE UNIQUE INDEX idx_saved_views_scope ON saved_views(name);
+      `);
+      const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeSchema = db
+        .query(
+          `SELECT type, name, tbl_name, sql
+           FROM sqlite_master
+           WHERE tbl_name = 'saved_views' OR name = 'idx_saved_views_scope'
+           ORDER BY type, name`,
+        )
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      expect(runMigration).toThrow(/missing indexes.*saved_views\(scope, team_id\)/i);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db
+          .query(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE tbl_name = 'saved_views' OR name = 'idx_saved_views_scope'
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(runMigration).toThrow(/missing indexes.*saved_views\(scope, team_id\)/i);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+      db.exec(`
+        DROP INDEX idx_saved_views_scope;
+        CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
+      `);
+      runMigration();
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("renombra una colisión same-table si un índice equivalente conserva el preflight", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        DROP INDEX idx_saved_views_scope;
+        CREATE UNIQUE INDEX idx_saved_views_scope ON saved_views(name);
+        CREATE INDEX idx_saved_views_scope_equivalent ON saved_views(scope, team_id);
+      `);
+      const beforeRows = db
+        .query(
+          `SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+                  created_at, updated_at, archived_at, columns_json, workspace_id
+           FROM saved_views ORDER BY id`,
+        )
+        .all();
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            `SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+                    created_at, updated_at, archived_at, columns_json, workspace_id
+             FROM saved_views ORDER BY id`,
+          )
+          .all(),
+      ).toEqual(beforeRows);
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('saved_views')
+             WHERE name IN ('idx_saved_views_scope', 'idx_saved_views_scope_legacy')
+             ORDER BY name`,
+          )
+          .all(),
+      ).toEqual([
+        { name: "idx_saved_views_scope", unique_value: 0 },
+        { name: "idx_saved_views_scope_legacy", unique_value: 1 },
+      ]);
+      expect(
+        db
+          .query(
+            `SELECT 1
+             FROM pragma_index_list('saved_views')
+             WHERE name = 'idx_saved_views_scope_equivalent'`,
+          )
+          .get(),
+      ).toBeNull();
+      expect(() =>
+        db
+          .query(
+            `INSERT INTO saved_views
+             (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+              created_at, updated_at, archived_at, columns_json, workspace_id)
+             SELECT 'view-duplicate-scope', name, scope, team_id, owner_id, filter_json,
+                    order_by, group_by, created_at, updated_at, archived_at, columns_json,
+                    workspace_id
+               FROM saved_views
+              WHERE id = 'view-legacy'`,
+          )
+          .run(),
+      ).toThrow();
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const indexes = db
+        .query(
+          `SELECT name, "unique" AS unique_value
+           FROM pragma_index_list('saved_views')
+           WHERE name IN ('idx_saved_views_scope', 'idx_saved_views_scope_legacy')
+           ORDER BY name`,
+        )
+        .all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('saved_views')
+             WHERE name IN ('idx_saved_views_scope', 'idx_saved_views_scope_legacy')
+             ORDER BY name`,
+          )
+          .all(),
+      ).toEqual(indexes);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("conserva una UNIQUE de tabla representada por sqlite_autoindex durante el rebuild", () => {
     const db = databaseWithMigrationsThrough(32);
     try {

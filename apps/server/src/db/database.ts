@@ -492,16 +492,52 @@ interface SqlDefinitionRow {
   sql: string | null;
 }
 
-const VIEWS_MIGRATION_ARTIFACTS = [
+interface SchemaObjectRow {
+  type: string;
+  name: string;
+  tbl_name: string;
+  sql: string | null;
+}
+
+interface ViewsMigrationIndexArtifact {
+  table: string;
+  name: string;
+  columns: readonly string[];
+  unique: boolean;
+}
+
+const VIEWS_MIGRATION_ARTIFACT_TABLES = [
   "view_preferences",
   "view_subscriptions",
   "_prb390_saved_views",
-  "idx_view_preferences_key",
-  "idx_view_preferences_view",
-  "idx_view_preferences_actor",
-  "idx_view_subscriptions_view",
-  "idx_view_subscriptions_actor",
-];
+] satisfies readonly string[];
+
+const VIEWS_MIGRATION_ARTIFACT_INDEXES = [
+  {
+    table: "view_preferences",
+    name: "idx_view_preferences_view",
+    columns: ["workspace_id", "view_id"],
+    unique: false,
+  },
+  {
+    table: "view_preferences",
+    name: "idx_view_preferences_actor",
+    columns: ["workspace_id", "actor_id"],
+    unique: false,
+  },
+  {
+    table: "view_subscriptions",
+    name: "idx_view_subscriptions_view",
+    columns: ["workspace_id", "view_id"],
+    unique: false,
+  },
+  {
+    table: "view_subscriptions",
+    name: "idx_view_subscriptions_actor",
+    columns: ["workspace_id", "actor_id"],
+    unique: false,
+  },
+] satisfies readonly ViewsMigrationIndexArtifact[];
 
 const SAVED_VIEWS_TARGET_FOREIGN_KEYS = [
   ...SAVED_VIEWS_REQUIRED_FOREIGN_KEYS,
@@ -617,8 +653,18 @@ function hasTable(db: Database, table: string): boolean {
   );
 }
 
-function hasSchemaObject(db: Database, name: string): boolean {
-  return Boolean(db.query("SELECT 1 FROM sqlite_master WHERE name = ?1 LIMIT 1").get(name));
+function schemaObjects(db: Database, name: string): SchemaObjectRow[] {
+  return db
+    .query<SchemaObjectRow, SQLQueryBindings[]>(
+      "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE lower(name) = lower(?1) ORDER BY type, name",
+    )
+    .all(name);
+}
+
+function indexNameInUse(db: Database, name: string): boolean {
+  // SQLite permite compartir el nombre entre un índice y un trigger. Los
+  // demás objetos del esquema reservan el nombre para un índice.
+  return schemaObjects(db, name).some((object) => object.type !== "trigger");
 }
 
 function tableInfo(db: Database, table: string): TableInfoRow[] {
@@ -1091,6 +1137,37 @@ function indexDefinitionFromSql(definition: string): ParsedIndexDefinition | nul
   };
 }
 
+function renamedIndexSql(definition: string, name: string): string | null {
+  const parsed = sqliteTokens(definition);
+  if (parsed === null) return null;
+  const tokens = singleSqlStatement(parsed);
+  if (tokens === null) return null;
+
+  let position = 0;
+  if (!isSqlKeyword(tokens[position], "create")) return null;
+  position += 1;
+  if (isSqlKeyword(tokens[position], "unique")) position += 1;
+  if (!isSqlKeyword(tokens[position], "index")) return null;
+  position += 1;
+  if (isSqlKeyword(tokens[position], "if")) {
+    if (!isSqlKeyword(tokens[position + 1], "not")) return null;
+    if (!isSqlKeyword(tokens[position + 2], "exists")) return null;
+    position += 3;
+  }
+
+  const indexToken = tokens[position];
+  const tableToken = tokens[position + 2];
+  if (
+    !isSqlNameToken(indexToken) ||
+    !isSqlKeyword(tokens[position + 1], "on") ||
+    !isSqlNameToken(tableToken) ||
+    tableToken.value.toLowerCase() !== "saved_views"
+  ) {
+    return null;
+  }
+  return `${definition.slice(0, indexToken.start)}${quoteIdentifier(name)}${definition.slice(indexToken.end)}`;
+}
+
 const VIEW_PREFERENCES_KEY_INDEX_TERMS = [
   { sql: "workspace_id", column: "workspace_id" },
   { sql: "ifnull(view_id, '')", column: null },
@@ -1184,12 +1261,14 @@ function equivalentIndex(
   terms: readonly IndexTermRow[],
   unique: boolean,
   origin?: string,
+  partial = 0,
 ): boolean {
   return indexList(db, table).some((index) => {
     if (origin !== undefined && index.origin !== origin) return false;
     const actualTerms = indexTerms(db, index.name);
     return (
       index.unique_value === (unique ? 1 : 0) &&
+      index.partial === partial &&
       actualTerms.length === terms.length &&
       actualTerms.every((term, position) => {
         const expected = terms[position];
@@ -1213,10 +1292,19 @@ function generatedLegacyIndexName(db: Database, terms: readonly IndexTermRow[]):
       .replace(/[^a-zA-Z0-9_]/g, "_")
       .replace(/^_+|_+$/g, "") || "columns";
   const base = `idx_saved_views_legacy_unique_${suffix}`;
-  if (!hasSchemaObject(db, base)) return base;
+  if (!indexNameInUse(db, base)) return base;
   for (let suffixNumber = 2; ; suffixNumber += 1) {
     const candidate = `${base}_${suffixNumber}`;
-    if (!hasSchemaObject(db, candidate)) return candidate;
+    if (!indexNameInUse(db, candidate)) return candidate;
+  }
+}
+
+function generatedSavedViewsIndexName(db: Database, name: string): string {
+  const base = `${name}_legacy`;
+  if (!indexNameInUse(db, base)) return base;
+  for (let suffixNumber = 2; ; suffixNumber += 1) {
+    const candidate = `${base}_${suffixNumber}`;
+    if (!indexNameInUse(db, candidate)) return candidate;
   }
 }
 
@@ -1242,21 +1330,39 @@ function restoreSavedViewsIndexes(
     // materializan como índices explícitos con columnas de PRAGMA.
 
     const unique = definition.unique_value === 1;
-    if (definition.sql !== null) {
-      if (!hasSchemaObject(db, definition.name)) db.exec(definition.sql);
+    if (
+      equivalentIndex(db, "saved_views", definition.terms, unique, undefined, definition.partial)
+    ) {
       continue;
     }
-    if (equivalentIndex(db, "saved_views", definition.terms, unique)) continue;
+    if (definition.sql !== null) {
+      const indexName = indexNameInUse(db, definition.name)
+        ? generatedSavedViewsIndexName(db, definition.name)
+        : definition.name;
+      const sql =
+        indexName === definition.name ? definition.sql : renamedIndexSql(definition.sql, indexName);
+      if (sql === null) {
+        throw new Error(`Cannot restore saved_views index ${definition.name} safely`);
+      }
+      db.exec(sql);
+      continue;
+    }
+
     if (definition.partial !== 0 || definition.terms.length === 0) {
       throw new Error(`Cannot restore saved_views index ${definition.name} safely`);
     }
     if (definition.terms.some((term) => term.name === null)) {
       throw new Error(`Cannot restore saved_views index ${definition.name} safely`);
     }
+
     const indexName = definition.name.startsWith("sqlite_autoindex_")
       ? generatedLegacyIndexName(db, definition.terms)
-      : definition.name;
-    if (hasSchemaObject(db, indexName)) continue;
+      : indexNameInUse(db, definition.name)
+        ? generatedSavedViewsIndexName(db, definition.name)
+        : definition.name;
+    if (indexNameInUse(db, indexName)) {
+      throw new Error(`Cannot restore saved_views index ${definition.name} safely`);
+    }
     const terms = definition.terms
       .map((term) => {
         const column = quoteIdentifier(term.name ?? "");
@@ -2111,10 +2217,24 @@ function migrationMarker(db: Database, version: number): MigrationMarkerRow | nu
 }
 
 function hasViewsMigrationArtifacts(db: Database): boolean {
+  if (VIEWS_MIGRATION_ARTIFACT_TABLES.some((table) => hasTable(db, table))) return true;
+  if (hasViewPreferencesKeyIndex(db)) return true;
+  if (
+    VIEWS_MIGRATION_ARTIFACT_INDEXES.some((artifact) =>
+      hasNamedIndexWithColumns(
+        db,
+        artifact.table,
+        artifact.name,
+        artifact.columns,
+        artifact.unique,
+      ),
+    )
+  ) {
+    return true;
+  }
   return (
-    VIEWS_MIGRATION_ARTIFACTS.some((name) => hasSchemaObject(db, name)) ||
-    (hasTable(db, "saved_views") &&
-      (hasColumn(db, "saved_views", "project_id") || hasColumn(db, "saved_views", "initiative_id")))
+    hasTable(db, "saved_views") &&
+    (hasColumn(db, "saved_views", "project_id") || hasColumn(db, "saved_views", "initiative_id"))
   );
 }
 
