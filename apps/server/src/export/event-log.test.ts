@@ -54,6 +54,39 @@ describe("event log", () => {
     expect(writer.read()).toHaveLength(1);
   });
 
+  it("acepta la transición de un evento legacy a uno scoped sin reescribir historia", () => {
+    const writer = new EventLogWriter(logOptions());
+    const legacy = event();
+    const scoped = event({ workspaceId: "workspace-a" });
+
+    expect(writer.append(legacy)).toEqual({ eventId: "event-1", appended: true });
+    expect(writer.append(scoped)).toEqual({ eventId: "event-1", appended: false });
+    expect(writer.read()).toEqual([legacy]);
+    expect(mergeEventStreams([[legacy], [scoped]])).toEqual([legacy]);
+
+    const scopedWriter = new EventLogWriter(logOptions());
+    expect(scopedWriter.append(scoped)).toEqual({ eventId: "event-1", appended: true });
+    expect(scopedWriter.append(legacy)).toEqual({ eventId: "event-1", appended: false });
+    expect(scopedWriter.read()).toEqual([scoped]);
+
+    const batchWriter = new EventLogWriter(logOptions());
+    expect(batchWriter.appendMany([legacy, scoped])).toEqual([
+      { eventId: "event-1", appended: true },
+      { eventId: "event-1", appended: false },
+    ]);
+    expect(batchWriter.read()).toEqual([legacy]);
+  });
+
+  it("rechaza un cambio real de Workspace entre eventos scoped", () => {
+    const writer = new EventLogWriter(logOptions());
+    writer.append(event({ workspaceId: "workspace-a" }));
+
+    expect(() => writer.append(event({ workspaceId: "workspace-b" }))).toThrow(
+      EventLogConflictError,
+    );
+    expect(writer.read()).toEqual([event({ workspaceId: "workspace-a" })]);
+  });
+
   it("lee el log una sola vez por lote idempotente", () => {
     const writer = new CountingEventLogWriter(logOptions());
     const events = Array.from({ length: 3 }, (_, index) =>
