@@ -592,46 +592,73 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
-  it("revierte el rebuild de Views si falla y permite reintentar sin pérdida", () => {
+  it("renombra una colisión cross-table antes de reconstruir Views", () => {
     const db = databaseWithMigrationsThrough(32);
     try {
       seedLegacyNotificationAndViewData(db);
-      const beforeView = db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get();
+      const beforeView = db
+        .query(
+          `SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+                  created_at, updated_at, columns_json, archived_at, workspace_id
+           FROM saved_views WHERE id = 'view-legacy'`,
+        )
+        .get();
       const beforeFavorite = db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get();
       const beforeNotification = db
         .query("SELECT * FROM notification_preferences WHERE category = 'mentions'")
         .get();
-      db.exec("CREATE INDEX idx_saved_views_project ON actors(name)");
+      db.exec("CREATE UNIQUE INDEX idx_saved_views_project ON actors(name)");
 
-      expect(() => migrate(db)).toThrow(/idx_saved_views_project/);
-      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
-      for (const table of ["_prb390_saved_views", "view_preferences", "view_subscriptions"]) {
-        expect(
-          db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1").get(table),
-        ).toBeNull();
-      }
-      expect(db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get()).toEqual(
-        beforeView,
-      );
-      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
-        beforeFavorite,
-      );
-      expect(
-        db.query("SELECT * FROM notification_preferences WHERE category = 'mentions'").get(),
-      ).toEqual(beforeNotification);
-      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-
-      db.exec("DROP INDEX idx_saved_views_project");
       migrate(db);
+
       expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
         version: 33,
       });
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('actors')
+             WHERE name = 'idx_saved_views_project_legacy'`,
+          )
+          .get(),
+      ).toEqual({ name: "idx_saved_views_project_legacy", unique_value: 1 });
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('saved_views')
+             WHERE name = 'idx_saved_views_project'`,
+          )
+          .get(),
+      ).toEqual({ name: "idx_saved_views_project", unique_value: 0 });
+      expect(
+        db
+          .query(
+            `SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+                    created_at, updated_at, columns_json, archived_at, workspace_id
+             FROM saved_views WHERE id = 'view-legacy'`,
+          )
+          .get(),
+      ).toEqual(beforeView);
       expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
         beforeFavorite,
       );
       expect(
         db.query("SELECT * FROM notification_preferences WHERE category = 'mentions'").get(),
       ).toEqual(beforeNotification);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+
+      const migrationCount = db.query("SELECT count(*) AS count FROM _migrations").get();
+      migrate(db);
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual(migrationCount);
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE name LIKE 'idx_saved_views_project%'",
+          )
+          .get(),
+      ).toEqual({ count: 2 });
     } finally {
       db.close();
     }
@@ -2317,6 +2344,644 @@ describe("colisión de migraciones SQLite", () => {
       expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
         migrationMarkers,
       );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("renombra un índice global cross-table y conserva unicidad e idempotencia", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(
+        'CREATE UNIQUE INDEX "IDX_VIEW_PREFERENCES_VIEW" ON "actors"(name COLLATE NOCASE) WHERE name <> \'ignored\'',
+      );
+      const beforeDefinition = db
+        .query("SELECT sql FROM sqlite_master WHERE type = 'index' AND lower(name) = lower(?1)")
+        .get("idx_view_preferences_view");
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value, partial
+             FROM pragma_index_list('actors')
+             WHERE name = 'IDX_VIEW_PREFERENCES_VIEW_legacy'`,
+          )
+          .get(),
+      ).toEqual({
+        name: "IDX_VIEW_PREFERENCES_VIEW_legacy",
+        unique_value: 1,
+        partial: 1,
+      });
+      expect(
+        db
+          .query("SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?1")
+          .get("IDX_VIEW_PREFERENCES_VIEW_legacy"),
+      ).toEqual({ tbl_name: "actors" });
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('view_preferences')
+             WHERE name = 'idx_view_preferences_view'`,
+          )
+          .get(),
+      ).toEqual({ name: "idx_view_preferences_view", unique_value: 0 });
+      expect(
+        db
+          .query(
+            `SELECT name, coll, desc, key
+             FROM pragma_index_xinfo('IDX_VIEW_PREFERENCES_VIEW_legacy')
+             WHERE key = 1`,
+          )
+          .all(),
+      ).toEqual([{ name: "name", coll: "NOCASE", desc: 0, key: 1 }]);
+      expect(
+        db
+          .query("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1")
+          .get("IDX_VIEW_PREFERENCES_VIEW_legacy"),
+      ).toEqual({
+        sql: `CREATE UNIQUE INDEX "IDX_VIEW_PREFERENCES_VIEW_legacy" ON "actors"(name COLLATE NOCASE) WHERE name <> 'ignored'`,
+      });
+      expect(beforeDefinition).toEqual({
+        sql: `CREATE UNIQUE INDEX "IDX_VIEW_PREFERENCES_VIEW" ON "actors"(name COLLATE NOCASE) WHERE name <> 'ignored'`,
+      });
+      expect(() =>
+        db
+          .query(
+            `INSERT INTO actors (id, name, type, created_at, updated_at)
+             VALUES ('actor-duplicate-name', 'ADMIN', 'human', '2026-01-01', '2026-01-01')`,
+          )
+          .run(),
+      ).toThrow();
+
+      const migrationMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        migrationMarkers,
+      );
+      expect(
+        db
+          .query(
+            `SELECT type, name, tbl_name
+             FROM sqlite_master
+             WHERE name IN ('idx_view_preferences_view', 'IDX_VIEW_PREFERENCES_VIEW_legacy')
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual([
+        { type: "index", name: "IDX_VIEW_PREFERENCES_VIEW_legacy", tbl_name: "actors" },
+        { type: "index", name: "idx_view_preferences_view", tbl_name: "view_preferences" },
+      ]);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("usa el siguiente sufijo libre de forma determinista", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(
+        "CREATE INDEX idx_view_preferences_view_legacy ON actors(name); CREATE INDEX idx_view_preferences_view ON actors(id)",
+      );
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_view_preferences_view_legacy%' ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "idx_view_preferences_view_legacy", tbl_name: "actors" },
+        { name: "idx_view_preferences_view_legacy_2", tbl_name: "actors" },
+      ]);
+      const migrationMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        migrationMarkers,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("renombra un trigger global cross-table y conserva WHEN, cuerpo e idempotencia", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        DROP TRIGGER saved_views_workspace_scope_insert;
+        CREATE TABLE legacy_trigger_log (team_id TEXT NOT NULL, marker TEXT NOT NULL);
+        CREATE TRIGGER saved_views_workspace_scope_insert
+        AFTER INSERT ON teams
+        WHEN NEW.name LIKE 'legacy%'
+        BEGIN
+          INSERT INTO legacy_trigger_log (team_id, marker) VALUES (NEW.id, 'inserted');
+          UPDATE teams SET description = 'triggered' WHERE id = NEW.id;
+        END;
+      `);
+      const beforeDefinition = db
+        .query("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1")
+        .get("saved_views_workspace_scope_insert");
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE type = 'trigger' AND name = 'saved_views_workspace_scope_insert_legacy'`,
+          )
+          .get(),
+      ).toEqual({
+        type: "trigger",
+        name: "saved_views_workspace_scope_insert_legacy",
+        tbl_name: "teams",
+        sql: `CREATE TRIGGER "saved_views_workspace_scope_insert_legacy"
+        AFTER INSERT ON teams
+        WHEN NEW.name LIKE 'legacy%'
+        BEGIN
+          INSERT INTO legacy_trigger_log (team_id, marker) VALUES (NEW.id, 'inserted');
+          UPDATE teams SET description = 'triggered' WHERE id = NEW.id;
+        END`,
+      });
+      expect(beforeDefinition).toEqual({
+        sql: `CREATE TRIGGER saved_views_workspace_scope_insert
+        AFTER INSERT ON teams
+        WHEN NEW.name LIKE 'legacy%'
+        BEGIN
+          INSERT INTO legacy_trigger_log (team_id, marker) VALUES (NEW.id, 'inserted');
+          UPDATE teams SET description = 'triggered' WHERE id = NEW.id;
+        END`,
+      });
+      expect(
+        db
+          .query(
+            `SELECT type, name, tbl_name
+             FROM sqlite_master
+             WHERE type = 'trigger' AND name = 'saved_views_workspace_scope_insert'`,
+          )
+          .get(),
+      ).toEqual({
+        type: "trigger",
+        name: "saved_views_workspace_scope_insert",
+        tbl_name: "saved_views",
+      });
+
+      const workspaceValue = db.query("SELECT id FROM workspace LIMIT 1").values()[0]?.[0];
+      if (typeof workspaceValue !== "string") throw new Error("Missing fixture Workspace");
+      db.query(
+        `INSERT INTO teams
+          (id, workspace_id, name, key, description, created_at, updated_at)
+         VALUES ('legacy-trigger-team', ?1, 'legacy trigger team', 'TRG', NULL,
+                 '2026-01-01', '2026-01-01')`,
+      ).run(workspaceValue);
+      expect(
+        db.query("SELECT * FROM legacy_trigger_log WHERE team_id = 'legacy-trigger-team'").all(),
+      ).toEqual([{ team_id: "legacy-trigger-team", marker: "inserted" }]);
+      expect(
+        db.query("SELECT description FROM teams WHERE id = 'legacy-trigger-team'").get(),
+      ).toEqual({ description: "triggered" });
+
+      db.query(
+        `INSERT INTO teams
+          (id, workspace_id, name, key, description, created_at, updated_at)
+         VALUES ('ordinary-trigger-team', ?1, 'ordinary trigger team', 'TRG2', NULL,
+                 '2026-01-01', '2026-01-01')`,
+      ).run(workspaceValue);
+      expect(
+        db.query("SELECT * FROM legacy_trigger_log WHERE team_id = 'ordinary-trigger-team'").all(),
+      ).toEqual([]);
+      expect(
+        db.query("SELECT description FROM teams WHERE id = 'ordinary-trigger-team'").get(),
+      ).toEqual({ description: null });
+
+      const migrationMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        migrationMarkers,
+      );
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'saved_views_workspace_scope_insert%'",
+          )
+          .get(),
+      ).toEqual({ count: 2 });
+      expect(
+        db
+          .query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'saved_views_workspace_scope_insert_legacy_2'",
+          )
+          .get(),
+      ).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("resuelve una colisión de índice al reconciliar el marker legacy 0032", () => {
+    const db = databaseWithMigrationsThrough(30);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      db.exec("DROP INDEX idx_saved_views_workspace_id");
+      db.exec("CREATE UNIQUE INDEX idx_saved_views_workspace_id ON actors(name)");
+      const beforeView = db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get();
+
+      migrate(db);
+
+      expect(db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get()).toEqual(
+        beforeView,
+      );
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('actors')
+             WHERE name = 'idx_saved_views_workspace_id_legacy'`,
+          )
+          .get(),
+      ).toEqual({ name: "idx_saved_views_workspace_id_legacy", unique_value: 1 });
+      expect(
+        db
+          .query(
+            `SELECT name, "unique" AS unique_value
+             FROM pragma_index_list('saved_views')
+             WHERE name = 'idx_saved_views_workspace_id'`,
+          )
+          .get(),
+      ).toEqual({ name: "idx_saved_views_workspace_id", unique_value: 1 });
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+
+      const migrationMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        migrationMarkers,
+      );
+      expect(
+        db
+          .query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_saved_views_workspace_id_legacy_2'",
+          )
+          .get(),
+      ).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("revierte el renombre cross-table si falla la validación posterior del DDL", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec("CREATE UNIQUE INDEX idx_view_preferences_view ON actors(name)");
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.exec(`
+        INSERT INTO favorites
+          (id, actor_id, project_id, saved_view_id, position, created_at, workspace_id)
+        SELECT 'broken-favorite', actors.id, NULL, 'missing-view', 0, '2026-01-01', workspace.id
+          FROM workspace
+          JOIN actors
+         LIMIT 1;
+      `);
+      db.exec("PRAGMA foreign_keys = ON");
+      const beforeFavorite = db.query("SELECT * FROM favorites WHERE id = 'broken-favorite'").get();
+      const beforeSchema = db
+        .query(
+          `SELECT type, name, tbl_name, sql
+           FROM sqlite_master
+           WHERE name IN ('idx_view_preferences_view', 'idx_view_preferences_view_legacy',
+                          'view_preferences', 'view_subscriptions', '_prb390_saved_views')
+           ORDER BY type, name`,
+        )
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      expect(runMigration).toThrow(/foreign.?key|incompatible/i);
+      expect(db.query("SELECT * FROM favorites WHERE id = 'broken-favorite'").get()).toEqual(
+        beforeFavorite,
+      );
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db
+          .query(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE name IN ('idx_view_preferences_view', 'idx_view_preferences_view_legacy',
+                            'view_preferences', 'view_subscriptions', '_prb390_saved_views')
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(
+        db
+          .query(
+            "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'idx_view_preferences_view'",
+          )
+          .get(),
+      ).toEqual({ tbl_name: "actors" });
+      expect(
+        db
+          .query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_view_preferences_view_legacy'",
+          )
+          .get(),
+      ).toBeNull();
+
+      expect(runMigration).toThrow(/foreign.?key|incompatible/i);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db
+          .query(
+            "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'idx_view_preferences_view'",
+          )
+          .get(),
+      ).toEqual({ tbl_name: "actors" });
+
+      db.query("DELETE FROM favorites WHERE id = 'broken-favorite'").run();
+      migrate(db);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(
+        db
+          .query(
+            "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'idx_view_preferences_view_legacy'",
+          )
+          .get(),
+      ).toEqual({ tbl_name: "actors" });
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("renombra índices ajenos que bloquean tablas temporales o finales de Views", () => {
+    for (const reservedName of ["_prb390_saved_views", "view_preferences", "view_subscriptions"]) {
+      const db = databaseWithMigrationsThrough(32);
+      try {
+        seedLegacyNotificationAndViewData(db);
+        db.exec(`CREATE UNIQUE INDEX ${reservedName} ON actors(name)`);
+
+        migrate(db);
+
+        expect(
+          db
+            .query(
+              "SELECT tbl_name, \"unique\" AS unique_value FROM sqlite_master JOIN pragma_index_list('actors') ON pragma_index_list.name = sqlite_master.name WHERE sqlite_master.type = 'index' AND sqlite_master.name = ?1",
+            )
+            .get(`${reservedName}_legacy`),
+        ).toEqual({ tbl_name: "actors", unique_value: 1 });
+        expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+          version: 33,
+        });
+        expect(
+          db
+            .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1")
+            .get(reservedName === "_prb390_saved_views" ? "saved_views" : reservedName),
+        ).toEqual({ name: reservedName === "_prb390_saved_views" ? "saved_views" : reservedName });
+        expect(
+          db
+            .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1")
+            .get(`${reservedName}_legacy_2`),
+        ).toBeNull();
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("falla cerrado ante una tabla que ocupa un nombre global reservado", () => {
+    for (const reservedName of [
+      "idx_view_preferences_view",
+      "view_preferences",
+      "_prb390_saved_views",
+    ]) {
+      const db = databaseWithMigrationsThrough(32);
+      try {
+        seedLegacyNotificationAndViewData(db);
+        db.exec(`CREATE TABLE "${reservedName}" (id TEXT)`);
+        const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const beforeSchema = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all();
+        const runMigration = () => migrate(db);
+
+        expect(runMigration).toThrow(/(?:global index\/table name|partially applied)/i);
+        expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(
+          db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+        ).toEqual(beforeSchema);
+        expect(runMigration).toThrow(/(?:global index\/table name|partially applied)/i);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("renombra una View legacy que bloquea una tabla final y conserva su consulta", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec('CREATE VIEW "VIEW_PREFERENCES" AS SELECT id, name FROM "actors"');
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'view' AND lower(name) = lower(?1)",
+          )
+          .get("view_preferences_legacy"),
+      ).toEqual({ name: "VIEW_PREFERENCES_legacy", tbl_name: "VIEW_PREFERENCES_legacy" });
+      expect(db.query("SELECT id, name FROM VIEW_PREFERENCES_legacy ORDER BY id").all()).toEqual(
+        db.query("SELECT id, name FROM actors ORDER BY id").all(),
+      );
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'view_preferences'",
+          )
+          .get(),
+      ).toEqual({ name: "view_preferences" });
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado si una View bloqueadora tiene dependencias preservables desconocidas", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE VIEW view_preferences AS SELECT id, name FROM actors;
+        CREATE VIEW view_preferences_dependent AS SELECT id FROM view_preferences;
+      `);
+      const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeSchema = db
+        .query(
+          `SELECT type, name, tbl_name, sql
+           FROM sqlite_master
+           WHERE name IN ('view_preferences', 'view_preferences_dependent',
+                          'view_preferences_legacy', 'view_subscriptions', '_prb390_saved_views')
+           ORDER BY type, name`,
+        )
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(/view view_preferences.*dependent schema objects/i);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db
+          .query(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE name IN ('view_preferences', 'view_preferences_dependent',
+                            'view_preferences_legacy', 'view_subscriptions', '_prb390_saved_views')
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'view_preferences'",
+          )
+          .get(),
+      ).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("resuelve una colisión cross-table en una instalación fresh", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      bootstrap(db);
+      db.exec('CREATE UNIQUE INDEX "IDX_VIEW_PREFERENCES_VIEW" ON actors(name)');
+
+      migrate(db);
+
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+      expect(
+        db
+          .query("SELECT tbl_name FROM sqlite_master WHERE lower(name) = lower(?1)")
+          .get("idx_view_preferences_view_legacy"),
+      ).toEqual({ tbl_name: "actors" });
+      expect(
+        db
+          .query("SELECT tbl_name FROM sqlite_master WHERE name = 'idx_view_preferences_view'")
+          .get(),
+      ).toEqual({ tbl_name: "view_preferences" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("resuelve una View bloqueadora en una instalación fresh", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      bootstrap(db);
+      db.exec('CREATE VIEW "VIEW_SUBSCRIPTIONS" AS SELECT id, name FROM "actors"');
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'view' AND lower(name) = lower(?1)",
+          )
+          .get("view_subscriptions_legacy"),
+      ).toEqual({ name: "VIEW_SUBSCRIPTIONS_legacy", tbl_name: "VIEW_SUBSCRIPTIONS_legacy" });
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'view_subscriptions'",
+          )
+          .get(),
+      ).toEqual({ name: "view_subscriptions" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado ante una View recursiva que no se puede renombrar solo por token", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec("CREATE VIEW view_preferences AS SELECT id, name FROM view_preferences");
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(/dependent schema objects/i);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserva un índice custom de la tabla fuente mientras reserva el nombre temporal", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec("CREATE UNIQUE INDEX _prb390_saved_views ON saved_views(name)");
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT sqlite_master.type, sqlite_master.name, sqlite_master.tbl_name, indexes.\"unique\" AS unique_value FROM sqlite_master JOIN pragma_index_list('saved_views') AS indexes ON indexes.name = sqlite_master.name WHERE sqlite_master.type = 'index' AND sqlite_master.name = '_prb390_saved_views'",
+          )
+          .get(),
+      ).toEqual({
+        type: "index",
+        name: "_prb390_saved_views",
+        tbl_name: "saved_views",
+        unique_value: 1,
+      });
+      expect(
+        db.query("SELECT name FROM sqlite_master WHERE name = '_prb390_saved_views_legacy'").get(),
+      ).toBeNull();
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
     } finally {
       db.close();
     }

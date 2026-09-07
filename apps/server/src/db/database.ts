@@ -728,8 +728,10 @@ function hasNamedIndexWithColumns(
   columns: readonly string[],
   unique: boolean,
 ): boolean {
-  const index = indexList(db, table).find((value) => value.name === name);
-  return Boolean(index && indexHasColumns(index, indexTerms(db, name), columns, unique));
+  const index = indexList(db, table).find(
+    (value) => value.name.toLowerCase() === name.toLowerCase(),
+  );
+  return Boolean(index && indexHasColumns(index, indexTerms(db, index.name), columns, unique));
 }
 
 function hasIndexWithColumns(
@@ -766,7 +768,7 @@ function hasPrimaryKeyColumns(db: Database, table: string, columns: readonly str
 }
 
 function hasNamedIndex(db: Database, table: string, name: string): boolean {
-  return indexList(db, table).some((index) => index.name === name);
+  return indexList(db, table).some((index) => index.name.toLowerCase() === name.toLowerCase());
 }
 
 function hasTrigger(db: Database, name: string): boolean {
@@ -1054,6 +1056,21 @@ function executableTableDefinition(db: Database, definition: string): boolean {
   }
 }
 
+function executableSchemaDefinition(db: Database, definition: string): boolean {
+  if (sqliteTokens(definition) === null) return false;
+  try {
+    const query = db.query(`EXPLAIN ${definition}`);
+    try {
+      query.all();
+      return true;
+    } finally {
+      query.finalize();
+    }
+  } catch {
+    return false;
+  }
+}
+
 interface ParsedIndexDefinition {
   name: string;
   table: string;
@@ -1163,6 +1180,11 @@ function triggerDefinitionFromSql(definition: string): ParsedTriggerDefinition |
   position += 1;
   if (!isSqlKeyword(tokens[position], "trigger")) return null;
   position += 1;
+  if (isSqlKeyword(tokens[position], "if")) {
+    if (!isSqlKeyword(tokens[position + 1], "not")) return null;
+    if (!isSqlKeyword(tokens[position + 2], "exists")) return null;
+    position += 3;
+  }
 
   const nameToken = tokens[position];
   if (!isSqlNameToken(nameToken)) return null;
@@ -1217,6 +1239,13 @@ function triggerDefinitionFromSql(definition: string): ParsedTriggerDefinition |
   const tableToken = tokens[position];
   if (!isSqlNameToken(tableToken)) return null;
   position += 1;
+  let tableName = tableToken.value;
+  if (tokens[position]?.value === ".") {
+    const qualifiedTableToken = tokens[position + 1];
+    if (!isSqlNameToken(qualifiedTableToken)) return null;
+    tableName = qualifiedTableToken.value;
+    position += 2;
+  }
 
   let forEachRow = false;
   if (isSqlKeyword(tokens[position], "for")) {
@@ -1242,13 +1271,130 @@ function triggerDefinitionFromSql(definition: string): ParsedTriggerDefinition |
 
   return {
     name: nameToken.value,
-    table: tableToken.value,
+    table: tableName,
     timing,
     event,
     forEachRow,
     when,
     body: tokens.slice(position + 1, end),
   };
+}
+
+function renamedTriggerSql(
+  definition: string,
+  name: string,
+  expectedTable: string,
+  expectedName: string,
+): string | null {
+  const parsed = triggerStatementTokens(definition);
+  if (parsed === null) return null;
+  if (!isSqlKeyword(parsed[0], "create") || !isSqlKeyword(parsed[1], "trigger")) return null;
+  let position = 2;
+  if (isSqlKeyword(parsed[position], "if")) {
+    if (!isSqlKeyword(parsed[position + 1], "not")) return null;
+    if (!isSqlKeyword(parsed[position + 2], "exists")) return null;
+    position += 3;
+  }
+  const triggerToken = parsed[position];
+  if (
+    !isSqlNameToken(triggerToken) ||
+    triggerToken.value.toLowerCase() !== expectedName.toLowerCase()
+  ) {
+    return null;
+  }
+  const actual = triggerDefinitionFromSql(definition);
+  if (
+    actual === null ||
+    actual.name.toLowerCase() !== expectedName.toLowerCase() ||
+    actual.table.toLowerCase() !== expectedTable.toLowerCase()
+  ) {
+    return null;
+  }
+  return `${definition.slice(0, triggerToken.start)}${quoteIdentifier(name)}${definition.slice(triggerToken.end)}`;
+}
+
+function renamedViewSql(definition: string, name: string, expectedName: string): string | null {
+  const parsed = sqliteTokens(definition);
+  if (parsed === null) return null;
+  const tokens = singleSqlStatement(parsed);
+  if (!tokens || !isSqlKeyword(tokens[0], "create")) return null;
+  let position = 1;
+  if (isSqlKeyword(tokens[position], "temp")) position += 1;
+  if (!isSqlKeyword(tokens[position], "view")) return null;
+  position += 1;
+  if (isSqlKeyword(tokens[position], "if")) {
+    if (!isSqlKeyword(tokens[position + 1], "not")) return null;
+    if (!isSqlKeyword(tokens[position + 2], "exists")) return null;
+    position += 3;
+  }
+  const viewToken = tokens[position];
+  if (!isSqlNameToken(viewToken) || viewToken.value.toLowerCase() !== expectedName.toLowerCase()) {
+    return null;
+  }
+  position += 1;
+
+  let depth = 0;
+  let asPosition = -1;
+  for (; position < tokens.length; position += 1) {
+    const token = tokens[position];
+    if (token?.value === "(") {
+      depth += 1;
+      continue;
+    }
+    if (token?.value === ")") {
+      if (depth === 0) return null;
+      depth -= 1;
+      continue;
+    }
+    if (depth === 0 && isSqlKeyword(token, "as")) {
+      asPosition = position;
+      break;
+    }
+  }
+  if (asPosition < 0 || asPosition === tokens.length - 1) return null;
+  return `${definition.slice(0, viewToken.start)}${quoteIdentifier(name)}${definition.slice(viewToken.end)}`;
+}
+
+function sqlReferencesIdentifier(sql: string, name: string): boolean {
+  const parsed = sqliteTokens(sql);
+  return (
+    parsed !== null &&
+    parsed.some(
+      (token) =>
+        (token.kind === "identifier" || token.kind === "quoted_identifier") &&
+        token.value.toLowerCase() === name.toLowerCase(),
+    )
+  );
+}
+
+function viewHasSchemaDependencies(db: Database, view: SchemaObjectRow): boolean {
+  if (view.sql !== null) {
+    const ownTokens = sqliteTokens(view.sql);
+    const selfReferenceCount =
+      ownTokens?.filter(
+        (token) =>
+          (token.kind === "identifier" || token.kind === "quoted_identifier") &&
+          token.value.toLowerCase() === view.name.toLowerCase(),
+      ).length ?? 0;
+    // Una aparición corresponde al nombre de CREATE VIEW. Una segunda puede ser
+    // una referencia recursiva o un nombre de la consulta; ambas son inseguras
+    // si solo se cambia el nombre del objeto.
+    if (selfReferenceCount > 1) return true;
+  }
+  return db
+    .query<SchemaObjectRow, SQLQueryBindings[]>(
+      "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL",
+    )
+    .all()
+    .some((object) => {
+      if (object.type === "view" && object.name.toLowerCase() === view.name.toLowerCase()) {
+        return false;
+      }
+      return (
+        object.tbl_name.toLowerCase() === view.name.toLowerCase() ||
+        (object.sql !== null && sqlReferencesIdentifier(object.sql, view.name))
+      );
+    });
 }
 
 function sameTriggerEvent(left: TriggerEvent, right: TriggerEvent): boolean {
@@ -1259,6 +1405,37 @@ function sameTriggerEvent(left: TriggerEvent, right: TriggerEvent): boolean {
     left.columns.every(
       (column, position) => column.toLowerCase() === right.columns[position]?.toLowerCase(),
     )
+  );
+}
+
+function matchesTriggerContract(
+  definition: TriggerDefinitionRow | null,
+  contract: TriggerContract,
+): boolean {
+  if (
+    definition === null ||
+    typeof definition.name !== "string" ||
+    typeof definition.tbl_name !== "string" ||
+    typeof definition.sql !== "string"
+  ) {
+    return false;
+  }
+  const actual = triggerDefinitionFromSql(definition.sql);
+  const expectedWhen = sqliteTokens(contract.when);
+  const expectedBody = sqliteTokens(contract.body);
+  return (
+    definition.name.toLowerCase() === contract.name.toLowerCase() &&
+    definition.tbl_name.toLowerCase() === contract.table.toLowerCase() &&
+    actual !== null &&
+    actual.name.toLowerCase() === contract.name.toLowerCase() &&
+    actual.table.toLowerCase() === contract.table.toLowerCase() &&
+    actual.timing === contract.timing &&
+    sameTriggerEvent(actual.event, contract.event) &&
+    actual.forEachRow === contract.forEachRow &&
+    expectedWhen !== null &&
+    sameSqlTokens(comparableSqlTokens(actual.when), comparableSqlTokens(expectedWhen)) &&
+    expectedBody !== null &&
+    sameSqlTokens(comparableSqlTokens(actual.body), comparableSqlTokens(expectedBody))
   );
 }
 
@@ -1340,7 +1517,12 @@ function indexDefinitionFromSql(definition: string): ParsedIndexDefinition | nul
   };
 }
 
-function renamedIndexSql(definition: string, name: string): string | null {
+function renamedIndexSql(
+  definition: string,
+  name: string,
+  expectedTable = "saved_views",
+  expectedName?: string,
+): string | null {
   const parsed = sqliteTokens(definition);
   if (parsed === null) return null;
   const tokens = singleSqlStatement(parsed);
@@ -1364,7 +1546,8 @@ function renamedIndexSql(definition: string, name: string): string | null {
     !isSqlNameToken(indexToken) ||
     !isSqlKeyword(tokens[position + 1], "on") ||
     !isSqlNameToken(tableToken) ||
-    tableToken.value.toLowerCase() !== "saved_views"
+    tableToken.value.toLowerCase() !== expectedTable.toLowerCase() ||
+    (expectedName !== undefined && indexToken.value.toLowerCase() !== expectedName.toLowerCase())
   ) {
     return null;
   }
@@ -1394,13 +1577,13 @@ function sameSqlTokens(left: readonly string[], right: readonly string[]): boole
 
 function hasViewPreferencesKeyIndex(db: Database): boolean {
   const index = indexList(db, "view_preferences").find(
-    (value) => value.name === "idx_view_preferences_key",
+    (value) => value.name.toLowerCase() === "idx_view_preferences_key",
   );
   if (!index || index.unique_value !== 1 || index.partial !== 0) return false;
 
   const definition = db
     .query<SqlDefinitionRow, SQLQueryBindings[]>(
-      "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+      "SELECT sql FROM sqlite_master WHERE type = 'index' AND lower(name) = lower(?1)",
     )
     .get("idx_view_preferences_key");
   if (!definition?.sql) return false;
@@ -1443,7 +1626,7 @@ function savedViewsIndexDefinitions(db: Database): SavedViewsIndexDefinition[] {
   return indexList(db, "saved_views").map((index) => {
     const definition = db
       .query<SqlDefinitionRow, SQLQueryBindings[]>(
-        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND lower(name) = lower(?1)",
       )
       .get(index.name);
     return {
@@ -1508,6 +1691,315 @@ function generatedSavedViewsIndexName(db: Database, name: string): string {
   for (let suffixNumber = 2; ; suffixNumber += 1) {
     const candidate = `${base}_${suffixNumber}`;
     if (!indexNameInUse(db, candidate)) return candidate;
+  }
+}
+
+type ViewsMigrationNamedIndex =
+  | { kind: "key"; name: "idx_view_preferences_key"; table: "view_preferences" }
+  | {
+      kind: "columns";
+      name: string;
+      table: string;
+      columns: readonly string[];
+      unique: boolean;
+    };
+
+const VIEWS_MIGRATION_NAMED_INDEXES = [
+  {
+    kind: "columns",
+    name: "idx_saved_views_workspace_id",
+    table: "saved_views",
+    columns: ["workspace_id", "id"],
+    unique: true,
+  },
+  {
+    kind: "columns",
+    name: "idx_saved_views_scope",
+    table: "saved_views",
+    columns: ["scope", "team_id"],
+    unique: false,
+  },
+  {
+    kind: "columns",
+    name: "idx_saved_views_owner",
+    table: "saved_views",
+    columns: ["owner_id"],
+    unique: false,
+  },
+  {
+    kind: "columns",
+    name: "idx_saved_views_project",
+    table: "saved_views",
+    columns: ["workspace_id", "project_id"],
+    unique: false,
+  },
+  {
+    kind: "columns",
+    name: "idx_saved_views_initiative",
+    table: "saved_views",
+    columns: ["workspace_id", "initiative_id"],
+    unique: false,
+  },
+  { kind: "key", name: "idx_view_preferences_key", table: "view_preferences" },
+  {
+    kind: "columns",
+    name: "idx_view_preferences_view",
+    table: "view_preferences",
+    columns: ["workspace_id", "view_id"],
+    unique: false,
+  },
+  {
+    kind: "columns",
+    name: "idx_view_preferences_actor",
+    table: "view_preferences",
+    columns: ["workspace_id", "actor_id"],
+    unique: false,
+  },
+  {
+    kind: "columns",
+    name: "idx_view_subscriptions_view",
+    table: "view_subscriptions",
+    columns: ["workspace_id", "view_id"],
+    unique: false,
+  },
+  {
+    kind: "columns",
+    name: "idx_view_subscriptions_actor",
+    table: "view_subscriptions",
+    columns: ["workspace_id", "actor_id"],
+    unique: false,
+  },
+] satisfies readonly ViewsMigrationNamedIndex[];
+
+const VIEWS_MIGRATION_CREATED_TABLES = [
+  "_prb390_saved_views",
+  "view_preferences",
+  "view_subscriptions",
+] satisfies readonly string[];
+
+interface ViewsMigrationNameCollision {
+  type: "index" | "trigger" | "view";
+  name: string;
+  table: string;
+  replacementName: string;
+  sql: string;
+}
+
+function triggerNameInUse(db: Database, name: string): boolean {
+  return schemaObjects(db, name).some((object) => object.type === "trigger");
+}
+
+function generatedViewsMigrationIndexName(
+  db: Database,
+  name: string,
+  plannedNames: Set<string>,
+): string {
+  const base = `${name}_legacy`;
+  for (let suffixNumber = 1; ; suffixNumber += 1) {
+    const candidate = suffixNumber === 1 ? base : `${base}_${suffixNumber}`;
+    if (!indexNameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
+      plannedNames.add(candidate.toLowerCase());
+      return candidate;
+    }
+  }
+}
+
+function generatedViewsMigrationTriggerName(
+  db: Database,
+  name: string,
+  plannedNames: Set<string>,
+): string {
+  const base = `${name}_legacy`;
+  for (let suffixNumber = 1; ; suffixNumber += 1) {
+    const candidate = suffixNumber === 1 ? base : `${base}_${suffixNumber}`;
+    if (!triggerNameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
+      plannedNames.add(candidate.toLowerCase());
+      return candidate;
+    }
+  }
+}
+
+function generatedViewsMigrationViewName(
+  db: Database,
+  name: string,
+  plannedNames: Set<string>,
+): string {
+  const base = `${name}_legacy`;
+  for (let suffixNumber = 1; ; suffixNumber += 1) {
+    const candidate = suffixNumber === 1 ? base : `${base}_${suffixNumber}`;
+    if (!indexNameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
+      plannedNames.add(candidate.toLowerCase());
+      return candidate;
+    }
+  }
+}
+
+function viewsMigrationIndexMatches(db: Database, expected: ViewsMigrationNamedIndex): boolean {
+  if (expected.kind === "key") return hasViewPreferencesKeyIndex(db);
+  return hasNamedIndexWithColumns(
+    db,
+    expected.table,
+    expected.name,
+    expected.columns,
+    expected.unique,
+  );
+}
+
+function viewsMigrationIndexHasEquivalentAlternative(
+  db: Database,
+  expected: ViewsMigrationNamedIndex,
+): boolean {
+  return (
+    expected.kind === "columns" &&
+    expected.table === "saved_views" &&
+    hasIndexWithColumns(db, expected.table, expected.columns, expected.unique)
+  );
+}
+
+function viewsMigrationNameCollisionPlan(
+  db: Database,
+  includeCreatedTables = true,
+): ViewsMigrationNameCollision[] {
+  const indexByName = new Map(
+    VIEWS_MIGRATION_NAMED_INDEXES.map((index) => [index.name.toLowerCase(), index]),
+  );
+  const reservedIndexNames = [
+    ...VIEWS_MIGRATION_NAMED_INDEXES.map((index) => index.name),
+    ...(includeCreatedTables ? VIEWS_MIGRATION_CREATED_TABLES : []),
+  ];
+  const collisions: ViewsMigrationNameCollision[] = [];
+  const plannedObjectNames = new Set<string>();
+  const plannedTriggerNames = new Set<string>();
+
+  for (const name of reservedIndexNames) {
+    const expected = indexByName.get(name.toLowerCase());
+    for (const object of schemaObjects(db, name)) {
+      if (object.type === "trigger") continue;
+      if (object.type === "view") {
+        if (viewHasSchemaDependencies(db, object)) {
+          throw new Error(
+            `Cannot apply migration 0033 safely: view ${object.name} has dependent schema objects`,
+          );
+        }
+        if (object.sql === null) {
+          throw new Error(`Cannot rename legacy view ${object.name} safely`);
+        }
+        const replacementName = generatedViewsMigrationViewName(
+          db,
+          object.name,
+          plannedObjectNames,
+        );
+        const sql = renamedViewSql(object.sql, replacementName, object.name);
+        if (sql === null || !executableSchemaDefinition(db, sql)) {
+          throw new Error(`Cannot rename legacy view ${object.name} safely`);
+        }
+        collisions.push({
+          type: "view",
+          name: object.name,
+          table: object.tbl_name,
+          replacementName,
+          sql,
+        });
+        continue;
+      }
+      if (object.type !== "index") {
+        throw new Error(
+          `Cannot apply migration 0033 safely: ${object.type} ${object.name} ` +
+            `blocks the global index/table name ${name}`,
+        );
+      }
+      if (
+        expected !== undefined &&
+        object.tbl_name.toLowerCase() === expected.table.toLowerCase()
+      ) {
+        if (
+          !viewsMigrationIndexMatches(db, expected) &&
+          !viewsMigrationIndexHasEquivalentAlternative(db, expected)
+        ) {
+          throw new Error(
+            `Cannot apply migration 0033 safely: same-table index ${object.name} on ` +
+              `${object.tbl_name} is incompatible`,
+          );
+        }
+        continue;
+      }
+      if (object.sql === null) {
+        throw new Error(
+          `Cannot apply migration 0033 safely: index ${object.name} has no recoverable definition`,
+        );
+      }
+      const replacementName = generatedViewsMigrationIndexName(db, object.name, plannedObjectNames);
+      const sql = renamedIndexSql(object.sql, replacementName, object.tbl_name, object.name);
+      if (sql === null || !executableSchemaDefinition(db, sql)) {
+        throw new Error(`Cannot rename legacy index ${object.name} safely`);
+      }
+      collisions.push({
+        type: "index",
+        name: object.name,
+        table: object.tbl_name,
+        replacementName,
+        sql,
+      });
+    }
+  }
+
+  for (const expected of VIEWS_MIGRATION_TRIGGER_CONTRACTS) {
+    for (const object of schemaObjects(db, expected.name)) {
+      if (object.type !== "trigger") continue;
+      const definition: TriggerDefinitionRow = {
+        name: object.name,
+        tbl_name: object.tbl_name,
+        sql: object.sql,
+      };
+      if (object.tbl_name.toLowerCase() === expected.table.toLowerCase()) {
+        if (!matchesTriggerContract(definition, expected)) {
+          throw new Error(
+            `Cannot apply migration 0033 safely: same-table trigger ${object.name} on ` +
+              `${object.tbl_name} is incompatible`,
+          );
+        }
+        continue;
+      }
+      if (object.sql === null) {
+        throw new Error(
+          `Cannot apply migration 0033 safely: trigger ${object.name} has no recoverable definition`,
+        );
+      }
+      const replacementName = generatedViewsMigrationTriggerName(
+        db,
+        object.name,
+        plannedTriggerNames,
+      );
+      const sql = renamedTriggerSql(object.sql, replacementName, object.tbl_name, object.name);
+      if (sql === null || !executableSchemaDefinition(db, sql)) {
+        throw new Error(`Cannot rename legacy trigger ${object.name} safely`);
+      }
+      collisions.push({
+        type: "trigger",
+        name: object.name,
+        table: object.tbl_name,
+        replacementName,
+        sql,
+      });
+    }
+  }
+
+  return collisions;
+}
+
+function applyViewsMigrationNameCollisions(
+  db: Database,
+  collisions: readonly ViewsMigrationNameCollision[],
+): void {
+  for (const collision of collisions) {
+    if (collision.type === "index") {
+      db.exec(`DROP INDEX ${quoteIdentifier(collision.name)}`);
+    } else if (collision.type === "trigger") {
+      db.exec(`DROP TRIGGER ${quoteIdentifier(collision.name)}`);
+    } else {
+      db.exec(`DROP VIEW ${quoteIdentifier(collision.name)}`);
+    }
+    db.exec(collision.sql);
   }
 }
 
@@ -1879,7 +2371,10 @@ function validateViewsMigrationPrerequisites(db: Database): void {
   );
   const invalidRows = invalidSavedViewRows(db);
   const indexProblems = savedViewsIndexProblems(savedViewsIndexDefinitions(db));
-  const triggerSchemaProblems = triggerProblems(db, VIEWS_MIGRATION_TRIGGER_CONTRACTS);
+  const triggerSchemaProblems = viewsMigrationTriggerPrerequisiteProblems(
+    db,
+    VIEWS_MIGRATION_TRIGGER_CONTRACTS,
+  );
   const problems = [
     ...schemaProblems,
     ...foreignKeySchemaProblems,
@@ -1946,36 +2441,55 @@ function foreignKeyProblems(
  */
 function triggerProblems(db: Database, expected: readonly TriggerContract[]): string[] {
   return expected.flatMap((contract) => {
-    const definition = db
+    const definition =
+      db
+        .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+          "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND lower(name) = lower(?1)",
+        )
+        .get(contract.name) ?? null;
+    return matchesTriggerContract(definition, contract)
+      ? []
+      : [`missing or incompatible trigger ${contract.name}`];
+  });
+}
+
+function viewsMigrationTriggerPrerequisiteProblems(
+  db: Database,
+  expected: readonly TriggerContract[],
+): string[] {
+  return expected.flatMap((contract) => {
+    const definitions = db
       .query<TriggerDefinitionRow, SQLQueryBindings[]>(
         "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND lower(name) = lower(?1)",
       )
-      .get(contract.name);
-    const actual =
-      definition !== null && definition !== undefined && typeof definition.sql === "string"
-        ? triggerDefinitionFromSql(definition.sql)
-        : null;
-    const expectedWhen = sqliteTokens(contract.when);
-    const expectedBody = sqliteTokens(contract.body);
-    const valid =
-      definition !== null &&
-      definition !== undefined &&
-      typeof definition.name === "string" &&
-      typeof definition.tbl_name === "string" &&
-      typeof definition.sql === "string" &&
-      definition.name.toLowerCase() === contract.name.toLowerCase() &&
-      definition.tbl_name.toLowerCase() === contract.table.toLowerCase() &&
-      actual !== null &&
-      actual.name.toLowerCase() === contract.name.toLowerCase() &&
-      actual.table.toLowerCase() === contract.table.toLowerCase() &&
-      actual.timing === contract.timing &&
-      sameTriggerEvent(actual.event, contract.event) &&
-      actual.forEachRow === contract.forEachRow &&
-      expectedWhen !== null &&
-      sameSqlTokens(comparableSqlTokens(actual.when), comparableSqlTokens(expectedWhen)) &&
-      expectedBody !== null &&
-      sameSqlTokens(comparableSqlTokens(actual.body), comparableSqlTokens(expectedBody));
-    return valid ? [] : [`missing or incompatible trigger ${contract.name}`];
+      .all(contract.name);
+    const sameTable =
+      definitions.find(
+        (definition) =>
+          typeof definition.tbl_name === "string" &&
+          definition.tbl_name.toLowerCase() === contract.table.toLowerCase(),
+      ) ?? null;
+    if (sameTable !== null) {
+      return matchesTriggerContract(sameTable, contract)
+        ? []
+        : [`missing or incompatible trigger ${contract.name}`];
+    }
+    const crossTable = definitions[0];
+    if (
+      crossTable !== undefined &&
+      typeof crossTable.name === "string" &&
+      typeof crossTable.tbl_name === "string" &&
+      typeof crossTable.sql === "string" &&
+      renamedTriggerSql(
+        crossTable.sql,
+        `${contract.name}_legacy`,
+        crossTable.tbl_name,
+        crossTable.name,
+      ) !== null
+    ) {
+      return [];
+    }
+    return [`missing or incompatible trigger ${contract.name}`];
   });
 }
 
@@ -2471,9 +2985,11 @@ function reconcileLegacyViewsMigration(db: Database, marker: MigrationMarkerRow)
       `Cannot reconcile legacy Views migration: incomplete or incompatible schema or data. ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  const nameCollisionPlan = viewsMigrationNameCollisionPlan(db, false);
 
   db.transaction(() => {
     const appliedAt = now();
+    applyViewsMigrationNameCollisions(db, nameCollisionPlan);
     db.exec(migration0032);
     db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_views_workspace_id ON saved_views(workspace_id, id)",
@@ -2608,12 +3124,14 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
     // alrededor de estas migraciones y las reactiva aun si una falla.
     const rebuild = migration.version === 25 || migration.version === 33;
     const savedViewIndexes = migration.version === 33 ? savedViewsIndexDefinitions(db) : [];
+    const nameCollisionPlan = migration.version === 33 ? viewsMigrationNameCollisionPlan(db) : [];
     if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
         if (migration.version === 24) validateWorkspaceMigration(db, "before");
         if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "before");
         if (migration.version === 30) verifyDocumentsBeforeRetirement(db, options);
+        if (migration.version === 33) applyViewsMigrationNameCollisions(db, nameCollisionPlan);
         db.exec(migration.sql);
         if (migration.version === 33) restoreSavedViewsIndexes(db, savedViewIndexes);
         if (migration.version === 24) {
