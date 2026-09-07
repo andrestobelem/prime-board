@@ -36,26 +36,75 @@ export function mapPostgresActor(row: ActorRow) {
   };
 }
 
+const ACTOR_COLUMNS = `
+  actors.id,
+  actors.name,
+  actors.email,
+  actors.type,
+  memberships.role AS workspace_role,
+  memberships.status,
+  actors.avatar_url,
+  actors.created_at,
+  actors.updated_at`;
+
+/**
+ * Obtiene un Actor y proyecta el rol y estado de su Membership efectiva.
+ *
+ * El alcance es opcional solo para conservar los helpers internos que todavía
+ * operan bajo el contrato PostgreSQL legacy de un único Workspace. Las rutas
+ * GraphQL que exponen Actors deben pasar siempre el WorkspaceContext.
+ */
 export async function getPostgresActor(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  workspaceId?: string,
 ): Promise<ActorRow | null> {
-  return persistence.one<ActorRow>("SELECT * FROM actors WHERE id = $1", [id]);
+  if (workspaceId === undefined) {
+    return persistence.one<ActorRow>("SELECT * FROM actors WHERE id = $1", [id]);
+  }
+  return persistence.one<ActorRow>(
+    `SELECT ${ACTOR_COLUMNS}
+       FROM actors
+       JOIN workspace_memberships AS memberships
+         ON memberships.actor_id = actors.id
+        AND memberships.workspace_id = $2
+      WHERE actors.id = $1`,
+    [id, workspaceId],
+  );
 }
 
+/** Lista solo Actors con una Membership en el Workspace efectivo. */
 export async function listPostgresActors(
   persistence: Persistence,
   type?: string | null,
+  workspaceId?: string,
 ): Promise<ActorRow[]> {
-  if (type) {
-    return [
-      ...(await persistence.many<ActorRow>(
-        "SELECT * FROM actors WHERE type = $1 ORDER BY created_at",
-        [type],
-      )),
-    ];
+  if (workspaceId === undefined) {
+    if (type) {
+      return [
+        ...(await persistence.many<ActorRow>(
+          "SELECT * FROM actors WHERE type = $1 ORDER BY created_at",
+          [type],
+        )),
+      ];
+    }
+    return [...(await persistence.many<ActorRow>("SELECT * FROM actors ORDER BY created_at"))];
   }
-  return [...(await persistence.many<ActorRow>("SELECT * FROM actors ORDER BY created_at"))];
+
+  const typeClause = type ? "AND actors.type = $2" : "";
+  const params = type ? [workspaceId, type] : [workspaceId];
+  return [
+    ...(await persistence.many<ActorRow>(
+      `SELECT ${ACTOR_COLUMNS}
+         FROM actors
+         JOIN workspace_memberships AS memberships
+           ON memberships.actor_id = actors.id
+          AND memberships.workspace_id = $1
+        WHERE TRUE ${typeClause}
+         ORDER BY actors.created_at, actors.id`,
+      params,
+    )),
+  ];
 }
 
 export async function createPostgresActor(

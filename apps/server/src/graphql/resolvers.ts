@@ -1071,7 +1071,9 @@ export const resolvers = {
       actors: async (_parent: unknown, args: { type?: string }, context: Context) => {
         requireViewer(context);
         if (context.persistence) {
-          return (await listPostgresActors(context.persistence, args.type)).map(mapPostgresActor);
+          return (
+            await listPostgresActors(context.persistence, args.type, context.workspace.workspaceId)
+          ).map(mapPostgresActor);
         }
         return listActorsInWorkspace(context, args.type).map(mapActor);
       },
