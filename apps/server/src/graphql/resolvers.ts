@@ -1234,13 +1234,14 @@ export const resolvers = {
             await listPostgresInboxActivity(
               context.persistence,
               viewer,
+              context.workspace.workspaceId,
               {
                 first: args.first ?? 50,
                 includeArchived: Boolean(args.includeArchived),
               },
               context.auth?.teamIds,
             )
-          ).map(mapPostgresInboxActivity);
+          ).map((row) => mapPostgresInboxActivity(row, context.workspace.workspaceId));
         }
         return scopeWorkspaceRows(
           context,
@@ -1270,6 +1271,7 @@ export const resolvers = {
           const page = await listPostgresInboxActivityPage(
             context.persistence,
             viewer,
+            context.workspace.workspaceId,
             {
               first: args.first ?? 50,
               after: args.after,
@@ -1278,7 +1280,9 @@ export const resolvers = {
             context.auth?.teamIds,
           );
           return {
-            nodes: page.rows.map(mapPostgresInboxActivity),
+            nodes: page.rows.map((row) =>
+              mapPostgresInboxActivity(row, context.workspace.workspaceId),
+            ),
             pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
           };
         }
@@ -1305,7 +1309,12 @@ export const resolvers = {
       inboxUnreadCount: async (_parent: unknown, _args: unknown, context: Context) => {
         const viewer = requireViewer(context);
         return context.persistence
-          ? countPostgresUnreadInboxActivity(context.persistence, viewer, context.auth?.teamIds)
+          ? countPostgresUnreadInboxActivity(
+              context.persistence,
+              viewer,
+              context.workspace.workspaceId,
+              context.auth?.teamIds,
+            )
           : countUnreadInboxActivity(context.db, viewer, context.workspace.workspaceId);
       },
       cycles: async (
@@ -3006,8 +3015,10 @@ export const resolvers = {
                   context.persistence,
                   args.id,
                   viewer,
+                  context.workspace.workspaceId,
                   context.auth?.teamIds,
                 ),
+                context.workspace.workspaceId,
               ),
             };
           }
@@ -3032,8 +3043,10 @@ export const resolvers = {
                   context.persistence,
                   args.id,
                   viewer,
+                  context.workspace.workspaceId,
                   context.auth?.teamIds,
                 ),
+                context.workspace.workspaceId,
               ),
             };
           }

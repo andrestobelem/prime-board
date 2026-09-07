@@ -13,9 +13,13 @@ export interface PostgresInboxActivityRow extends ActivityRow {
   issue_team_id: string;
 }
 
-export function mapPostgresInboxActivity(row: PostgresInboxActivityRow) {
+export function mapPostgresInboxActivity(
+  row: PostgresInboxActivityRow,
+  effectiveWorkspaceId: string,
+) {
   return {
-    ...mapActivity(row),
+    ...mapActivity(row, effectiveWorkspaceId),
+    workspaceId: row.workspace_id ?? effectiveWorkspaceId,
     issueId: row.issue_id,
     isRead: Boolean(row.is_read),
     isArchived: Boolean(row.is_archived),
@@ -177,10 +181,11 @@ function addTeamFilter(
 async function listInboxActivityInternal(
   persistence: Persistence,
   viewer: ActorRow,
+  workspaceId: string,
   opts: InboxListOptions,
   allowedTeamIds?: readonly string[] | null,
 ): Promise<PostgresInboxActivityRow[]> {
-  const params: SqlValue[] = [viewer.id, Boolean(opts.includeArchived)];
+  const params: SqlValue[] = [viewer.id, Boolean(opts.includeArchived), workspaceId];
   const teamFilter = addTeamFilter(params, allowedTeamIds);
   const rows = [
     ...(await persistence.many<PostgresInboxActivityRow>(
@@ -190,7 +195,12 @@ async function listInboxActivityInternal(
               CASE WHEN r.read_at IS NOT NULL THEN 1 ELSE 0 END AS is_read,
               CASE WHEN r.archived_at IS NOT NULL THEN 1 ELSE 0 END AS is_archived
        FROM activity AS a
-       JOIN issues AS i ON i.id = a.issue_id
+       JOIN workspace_memberships AS activity_memberships
+         ON activity_memberships.actor_id = a.actor_id
+        AND activity_memberships.workspace_id = $3
+       JOIN issues AS i
+         ON i.id = a.issue_id
+        AND i.workspace_id = $3
        LEFT JOIN inbox_receipts AS r
          ON r.activity_id = a.id AND r.actor_id = $1
        WHERE ($2 = TRUE OR r.archived_at IS NULL)
@@ -243,11 +253,18 @@ function decodePostgresInboxCursor(cursor: string): [string, string] | null {
 export async function listPostgresInboxActivity(
   persistence: Persistence,
   viewer: ActorRow,
+  workspaceId: string,
   opts: InboxListOptions = {},
   allowedTeamIds?: readonly string[] | null,
 ): Promise<PostgresInboxActivityRow[]> {
   const limit = Math.min(Math.max(opts.first ?? 50, 1), 100);
-  const rows = await listInboxActivityInternal(persistence, viewer, opts, allowedTeamIds);
+  const rows = await listInboxActivityInternal(
+    persistence,
+    viewer,
+    workspaceId,
+    opts,
+    allowedTeamIds,
+  );
   return rows.slice(0, limit);
 }
 
@@ -260,6 +277,7 @@ export interface PostgresInboxActivityPage {
 export async function listPostgresInboxActivityPage(
   persistence: Persistence,
   viewer: ActorRow,
+  workspaceId: string,
   opts: { first?: number; after?: string | null; includeArchived?: boolean | null } = {},
   allowedTeamIds?: readonly string[] | null,
 ): Promise<PostgresInboxActivityPage> {
@@ -267,6 +285,7 @@ export async function listPostgresInboxActivityPage(
   const all = await listInboxActivityInternal(
     persistence,
     viewer,
+    workspaceId,
     { includeArchived: Boolean(opts.includeArchived) },
     allowedTeamIds,
   );
@@ -289,9 +308,16 @@ export async function listPostgresInboxActivityPage(
 export async function countPostgresUnreadInboxActivity(
   persistence: Persistence,
   viewer: ActorRow,
+  workspaceId: string,
   allowedTeamIds?: readonly string[] | null,
 ): Promise<number> {
-  const rows = await listInboxActivityInternal(persistence, viewer, {}, allowedTeamIds);
+  const rows = await listInboxActivityInternal(
+    persistence,
+    viewer,
+    workspaceId,
+    {},
+    allowedTeamIds,
+  );
   return rows.filter((row) => !row.is_read).length;
 }
 
@@ -299,11 +325,13 @@ async function findPostgresInboxActivity(
   persistence: Persistence,
   viewer: ActorRow,
   activityId: string,
+  workspaceId: string,
   allowedTeamIds?: readonly string[] | null,
 ): Promise<PostgresInboxActivityRow | null> {
   const rows = await listInboxActivityInternal(
     persistence,
     viewer,
+    workspaceId,
     { includeArchived: true },
     allowedTeamIds,
   );
@@ -328,9 +356,12 @@ export async function markPostgresInboxRead(
   persistence: Persistence,
   activityId: string,
   viewer: ActorRow,
+  workspaceId: string,
   allowedTeamIds?: readonly string[] | null,
 ): Promise<PostgresInboxActivityRow> {
-  if (!(await findPostgresInboxActivity(persistence, viewer, activityId, allowedTeamIds))) {
+  if (
+    !(await findPostgresInboxActivity(persistence, viewer, activityId, workspaceId, allowedTeamIds))
+  ) {
     throw apiError("NOT_FOUND", "Inbox item not found");
   }
   await persistence.transaction(async (tx) => {
@@ -342,7 +373,13 @@ export async function markPostgresInboxRead(
       [activityId, viewer.id, now()],
     );
   });
-  const row = await findPostgresInboxActivity(persistence, viewer, activityId, allowedTeamIds);
+  const row = await findPostgresInboxActivity(
+    persistence,
+    viewer,
+    activityId,
+    workspaceId,
+    allowedTeamIds,
+  );
   if (!row) throw apiError("NOT_FOUND", "Inbox item not found");
   return row;
 }
@@ -351,9 +388,12 @@ export async function archivePostgresInboxItem(
   persistence: Persistence,
   activityId: string,
   viewer: ActorRow,
+  workspaceId: string,
   allowedTeamIds?: readonly string[] | null,
 ): Promise<PostgresInboxActivityRow> {
-  if (!(await findPostgresInboxActivity(persistence, viewer, activityId, allowedTeamIds))) {
+  if (
+    !(await findPostgresInboxActivity(persistence, viewer, activityId, workspaceId, allowedTeamIds))
+  ) {
     throw apiError("NOT_FOUND", "Inbox item not found");
   }
   await persistence.transaction(async (tx) => {
@@ -366,7 +406,13 @@ export async function archivePostgresInboxItem(
       [activityId, viewer.id, timestamp],
     );
   });
-  const row = await findPostgresInboxActivity(persistence, viewer, activityId, allowedTeamIds);
+  const row = await findPostgresInboxActivity(
+    persistence,
+    viewer,
+    activityId,
+    workspaceId,
+    allowedTeamIds,
+  );
   if (!row) throw apiError("NOT_FOUND", "Inbox item not found");
   return row;
 }
