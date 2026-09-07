@@ -432,6 +432,51 @@ describe("webhooks", () => {
     });
   });
 
+  it("no entrega workspace.created en un retry idempotente", async () => {
+    received.length = 0;
+    const first = await gql(
+      app,
+      `mutation {
+        workspaceCreate(input: { name: "Webhook idempotent", urlKey: "webhook-idempotent" }) {
+          success workspace { id urlKey }
+        }
+      }`,
+    );
+    expect(first.errors).toBeUndefined();
+    const workspaceId = first.data!.workspaceCreate.workspace.id as string;
+    await app.events.idle();
+
+    const hook = await gql(
+      app,
+      `mutation($url: String!) {
+        webhookCreate(input: { url: $url, events: ["workspace.created"] }) { webhook { id } }
+      }`,
+      { url: `http://localhost:${receiver.port}/workspace-idempotent` },
+      app.apiKey,
+      workspaceId,
+    );
+    expect(hook.errors).toBeUndefined();
+    const retry = await gql(
+      app,
+      `mutation {
+        workspaceCreate(input: { name: "Changed webhook name", urlKey: "webhook-idempotent" }) {
+          success workspace { id urlKey }
+        }
+      }`,
+    );
+    expect(retry.errors).toBeUndefined();
+    await app.events.idle();
+    expect(received).toHaveLength(0);
+
+    await gql(
+      app,
+      `mutation($id: ID!) { webhookDelete(id: $id) { success } }`,
+      { id: hook.data!.webhookCreate.webhook.id },
+      app.apiKey,
+      workspaceId,
+    );
+  });
+
   it("rechaza eventos desconocidos y acepta todos los eventos soportados", async () => {
     const before = await gql(app, `{ webhooks { id } }`);
     const bad = await gql(

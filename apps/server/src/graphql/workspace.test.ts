@@ -183,6 +183,40 @@ describe("Workspace GraphQL contract", () => {
     expect(legacy.data?.workspace).toMatchObject({ urlKey: "prime-board", name: "workspace" });
   });
 
+  it("emite workspace.created solo en la primera creación", async () => {
+    const emitted: string[] = [];
+    const original = lifecycleApp.events.emitForWorkspace.bind(lifecycleApp.events);
+    lifecycleApp.events.emitForWorkspace = (...args: Parameters<typeof original>) => {
+      if (args[1] === "workspace.created") emitted.push(args[0]);
+      return original(...args);
+    };
+    try {
+      const first = await gql(
+        lifecycleApp,
+        `mutation {
+          workspaceCreate(input: { name: "Idempotent Workspace", urlKey: "idempotent-lifecycle" }) {
+            success workspace { id urlKey }
+          }
+        }`,
+      );
+      expect(first.errors).toBeUndefined();
+      const createdWorkspaceId = first.data?.workspaceCreate.workspace.id as string;
+      const retry = await gql(
+        lifecycleApp,
+        `mutation {
+          workspaceCreate(input: { name: "Changed Name", urlKey: "idempotent-lifecycle" }) {
+            success workspace { id urlKey }
+          }
+        }`,
+      );
+      expect(retry.errors).toBeUndefined();
+      expect(retry.data?.workspaceCreate.workspace.id).toBe(createdWorkspaceId);
+      expect(emitted).toEqual([createdWorkspaceId]);
+    } finally {
+      lifecycleApp.events.emitForWorkspace = original;
+    }
+  });
+
   it("rechaza seleccionar un Workspace sin grant", async () => {
     const actor = await gql(
       lifecycleApp,

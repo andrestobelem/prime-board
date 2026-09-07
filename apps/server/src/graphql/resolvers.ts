@@ -1645,11 +1645,13 @@ export const resolvers = {
             if (!access) {
               throw apiError("UNAUTHORIZED", "Workspace access is not granted");
             }
-            context.events.emitForWorkspace(row.id, "workspace.created", viewer, {
-              id: row.id,
-              name: row.name,
-              urlKey: row.url_key,
-            });
+            if (created.created) {
+              context.events.emitForWorkspace(row.id, "workspace.created", viewer, {
+                id: row.id,
+                name: row.name,
+                urlKey: row.url_key,
+              });
+            }
             return { success: true, workspace: mapWorkspace(access) };
           } catch (error) {
             if (error && typeof error === "object" && "extensions" in error) throw error;
