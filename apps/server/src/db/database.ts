@@ -1094,6 +1094,7 @@ type TriggerEvent =
 interface ParsedTriggerDefinition {
   name: string;
   table: string;
+  tableToken: SqlToken;
   timing: TriggerTiming;
   event: TriggerEvent;
   forEachRow: boolean;
@@ -1140,6 +1141,22 @@ const VIEWS_MIGRATION_TRIGGER_CONTRACTS = [
     body: "SELECT RAISE(ABORT, 'Workspace context is required for saved_views');",
   },
 ] satisfies readonly TriggerContract[];
+
+interface ViewsMigrationTriggerSnapshot {
+  name: string;
+  table: string;
+  sql: string;
+  recreatedSql: string;
+  canonical: boolean;
+}
+
+const VIEWS_MIGRATION_CANONICAL_TRIGGER_NAMES = new Set(
+  VIEWS_MIGRATION_TRIGGER_CONTRACTS.map((contract) => contract.name.toLowerCase()),
+);
+
+function isViewsMigrationCanonicalTrigger(name: string): boolean {
+  return VIEWS_MIGRATION_CANONICAL_TRIGGER_NAMES.has(name.toLowerCase());
+}
 
 /**
  * Los triggers contienen sentencias separadas por `;` dentro de BEGIN/END.
@@ -1272,6 +1289,7 @@ function triggerDefinitionFromSql(definition: string): ParsedTriggerDefinition |
   return {
     name: nameToken.value,
     table: tableName,
+    tableToken,
     timing,
     event,
     forEachRow,
@@ -1311,6 +1329,92 @@ function renamedTriggerSql(
     return null;
   }
   return `${definition.slice(0, triggerToken.start)}${quoteIdentifier(name)}${definition.slice(triggerToken.end)}`;
+}
+
+function triggerSqlForTable(
+  definition: string,
+  expectedName: string,
+  expectedTable: string,
+  targetTable: string,
+): string | null {
+  const actual = triggerDefinitionFromSql(definition);
+  if (
+    actual === null ||
+    actual.name.toLowerCase() !== expectedName.toLowerCase() ||
+    actual.table.toLowerCase() !== expectedTable.toLowerCase()
+  ) {
+    return null;
+  }
+  if (actual.table.toLowerCase() === targetTable.toLowerCase()) return definition;
+  return `${definition.slice(0, actual.tableToken.start)}${quoteIdentifier(targetTable)}${definition.slice(actual.tableToken.end)}`;
+}
+
+function triggerOperationForExplain(
+  db: Database,
+  definition: ParsedTriggerDefinition,
+): string | null {
+  const table = quoteIdentifier(definition.table);
+  switch (definition.event.kind) {
+    case "insert":
+      return `EXPLAIN INSERT INTO ${table} DEFAULT VALUES`;
+    case "delete":
+      return `EXPLAIN DELETE FROM ${table} WHERE 0`;
+    case "update": {
+      const columns = tableInfo(db, definition.table);
+      if (
+        definition.event.columns.some(
+          (column) => !columns.some((value) => value.name.toLowerCase() === column.toLowerCase()),
+        )
+      ) {
+        return null;
+      }
+      const column = definition.event.columns[0] ?? columns[0]?.name;
+      if (column === undefined) return null;
+      const quotedColumn = quoteIdentifier(column);
+      return `EXPLAIN UPDATE ${table} SET ${quotedColumn} = ${quotedColumn} WHERE 0`;
+    }
+    default: {
+      const _exhaustive: never = definition.event;
+      return _exhaustive;
+    }
+  }
+}
+
+function triggerSchemaDefinitionForExplain(db: Database, definition: string): string | null {
+  const parsed = triggerDefinitionFromSql(definition);
+  if (parsed === null) return null;
+
+  let probeName = "__prb654_trigger_probe";
+  let suffix = 1;
+  while (schemaObjectsWithName(db, probeName).length > 0) {
+    suffix += 1;
+    probeName = `__prb654_trigger_probe_${suffix}`;
+  }
+  return renamedTriggerSql(definition, probeName, parsed.table, parsed.name);
+}
+
+function executableTriggerSchemaDefinition(db: Database, definition: string): boolean {
+  const explainable = triggerSchemaDefinitionForExplain(db, definition);
+  return explainable !== null && executableSchemaDefinition(db, explainable);
+}
+
+function executableTriggerDefinition(db: Database, definition: string): boolean {
+  const parsed = triggerDefinitionFromSql(definition);
+  if (parsed === null || !executableTriggerSchemaDefinition(db, definition)) return false;
+
+  const operation = triggerOperationForExplain(db, parsed);
+  if (operation === null) return false;
+  try {
+    const query = db.query(operation);
+    try {
+      query.all();
+      return true;
+    } finally {
+      query.finalize();
+    }
+  } catch {
+    return false;
+  }
 }
 
 function renamedViewSql(definition: string, name: string, expectedName: string): string | null {
@@ -1445,6 +1549,19 @@ function sameTriggerEvent(left: TriggerEvent, right: TriggerEvent): boolean {
     left.columns.every(
       (column, position) => column.toLowerCase() === right.columns[position]?.toLowerCase(),
     )
+  );
+}
+
+function sameTriggerBehavior(
+  left: ParsedTriggerDefinition,
+  right: ParsedTriggerDefinition,
+): boolean {
+  return (
+    left.timing === right.timing &&
+    sameTriggerEvent(left.event, right.event) &&
+    left.forEachRow === right.forEachRow &&
+    sameSqlTokens(comparableSqlTokens(left.when), comparableSqlTokens(right.when)) &&
+    sameSqlTokens(comparableSqlTokens(left.body), comparableSqlTokens(right.body))
   );
 }
 
@@ -2099,6 +2216,88 @@ function viewsMigrationNameCollisionPlan(
   return collisions;
 }
 
+/**
+ * Captura triggers MAIN antes de eliminar una tabla Views. Conserva también los
+ * canónicos para restaurar el orden de creación; los TEMP se consultan aparte
+ * y mantienen la política de PRB-645.
+ */
+function captureViewsMigrationTriggers(
+  db: Database,
+  table: string,
+  migrationVersion: number,
+): ViewsMigrationTriggerSnapshot[] {
+  const definitions = db
+    .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+      "SELECT name, tbl_name, sql FROM sqlite_master " +
+        "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1) ORDER BY rowid",
+    )
+    .all(table);
+  const migrationLabel = migrationVersion.toString().padStart(4, "0");
+
+  return definitions.map((definition) => {
+    if (
+      typeof definition.name !== "string" ||
+      typeof definition.tbl_name !== "string" ||
+      typeof definition.sql !== "string"
+    ) {
+      const triggerName = typeof definition.name === "string" ? definition.name : "unknown";
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: custom trigger ${triggerName} on ${table} ` +
+          "has no recoverable definition",
+      );
+    }
+    const triggerName = definition.name;
+    const triggerTable = definition.tbl_name;
+    const triggerSql = definition.sql;
+
+    const canonical = isViewsMigrationCanonicalTrigger(triggerName);
+    const canonicalMatches =
+      !canonical ||
+      VIEWS_MIGRATION_TRIGGER_CONTRACTS.some(
+        (contract) =>
+          contract.name.toLowerCase() === triggerName.toLowerCase() &&
+          matchesTriggerContract(
+            { name: triggerName, tbl_name: triggerTable, sql: triggerSql },
+            contract,
+          ),
+      );
+    const parsed = triggerDefinitionFromSql(triggerSql);
+    const recreatedSql = triggerSqlForTable(triggerSql, triggerName, triggerTable, table);
+    const recreated = recreatedSql === null ? null : triggerDefinitionFromSql(recreatedSql);
+    const executable =
+      canonical || parsed === null || recreatedSql === null
+        ? executableTriggerSchemaDefinition(db, triggerSql) &&
+          (recreatedSql === null || executableTriggerSchemaDefinition(db, recreatedSql))
+        : executableTriggerDefinition(db, triggerSql) &&
+          executableTriggerDefinition(db, recreatedSql);
+    if (
+      !canonicalMatches ||
+      parsed === null ||
+      parsed.name.toLowerCase() !== triggerName.toLowerCase() ||
+      parsed.table.toLowerCase() !== triggerTable.toLowerCase() ||
+      recreatedSql === null ||
+      recreated === null ||
+      recreated.name.toLowerCase() !== triggerName.toLowerCase() ||
+      recreated.table.toLowerCase() !== table.toLowerCase() ||
+      !sameTriggerBehavior(parsed, recreated) ||
+      !executable
+    ) {
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: ${canonical ? "canonical" : "custom"} ` +
+          `trigger ${triggerName} on ${triggerTable} cannot be preserved safely`,
+      );
+    }
+
+    return {
+      name: triggerName,
+      table: triggerTable,
+      sql: triggerSql,
+      recreatedSql,
+      canonical,
+    };
+  });
+}
+
 const NOTIFICATION_MIGRATION_RESERVED_NAMES = [
   "notification_preferences",
   "idx_notification_preferences_actor_workspace",
@@ -2119,11 +2318,25 @@ function applyMigrationNameCollisions(
     if (collision.type === "index") {
       db.exec(`DROP INDEX ${quoteIdentifier(collision.name)}`);
     } else if (collision.type === "trigger") {
-      db.exec(`DROP TRIGGER ${quoteIdentifier(collision.name)}`);
+      db.exec(`DROP TRIGGER main.${quoteIdentifier(collision.name)}`);
     } else {
       db.exec(`DROP VIEW ${quoteIdentifier(collision.name)}`);
     }
     db.exec(collision.sql);
+  }
+}
+
+function restoreViewsMigrationTriggers(
+  db: Database,
+  definitions: readonly ViewsMigrationTriggerSnapshot[],
+): void {
+  for (const definition of definitions) {
+    if (definition.canonical && hasTrigger(db, definition.name)) {
+      db.exec(`DROP TRIGGER main.${quoteIdentifier(definition.name)}`);
+    }
+  }
+  for (const definition of definitions) {
+    db.exec(definition.recreatedSql);
   }
 }
 
@@ -3253,6 +3466,10 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
     const nameCollisionPlan = migration.version === 33 ? viewsMigrationNameCollisionPlan(db) : [];
     const notificationNameCollisionPlan =
       migration.version === 32 ? notificationMigrationNameCollisionPlan(db) : [];
+    const savedViewsTriggerSnapshots =
+      migration.version === 25 || migration.version === 33
+        ? captureViewsMigrationTriggers(db, "saved_views", migration.version)
+        : [];
     if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
@@ -3265,6 +3482,9 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
         if (migration.version === 33) applyMigrationNameCollisions(db, nameCollisionPlan);
         db.exec(migration.sql);
         if (migration.version === 33) restoreSavedViewsIndexes(db, savedViewIndexes);
+        if (savedViewsTriggerSnapshots.length > 0) {
+          restoreViewsMigrationTriggers(db, savedViewsTriggerSnapshots);
+        }
         if (migration.version === 24) {
           normalizeBackfilledMembershipIds(db);
           validateWorkspaceMigration(db, "after");

@@ -3407,4 +3407,480 @@ describe("colisión de migraciones SQLite", () => {
       db.close();
     }
   });
+
+  it("preserva triggers MAIN custom de Views con contrato completo y orden", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      dropSavedViewsTriggers(db);
+      db.exec(`
+        CREATE TABLE custom_trigger_log (
+          event TEXT NOT NULL,
+          value TEXT NOT NULL
+        );
+        CREATE TRIGGER "Custom Saved Insert"
+        AFTER INSERT ON saved_views
+        FOR EACH ROW
+        WHEN NEW.name <> 'ignored'
+        BEGIN
+          INSERT INTO custom_trigger_log(event, value) VALUES ('insert', NEW.id);
+          INSERT INTO custom_trigger_log(event, value) VALUES ('insert-name', NEW.name);
+        END;
+        CREATE TRIGGER custom_saved_update
+        BEFORE UPDATE OF ID, "Name", SCOPE, team_id, owner_id, filter_json, order_by, group_by,
+          created_at, updated_at, archived_at, columns_json, workspace_id ON saved_views
+        WHEN OLD.name <> NEW.name AND NEW.scope = 'personal'
+        BEGIN
+          INSERT INTO custom_trigger_log(event, value) VALUES ('update', NEW.id);
+          INSERT INTO custom_trigger_log(event, value) VALUES ('update-name', NEW.name);
+        END;
+      `);
+      createLegacySavedViewsTriggers(db);
+
+      const beforeRows = db
+        .query(
+          "SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by, " +
+            "created_at, updated_at, archived_at, columns_json, workspace_id " +
+            "FROM saved_views ORDER BY id",
+        )
+        .all();
+      const beforeForeignKeys = db
+        .query(
+          'SELECT "table", seq, "from", "to", on_update, on_delete, match ' +
+            "FROM pragma_foreign_key_list('saved_views') " +
+            "WHERE \"table\" IN ('actors', 'workspace', 'teams') ORDER BY \"table\", seq",
+        )
+        .all();
+      const beforeDefinitions = db
+        .query(
+          "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND lower(name) IN ('custom saved insert', 'custom_saved_update') ORDER BY rowid",
+        )
+        .all();
+      const beforeCanonical = db
+        .query(
+          "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update') ORDER BY name",
+        )
+        .all();
+      const beforeTriggerOrder = db
+        .query(
+          "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'saved_views' ORDER BY rowid",
+        )
+        .all();
+
+      db.exec(`
+        INSERT INTO saved_views
+          (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+           created_at, updated_at, archived_at, columns_json, workspace_id)
+        SELECT 'custom-before', 'Before', 'personal', NULL, actors.id, '{}', 'CREATED_DESC', 'state',
+               '2026-01-01', '2026-01-01', NULL, '[]', workspace.id
+          FROM workspace CROSS JOIN actors
+         LIMIT 1;
+        UPDATE saved_views SET name = 'After' WHERE id = 'custom-before';
+      `);
+      expect(db.query("SELECT event, value FROM custom_trigger_log ORDER BY rowid").all()).toEqual([
+        { event: "insert", value: "custom-before" },
+        { event: "insert-name", value: "Before" },
+        { event: "update", value: "custom-before" },
+        { event: "update-name", value: "After" },
+      ]);
+      db.exec(
+        "DELETE FROM custom_trigger_log; DELETE FROM saved_views WHERE id = 'custom-before';",
+      );
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by, " +
+              "created_at, updated_at, archived_at, columns_json, workspace_id " +
+              "FROM saved_views ORDER BY id",
+          )
+          .all(),
+      ).toEqual(beforeRows);
+      expect(
+        db
+          .query(
+            'SELECT "table", seq, "from", "to", on_update, on_delete, match ' +
+              "FROM pragma_foreign_key_list('saved_views') " +
+              "WHERE \"table\" IN ('actors', 'workspace', 'teams') ORDER BY \"table\", seq",
+          )
+          .all(),
+      ).toEqual(beforeForeignKeys);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND lower(name) IN ('custom saved insert', 'custom_saved_update') ORDER BY rowid",
+          )
+          .all(),
+      ).toEqual(beforeDefinitions);
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update') ORDER BY name",
+          )
+          .all(),
+      ).toEqual(beforeCanonical);
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'saved_views' ORDER BY rowid",
+          )
+          .all(),
+      ).toEqual(beforeTriggerOrder);
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update')",
+          )
+          .get(),
+      ).toEqual({ count: 3 });
+      expect(
+        db.query("SELECT version FROM _migrations WHERE version >= 32 ORDER BY version").all(),
+      ).toEqual([{ version: 32 }, { version: 33 }]);
+
+      db.exec(`
+        INSERT INTO saved_views
+          (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+           created_at, updated_at, archived_at, columns_json, workspace_id)
+        SELECT 'custom-after', 'Before', 'personal', NULL, actors.id, '{}', 'CREATED_DESC', 'state',
+               '2026-01-01', '2026-01-01', NULL, '[]', workspace.id
+          FROM workspace CROSS JOIN actors
+         LIMIT 1;
+        UPDATE saved_views SET name = 'After' WHERE id = 'custom-after';
+      `);
+      expect(db.query("SELECT event, value FROM custom_trigger_log ORDER BY rowid").all()).toEqual([
+        { event: "insert", value: "custom-after" },
+        { event: "insert-name", value: "Before" },
+        { event: "update", value: "custom-after" },
+        { event: "update-name", value: "After" },
+      ]);
+      db.exec("DELETE FROM custom_trigger_log; DELETE FROM saved_views WHERE id = 'custom-after';");
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by, " +
+              "created_at, updated_at, archived_at, columns_json, workspace_id " +
+              "FROM saved_views ORDER BY id",
+          )
+          .all(),
+      ).toEqual(beforeRows);
+      expect(
+        db
+          .query(
+            'SELECT "table", seq, "from", "to", on_update, on_delete, match ' +
+              "FROM pragma_foreign_key_list('saved_views') " +
+              "WHERE \"table\" IN ('actors', 'workspace', 'teams') ORDER BY \"table\", seq",
+          )
+          .all(),
+      ).toEqual(beforeForeignKeys);
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update')",
+          )
+          .get(),
+      ).toEqual({ count: 3 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla antes del DDL si un trigger MAIN custom no es ejecutable", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE TRIGGER custom_saved_unexecutable
+        AFTER INSERT ON saved_views
+        BEGIN
+          INSERT INTO missing_custom_trigger_table(value) VALUES (NEW.id);
+        END;
+      `);
+
+      const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = (): string => {
+        try {
+          migrate(db);
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+        return "migration unexpectedly succeeded";
+      };
+
+      const firstError = runMigration();
+      expect(firstError).toMatch(
+        /migration 0033.*custom trigger custom_saved_unexecutable.*cannot be preserved safely/i,
+      );
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+
+      expect(runMigration()).toBe(firstError);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserva triggers MAIN custom en una instalación fresh y sobre actors", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      bootstrap(db);
+      db.exec(`
+        CREATE TABLE custom_trigger_log (
+          source TEXT NOT NULL,
+          value TEXT NOT NULL
+        );
+        CREATE TRIGGER custom_fresh_saved
+        AFTER INSERT ON saved_views
+        WHEN NEW.name = 'Fresh custom'
+        BEGIN
+          INSERT INTO custom_trigger_log(source, value) VALUES ('saved', NEW.id);
+        END;
+        CREATE TRIGGER custom_actor_update
+        AFTER UPDATE OF name ON actors
+        WHEN NEW.name <> OLD.name
+        BEGIN
+          INSERT INTO custom_trigger_log(source, value) VALUES ('actor', NEW.name);
+        END;
+      `);
+      const beforeSavedTrigger = db
+        .query(
+          "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_fresh_saved'",
+        )
+        .get();
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_fresh_saved'",
+          )
+          .get(),
+      ).toEqual(beforeSavedTrigger);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_actor_update'",
+          )
+          .get(),
+      ).toEqual({ name: "custom_actor_update", tbl_name: "actors" });
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update')",
+          )
+          .get(),
+      ).toEqual({ count: 3 });
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+
+      db.exec("UPDATE actors SET name = 'fresh-admin-after' WHERE name = 'admin';");
+      db.exec(`
+        INSERT INTO saved_views
+          (id, name, scope, team_id, project_id, initiative_id, owner_id, filter_json, order_by,
+           group_by, created_at, updated_at, archived_at, columns_json, workspace_id)
+        SELECT 'fresh-custom-view', 'Fresh custom', 'personal', NULL, NULL, NULL, actors.id, '{}',
+               'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', workspace.id
+          FROM workspace CROSS JOIN actors
+         WHERE actors.name = 'fresh-admin-after'
+         LIMIT 1;
+      `);
+      expect(db.query("SELECT source, value FROM custom_trigger_log ORDER BY rowid").all()).toEqual(
+        [
+          { source: "actor", value: "fresh-admin-after" },
+          { source: "saved", value: "fresh-custom-view" },
+        ],
+      );
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update')",
+          )
+          .get(),
+      ).toEqual({ count: 3 });
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_actor_update'",
+          )
+          .get(),
+      ).toEqual({ name: "custom_actor_update", tbl_name: "actors" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("conserva el trigger MAIN custom al reconciliar marker32 de Views", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      db.exec(`
+        CREATE TABLE reconcile_trigger_log (value TEXT NOT NULL);
+        CREATE TRIGGER custom_reconcile_saved
+        AFTER INSERT ON saved_views
+        BEGIN
+          INSERT INTO reconcile_trigger_log(value) VALUES (NEW.id);
+        END;
+      `);
+      const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeDefinition = db
+        .query(
+          "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_reconcile_saved'",
+        )
+        .get();
+      const beforeCanonical = db
+        .query(
+          "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update') ORDER BY name",
+        )
+        .all();
+
+      migrate(db);
+
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_reconcile_saved'",
+          )
+          .get(),
+      ).toEqual(beforeDefinition);
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update') ORDER BY name",
+          )
+          .all(),
+      ).toEqual(beforeCanonical);
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+
+      db.exec(`
+        INSERT INTO saved_views
+          (id, name, scope, team_id, project_id, initiative_id, owner_id, filter_json, order_by,
+           group_by, created_at, updated_at, archived_at, columns_json, workspace_id)
+        SELECT 'reconcile-custom-view', 'Reconcile custom', 'personal', NULL, NULL, NULL, actors.id,
+               '{}', 'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', workspace.id
+          FROM workspace CROSS JOIN actors
+         LIMIT 1;
+      `);
+      expect(db.query("SELECT value FROM reconcile_trigger_log").all()).toEqual([
+        { value: "reconcile-custom-view" },
+      ]);
+      db.exec(
+        "DELETE FROM saved_views WHERE id = 'reconcile-custom-view'; DELETE FROM reconcile_trigger_log;",
+      );
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_reconcile_saved'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update')",
+          )
+          .get(),
+      ).toEqual({ count: 3 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserva triggers MAIN custom en la ruta legacy de rebuild de 0025", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        CREATE TABLE legacy_trigger_log (value TEXT NOT NULL);
+        CREATE TRIGGER custom_legacy_saved
+        AFTER INSERT ON saved_views
+        BEGIN
+          INSERT INTO legacy_trigger_log(value) VALUES (NEW.id);
+        END;
+      `);
+      const beforeDefinition = db
+        .query(
+          "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_legacy_saved'",
+        )
+        .get();
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_legacy_saved'",
+          )
+          .get(),
+      ).toEqual(beforeDefinition);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+
+      db.exec(`
+        INSERT INTO workspace (id, name, url_key, created_at, updated_at)
+        VALUES ('legacy-workspace', 'Legacy Workspace', 'legacy-workspace', '2026-01-01', '2026-01-01');
+        INSERT INTO actors (id, name, type, created_at, updated_at)
+        VALUES ('legacy-actor', 'Legacy Actor', 'human', '2026-01-01', '2026-01-01');
+        INSERT INTO saved_views
+          (id, name, scope, team_id, project_id, initiative_id, owner_id, filter_json, order_by,
+           group_by, created_at, updated_at, archived_at, columns_json, workspace_id)
+        VALUES ('legacy-custom-view', 'Legacy custom', 'personal', NULL, NULL, NULL, 'legacy-actor',
+                '{}', 'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]', 'legacy-workspace');
+      `);
+      expect(db.query("SELECT value FROM legacy_trigger_log").all()).toEqual([
+        { value: "legacy-custom-view" },
+      ]);
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name = 'custom_legacy_saved'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name IN ('saved_views_workspace_scope_insert', 'saved_views_workspace_required_insert', 'saved_views_workspace_required_update')",
+          )
+          .get(),
+      ).toEqual({ count: 3 });
+    } finally {
+      db.close();
+    }
+  });
 });
