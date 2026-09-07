@@ -508,8 +508,43 @@ describe("pb project / team / webhook", () => {
     expect(JSON.parse(next.out).identifier).toBe("ARC-2");
   });
 
+  it("crea el horizonte inicial de cycles desde team create", () => {
+    const created = pb([
+      "team",
+      "create",
+      "--name",
+      "CLI cycle horizon",
+      "--key",
+      "HCLI",
+      "--cycles-enabled",
+      "true",
+      "--cycle-upcoming-count",
+      "2",
+      "--json",
+    ]);
+    expect(created.code).toBe(0);
+    expect(JSON.parse(created.out).cycleUpcomingCount).toBe(2);
+
+    const cycles = pb(["cycle", "list", "--team", "HCLI", "--json"]);
+    expect(cycles.code).toBe(0);
+    expect(JSON.parse(cycles.out)).toHaveLength(2);
+    expect(JSON.parse(cycles.out).every((cycle: any) => cycle.cadenceSource === "CADENCE")).toBe(
+      true,
+    );
+  });
+
   it("borra definitivamente un Team vacío con confirmación explícita", () => {
-    const created = pb(["team", "create", "--name", "CLI disposable", "--key", "DCLI", "--json"]);
+    const created = pb([
+      "team",
+      "create",
+      "--name",
+      "CLI disposable",
+      "--key",
+      "DCLI",
+      "--cycles-enabled",
+      "false",
+      "--json",
+    ]);
     expect(created.code).toBe(0);
     const mismatch = pb(["team", "delete", "DCLI", "--confirm", "WRONG"]);
     expect(mismatch.code).toBe(1);

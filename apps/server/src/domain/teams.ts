@@ -4,6 +4,7 @@ import { apiError } from "../graphql/errors.ts";
 import { seedTeamWorkflow } from "../db/seed.ts";
 import { newId, now } from "../db/util.ts";
 import { recordActivity } from "./activity.ts";
+import { ensureUpcomingCadenceCycles } from "./cycles.ts";
 
 export type EstimateScale = "exponential" | "fibonacci" | "linear" | "t_shirt";
 export type CycleStartDay =
@@ -581,6 +582,7 @@ export function createTeam(
       timestamp,
     );
     seedTeamWorkflow(db, id, workspaceId);
+    if (settings.cyclesEnabled) ensureUpcomingCadenceCycles(db, id, workspaceId);
     if (ownerId) {
       db.query(
         "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at, workspace_id) VALUES (?1, ?2, ?3, 'owner', ?4, ?5)",

@@ -36,9 +36,14 @@ describe("teams", () => {
     expect(teamRow.workspace_id).toBe(workspace.id);
     expect(
       app.db
-        .query("SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1 AND workspace_id = ?2")
+        .query(
+          "SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1 AND workspace_id = ?2",
+        )
         .get(teamRow.id, workspace.id),
     ).toEqual({ count: 5 });
+    expect(
+      app.db.query("SELECT count(*) AS count FROM cycles WHERE team_id = ?1").get(teamRow.id),
+    ).toEqual({ count: 3 });
   });
 
   it("busca team por key y agrega estados custom", async () => {
@@ -73,6 +78,114 @@ describe("teams", () => {
       `mutation { teamCreate(input: { name: "X", key: "AG" }) { success } }`,
     );
     expect(dup.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("crea el horizonte de Cycles configurado solo cuando está habilitado", async () => {
+    const configured = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "Cycle horizon", key: "HZN", cyclesEnabled: true,
+          timezone: "America/New_York", cycleStartDay: WEDNESDAY,
+          cycleDurationWeeks: 1, cycleCooldownDays: 2, cycleUpcomingCount: 5
+        }) { team { id cycleUpcomingCount } }
+      }`,
+    );
+    expect(configured.errors).toBeUndefined();
+    const configuredTeam = configured.data!.teamCreate.team;
+    expect(configuredTeam.cycleUpcomingCount).toBe(5);
+
+    const cycles = await gql(
+      app,
+      `query($teamId: ID!) {
+        cycles(teamId: $teamId) { number name state cadenceSource startsAt endsAt }
+      }`,
+      { teamId: configuredTeam.id },
+    );
+    expect(cycles.errors).toBeUndefined();
+    expect(cycles.data!.cycles).toHaveLength(5);
+    expect(cycles.data!.cycles).toEqual(
+      expect.arrayContaining(
+        Array.from({ length: 5 }, (_, index) =>
+          expect.objectContaining({
+            number: index + 1,
+            name: `Cycle ${index + 1}`,
+            state: "UPCOMING",
+            cadenceSource: "CADENCE",
+          }),
+        ),
+      ),
+    );
+    const localParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "long",
+      hour: "numeric",
+      minute: "numeric",
+      hourCycle: "h23",
+    }).formatToParts(new Date(cycles.data!.cycles[0].startsAt));
+    expect(localParts.find((part) => part.type === "weekday")?.value).toBe("Wednesday");
+    expect(localParts.find((part) => part.type === "hour")?.value).toBe("00");
+    expect(localParts.find((part) => part.type === "minute")?.value).toBe("00");
+
+    const disabled = await gql(
+      app,
+      `mutation { teamCreate(input: { name: "Disabled cycles", key: "NOC", cyclesEnabled: false }) {
+        team { id }
+      } }`,
+    );
+    expect(disabled.errors).toBeUndefined();
+    const disabledCycles = await gql(
+      app,
+      `query($teamId: ID!) { cycles(teamId: $teamId) { id } }`,
+      { teamId: disabled.data!.teamCreate.team.id },
+    );
+    expect(disabledCycles.data!.cycles).toEqual([]);
+
+    const zero = await gql(
+      app,
+      `mutation { teamCreate(input: {
+        name: "Zero cycles", key: "ZER", cyclesEnabled: true, cycleUpcomingCount: 0
+      }) { team { id } } }`,
+    );
+    expect(zero.errors).toBeUndefined();
+    const zeroCycles = await gql(app, `query($teamId: ID!) { cycles(teamId: $teamId) { id } }`, {
+      teamId: zero.data!.teamCreate.team.id,
+    });
+    expect(zeroCycles.data!.cycles).toEqual([]);
+  });
+  it("revierte Team y workflow si falla la creación del horizonte", async () => {
+    const isolated = createTestApp();
+    try {
+      isolated.db.exec(`
+        CREATE TRIGGER fail_cycle_horizon
+        BEFORE INSERT ON cycles
+        BEGIN
+          SELECT RAISE(ABORT, 'cycle horizon failure');
+        END;
+      `);
+      const failed = await gql(
+        isolated,
+        `mutation { teamCreate(input: { name: "Atomic horizon", key: "ATOM" }) { success } }`,
+      );
+      expect(failed.errors).toBeDefined();
+      expect(isolated.db.query("SELECT id FROM teams WHERE key = 'ATOM'").get()).toBeNull();
+      expect(
+        isolated.db
+          .query(
+            "SELECT count(*) AS count FROM workflow_states WHERE team_id IN (SELECT id FROM teams WHERE key = 'ATOM')",
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        isolated.db
+          .query(
+            "SELECT count(*) AS count FROM cycles WHERE team_id IN (SELECT id FROM teams WHERE key = 'ATOM')",
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      isolated.stop();
+    }
   });
 });
 
