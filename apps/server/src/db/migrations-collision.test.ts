@@ -3485,6 +3485,65 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("resuelve WITH como identificador de tabla o alias", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      bootstrap(db);
+      db.exec(`
+        CREATE TABLE with (id TEXT PRIMARY KEY);
+        INSERT INTO with (id) VALUES ('with-row');
+        CREATE INDEX idx_notification_preferences_actor_workspace ON with(id);
+        CREATE VIEW dependent_with_table AS
+          SELECT id FROM with INDEXED BY idx_notification_preferences_actor_workspace;
+        CREATE VIEW dependent_with_alias AS
+          SELECT id FROM with AS with INDEXED BY idx_notification_preferences_actor_workspace;
+        CREATE VIEW dependent_with_column_name (with) AS
+          SELECT id FROM with INDEXED BY idx_notification_preferences_actor_workspace;
+        CREATE TABLE with_column (id TEXT PRIMARY KEY, with TEXT);
+        INSERT INTO with_column (id, with) VALUES ('column-row', 'column-value');
+        CREATE INDEX idx_view_preferences_key ON with_column(id);
+        CREATE VIEW dependent_with_column AS
+          SELECT with FROM with_column INDEXED BY idx_view_preferences_key;
+        CREATE TRIGGER dependent_with_update AFTER INSERT ON actors
+        BEGIN
+          UPDATE OR ABORT with SET id = id WHERE id = 'with-row';
+          SELECT id FROM with INDEXED BY idx_notification_preferences_actor_workspace;
+        END;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT id FROM dependent_with_table").all()).toEqual([{ id: "with-row" }]);
+      expect(db.query("SELECT id FROM dependent_with_alias").all()).toEqual([{ id: "with-row" }]);
+      expect(db.query("SELECT with FROM dependent_with_column_name").all()).toEqual([
+        { with: "with-row" },
+      ]);
+      expect(db.query("SELECT with FROM dependent_with_column").all()).toEqual([
+        { with: "column-value" },
+      ]);
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'dependent_with_update'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE TRIGGER dependent_with_update AFTER INSERT ON actors
+        BEGIN
+          UPDATE OR ABORT with SET id = id WHERE id = 'with-row';
+          SELECT id FROM with INDEXED BY "idx_notification_preferences_actor_workspace_legacy";
+        END`,
+      });
+      db.query(
+        `INSERT INTO actors (id, name, type, created_at, updated_at)
+         VALUES ('with-trigger-actor', 'with-trigger', 'human', '2026-01-01', '2026-01-01')`,
+      ).run();
+      expect(db.query("SELECT id FROM with").all()).toEqual([{ id: "with-row" }]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("falla cerrado ante INDEXED BY sobre una CTE sombreada y permite reparar", () => {
     const db = databaseWithMigrationsThrough(31);
     try {
@@ -3500,6 +3559,12 @@ describe("colisión de migraciones SQLite", () => {
             WITH actors AS (SELECT 'cte-row' AS id)
             SELECT id FROM actors
           );
+        CREATE VIEW dependent_nested_cte_real AS
+          WITH helper AS (
+            SELECT id FROM actors INDEXED BY idx_view_preferences_view
+          )
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view
+          WHERE id IN (SELECT id FROM helper);
       `);
 
       expect(() => migrate(db)).toThrow(/CTE/i);
@@ -3530,6 +3595,23 @@ describe("colisión de migraciones SQLite", () => {
         db.query("SELECT id FROM actors ORDER BY id").all(),
       );
       expect(db.query("SELECT id FROM dependent_nested_cte").all()).toEqual([]);
+      expect(db.query("SELECT id FROM dependent_nested_cte_real").all()).toEqual(
+        db.query("SELECT id FROM actors ORDER BY id").all(),
+      );
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'dependent_nested_cte_real'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE VIEW dependent_nested_cte_real AS
+          WITH helper AS (
+            SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy"
+          )
+          SELECT id FROM actors INDEXED BY "idx_view_preferences_view_legacy"
+          WHERE id IN (SELECT id FROM helper)`,
+      });
     } finally {
       db.close();
     }

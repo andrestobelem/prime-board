@@ -1017,6 +1017,132 @@ function sqlParenthesisPairs(tokens: readonly SqlToken[]): SqlParenthesisPairs |
   return openings.length === 0 ? { matchingClose, enclosingOpen } : null;
 }
 
+function indexedByWithTokenIsCteStart(tokens: readonly SqlToken[], position: number): boolean {
+  const previous = tokens[position - 1];
+  if (
+    isSqlKeyword(previous, "view") ||
+    isSqlKeyword(previous, "trigger") ||
+    isSqlKeyword(previous, "exists")
+  ) {
+    return false;
+  }
+
+  let columnListDepth = 0;
+  for (let cursor = position + 1; cursor < tokens.length; cursor += 1) {
+    const token = tokens[cursor];
+    if (token?.value === "(") {
+      columnListDepth += 1;
+    } else if (token?.value === ")") {
+      if (columnListDepth > 0) {
+        columnListDepth -= 1;
+      } else {
+        if (isSqlKeyword(tokens[cursor + 1], "as")) return false;
+        break;
+      }
+    }
+  }
+
+  let parentheses = 0;
+  for (let cursor = position - 1; cursor >= 0; cursor -= 1) {
+    const token = tokens[cursor];
+    if (token?.value === ")") {
+      parentheses += 1;
+      continue;
+    }
+    if (token?.value === "(") {
+      if (parentheses > 0) parentheses -= 1;
+      continue;
+    }
+    if (parentheses > 0 || token === undefined || token.value === ".") continue;
+    if (
+      isSqlKeyword(token, "from") ||
+      isSqlKeyword(token, "join") ||
+      isSqlKeyword(token, "update") ||
+      isSqlKeyword(token, "into")
+    ) {
+      return false;
+    }
+    if (
+      token.value === ";" ||
+      isSqlKeyword(token, "begin") ||
+      isSqlKeyword(token, "create") ||
+      isSqlKeyword(token, "view") ||
+      isSqlKeyword(token, "trigger") ||
+      isSqlKeyword(token, "union") ||
+      isSqlKeyword(token, "except") ||
+      isSqlKeyword(token, "intersect")
+    ) {
+      return true;
+    }
+    if (
+      isSqlKeyword(token, "delete") ||
+      isSqlKeyword(token, "group") ||
+      isSqlKeyword(token, "having") ||
+      isSqlKeyword(token, "insert") ||
+      isSqlKeyword(token, "limit") ||
+      isSqlKeyword(token, "on") ||
+      isSqlKeyword(token, "order") ||
+      isSqlKeyword(token, "returning") ||
+      isSqlKeyword(token, "select") ||
+      isSqlKeyword(token, "set") ||
+      isSqlKeyword(token, "values") ||
+      isSqlKeyword(token, "where") ||
+      isSqlKeyword(token, "window")
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function indexedByCteScopeAt(
+  tokens: readonly SqlToken[],
+  parentheses: SqlParenthesisPairs,
+  position: number,
+): IndexedByCteScope | null {
+  let cursor = position + 1;
+  if (isSqlKeyword(tokens[cursor], "recursive")) cursor += 1;
+  const names = new Set<string>();
+  while (true) {
+    const name = tokens[cursor];
+    if (!isSqlNameToken(name)) return null;
+    names.add(name.value.toLowerCase());
+    cursor += 1;
+    if (tokens[cursor]?.value === "(") {
+      const columnsClose = parentheses.matchingClose.get(cursor);
+      if (columnsClose === undefined) return null;
+      cursor = columnsClose + 1;
+    }
+    if (!isSqlKeyword(tokens[cursor], "as")) return null;
+    cursor += 1;
+    if (isSqlKeyword(tokens[cursor], "not")) {
+      if (!isSqlKeyword(tokens[cursor + 1], "materialized")) return null;
+      cursor += 2;
+    } else if (isSqlKeyword(tokens[cursor], "materialized")) {
+      cursor += 1;
+    }
+    if (tokens[cursor]?.value !== "(") return null;
+    const queryClose = parentheses.matchingClose.get(cursor);
+    if (queryClose === undefined) return null;
+    cursor = queryClose + 1;
+    if (tokens[cursor]?.value !== ",") break;
+    cursor += 1;
+  }
+  const enclosingOpen = parentheses.enclosingOpen[position];
+  const enclosingClose =
+    enclosingOpen === undefined ? undefined : parentheses.matchingClose.get(enclosingOpen);
+  const semicolon = tokens.findIndex((token, index) => index > position && token.value === ";");
+  const end =
+    enclosingClose === undefined
+      ? semicolon < 0
+        ? tokens.length
+        : semicolon
+      : semicolon < 0 || semicolon > enclosingClose
+        ? enclosingClose
+        : semicolon;
+  return { start: position, end, names };
+}
+
 function indexedByCteScopes(
   tokens: readonly SqlToken[],
   parentheses: SqlParenthesisPairs,
@@ -1024,47 +1150,14 @@ function indexedByCteScopes(
   const scopes: IndexedByCteScope[] = [];
   for (let position = 0; position < tokens.length; position += 1) {
     if (!isSqlKeyword(tokens[position], "with")) continue;
-    let cursor = position + 1;
-    if (isSqlKeyword(tokens[cursor], "recursive")) cursor += 1;
-    const names = new Set<string>();
-    while (true) {
-      const name = tokens[cursor];
-      if (!isSqlNameToken(name)) return null;
-      names.add(name.value.toLowerCase());
-      cursor += 1;
-      if (tokens[cursor]?.value === "(") {
-        const columnsClose = parentheses.matchingClose.get(cursor);
-        if (columnsClose === undefined) return null;
-        cursor = columnsClose + 1;
-      }
-      if (!isSqlKeyword(tokens[cursor], "as")) return null;
-      cursor += 1;
-      if (isSqlKeyword(tokens[cursor], "not")) {
-        if (!isSqlKeyword(tokens[cursor + 1], "materialized")) return null;
-        cursor += 2;
-      } else if (isSqlKeyword(tokens[cursor], "materialized")) {
-        cursor += 1;
-      }
-      if (tokens[cursor]?.value !== "(") return null;
-      const queryClose = parentheses.matchingClose.get(cursor);
-      if (queryClose === undefined) return null;
-      cursor = queryClose + 1;
-      if (tokens[cursor]?.value !== ",") break;
-      cursor += 1;
+    const scope = indexedByCteScopeAt(tokens, parentheses, position);
+    if (scope !== null) {
+      scopes.push(scope);
+    } else if (indexedByWithTokenIsCteStart(tokens, position)) {
+      // Unparseable WITH clauses are unsafe. A bare WITH can also be a SQLite
+      // identifier in a source or expression, so keep that valid form.
+      return null;
     }
-    const enclosingOpen = parentheses.enclosingOpen[position];
-    const enclosingClose =
-      enclosingOpen === undefined ? undefined : parentheses.matchingClose.get(enclosingOpen);
-    const semicolon = tokens.findIndex((token, index) => index > position && token.value === ";");
-    const end =
-      enclosingClose === undefined
-        ? semicolon < 0
-          ? tokens.length
-          : semicolon
-        : semicolon < 0 || semicolon > enclosingClose
-          ? enclosingClose
-          : semicolon;
-    scopes.push({ start: position, end, names });
   }
   return scopes;
 }
