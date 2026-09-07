@@ -479,6 +479,141 @@ describe("complete SQLite history import", () => {
     }
   });
 
+  it("rejects Activity when a persisted relationship mixes Workspaces", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-mixed-relation-"));
+    try {
+      // Simula un snapshot sin tabla Workspace. Memberships demuestran dos
+      // Workspaces, mientras la relación apunta a uno distinto del Activity.
+      db.exec("DROP TABLE workspace");
+      const date = "2025-01-01T00:00:00.000Z";
+      db.query("INSERT INTO actors VALUES ('a2', 'Other', 'agent', ?1, ?1)").run(date);
+      db.query(
+        "INSERT INTO workspace_memberships VALUES ('wm2', 'w2', 'a2', 'member', 'active', ?1, ?1)",
+      ).run(date);
+      db.exec("ALTER TABLE issues ADD COLUMN project_id TEXT");
+      db.query("UPDATE issues SET project_id = 'p1' WHERE id = 'i1'").run();
+      db.query("UPDATE project_teams SET workspace_id = 'w2' WHERE project_id = 'p1'").run();
+
+      const options = {
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: false,
+        includeActivity: true,
+      } as const;
+      const dry = importSqliteHistory({ ...options, dryRun: true });
+      expect(dry).toMatchObject({ emitted: 0, written: 0, multipleWorkspaces: true });
+      expect(dry.tables.activity?.emitted).toBe(0);
+      expect((dry.tables.activity?.ambiguous ?? 0) + (dry.tables.activity?.orphaned ?? 0)).toBe(1);
+      expect(dry.warnings).toContain("ambiguous:activity:ac1");
+      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory(options);
+      expect(applied).toMatchObject({ emitted: 0, written: 0 });
+      expect(applied.tables.activity?.emitted).toBe(0);
+      expect(readEventLog(root)).toEqual([]);
+      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Activity when a legacy Issue crosses into another Workspace", () => {
+    const db = sourceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-mixed-legacy-issue-"));
+    try {
+      db.exec("DROP TABLE workspace");
+      const date = "2025-01-01T00:00:00.000Z";
+      db.query("INSERT INTO actors VALUES ('a2', 'Other', 'agent', ?1, ?1)").run(date);
+      db.query(
+        "INSERT INTO workspace_memberships VALUES ('wm2', 'w2', 'a2', 'member', 'active', ?1, ?1)",
+      ).run(date);
+      db.query("UPDATE issues SET workspace_id = NULL WHERE id = 'i1'").run();
+      db.query("UPDATE teams SET workspace_id = 'w2' WHERE id = 't1'").run();
+
+      const options = {
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        includeSnapshots: false,
+        includeActivity: true,
+      } as const;
+      const dry = importSqliteHistory({ ...options, dryRun: true });
+      expect(dry).toMatchObject({ emitted: 0, written: 0, multipleWorkspaces: true });
+      expect(dry.tables.activity?.emitted).toBe(0);
+      expect((dry.tables.activity?.ambiguous ?? 0) + (dry.tables.activity?.orphaned ?? 0)).toBe(1);
+      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+
+      const applied = importSqliteHistory(options);
+      expect(applied).toMatchObject({ emitted: 0, written: 0 });
+      expect(applied.tables.activity?.emitted).toBe(0);
+      expect(readEventLog(root)).toEqual([]);
+      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Activity for every reachable cross-Workspace relationship", () => {
+    const relationships = [
+      ["project_teams", "project_id", "p1", true],
+      ["issue_labels", "issue_id", "i1", false],
+      ["issue_relations", "issue_id", "i1", false],
+      ["comments", "issue_id", "i1", false],
+      ["team_memberships", "team_id", "t1", false],
+      ["initiative_projects", "project_id", "p1", true],
+      ["initiative_teams", "team_id", "t1", false],
+      ["project_updates", "project_id", "p1", true],
+      ["reviews", "issue_id", "i1", false],
+      ["issue_subscribers", "issue_id", "i1", false],
+    ] as const;
+
+    for (const [table, field, reference, needsProject] of relationships) {
+      const db = sourceDatabase();
+      const root = mkdtempSync(join(tmpdir(), `pb-sqlite-history-mixed-${table}-`));
+      try {
+        db.exec("DROP TABLE workspace");
+        const date = "2025-01-01T00:00:00.000Z";
+        db.query("INSERT INTO actors VALUES ('a2', 'Other', 'agent', ?1, ?1)").run(date);
+        db.query(
+          "INSERT INTO workspace_memberships VALUES ('wm2', 'w2', 'a2', 'member', 'active', ?1, ?1)",
+        ).run(date);
+        if (needsProject) {
+          db.exec("ALTER TABLE issues ADD COLUMN project_id TEXT");
+          db.query("UPDATE issues SET project_id = 'p1' WHERE id = 'i1'").run();
+        }
+        db.query(`UPDATE ${table} SET workspace_id = 'w2' WHERE ${field} = ?1`).run(reference);
+
+        const options = {
+          db,
+          rootDir: root,
+          workspaceId: "w1",
+          includeSnapshots: false,
+          includeActivity: true,
+        } as const;
+        const dry = importSqliteHistory({ ...options, dryRun: true });
+        expect(dry).toMatchObject({ emitted: 0, written: 0, multipleWorkspaces: true });
+        expect(dry.tables.activity?.emitted).toBe(0);
+        expect((dry.tables.activity?.ambiguous ?? 0) + (dry.tables.activity?.orphaned ?? 0)).toBe(
+          1,
+        );
+        expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+
+        const applied = importSqliteHistory(options);
+        expect(applied).toMatchObject({ emitted: 0, written: 0 });
+        expect(applied.tables.activity?.emitted).toBe(0);
+        expect(readEventLog(root)).toEqual([]);
+        expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+      } finally {
+        db.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("resolves case variants and quotes physical sensitive table names", () => {
     const db = new Database(":memory:");
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-history-table-resolution-"));

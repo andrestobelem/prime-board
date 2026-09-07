@@ -181,9 +181,32 @@ interface WorkspaceMembershipMetadata {
 type ActorScopeDecision =
   { readonly kind: "membership" } | { readonly kind: "legacy" } | { readonly kind: "ambiguous" };
 
+interface RelationLink {
+  readonly relationTable: HistoryTable;
+  readonly sourceTable: HistoryTable;
+  readonly field: string;
+}
+
+interface RelatedRow {
+  readonly table: HistoryTable;
+  readonly row: SourceRow;
+  readonly sourceId: string;
+}
+
 interface RowIndexes {
   readonly byTable: ReadonlyMap<string, ReadonlyMap<string, SourceRow>>;
   readonly workspaceByTable: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** Todos los alcances derivados, incluidos conflictos entre referencias. */
+  readonly workspaceCandidatesByTable: ReadonlyMap<
+    string,
+    ReadonlyMap<string, ReadonlySet<string>>
+  >;
+  /** Filas de relaciones que apuntan a una entidad, indexadas por entidad. */
+  readonly relatedRowsBySource: ReadonlyMap<string, readonly RelatedRow[]>;
+  /** Filas con scope NULL que contaminan el alcance de sus referencias. */
+  readonly unknownWorkspaceByTable: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Filas con scope inválido que no se pueden proyectar de forma segura. */
+  readonly invalidWorkspaceByTable: ReadonlyMap<string, ReadonlySet<string>>;
   readonly actorWorkspaceIds: ReadonlyMap<string, ReadonlySet<string>>;
   readonly duplicateIdsByTable: ReadonlyMap<string, ReadonlySet<string>>;
   readonly workspaceMembershipMetadata: WorkspaceMembershipMetadata;
@@ -326,6 +349,33 @@ const REQUIRED_REFERENCE_FIELDS: Partial<Record<HistoryTable, ReadonlySet<string
   issue_subscribers: new Set(["issue_id", "actor_id"]),
   saved_views: new Set(["owner_id"]),
 };
+
+/**
+ * Relaciones que pueden llevar el alcance de una fila hija a su entidad padre.
+ * Se recorren en ambos sentidos para no aceptar un Activity cuando una relación
+ * persistida apunta a otro Workspace.
+ */
+const RELATION_LINKS: readonly RelationLink[] = [
+  { relationTable: "project_teams", sourceTable: "projects", field: "project_id" },
+  { relationTable: "project_teams", sourceTable: "teams", field: "team_id" },
+  { relationTable: "issue_labels", sourceTable: "issues", field: "issue_id" },
+  { relationTable: "issue_labels", sourceTable: "labels", field: "label_id" },
+  { relationTable: "issue_relations", sourceTable: "issues", field: "issue_id" },
+  { relationTable: "issue_relations", sourceTable: "issues", field: "related_id" },
+  { relationTable: "comments", sourceTable: "issues", field: "issue_id" },
+  { relationTable: "team_memberships", sourceTable: "teams", field: "team_id" },
+  { relationTable: "initiative_projects", sourceTable: "initiatives", field: "initiative_id" },
+  { relationTable: "initiative_projects", sourceTable: "projects", field: "project_id" },
+  { relationTable: "initiative_teams", sourceTable: "initiatives", field: "initiative_id" },
+  { relationTable: "initiative_teams", sourceTable: "teams", field: "team_id" },
+  { relationTable: "project_updates", sourceTable: "projects", field: "project_id" },
+  { relationTable: "reviews", sourceTable: "issues", field: "issue_id" },
+  { relationTable: "issue_subscribers", sourceTable: "issues", field: "issue_id" },
+];
+
+function relationSourceKey(table: HistoryTable, id: string): string {
+  return `${table}\u0000${id}`;
+}
 
 function isRecord(value: unknown): value is SourceRow {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -750,11 +800,29 @@ function workspaceIndexes(
   byId: ReadonlyMap<string, ReadonlyMap<string, SourceRow>>,
 ): RowIndexes {
   const membershipMetadata = workspaceMembershipMetadata(db, tables);
-  const direct = new Map<string, Map<string, string>>();
+  const workspaceCandidates = new Map<string, Map<string, Set<string>>>();
   const duplicateIdsByTable = new Map<string, Set<string>>();
+  const unknownWorkspaceByTable = new Map<string, Set<string>>();
+  const invalidWorkspaceByTable = new Map<string, Set<string>>();
   const actorWorkspaceIds = new Map<string, Set<string>>();
+  const relatedRowsBySource = new Map<string, RelatedRow[]>();
+
+  const candidateSet = (table: string, id: string): Set<string> => {
+    const tableCandidates = workspaceCandidates.get(table) ?? new Map<string, Set<string>>();
+    const candidates = tableCandidates.get(id) ?? new Set<string>();
+    tableCandidates.set(id, candidates);
+    workspaceCandidates.set(table, tableCandidates);
+    return candidates;
+  };
+  const addState = (states: Map<string, Set<string>>, table: string, id: string): boolean => {
+    const ids = states.get(table) ?? new Set<string>();
+    if (ids.has(id)) return false;
+    ids.add(id);
+    states.set(table, ids);
+    return true;
+  };
+
   for (const [table, raw] of tables) {
-    const tableIndex = new Map<string, string>();
     const seenIds = new Set<string>();
     const duplicateIds = new Set<string>();
     for (const row of raw.rows) {
@@ -763,11 +831,42 @@ function workspaceIndexes(
       if (seenIds.has(id)) duplicateIds.add(id);
       else seenIds.add(id);
       const explicit = directWorkspace(table as HistoryTable, row);
-      if (explicit.workspaceId !== undefined) tableIndex.set(id, explicit.workspaceId);
+      if (explicit.workspaceId !== undefined) candidateSet(table, id).add(explicit.workspaceId);
+      else if (explicit.explicitNull) {
+        const unknown = unknownWorkspaceByTable.get(table) ?? new Set<string>();
+        unknown.add(id);
+        unknownWorkspaceByTable.set(table, unknown);
+      } else if (explicit.invalid) {
+        const invalid = invalidWorkspaceByTable.get(table) ?? new Set<string>();
+        invalid.add(id);
+        invalidWorkspaceByTable.set(table, invalid);
+      }
     }
-    direct.set(table, tableIndex);
     if (duplicateIds.size > 0) duplicateIdsByTable.set(table, duplicateIds);
   }
+
+  // Indexa cada relación en el sentido padre -> hijo. Los eventos de Activity y
+  // los snapshots usan este índice para validar también las relaciones que no
+  // aparecen como una columna directa en la entidad raíz.
+  for (const link of RELATION_LINKS) {
+    const relationRows = tables.get(link.relationTable)?.rows ?? [];
+    for (const row of relationRows) {
+      const sourceIdValue = textValue(row[link.field]);
+      const relationId = sourceId(link.relationTable, row);
+      if (sourceIdValue === undefined || relationId === undefined) continue;
+      const key = relationSourceKey(link.sourceTable, sourceIdValue);
+      const rows = relatedRowsBySource.get(key) ?? [];
+      if (
+        !rows.some(
+          (related) => related.table === link.relationTable && related.sourceId === relationId,
+        )
+      ) {
+        rows.push({ table: link.relationTable, row, sourceId: relationId });
+        relatedRowsBySource.set(key, rows);
+      }
+    }
+  }
+
   // Los Actors son identidades globales. Las membresías indican en qué
   // Workspaces seleccionados se puede recibir el evento de identidad. Un
   // esquema ambiguo o inválido no produce un mapa parcial que parezca fiable.
@@ -783,35 +882,80 @@ function workspaceIndexes(
       }
     }
   }
-  // Deriva alcances hasta alcanzar un punto fijo. Cada fila se agrega como
-  // máximo una vez, por lo que el ciclo termina y no pierde scope por la
-  // profundidad ni por el orden de inserción del snapshot SQLite.
+
+  // Deriva alcances hasta alcanzar un punto fijo. Además de las FK directas,
+  // propaga los alcances de relaciones como project_teams y comments. Se
+  // conservan todos los candidatos, no solo el primero, para detectar una
+  // fila que mezcla Workspaces aunque su scope directo parezca correcto.
   let changed = true;
   while (changed) {
     changed = false;
     for (const [table, raw] of tables) {
       const refs = REFERENCED_WORKSPACE_FIELDS[table as HistoryTable] ?? [];
-      const target = direct.get(table) ?? new Map<string, string>();
       for (const row of raw.rows) {
         const id = sourceId(table as HistoryTable, row);
-        if (id === undefined || target.has(id)) continue;
-        const candidates = new Set<string>();
+        if (id === undefined) continue;
+        const ownCandidates = candidateSet(table, id);
         for (const [field, targetTable] of refs) {
+          // La pertenencia de un Actor se valida con Workspace Memberships.
+          // Su columna workspace_id no autoriza una referencia global.
+          if (targetTable === "actors") continue;
           const reference = textValue(row[field]);
-          addWorkspaceCandidate(candidates, targetTable, reference, direct, { value: false });
+          if (reference === undefined) continue;
+          if (invalidWorkspaceByTable.get(targetTable)?.has(reference)) {
+            changed = addState(invalidWorkspaceByTable, table, id) || changed;
+          } else if (unknownWorkspaceByTable.get(targetTable)?.has(reference)) {
+            changed = addState(unknownWorkspaceByTable, table, id) || changed;
+          }
+          const targetCandidates = workspaceCandidates.get(targetTable)?.get(reference);
+          if (targetCandidates === undefined) continue;
+          for (const workspace of targetCandidates) {
+            if (!ownCandidates.has(workspace)) {
+              ownCandidates.add(workspace);
+              changed = true;
+            }
+          }
         }
-        if (candidates.size === 1) {
-          target.set(id, [...candidates][0]!);
-          changed = true;
+        const relatedRows =
+          relatedRowsBySource.get(relationSourceKey(table as HistoryTable, id)) ?? [];
+        for (const related of relatedRows) {
+          if (invalidWorkspaceByTable.get(related.table)?.has(related.sourceId)) {
+            changed = addState(invalidWorkspaceByTable, table, id) || changed;
+          } else if (unknownWorkspaceByTable.get(related.table)?.has(related.sourceId)) {
+            changed = addState(unknownWorkspaceByTable, table, id) || changed;
+          }
+          const relationCandidates = workspaceCandidates.get(related.table)?.get(related.sourceId);
+          if (relationCandidates === undefined) continue;
+          for (const workspace of relationCandidates) {
+            if (!ownCandidates.has(workspace)) {
+              ownCandidates.add(workspace);
+              changed = true;
+            }
+          }
         }
       }
-      direct.set(table, target);
     }
   }
-  // Conserva la forma de tipos y mantiene los mapas inmutables para los callers.
+
+  const workspaceByTable = new Map<string, Map<string, string>>();
+  for (const [table, tableCandidates] of workspaceCandidates) {
+    const unique = new Map<string, string>();
+    for (const [id, candidates] of tableCandidates) {
+      if (candidates.size === 1) {
+        const workspace = [...candidates][0];
+        if (workspace !== undefined) unique.set(id, workspace);
+      }
+    }
+    workspaceByTable.set(table, unique);
+  }
+
   return {
     byTable: byId,
-    workspaceByTable: direct,
+    workspaceByTable,
+    workspaceCandidatesByTable: workspaceCandidates,
+    relatedRowsBySource,
+    unknownWorkspaceByTable,
+    invalidWorkspaceByTable,
     actorWorkspaceIds,
     duplicateIdsByTable,
     workspaceMembershipMetadata: membershipMetadata,
@@ -842,6 +986,23 @@ function referencedWorkspaceIds(
   if (direct.workspaceId !== undefined) {
     if (!scope.workspaceIds.has(direct.workspaceId)) missing = true;
     else candidates.add(direct.workspaceId);
+  }
+  // Una entidad puede tener un scope directo y otro heredado de una relación.
+  // Conserva ambos candidatos para que rowScope falle cerrado en vez de usar
+  // solo el valor de la columna de la entidad.
+  if (table !== "actors") {
+    if (indexes.invalidWorkspaceByTable.get(table)?.has(identity.sourceId)) invalid = true;
+    if (indexes.unknownWorkspaceByTable.get(table)?.has(identity.sourceId)) {
+      unknownReferenceScope = true;
+    }
+    const ownCandidates = indexes.workspaceCandidatesByTable.get(table)?.get(identity.sourceId);
+    if (ownCandidates !== undefined) {
+      for (const workspace of ownCandidates) {
+        if (!scope.workspaceIds.has(workspace)) missing = true;
+        else candidates.add(workspace);
+      }
+      if (ownCandidates.size > 1) ambiguous = true;
+    }
   }
   const refs = REFERENCED_WORKSPACE_FIELDS[table] ?? [];
   const required = REQUIRED_REFERENCE_FIELDS[table] ?? new Set<string>();
@@ -908,11 +1069,18 @@ function referencedWorkspaceIds(
       missing = true;
       continue;
     }
-    if (targetScope.explicitNull) {
-      unknownReferenceScope = true;
+    if (targetScope.explicitNull) unknownReferenceScope = true;
+    const targetCandidates = indexes.workspaceCandidatesByTable.get(targetTable)?.get(value);
+    if (targetCandidates !== undefined && targetCandidates.size > 1) {
+      // Una relación directa y otra referencia pueden probar dos Workspaces
+      // distintos. No elijas el primero que haya aparecido en SQLite.
+      ambiguous = true;
       continue;
     }
-    const workspace = indexes.workspaceByTable.get(targetTable)?.get(value);
+    const workspace =
+      targetCandidates !== undefined && targetCandidates.size === 1
+        ? [...targetCandidates][0]
+        : indexes.workspaceByTable.get(targetTable)?.get(value);
     if (workspace === undefined) {
       unknownReferenceScope = true;
       continue;
