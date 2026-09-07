@@ -535,6 +535,12 @@ interface IndexTermRow {
   key: number;
 }
 
+interface WorkspaceConstraintAutoindexContract {
+  table: string;
+  index: IndexListRow;
+  terms: readonly IndexTermRow[];
+}
+
 /**
  * SQLite no conserva SQL para los índices de PRIMARY KEY/UNIQUE de tabla.
  * Los términos de PRAGMA son la representación canónica que permite
@@ -812,6 +818,190 @@ function mainIndexTerms(db: Database, name: string): IndexTermRow[] {
     .filter((term) => term.key === 1)
     .sort((left, right) => left.seqno - right.seqno);
 }
+
+/**
+ * PRB-672 compara el contrato efectivo de autoíndices PK/UNIQUE antes del DDL.
+ * SQLite no permite recuperar su SQL; PRB-669 conserva solo índices custom.
+ */
+function workspaceConstraintAutoindexContractKey(
+  contract: WorkspaceConstraintAutoindexContract,
+): string {
+  return JSON.stringify([
+    normalizeSqliteIdentifier(contract.table),
+    contract.index.unique_value,
+    contract.index.origin,
+    contract.index.partial,
+    contract.terms.map((term) => [
+      term.seqno,
+      term.name === null ? null : normalizeSqliteIdentifier(term.name),
+      term.desc,
+      normalizeSqliteIdentifier(term.coll),
+      term.key,
+    ]),
+  ]);
+}
+
+function workspaceConstraintAutoindexShapeKey(
+  contract: WorkspaceConstraintAutoindexContract,
+): string {
+  return JSON.stringify([
+    normalizeSqliteIdentifier(contract.table),
+    contract.terms
+      .map((term) => (term.name === null ? null : normalizeSqliteIdentifier(term.name)))
+      .sort(),
+  ]);
+}
+
+function workspaceConstraintAutoindexOrdinal(table: string, index: IndexListRow): number | null {
+  const prefix = `sqlite_autoindex_${normalizeSqliteIdentifier(table)}_`;
+  const name = normalizeSqliteIdentifier(index.name);
+  if (!name.startsWith(prefix)) return null;
+  const ordinal = Number(name.slice(prefix.length));
+  return Number.isInteger(ordinal) && ordinal > 0 ? ordinal : null;
+}
+
+function workspaceConstraintHasIntegerPrimaryKeyWithoutAutoindex(
+  db: Database,
+  table: string,
+  contract: WorkspaceConstraintAutoindexContract,
+): boolean {
+  if (contract.index.origin !== "pk" || contract.terms.length !== 1) return false;
+  const columns = tableInfo(db, table).filter((column) => column.pk > 0);
+  return (
+    columns.length === 1 &&
+    columns[0]?.pk === 1 &&
+    sameSqliteIdentifier(columns[0].type, "INTEGER") &&
+    mainIndexList(db, table).every((index) => index.origin !== "pk")
+  );
+}
+
+function validateWorkspaceConstraintAutoindexCollations(
+  db: Database,
+  migrationVersion: number,
+): void {
+  const migrationLabel = migrationVersion.toString().padStart(4, "0");
+  for (const table of WORKSPACE_CONSTRAINTS_REBUILT_TABLES) {
+    const normalizedTable = normalizeSqliteIdentifier(table);
+    const targetCollations = WORKSPACE_CONSTRAINTS_TARGET_COLUMN_COLLATIONS.get(normalizedTable);
+    const targetContracts = WORKSPACE_CONSTRAINTS_TARGET_AUTOINDEX_CONTRACTS.get(normalizedTable);
+    const legacyContracts = WORKSPACE_CONSTRAINTS_LEGACY_AUTOINDEX_CONTRACTS.get(normalizedTable);
+    if (
+      targetCollations === undefined ||
+      targetContracts === undefined ||
+      legacyContracts === undefined
+    ) {
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: missing target constraint contract for ${table}`,
+      );
+    }
+
+    const integerPrimaryKeyMissing = legacyContracts.some((contract) =>
+      workspaceConstraintHasIntegerPrimaryKeyWithoutAutoindex(db, table, contract),
+    );
+    const sourceContracts: WorkspaceConstraintAutoindexContract[] = [];
+    const sourceByOrdinal = new Map<number, WorkspaceConstraintAutoindexContract>();
+    for (const index of mainIndexList(db, table)) {
+      if (index.origin !== "pk" && index.origin !== "u") continue;
+      const terms = mainIndexTerms(db, index.name);
+      if (terms.length === 0) {
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: autoindex ${index.name} on ${table} ` +
+            "has no recoverable constraint terms",
+        );
+      }
+      for (const term of terms) {
+        if (term.name === null) {
+          throw new Error(
+            `Cannot apply migration ${migrationLabel} safely: autoindex ${index.name} on ${table} ` +
+              "has an expression term without a recoverable column",
+          );
+        }
+        const targetCollation = targetCollations.get(normalizeSqliteIdentifier(term.name));
+        if (targetCollation === undefined) {
+          throw new Error(
+            `Cannot apply migration ${migrationLabel} safely: autoindex ${index.name} on ${table} ` +
+              `column ${term.name} is missing from the target constraint contract`,
+          );
+        }
+        if (!sameSqliteIdentifier(term.coll, targetCollation)) {
+          throw new Error(
+            `Cannot apply migration ${migrationLabel} safely: autoindex ${index.name} on ${table} ` +
+              `column ${term.name} has incompatible collation ${term.coll}; target ` +
+              `${targetCollation}`,
+          );
+        }
+      }
+      const contract = { table: normalizedTable, index, terms };
+      const ordinal = workspaceConstraintAutoindexOrdinal(table, index);
+      const identityOrdinal = ordinal === null ? null : ordinal + (integerPrimaryKeyMissing ? 1 : 0);
+      if (identityOrdinal === null || sourceByOrdinal.has(identityOrdinal)) {
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: autoindex ${index.name} on ${table} ` +
+            "has an unknown or duplicate constraint identity",
+        );
+      }
+      sourceContracts.push(contract);
+      sourceByOrdinal.set(identityOrdinal, contract);
+    }
+
+    const targetByLegacyOrdinal = new Map<number, WorkspaceConstraintAutoindexContract>();
+    const usedTargetOrdinals = new Set<number>();
+    for (const legacy of legacyContracts) {
+      const ordinal = workspaceConstraintAutoindexOrdinal(table, legacy.index);
+      if (ordinal === null) continue;
+      const targetPosition = targetContracts.findIndex(
+        (target, position) =>
+          !usedTargetOrdinals.has(position) &&
+          workspaceConstraintAutoindexShapeKey(target) ===
+            workspaceConstraintAutoindexShapeKey(legacy),
+      );
+      if (targetPosition >= 0) {
+        const target = targetContracts[targetPosition];
+        if (target !== undefined) {
+          targetByLegacyOrdinal.set(ordinal, target);
+          usedTargetOrdinals.add(targetPosition);
+        }
+      }
+    }
+    const legacyByOrdinal = new Map<number, WorkspaceConstraintAutoindexContract>();
+    for (const legacy of legacyContracts) {
+      const ordinal = workspaceConstraintAutoindexOrdinal(table, legacy.index);
+      if (ordinal !== null) legacyByOrdinal.set(ordinal, legacy);
+    }
+
+    for (const source of sourceContracts) {
+      const ordinal = workspaceConstraintAutoindexOrdinal(table, source.index);
+      const identityOrdinal = ordinal === null ? null : ordinal + (integerPrimaryKeyMissing ? 1 : 0);
+      const legacy = identityOrdinal === null ? undefined : legacyByOrdinal.get(identityOrdinal);
+      if (legacy === undefined) {
+        const columns = source.terms.map((term) => term.name ?? "<expression>").join(", ");
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: autoindex ${source.index.name} on ${table} ` +
+            `columns [${columns}] is not in the legacy target constraint contract`,
+        );
+      }
+      const expected = targetByLegacyOrdinal.get(identityOrdinal ?? -1) ?? legacy;
+      if (workspaceConstraintAutoindexContractKey(source) !== workspaceConstraintAutoindexContractKey(expected)) {
+        const columns = source.terms.map((term) => term.name ?? "<expression>").join(", ");
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: autoindex ${source.index.name} on ${table} ` +
+            `columns [${columns}] has an incompatible target constraint contract`,
+        );
+      }
+    }
+
+    for (const legacy of legacyContracts) {
+      const ordinal = workspaceConstraintAutoindexOrdinal(table, legacy.index);
+      if (ordinal === null || sourceByOrdinal.has(ordinal)) continue;
+      if (workspaceConstraintHasIntegerPrimaryKeyWithoutAutoindex(db, table, legacy)) continue;
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: autoindex ${legacy.index.name} on ${table} ` +
+          "is missing from the source constraint contract",
+      );
+    }
+  }
+}
+
 
 function indexHasColumns(
   index: IndexListRow,
@@ -4872,10 +5062,11 @@ const WORKSPACE_CONSTRAINTS_PREVIOUS_OWNER_INDEX_DEFINITIONS = new Map(
   ]),
 );
 
-function workspaceConstraintTargetColumnCollations(): Map<string, Map<string, string>> {
+function workspaceConstraintTargetTableDefinitions(): Map<string, string> {
   const tokens = sqliteTokens(migration0025);
-  const result = new Map<string, Map<string, string>>();
+  const result = new Map<string, string>();
   if (tokens === null) return result;
+
   for (let position = 0; position < tokens.length; position += 1) {
     if (!isSqlKeyword(tokens[position], "create")) continue;
     let cursor = position + 1;
@@ -4906,12 +5097,11 @@ function workspaceConstraintTargetColumnCollations(): Map<string, Map<string, st
     }
     const closingToken = tokens[closing];
     if (closing < 0 || closingToken === undefined) continue;
-    const definition = migration0025.slice(tokens[position]?.start ?? 0, closingToken.end);
     const tableName = normalizeSqliteIdentifier(tableToken.value);
     if (tableName.startsWith("_prb25_")) {
       result.set(
         tableName.slice("_prb25_".length),
-        tableColumnCollationsFromDefinition(definition),
+        migration0025.slice(tokens[position]?.start ?? 0, closingToken.end),
       );
     }
     position = closing;
@@ -4919,7 +5109,78 @@ function workspaceConstraintTargetColumnCollations(): Map<string, Map<string, st
   return result;
 }
 
+function workspaceConstraintTargetColumnCollations(): Map<string, Map<string, string>> {
+  const result = new Map<string, Map<string, string>>();
+  for (const [table, definition] of workspaceConstraintTargetTableDefinitions()) {
+    result.set(table, tableColumnCollationsFromDefinition(definition));
+  }
+  return result;
+}
+
+function workspaceConstraintTargetAutoindexContracts(): Map<
+  string,
+  readonly WorkspaceConstraintAutoindexContract[]
+> {
+  const result = new Map<string, readonly WorkspaceConstraintAutoindexContract[]>();
+  const definitions = workspaceConstraintTargetTableDefinitions();
+  const targetDb = new Database(":memory:", { create: true, strict: true });
+  try {
+    for (const definition of definitions.values()) targetDb.exec(definition);
+    for (const table of definitions.keys()) {
+      const stagingTable = `_prb25_${table}`;
+      const contracts = mainIndexList(targetDb, stagingTable)
+        .filter((index) => index.origin === "pk" || index.origin === "u")
+        .map((index) => ({
+          table,
+          index,
+          terms: mainIndexTerms(targetDb, index.name),
+        }));
+      result.set(table, contracts);
+    }
+  } catch {
+    return result;
+  } finally {
+    targetDb.close();
+  }
+  return result;
+}
+
 const WORKSPACE_CONSTRAINTS_TARGET_COLUMN_COLLATIONS = workspaceConstraintTargetColumnCollations();
+const WORKSPACE_CONSTRAINTS_TARGET_AUTOINDEX_CONTRACTS =
+  workspaceConstraintTargetAutoindexContracts();
+
+function workspaceConstraintLegacyAutoindexContracts(): Map<
+  string,
+  readonly WorkspaceConstraintAutoindexContract[]
+> {
+  const result = new Map<string, readonly WorkspaceConstraintAutoindexContract[]>();
+  const legacyDb = new Database(":memory:", { create: true, strict: true });
+  try {
+    for (const migration of MIGRATIONS) {
+      if (migration.version >= 25) break;
+      legacyDb.exec(migration.sql);
+    }
+    for (const table of WORKSPACE_CONSTRAINTS_REBUILT_TABLES) {
+      const contracts = mainIndexList(legacyDb, table)
+        .filter((index) => index.origin === "pk" || index.origin === "u")
+        .map((index) => ({
+          table: normalizeSqliteIdentifier(table),
+          index,
+          terms: mainIndexTerms(legacyDb, index.name),
+        }));
+      result.set(normalizeSqliteIdentifier(table), contracts);
+    }
+  } catch {
+    return result;
+  } finally {
+    legacyDb.close();
+  }
+  return result;
+}
+
+const WORKSPACE_CONSTRAINTS_LEGACY_AUTOINDEX_CONTRACTS =
+  workspaceConstraintLegacyAutoindexContracts();
+
 
 function renamedIndexSql(
   definition: string,
@@ -8843,6 +9104,7 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
       // PRB-654 mantiene la protección de saved_views; PRB-659 extiende el
       // mismo fail-closed a cada tabla no-Views que 0025 reconstruye.
       validateWorkspaceConstraintsMigrationPreflight(db, migration.version);
+      validateWorkspaceConstraintAutoindexCollations(db, migration.version);
     }
     if (migration.version === 33) validateViewsMigrationPrerequisites(db);
     const indexedByDependencies =

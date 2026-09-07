@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { migrate, openDatabase } from "./database.ts";
 import { bootstrap } from "./seed.ts";
 
-function databaseWithMigrationsThrough(versionLimit: number): Database {
+function databaseWithMigrationsThrough(
+  versionLimit: number,
+  transformMigration?: (version: number, sql: string) => string,
+): Database {
   const db = new Database(":memory:", { strict: true });
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(
@@ -17,7 +20,8 @@ function databaseWithMigrationsThrough(versionLimit: number): Database {
     const version = Number(filename.slice(0, 4));
     if (!Number.isInteger(version) || version > versionLimit) continue;
     if (version === 25) db.exec("PRAGMA foreign_keys = OFF");
-    db.exec(readFileSync(join(migrationDirectory, filename), "utf8"));
+    const migration = readFileSync(join(migrationDirectory, filename), "utf8");
+    db.exec(transformMigration?.(version, migration) ?? migration);
     if (version === 25) db.exec("PRAGMA foreign_keys = ON");
     const name = version === 32 ? "notification_preferences" : filename.slice(5, -4);
     db.query("INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)").run(
@@ -2663,6 +2667,256 @@ describe("colisión de migraciones SQLite", () => {
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();
+    }
+  });
+
+  it("falla cerrado ante una collation heredada incompatible en un autoíndice UNIQUE de 0025", () => {
+    const db = databaseWithMigrationsThrough(24, (version, sql) =>
+      version === 1
+        ? sql.replace(
+            "  name TEXT NOT NULL,\n  type TEXT NOT NULL",
+            "  name TEXT COLLATE NOCASE NOT NULL,\n  type TEXT NOT NULL",
+          )
+        : sql,
+    );
+    try {
+      db.exec(`
+        INSERT INTO workspace (id, name, url_key, created_at, updated_at)
+        VALUES ('workspace-collation', 'Workspace', 'workspace-collation', '2026-01-01', '2026-01-01');
+        INSERT INTO teams (id, name, key, created_at, updated_at)
+        VALUES ('team-collation', 'Team', 'COL', '2026-01-01', '2026-01-01');
+        INSERT INTO workflow_states
+          (id, team_id, name, type, color, position, created_at, updated_at)
+        VALUES ('state-collation', 'team-collation', 'Todo', 'unstarted', '#fff', 1, '2026-01-01', '2026-01-01');
+      `);
+      const beforeRows = db.query("SELECT * FROM workflow_states ORDER BY id").all();
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const beforeForeignKeys = db.query("PRAGMA foreign_keys").get();
+      expect(
+        db
+          .query(
+            `SELECT name, coll
+             FROM pragma_index_xinfo(
+               (SELECT name FROM pragma_index_list('workflow_states') WHERE origin = 'u')
+             )
+             WHERE key = 1
+             ORDER BY seqno`,
+          )
+          .all(),
+      ).toEqual([
+        { name: "team_id", coll: "BINARY" },
+        { name: "name", coll: "NOCASE" },
+      ]);
+
+      let firstError = "";
+      try {
+        migrate(db);
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(
+        /migration 0025.*autoindex.*workflow_states.*name.*NOCASE.*BINARY/i,
+      );
+      expect(db.query("SELECT * FROM workflow_states ORDER BY id").all()).toEqual(beforeRows);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+
+      let secondError = "";
+      try {
+        migrate(db);
+      } catch (error) {
+        secondError = error instanceof Error ? error.message : String(error);
+      }
+      expect(secondError).toBe(firstError);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("acepta autoíndices PK/UNIQUE legacy con collation efectiva BINARY", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.query("SELECT version FROM _migrations WHERE version = 25").get()).toEqual({
+        version: 25,
+      });
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("compara la collation efectiva de restricciones compuestas, quoted y rowid", () => {
+    const explicitBinary = databaseWithMigrationsThrough(24, (version, sql) =>
+      version === 1
+        ? sql.replace(
+            "  name TEXT NOT NULL,\n  type TEXT NOT NULL CHECK",
+            "  name TEXT COLLATE NOCASE NOT NULL,\n  type TEXT NOT NULL CHECK",
+          ).replace(
+            "  UNIQUE (team_id, name)\n);",
+            "  UNIQUE (team_id, name COLLATE BINARY)\n);",
+          )
+        : sql,
+    );
+    try {
+      expect(() => migrate(explicitBinary)).not.toThrow();
+    } finally {
+      explicitBinary.close();
+    }
+
+    const quoted = databaseWithMigrationsThrough(24, (version, sql) =>
+      version === 1
+        ? sql.replace(
+            "  name TEXT NOT NULL,\n  type TEXT NOT NULL CHECK",
+            "  \"name\" TEXT COLLATE NOCASE NOT NULL,\n  type TEXT NOT NULL CHECK",
+          )
+        : sql,
+    );
+    try {
+      expect(() => migrate(quoted)).toThrow(
+        /migration 0025.*autoindex.*workflow_states.*name.*NOCASE.*BINARY/i,
+      );
+    } finally {
+      quoted.close();
+    }
+
+    const keyword = databaseWithMigrationsThrough(24, (version, sql) =>
+      version === 1
+        ? sql.replace(
+            "  name TEXT NOT NULL,\n  type TEXT NOT NULL CHECK",
+            "  name TEXT NOT NULL,\n  \"case\" TEXT COLLATE NOCASE,\n  type TEXT NOT NULL CHECK",
+          ).replace(
+            "  UNIQUE (team_id, name)\n);",
+            "  UNIQUE (team_id, name),\n  UNIQUE (team_id, \"case\")\n);",
+          )
+        : sql,
+    );
+    try {
+      expect(() => migrate(keyword)).toThrow(
+        /migration 0025.*autoindex.*workflow_states.*case.*target constraint contract/i,
+      );
+    } finally {
+      keyword.close();
+    }
+
+    const integerPrimaryKey = databaseWithMigrationsThrough(24, (version, sql) =>
+      version === 1
+        ? sql.replace(
+            "CREATE TABLE teams (\n  id TEXT PRIMARY KEY,",
+            "CREATE TABLE teams (\n  id INTEGER PRIMARY KEY,",
+          )
+        : sql,
+    );
+    try {
+      expect(() => migrate(integerPrimaryKey)).not.toThrow();
+    } finally {
+      integerPrimaryKey.close();
+    }
+
+    const withoutRowid = databaseWithMigrationsThrough(24, (version, sql) =>
+      version === 1
+        ? sql.replace(
+            "  UNIQUE (team_id, name)\n);",
+            "  UNIQUE (team_id, name)\n) WITHOUT ROWID;",
+          )
+        : sql,
+    );
+    try {
+      expect(() => migrate(withoutRowid)).not.toThrow();
+    } finally {
+      withoutRowid.close();
+    }
+  });
+
+  it("falla cerrado ante autoíndices PK/UNIQUE extra, faltantes, reordenados o DESC", () => {
+    const cases = [
+      {
+        name: "extra",
+        transform: (version: number, sql: string) => {
+          if (version !== 1) return sql;
+          return sql.replace(
+            "  UNIQUE (team_id, name)\n);",
+            "  UNIQUE (team_id, name),\n  UNIQUE (team_id, type)\n);",
+          );
+        },
+      },
+      {
+        name: "missing-column",
+        transform: (version: number, sql: string) => {
+          if (version !== 1) return sql;
+          return sql.replace("  UNIQUE (team_id, name)\n);", "  UNIQUE (team_id)\n);");
+        },
+      },
+      {
+        name: "missing-index",
+        transform: (version: number, sql: string) => {
+          if (version !== 1) return sql;
+          return sql.replace(
+            "  updated_at TEXT NOT NULL,\n  UNIQUE (team_id, name)\n);",
+            "  updated_at TEXT NOT NULL\n);",
+          );
+        },
+      },
+      {
+        name: "reordered",
+        transform: (version: number, sql: string) => {
+          if (version !== 1) return sql;
+          return sql.replace("  UNIQUE (team_id, name)\n);", "  UNIQUE (name, team_id)\n);");
+        },
+      },
+      {
+        name: "desc",
+        transform: (version: number, sql: string) => {
+          if (version !== 1) return sql;
+          return sql.replace(
+            "  UNIQUE (team_id, name)\n);",
+            "  UNIQUE (team_id DESC, name)\n);",
+          );
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const db = databaseWithMigrationsThrough(24, testCase.transform);
+      try {
+        const beforeRows = db.query("SELECT * FROM workflow_states ORDER BY id").all();
+        const beforeSchema = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const beforeForeignKeys = db.query("PRAGMA foreign_keys").get();
+        let error = "";
+        try {
+          migrate(db);
+        } catch (cause) {
+          error = cause instanceof Error ? cause.message : String(cause);
+        }
+
+        expect(error).toMatch(/migration 0025.*workflow_states.*constraint contract/i);
+        expect(db.query("SELECT * FROM workflow_states ORDER BY id").all()).toEqual(beforeRows);
+        expect(
+          db
+            .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+            .all(),
+        ).toEqual(beforeSchema);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+          beforeMarkers,
+        );
+        expect(db.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+      } finally {
+        db.close();
+      }
     }
   });
 
