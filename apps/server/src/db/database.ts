@@ -2741,21 +2741,30 @@ function executableIndexedByDependencyDefinition({
   for (let suffix = 2; probeInUse(probeName); suffix += 1) {
     probeName = `__prb656_${dependency.object.type}_probe_${suffix}`;
   }
-  const probe =
-    dependency.object.type === "view"
-      ? renamedSchemaObjectSql({
-          type: "view",
-          definition,
-          name: probeName,
-          expectedName: dependency.object.name,
-        })
-      : renamedSchemaObjectSql({
-          type: "trigger",
-          definition,
-          name: probeName,
-          expectedTable: dependency.object.tbl_name,
-          expectedName: dependency.object.name,
-        });
+  let probe: string | null;
+  switch (dependency.object.type) {
+    case "view":
+      probe = renamedSchemaObjectSql({
+        type: "view",
+        definition,
+        name: probeName,
+        expectedName: dependency.object.name,
+      });
+      break;
+    case "trigger":
+      probe = renamedSchemaObjectSql({
+        type: "trigger",
+        definition,
+        name: probeName,
+        expectedTable: dependency.object.tbl_name,
+        expectedName: dependency.object.name,
+      });
+      break;
+    default: {
+      const _exhaustive: never = dependency.object.type;
+      return _exhaustive;
+    }
+  }
   return probe !== null && executableSchemaDefinition(db, probe);
 }
 
