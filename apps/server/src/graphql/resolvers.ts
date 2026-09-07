@@ -1704,22 +1704,26 @@ export const resolvers = {
             const team = mapPostgresTeam(
               await createPostgresTeam(context.persistence, args.input, viewer.id),
             );
-            context.events.emit("team.created", viewer, {
+            context.events.emitForWorkspace(context.workspace.workspaceId, "team.created", viewer, {
               id: team.id,
               teamId: team.id,
               key: team.key,
               name: team.name,
+              _teamOwnerIds: [viewer.id],
+              _teamWorkspaceId: context.workspace.workspaceId,
             });
             return { success: true, team };
           }
           const team = mapTeam(
             createTeam(context.db, args.input, viewer.id, context.workspace.workspaceId),
           );
-          context.events.emit("team.created", viewer, {
+          context.events.emitForWorkspace(context.workspace.workspaceId, "team.created", viewer, {
             id: team.id,
             teamId: team.id,
             key: team.key,
             name: team.name,
+            _teamOwnerIds: [viewer.id],
+            _teamWorkspaceId: context.workspace.workspaceId,
           });
           return { success: true, team };
         },

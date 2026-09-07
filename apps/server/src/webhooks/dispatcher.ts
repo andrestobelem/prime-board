@@ -192,7 +192,11 @@ function sqliteEventMatchesWorkspace(
       // owners no prueba por sí solo el origen del evento.
       const deletedTeamWorkspaceId =
         typeof data._teamWorkspaceId === "string" ? data._teamWorkspaceId : null;
-      if (event !== "team.deleted" || deletedTeamWorkspaceId !== workspaceId) return false;
+      if (
+        (event !== "team.created" && event !== "team.deleted") ||
+        deletedTeamWorkspaceId !== workspaceId
+      )
+        return false;
     } else if (team.workspace_id !== workspaceId) {
       return false;
     }
@@ -260,7 +264,13 @@ function sqliteEventTeamIds(
     const team = db
       .query(`SELECT id FROM teams WHERE id = ?1 AND ${scope}`)
       .get(teamId, workspaceId);
-    return team ? direct : [];
+    if (team) return direct;
+    const markerWorkspaceId =
+      typeof data._teamWorkspaceId === "string" ? data._teamWorkspaceId : null;
+    return (event === "team.created" || event === "team.deleted") &&
+      markerWorkspaceId === workspaceId
+      ? direct
+      : [];
   }
   const issueId =
     typeof data.issueId === "string"
@@ -338,7 +348,11 @@ async function postgresEventMatchesWorkspace(
     if (!team) {
       const deletedTeamWorkspaceId =
         typeof data._teamWorkspaceId === "string" ? data._teamWorkspaceId : null;
-      if (event !== "team.deleted" || deletedTeamWorkspaceId !== workspaceId) return false;
+      if (
+        (event !== "team.created" && event !== "team.deleted") ||
+        deletedTeamWorkspaceId !== workspaceId
+      )
+        return false;
     }
   }
 

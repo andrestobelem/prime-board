@@ -153,6 +153,58 @@ describe("PostgreSQL webhook dispatcher", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("entrega team.created con el scope snapshot aunque el Team ya no exista", async () => {
+    const hook: WebhookRow = {
+      id: "hook-team-created-snapshot",
+      url: "https://example.test/team-created-snapshot",
+      secret: "SUPERSECRET",
+      events: '["team.created"]',
+      enabled: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+      owner_id: "admin-1",
+      team_id: null,
+    };
+    const requests: Request[] = [];
+    const fetchFn = (async (input: URL | RequestInfo, init?: RequestInit) => {
+      requests.push(new Request(input, init));
+      return new Response("ok");
+    }) as typeof fetch;
+    const dispatcher = new WebhookDispatcher(
+      new Database(":memory:"),
+      { fetchFn, retryDelays: [] },
+      fakePersistence(hook),
+    );
+
+    dispatcher.emitForWorkspace(
+      "workspace-1",
+      "team.created",
+      { id: "admin-1", name: "admin", type: "human" },
+      {
+        id: "team-created",
+        teamId: "team-created",
+        key: "NEW",
+        name: "New Team",
+        _teamWorkspaceId: "workspace-1",
+        _teamOwnerIds: ["admin-1"],
+      },
+    );
+    await dispatcher.idle();
+
+    expect(requests).toHaveLength(1);
+    const body = JSON.parse(await requests[0]!.text()) as {
+      event: string;
+      workspaceId: string;
+      data: Record<string, unknown>;
+    };
+    expect(body).toMatchObject({
+      event: "team.created",
+      workspaceId: "workspace-1",
+      data: { id: "team-created", key: "NEW" },
+    });
+    expect(body.data).not.toHaveProperty("_teamWorkspaceId");
+    expect(body.data).not.toHaveProperty("_teamOwnerIds");
+  });
+
   it("falla cerrado para recursos PostgreSQL inexistentes", async () => {
     const hook: WebhookRow = {
       id: "hook-missing-resource",

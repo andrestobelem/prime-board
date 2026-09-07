@@ -409,19 +409,18 @@ describe("webhooks", () => {
       `mutation { teamCreate(input: { name: "Lifecycle team", key: "LIFE" }) { team { id key } } }`,
     );
     expect(created.errors).toBeUndefined();
+    // Borra la fila antes de liberar el despacho asíncrono de team.created.
+    await gql(app, `mutation($id: ID!) { teamDelete(id: $id, confirmation: "LIFE") { success } }`, {
+      id: created.data!.teamCreate.team.id,
+    });
     await app.events.idle();
-    expect(received).toHaveLength(1);
+    expect(received).toHaveLength(2);
     const createdPayload = JSON.parse(received[0]!.body);
     expect(createdPayload).toMatchObject({
       event: "team.created",
       workspaceId: expect.any(String),
       data: { id: created.data!.teamCreate.team.id, key: "LIFE" },
     });
-
-    await gql(app, `mutation($id: ID!) { teamDelete(id: $id, confirmation: "LIFE") { success } }`, {
-      id: created.data!.teamCreate.team.id,
-    });
-    await app.events.idle();
     expect(received).toHaveLength(2);
     expect(JSON.parse(received[1]!.body)).toMatchObject({
       event: "team.deleted",
