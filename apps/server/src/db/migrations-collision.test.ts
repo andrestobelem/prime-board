@@ -3883,4 +3883,96 @@ describe("colisión de migraciones SQLite", () => {
       db.close();
     }
   });
+
+  it("falla cerrado ante un TEMP trigger de saved_views en el rebuild legacy de 0025", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        INSERT INTO workspace (id, name, url_key, created_at, updated_at)
+        VALUES ('legacy-temp-workspace', 'Legacy Temp Workspace', 'legacy-temp-workspace', '2026-01-01', '2026-01-01');
+        INSERT INTO actors (id, name, type, created_at, updated_at)
+        VALUES ('legacy-temp-actor', 'Legacy Temp Actor', 'human', '2026-01-01', '2026-01-01');
+        INSERT INTO saved_views
+          (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+           created_at, updated_at, archived_at, columns_json, workspace_id)
+        VALUES ('legacy-temp-view', 'Legacy Temp View', 'personal', NULL, 'legacy-temp-actor',
+                '{}', 'CREATED_DESC', 'state', '2026-01-01', '2026-01-01', NULL, '[]',
+                'legacy-temp-workspace');
+        CREATE TEMP TABLE temp_legacy_trigger_log (value TEXT NOT NULL);
+        CREATE TEMP TRIGGER temp_saved_views
+        AFTER INSERT ON saved_views
+        BEGIN
+          INSERT INTO temp_legacy_trigger_log(value) VALUES (NEW.id);
+        END;
+      `);
+      const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeTempSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = (): string => {
+        try {
+          migrate(db);
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+        return "migration unexpectedly succeeded";
+      };
+
+      const firstError = runMigration();
+      expect(firstError).toMatch(
+        /migration 0025.*temporary trigger temp_saved_views on saved_views.*would be lost/i,
+      );
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(
+        db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeTempSchema);
+
+      expect(runMigration()).toBe(firstError);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      expect(
+        db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeTempSchema);
+
+      db.exec("DROP TRIGGER temp_saved_views");
+      db.exec(`
+        CREATE TEMP TRIGGER temp_actor_update
+        AFTER UPDATE OF name ON actors
+        BEGIN
+          INSERT INTO temp_legacy_trigger_log(value) VALUES (NEW.name);
+        END;
+      `);
+      migrate(db);
+
+      expect(db.query("SELECT version FROM _migrations WHERE version = 25").get()).toEqual({
+        version: 25,
+      });
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(
+        db.query("SELECT name, tbl_name FROM sqlite_temp_master WHERE type = 'trigger'").all(),
+      ).toEqual([{ name: "temp_actor_update", tbl_name: "actors" }]);
+      db.exec("UPDATE actors SET name = 'Legacy Temp Actor after' WHERE id = 'legacy-temp-actor'");
+      expect(db.query("SELECT value FROM temp_legacy_trigger_log").all()).toEqual([
+        { value: "Legacy Temp Actor after" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
 });

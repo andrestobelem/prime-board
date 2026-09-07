@@ -2127,6 +2127,27 @@ function migrationNameCollisionPlan(
   return collisions;
 }
 
+function validateTemporaryTriggerBeforeRebuild(
+  db: Database,
+  table: string,
+  migrationVersion: number,
+): void {
+  const temporaryTriggers = db
+    .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+      "SELECT name, tbl_name, sql FROM sqlite_temp_master " +
+        "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1) ORDER BY rowid",
+    )
+    .all(table);
+  const temporaryTrigger = temporaryTriggers[0];
+  if (temporaryTrigger === undefined) return;
+
+  const migrationLabel = migrationVersion.toString().padStart(4, "0");
+  throw new Error(
+    `Cannot apply migration ${migrationLabel} safely: temporary trigger ${temporaryTrigger.name} on ` +
+      `${temporaryTrigger.tbl_name} would be lost while rebuilding ${table}`,
+  );
+}
+
 function viewsMigrationNameCollisionPlan(
   db: Database,
   includeCreatedTables = true,
@@ -2157,19 +2178,7 @@ function viewsMigrationNameCollisionPlan(
   const plannedTriggerNames = new Set<string>();
 
   if (includeCreatedTables) {
-    const temporaryTriggers = db
-      .query<TriggerDefinitionRow, SQLQueryBindings[]>(
-        "SELECT name, tbl_name, sql FROM sqlite_temp_master " +
-          "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1)",
-      )
-      .all("saved_views");
-    const temporaryTrigger = temporaryTriggers[0];
-    if (temporaryTrigger !== undefined) {
-      throw new Error(
-        `Cannot apply migration 0033 safely: temporary trigger ${temporaryTrigger.name} on ` +
-          `${temporaryTrigger.tbl_name} would be lost while rebuilding saved_views`,
-      );
-    }
+    validateTemporaryTriggerBeforeRebuild(db, "saved_views", 33);
   }
 
   for (const expected of VIEWS_MIGRATION_TRIGGER_CONTRACTS) {
@@ -3456,6 +3465,9 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
     // PRB-390 reconstruye SavedViews y no puede continuar sin su esquema legacy.
     // El preflight ocurre antes de desactivar las FKs o abrir la transacción para
     // que una base incompatible falle sin escrituras parciales y pueda repararse.
+    if (migration.version === 25) {
+      validateTemporaryTriggerBeforeRebuild(db, "saved_views", migration.version);
+    }
     if (migration.version === 33) validateViewsMigrationPrerequisites(db);
     // PRB-472 y PRB-390 reconstruyen el grafo de tablas para reemplazar FKs
     // simples por FKs compuestas. SQLite no permite cambiar foreign_keys dentro
