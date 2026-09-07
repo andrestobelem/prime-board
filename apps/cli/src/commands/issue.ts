@@ -35,8 +35,9 @@ const USAGE = `Usage:
                 [--include-archived] [--first N] [--after CURSOR]
                 [--order-by CREATED_ASC|CREATED_DESC|UPDATED_ASC|UPDATED_DESC] [--json]
   pb issue view <REF> [--json]
-  pb issue create --team KEY --title TEXT [--description TEXT|-] [--priority NAME]
-                  [--assignee me|ID] [--parent REF] [--project ID] [--label NAME ...] [--json]
+  pb issue create --team KEY --title TEXT [--description TEXT|-] [--state NAME|TYPE]
+                  [--priority NAME] [--assignee me|ID] [--parent REF] [--project ID]
+                  [--label NAME ...] [--json]
   pb issue update <REF> [--title TEXT] [--description TEXT|-|none] [--state NAME|TYPE]
                   [--priority NAME] [--assignee me|ID|none] [--parent REF|none]
                   [--project ID|none] [--milestone ID|none] [--cycle ID|NAME|none]
@@ -219,6 +220,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
         team: { type: "string" },
         title: { type: "string" },
         description: { type: "string" },
+        state: { type: "string" },
         priority: { type: "string" },
         assignee: { type: "string" },
         parent: { type: "string" },
@@ -231,6 +233,19 @@ export async function issueCommand(argv: string[]): Promise<void> {
     if (!values.team || !values.title) throw new UsageError(USAGE);
     const team = await resolveTeam(config, values.team);
     const input: Record<string, unknown> = { teamId: team.id, title: values.title };
+    if (values.state) {
+      const resolved = resolveState(team.states, values.state);
+      if (resolved.stateType) {
+        const state = team.states.find(
+          (candidate: { id: string; type: string }) =>
+            candidate.type.toLowerCase() === values.state!.toLowerCase(),
+        );
+        if (!state) throw new UsageError(`Team has no state of type ${values.state}`);
+        input.stateId = state.id;
+      } else {
+        input.stateId = resolved.stateId;
+      }
+    }
     if (values.number) input.number = Number(values.number);
     if (values.description) input.description = await readBody(values.description);
     if (values.priority) input.priority = priorityFromName(values.priority);
