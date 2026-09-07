@@ -3,22 +3,31 @@ import { describe, expect, it } from "bun:test";
 import type { Persistence } from "../db/persistence.ts";
 import { WebhookDispatcher, signPayload, type WebhookRow } from "./dispatcher.ts";
 
-function fakePersistence(hook: WebhookRow, workspaceId = "workspace-1"): Persistence {
+function fakePersistence(
+  input: WebhookRow | readonly WebhookRow[],
+  workspaceId = "workspace-1",
+): Persistence {
+  const hooks = Array.isArray(input) ? [...input] : [input];
   return {
     one: async <Row extends object>(sql: string, params = []) => {
       if (sql.includes("FROM workspace")) {
         return params[0] === workspaceId ? ({ id: workspaceId } as Row) : null;
       }
+      if (sql.includes("FROM issues")) {
+        return params[0] === "issue-1" ? ({ id: "issue-1", team_id: "team-1" } as Row) : null;
+      }
       if (sql.includes("workspace_role")) {
-        return { id: hook.owner_id, status: "active", workspace_role: "admin" } as Row;
+        return hooks[0]
+          ? ({ id: hooks[0].owner_id, status: "active", workspace_role: "admin" } as Row)
+          : null;
       }
       if (sql.includes("FROM teams")) {
-        return params[0] === hook.team_id ? ({ id: hook.team_id } as Row) : null;
+        return params[0] === "team-1" ? ({ id: "team-1" } as Row) : null;
       }
       return null;
     },
     many: async <Row extends object>(sql: string) =>
-      sql.includes("FROM workspace") ? ([{ id: workspaceId }] as Row[]) : ([hook] as Row[]),
+      sql.includes("FROM workspace") ? ([{ id: workspaceId }] as Row[]) : (hooks as Row[]),
     execute: async () => ({ rows: [], rowCount: 0 }),
     transaction: async () => {
       throw new Error("not used");
@@ -59,6 +68,7 @@ describe("PostgreSQL webhook dispatcher", () => {
       "issue.created",
       { id: "admin-1", name: "admin", type: "human" },
       {
+        id: "issue-1",
         teamId: "team-1",
         identifier: "PRB-1",
       },
@@ -71,6 +81,82 @@ describe("PostgreSQL webhook dispatcher", () => {
     expect(requests[1]?.headers).toMatchObject({
       "x-primeboard-signature": signPayload("SUPERSECRET", body),
     });
+  });
+
+  it("mantiene la semántica legacy de issueId", async () => {
+    const hook: WebhookRow = {
+      id: "hook-legacy-issue-id",
+      url: "https://example.test/legacy-issue-id",
+      secret: "fixture-secret",
+      events: '["issue.created"]',
+      enabled: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+      owner_id: "admin-1",
+      team_id: "team-1",
+    };
+    const requests: Request[] = [];
+    const fetchFn = (async (input: URL | RequestInfo, init?: RequestInit) => {
+      requests.push(new Request(input, init));
+      return new Response("ok");
+    }) as typeof fetch;
+    const dispatcher = new WebhookDispatcher(
+      new Database(":memory:"),
+      { fetchFn, retryDelays: [] },
+      fakePersistence(hook),
+    );
+
+    dispatcher.emitForWorkspace(
+      "workspace-1",
+      "issue.created",
+      { id: "admin-1", name: "admin", type: "human" },
+      { issueId: "issue-1", teamId: "team-1" },
+    );
+    await dispatcher.idle();
+
+    expect(requests).toHaveLength(1);
+  });
+
+  it("falla cerrado para una Issue canónica inexistente en hooks globales y limitados", async () => {
+    const globalHook: WebhookRow = {
+      id: "hook-global-missing-issue",
+      url: "https://example.test/global-missing-issue",
+      secret: "fixture-secret-global",
+      events: '["issue.created"]',
+      enabled: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+      owner_id: "admin-1",
+      team_id: null,
+    };
+    const limitedHook: WebhookRow = {
+      id: "hook-limited-missing-issue",
+      url: "https://example.test/limited-missing-issue",
+      secret: "fixture-secret-limited",
+      events: '["issue.created"]',
+      enabled: true,
+      created_at: "2026-01-01T00:00:01.000Z",
+      owner_id: "admin-1",
+      team_id: "team-1",
+    };
+    const requests: Request[] = [];
+    const fetchFn = (async (input: URL | RequestInfo, init?: RequestInit) => {
+      requests.push(new Request(input, init));
+      return new Response("ok");
+    }) as typeof fetch;
+    const dispatcher = new WebhookDispatcher(
+      new Database(":memory:"),
+      { fetchFn, retryDelays: [] },
+      fakePersistence([globalHook, limitedHook]),
+    );
+
+    dispatcher.emitForWorkspace(
+      "workspace-1",
+      "issue.created",
+      { id: "admin-1", name: "admin", type: "human" },
+      { id: "missing-issue", teamId: "team-1" },
+    );
+    await dispatcher.idle();
+
+    expect(requests).toHaveLength(0);
   });
 
   it("falla cerrado para un Workspace explícito ajeno en PostgreSQL", async () => {

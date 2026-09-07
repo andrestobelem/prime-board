@@ -125,7 +125,6 @@ describe("workspace scope for webhook dispatch", () => {
       { id: viewerId, name: "admin", type: "HUMAN" },
       {
         id: issueAId,
-        issueId: issueAId,
         teamId: teamAId,
       },
     );
@@ -159,6 +158,61 @@ describe("workspace scope for webhook dispatch", () => {
 
     expect(delivered).toHaveLength(0);
     expect(bodies).toHaveLength(0);
+  });
+
+  it("mantiene la semántica legacy de issueId en SQLite", async () => {
+    delivered.length = 0;
+    bodies.length = 0;
+    const dispatcher = new WebhookDispatcher(app.db, {
+      retryDelays: [],
+      fetchFn: makeFetch(),
+    });
+
+    dispatcher.emitForWorkspace(
+      workspaceAId,
+      "issue.created",
+      { id: viewerId, name: "admin", type: "HUMAN" },
+      { issueId: issueAId, teamId: teamAId },
+    );
+    await dispatcher.idle();
+
+    expect(delivered).toEqual(["https://hooks.example/a"]);
+  });
+
+  it("falla cerrado para una Issue canónica inexistente aunque el Team sea válido", async () => {
+    const hook = await gql(
+      app,
+      `mutation($url: String!, $teamId: ID!) {
+        webhookCreate(input: { url: $url, events: ["issue.created"], teamId: $teamId }) {
+          webhook { id }
+        }
+      }`,
+      { url: "https://hooks.example/a-limited", teamId: teamAId },
+      app.apiKey,
+      workspaceAKey,
+    );
+    expect(hook.errors).toBeUndefined();
+
+    delivered.length = 0;
+    bodies.length = 0;
+    const dispatcher = new WebhookDispatcher(app.db, {
+      retryDelays: [],
+      fetchFn: makeFetch(),
+    });
+
+    dispatcher.emitForWorkspace(
+      workspaceAId,
+      "issue.created",
+      { id: viewerId, name: "admin", type: "HUMAN" },
+      { id: "missing-canonical-issue", teamId: teamAId },
+    );
+    await dispatcher.idle();
+
+    expect(delivered).toHaveLength(0);
+    expect(bodies).toHaveLength(0);
+    await gql(app, `mutation($id: ID!) { webhookDelete(id: $id) { success } }`, {
+      id: hook.data!.webhookCreate.webhook.id,
+    });
   });
 
   it("falla cerrado si el recurso no pertenece al Workspace explícito", async () => {

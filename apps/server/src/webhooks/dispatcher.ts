@@ -93,6 +93,26 @@ function parseEvents(events: string | readonly string[]): string[] {
   }
 }
 
+/** Obtiene el ID canónico de una Issue en un evento issue.*.
+ *
+ * `issueId` se conserva como formato legacy. Cuando el evento incluye `id`,
+ * este campo es la referencia canónica y no se puede sustituir por el legacy.
+ */
+function issueEventIssueId(event: WebhookEventName, data: Record<string, unknown>): string | null {
+  if (!event.startsWith("issue.")) return null;
+
+  const hasCanonicalId = Object.prototype.hasOwnProperty.call(data, "id");
+  const hasLegacyId = Object.prototype.hasOwnProperty.call(data, "issueId");
+  if (hasCanonicalId && typeof data.id !== "string") return null;
+  if (hasLegacyId && typeof data.issueId !== "string") return null;
+  if (typeof data.id === "string" && typeof data.issueId === "string" && data.id !== data.issueId) {
+    return null;
+  }
+  if (typeof data.id === "string") return data.id;
+  if (!hasCanonicalId && typeof data.issueId === "string") return data.issueId;
+  return null;
+}
+
 function sqliteSingleWorkspaceId(db: Database): string | null {
   const rows = db.query("SELECT id FROM workspace ORDER BY created_at, id").all() as Array<{
     id: string;
@@ -106,7 +126,8 @@ function sqliteEventWorkspaceId(
   event: WebhookEventName,
   data: Record<string, unknown>,
 ): string | null {
-  if (typeof data._workspaceId === "string") {
+  if (Object.prototype.hasOwnProperty.call(data, "_workspaceId")) {
+    if (typeof data._workspaceId !== "string") return null;
     const workspace = db.query("SELECT id FROM workspace WHERE id = ?1").get(data._workspaceId) as {
       id: string;
     } | null;
@@ -126,7 +147,11 @@ function sqliteEventWorkspaceId(
     if (row?.workspace_id) return row.workspace_id;
   }
 
-  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  const issueId = event.startsWith("issue.")
+    ? issueEventIssueId(event, data)
+    : typeof data.issueId === "string"
+      ? data.issueId
+      : null;
   if (issueId) {
     const row = db.query("SELECT workspace_id FROM issues WHERE id = ?1").get(issueId) as {
       workspace_id: string | null;
@@ -171,6 +196,14 @@ function sqliteEventMatchesWorkspace(
   const workspace = db.query("SELECT id FROM workspace WHERE id = ?1").get(workspaceId);
   if (!workspace) return false;
 
+  const isIssueEvent = event.startsWith("issue.");
+  if (
+    isIssueEvent &&
+    Object.prototype.hasOwnProperty.call(data, "teamId") &&
+    typeof data.teamId !== "string"
+  ) {
+    return false;
+  }
   const teamId =
     typeof data.teamId === "string"
       ? data.teamId
@@ -193,7 +226,12 @@ function sqliteEventMatchesWorkspace(
     }
   }
 
-  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  const issueId = isIssueEvent
+    ? issueEventIssueId(event, data)
+    : typeof data.issueId === "string"
+      ? data.issueId
+      : null;
+  if (isIssueEvent && !issueId) return false;
   if (issueId) {
     const issue = db
       .query("SELECT workspace_id, team_id FROM issues WHERE id = ?1")
@@ -252,7 +290,11 @@ function sqliteEventTeamIds(
       .get(teamId, workspaceId);
     return team ? direct : [];
   }
-  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  const issueId = event.startsWith("issue.")
+    ? issueEventIssueId(event, data)
+    : typeof data.issueId === "string"
+      ? data.issueId
+      : null;
   if (issueId) {
     const row = db
       .query(`SELECT team_id FROM issues WHERE id = ?1 AND ${scope}`)
@@ -310,6 +352,14 @@ async function postgresEventMatchesWorkspace(
   );
   if (!workspace) return false;
 
+  const isIssueEvent = event.startsWith("issue.");
+  if (
+    isIssueEvent &&
+    Object.prototype.hasOwnProperty.call(data, "teamId") &&
+    typeof data.teamId !== "string"
+  ) {
+    return false;
+  }
   const teamId =
     typeof data.teamId === "string"
       ? data.teamId
@@ -327,7 +377,12 @@ async function postgresEventMatchesWorkspace(
     }
   }
 
-  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  const issueId = isIssueEvent
+    ? issueEventIssueId(event, data)
+    : typeof data.issueId === "string"
+      ? data.issueId
+      : null;
+  if (isIssueEvent && !issueId) return false;
   if (issueId) {
     const issue = await persistence.one<{ id: string; team_id: string }>(
       "SELECT id, team_id FROM issues WHERE id = $1",
@@ -373,7 +428,11 @@ async function postgresEventTeamIds(
         ? [data.id]
         : [];
   if (direct.length > 0) return direct;
-  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  const issueId = event.startsWith("issue.")
+    ? issueEventIssueId(event, data)
+    : typeof data.issueId === "string"
+      ? data.issueId
+      : null;
   if (issueId) {
     const row = await persistence.one<{ team_id: string }>(
       "SELECT team_id FROM issues WHERE id = $1",
