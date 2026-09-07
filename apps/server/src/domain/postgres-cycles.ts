@@ -288,6 +288,8 @@ export async function updatePostgresCycle(
       current.team_id,
     ]);
     if (!team) throw apiError("NOT_FOUND", "Team not found");
+    // Con Cycles deshabilitado no se permiten mutaciones, incluidas las históricas.
+    assertCyclesEnabled(team);
 
     if (
       input.cadenceSource != null &&
