@@ -29,6 +29,39 @@ function databaseWithMigrationsThrough(versionLimit: number): Database {
   return db;
 }
 
+function dropSavedViewsTriggers(db: Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS saved_views_workspace_scope_insert;
+    DROP TRIGGER IF EXISTS saved_views_workspace_required_insert;
+    DROP TRIGGER IF EXISTS saved_views_workspace_required_update;
+  `);
+}
+
+function createLegacySavedViewsTriggers(db: Database): void {
+  db.exec(`
+    CREATE TRIGGER saved_views_workspace_scope_insert
+    AFTER INSERT ON saved_views
+    WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+    BEGIN
+      UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id;
+    END;
+
+    CREATE TRIGGER saved_views_workspace_required_insert
+    BEFORE INSERT ON saved_views
+    WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+    BEGIN
+      SELECT RAISE(ABORT, 'Workspace context is required for saved_views');
+    END;
+
+    CREATE TRIGGER saved_views_workspace_required_update
+    BEFORE UPDATE OF workspace_id ON saved_views
+    WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+    BEGIN
+      SELECT RAISE(ABORT, 'Workspace context is required for saved_views');
+    END;
+  `);
+}
+
 function restoreLegacySavedViews(
   db: Database,
   scopeCheck = "CHECK (scope IN ('personal', 'team', 'workspace'))",
@@ -55,9 +88,11 @@ function restoreLegacySavedViews(
     CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
     CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
   `);
+  createLegacySavedViewsTriggers(db);
 }
 
 function replaceLegacySavedViewsScopeCheck(db: Database, scopeCheck: string): void {
+  dropSavedViewsTriggers(db);
   db.exec(`
     PRAGMA foreign_keys = OFF;
     DROP INDEX IF EXISTS idx_saved_views_workspace_id;
@@ -79,6 +114,7 @@ function replaceLegacySavedViewsScopeCheck(db: Database, scopeCheck: string): vo
 }
 
 function replaceSavedViewsWithIndependentForeignKeys(db: Database): void {
+  dropSavedViewsTriggers(db);
   db.exec(`
     PRAGMA foreign_keys = OFF;
     DROP INDEX IF EXISTS idx_saved_views_workspace_id;
@@ -120,6 +156,7 @@ function replaceSavedViewsWithIndependentForeignKeys(db: Database): void {
 }
 
 function restoreSavedViewsAfterRejectedSchema(db: Database): void {
+  dropSavedViewsTriggers(db);
   db.exec(`
     PRAGMA foreign_keys = OFF;
     DROP INDEX IF EXISTS idx_saved_views_workspace_id;
@@ -143,6 +180,7 @@ function restoreSavedViewsAfterRejectedSchema(db: Database): void {
 }
 
 function addLegacySavedViewsNameConstraint(db: Database): void {
+  dropSavedViewsTriggers(db);
   db.exec(`
     PRAGMA foreign_keys = OFF;
     DROP INDEX IF EXISTS idx_saved_views_workspace_id;
@@ -180,6 +218,7 @@ function addLegacySavedViewsNameConstraint(db: Database): void {
     CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
     PRAGMA foreign_keys = ON;
   `);
+  createLegacySavedViewsTriggers(db);
 }
 
 function removeViewPreferencesScopeCheck(db: Database): void {
@@ -2027,6 +2066,154 @@ describe("colisión de migraciones SQLite", () => {
       } finally {
         db.close();
       }
+    }
+  });
+
+  it("rechaza triggers legacy corruptos antes del rebuild de 0033", () => {
+    const cases: Array<{ name: string; malformed: string; repair: string }> = [
+      {
+        name: "saved_views_workspace_scope_insert",
+        malformed: `CREATE TRIGGER saved_views_workspace_scope_insert
+          AFTER INSERT ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+          BEGIN
+            SELECT 1;
+            /* AFTER INSERT ON saved_views UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) */
+          END`,
+        repair: `CREATE TRIGGER saved_views_workspace_scope_insert
+          AFTER INSERT ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+          BEGIN
+            UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id;
+          END`,
+      },
+      {
+        name: "saved_views_workspace_required_insert",
+        malformed: `CREATE TRIGGER saved_views_workspace_required_insert
+          BEFORE INSERT ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+          BEGIN
+            SELECT 'SELECT RAISE(ABORT, ''Workspace context is required for saved_views'')';
+          END`,
+        repair: `CREATE TRIGGER saved_views_workspace_required_insert
+          BEFORE INSERT ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+          BEGIN
+            SELECT RAISE(ABORT, 'Workspace context is required for saved_views');
+          END`,
+      },
+      {
+        name: "saved_views_workspace_required_update",
+        malformed: `CREATE TRIGGER saved_views_workspace_required_update
+          BEFORE UPDATE OF workspace_id ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+          BEGIN
+            SELECT 1;
+            /* SELECT RAISE(ABORT, 'Workspace context is required for saved_views') */
+          END`,
+        repair: `CREATE TRIGGER saved_views_workspace_required_update
+          BEFORE UPDATE OF workspace_id ON saved_views
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+          BEGIN
+            SELECT RAISE(ABORT, 'Workspace context is required for saved_views');
+          END`,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const db = databaseWithMigrationsThrough(32);
+      try {
+        bootstrap(db);
+        replaceSavedViewsTrigger(db, testCase.name, testCase.malformed);
+        const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+        const beforeSchema = db
+          .query(
+            `SELECT type, name, tbl_name, sql FROM sqlite_master
+             WHERE tbl_name = 'saved_views'
+                OR name IN ('saved_views_workspace_scope_insert',
+                            'saved_views_workspace_required_insert',
+                            'saved_views_workspace_required_update')
+             ORDER BY type, name`,
+          )
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const runMigration = () => migrate(db);
+
+        let firstError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          firstError = error instanceof Error ? error.message : String(error);
+        }
+        expect(firstError).toMatch(/migration 0033.*incompatible/i);
+        expect(firstError).toContain(testCase.name);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+        expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+        expect(
+          db
+            .query(
+              `SELECT type, name, tbl_name, sql FROM sqlite_master
+               WHERE tbl_name = 'saved_views'
+                  OR name IN ('saved_views_workspace_scope_insert',
+                              'saved_views_workspace_required_insert',
+                              'saved_views_workspace_required_update')
+               ORDER BY type, name`,
+            )
+            .all(),
+        ).toEqual(beforeSchema);
+
+        let secondError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          secondError = error instanceof Error ? error.message : String(error);
+        }
+        expect(secondError).toBe(firstError);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+        replaceSavedViewsTrigger(db, testCase.name, testCase.repair);
+        runMigration();
+        expect(
+          db
+            .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+            .all(),
+        ).toEqual([
+          { version: 32, name: "notification_preferences" },
+          { version: 33, name: "views_preferences" },
+        ]);
+        assertSavedViewsTriggerBehavior(db);
+        const migrationMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        runMigration();
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+          migrationMarkers,
+        );
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("acepta nombres de trigger sin distinguir mayúsculas en el preflight legacy", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      bootstrap(db);
+      replaceSavedViewsTrigger(
+        db,
+        "saved_views_workspace_scope_insert",
+        `CREATE TRIGGER "SAVED_VIEWS_WORKSPACE_SCOPE_INSERT"
+          AFTER INSERT ON "SAVED_VIEWS"
+          WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+          BEGIN
+            UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id;
+          END`,
+      );
+      migrate(db);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+    } finally {
+      db.close();
     }
   });
 

@@ -771,7 +771,11 @@ function hasNamedIndex(db: Database, table: string, name: string): boolean {
 
 function hasTrigger(db: Database, name: string): boolean {
   return Boolean(
-    db.query("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?1 LIMIT 1").get(name),
+    db
+      .query(
+        "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND lower(name) = lower(?1) LIMIT 1",
+      )
+      .get(name),
   );
 }
 
@@ -1875,6 +1879,7 @@ function validateViewsMigrationPrerequisites(db: Database): void {
   );
   const invalidRows = invalidSavedViewRows(db);
   const indexProblems = savedViewsIndexProblems(savedViewsIndexDefinitions(db));
+  const triggerSchemaProblems = triggerProblems(db, VIEWS_MIGRATION_TRIGGER_CONTRACTS);
   const problems = [
     ...schemaProblems,
     ...foreignKeySchemaProblems,
@@ -1890,6 +1895,7 @@ function validateViewsMigrationPrerequisites(db: Database): void {
       : []),
     ...(invalidRows.length > 0 ? [`invalid rows: ${invalidRows.join(", ")}`] : []),
     ...indexProblems,
+    ...triggerSchemaProblems,
   ];
   if (problems.length > 0) {
     throw new Error(
@@ -1942,7 +1948,7 @@ function triggerProblems(db: Database, expected: readonly TriggerContract[]): st
   return expected.flatMap((contract) => {
     const definition = db
       .query<TriggerDefinitionRow, SQLQueryBindings[]>(
-        "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+        "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND lower(name) = lower(?1)",
       )
       .get(contract.name);
     const actual =

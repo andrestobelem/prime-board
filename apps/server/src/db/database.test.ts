@@ -58,6 +58,24 @@ function preRetirementDatabase(): Database {
     CREATE UNIQUE INDEX idx_saved_views_workspace_id ON saved_views(workspace_id, id);
     CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
     CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
+    CREATE TRIGGER saved_views_workspace_scope_insert
+    AFTER INSERT ON saved_views
+    WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+    BEGIN
+      UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER saved_views_workspace_required_insert
+    BEFORE INSERT ON saved_views
+    WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+    BEGIN
+      SELECT RAISE(ABORT, 'Workspace context is required for saved_views');
+    END;
+    CREATE TRIGGER saved_views_workspace_required_update
+    BEFORE UPDATE OF workspace_id ON saved_views
+    WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) > 1
+    BEGIN
+      SELECT RAISE(ABORT, 'Workspace context is required for saved_views');
+    END;
     CREATE UNIQUE INDEX idx_teams_workspace_id ON teams(workspace_id, id);
     CREATE UNIQUE INDEX idx_projects_workspace_id ON projects(workspace_id, id);
     CREATE UNIQUE INDEX idx_initiatives_workspace_id ON initiatives(workspace_id, id);
