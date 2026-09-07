@@ -6,10 +6,15 @@ import { createPostgresHarness } from "../db/postgres/test-harness.ts";
 import { createPostgresPersistence } from "../db/postgres/persistence.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 import {
+  createPostgresCycle,
+  createPostgresCycleFromCadence,
+  deletePostgresCycle,
   ensureUpcomingPostgresCadenceCyclesInTransaction,
+  listPostgresCycles,
   updatePostgresCycle,
 } from "./postgres-cycles.ts";
 import type { TeamRow } from "./teams.ts";
+import { createPostgresTeam, updatePostgresTeam } from "./postgres-teams.ts";
 
 const integration = process.env.PRIME_BOARD_POSTGRES_URL ? it : it.skip;
 
@@ -268,3 +273,166 @@ describe("PostgreSQL cycles integration", () => {
     }
   });
 });
+
+describe("Horizonte de Cycles en PostgreSQL", () => {
+  integration("repone futuros solo MANUAL y mixtos", async () => {
+    const harness = await createPostgresHarness({
+      url: process.env.PRIME_BOARD_POSTGRES_URL!,
+      schemaPrefix: "prb624_cycles",
+    });
+    const persistence = createPostgresPersistence(harness.sql as unknown as Bun.SQL, {
+      close: false,
+    });
+    try {
+      const seeded = await bootstrapPostgres(persistence);
+      if (!seeded.created) throw new Error("El schema PostgreSQL de prueba no estaba vacío");
+      const viewer = await persistence.one<ActorRow>(
+        "SELECT * FROM actors WHERE name = 'admin' LIMIT 1",
+      );
+      if (!viewer) throw new Error("La fixture PostgreSQL de Cycles no tiene Actor admin");
+
+      const manualTeam = await createPostgresTeam(
+        persistence,
+        {
+          name: "PRB-624 manual horizon",
+          key: "PR624PG",
+          cyclesEnabled: true,
+          cycleUpcomingCount: 3,
+        },
+        viewer.id,
+      );
+      const manualOne = await createPostgresCycle(persistence, viewer, {
+        teamId: manualTeam.id,
+        name: "Manual 1",
+        startsAt: "2031-01-01",
+        endsAt: "2031-01-14",
+      });
+      const manualTwo = await createPostgresCycle(persistence, viewer, {
+        teamId: manualTeam.id,
+        name: "Manual 2",
+        startsAt: "2031-01-15",
+        endsAt: "2031-01-28",
+      });
+      const manualThree = await createPostgresCycle(persistence, viewer, {
+        teamId: manualTeam.id,
+        name: "Manual 3",
+        startsAt: "2031-01-29",
+        endsAt: "2031-02-11",
+      });
+      await deletePostgresCycle(persistence, viewer, manualOne.id);
+      const manualCycles = await listPostgresCycles(persistence, manualTeam.id);
+      expect(manualCycles).toHaveLength(3);
+      expect(manualCycles.filter((cycle) => cycle.cadence_source === "cadence")).toHaveLength(1);
+      expect(manualCycles).toContainEqual(expect.objectContaining(manualTwo));
+      expect(manualCycles).toContainEqual(expect.objectContaining(manualThree));
+      assertNoOverlaps(manualCycles);
+
+      const mixedTeam = await createPostgresTeam(
+        persistence,
+        {
+          name: "PRB-624 mixed horizon",
+          key: "PR624MX",
+          cyclesEnabled: true,
+          cycleUpcomingCount: 3,
+        },
+        viewer.id,
+      );
+      const mixedManualOne = await createPostgresCycle(persistence, viewer, {
+        teamId: mixedTeam.id,
+        name: "Mixed manual 1",
+        startsAt: "2032-01-01",
+        endsAt: "2032-01-14",
+      });
+      const mixedManualTwo = await createPostgresCycle(persistence, viewer, {
+        teamId: mixedTeam.id,
+        name: "Mixed manual 2",
+        startsAt: "2032-01-15",
+        endsAt: "2032-01-28",
+      });
+      const generated = await createPostgresCycleFromCadence(persistence, viewer, {
+        teamId: mixedTeam.id,
+      });
+      expect(generated.cadence_source).toBe("cadence");
+      await deletePostgresCycle(persistence, viewer, mixedManualOne.id);
+      const mixedCycles = await listPostgresCycles(persistence, mixedTeam.id);
+      expect(mixedCycles).toHaveLength(3);
+      expect(mixedCycles.filter((cycle) => cycle.cadence_source === "cadence")).toHaveLength(2);
+      expect(mixedCycles).toContainEqual(expect.objectContaining(mixedManualTwo));
+    } finally {
+      await persistence.close();
+      await harness.close();
+    }
+  });
+
+  integration("no repone con Cycles deshabilitado ni con horizonte cero", async () => {
+    const harness = await createPostgresHarness({
+      url: process.env.PRIME_BOARD_POSTGRES_URL!,
+      schemaPrefix: "prb624_disabled",
+    });
+    const persistence = createPostgresPersistence(harness.sql as unknown as Bun.SQL, {
+      close: false,
+    });
+    try {
+      const seeded = await bootstrapPostgres(persistence);
+      if (!seeded.created) throw new Error("El schema PostgreSQL de prueba no estaba vacío");
+      const viewer = await persistence.one<ActorRow>(
+        "SELECT * FROM actors WHERE name = 'admin' LIMIT 1",
+      );
+      if (!viewer) throw new Error("La fixture PostgreSQL de Cycles no tiene Actor admin");
+
+      const zeroTeam = await createPostgresTeam(
+        persistence,
+        {
+          name: "PRB-624 zero horizon",
+          key: "PR624ZP",
+          cyclesEnabled: true,
+          cycleUpcomingCount: 0,
+        },
+        viewer.id,
+      );
+      const zeroCycle = await createPostgresCycle(persistence, viewer, {
+        teamId: zeroTeam.id,
+        name: "Zero manual",
+        startsAt: "2033-01-01",
+        endsAt: "2033-01-14",
+      });
+      await deletePostgresCycle(persistence, viewer, zeroCycle.id);
+      expect(await listPostgresCycles(persistence, zeroTeam.id)).toEqual([]);
+
+      const disabledTeam = await createPostgresTeam(
+        persistence,
+        {
+          name: "PRB-624 disabled horizon",
+          key: "PR624DP",
+          cyclesEnabled: true,
+          cycleUpcomingCount: 3,
+        },
+        viewer.id,
+      );
+      const disabledCycle = await createPostgresCycle(persistence, viewer, {
+        teamId: disabledTeam.id,
+        name: "Disabled manual",
+        startsAt: "2034-01-01",
+        endsAt: "2034-01-14",
+      });
+      await updatePostgresTeam(persistence, disabledTeam.id, { cyclesEnabled: false });
+      await deletePostgresCycle(persistence, viewer, disabledCycle.id);
+      expect(await listPostgresCycles(persistence, disabledTeam.id)).toEqual([]);
+    } finally {
+      await persistence.close();
+      await harness.close();
+    }
+  });
+});
+
+
+function assertNoOverlaps(cycles: readonly { starts_at: string; ends_at: string }[]): void {
+  const ordered = [...cycles].sort(
+    (left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at),
+  );
+  for (let index = 1; index < ordered.length; index += 1) {
+    expect(Date.parse(ordered[index]!.starts_at)).toBeGreaterThanOrEqual(
+      Date.parse(ordered[index - 1]!.ends_at),
+    );
+  }
+}
