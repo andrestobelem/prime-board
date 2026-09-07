@@ -2875,6 +2875,109 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("falla cerrado ante un TEMP trigger en saved_views y permite reintentar", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE TEMP TRIGGER saved_views_workspace_scope_insert
+        AFTER INSERT ON saved_views
+        BEGIN
+          SELECT 1;
+        END;
+      `);
+      const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeTempSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      expect(runMigration).toThrow(/temporary trigger .*would be lost/i);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(
+        db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeTempSchema);
+
+      expect(runMigration).toThrow(/temporary trigger .*would be lost/i);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+      db.exec("DROP TRIGGER saved_views_workspace_scope_insert");
+      migrate(db);
+
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' AND lower(name) = lower(?1)",
+          )
+          .get("saved_views_workspace_scope_insert"),
+      ).toEqual({ name: "saved_views_workspace_scope_insert", tbl_name: "saved_views" });
+      expect(
+        db
+          .query("SELECT 1 FROM sqlite_temp_master WHERE type = 'trigger' AND name = ?1")
+          .get("saved_views_workspace_scope_insert"),
+      ).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("conserva un TEMP trigger sobre una tabla ajena durante el rebuild", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE TEMP TABLE temp_trigger_log (value TEXT NOT NULL);
+        CREATE TEMP TRIGGER saved_views_workspace_scope_insert
+        AFTER UPDATE OF name ON actors
+        BEGIN
+          INSERT INTO temp_trigger_log(value) VALUES (NEW.name);
+        END;
+      `);
+
+      migrate(db);
+
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(
+        db
+          .query("SELECT type, name, tbl_name FROM sqlite_temp_master WHERE type = 'trigger'")
+          .get(),
+      ).toEqual({
+        type: "trigger",
+        name: "saved_views_workspace_scope_insert",
+        tbl_name: "actors",
+      });
+
+      db.query("UPDATE actors SET name = 'admin-after-temp-trigger' WHERE name = 'admin'").run();
+      expect(db.query("SELECT value FROM temp_trigger_log").all()).toEqual([
+        { value: "admin-after-temp-trigger" },
+      ]);
+      migrate(db);
+      expect(
+        db
+          .query("SELECT 1 FROM sqlite_temp_master WHERE type = 'trigger' AND name = ?1")
+          .get("saved_views_workspace_scope_insert"),
+      ).not.toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
   it("falla cerrado ante una TEMP VIEW dependiente y permite reintentar de forma determinista", () => {
     const db = databaseWithMigrationsThrough(32);
     try {

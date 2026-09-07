@@ -1911,6 +1911,22 @@ function viewsMigrationNameCollisionPlan(
   const plannedObjectNames = new Set<string>();
   const plannedTriggerNames = new Set<string>();
 
+  if (includeCreatedTables) {
+    const temporaryTriggers = db
+      .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+        "SELECT name, tbl_name, sql FROM sqlite_temp_master " +
+          "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1)",
+      )
+      .all("saved_views");
+    const temporaryTrigger = temporaryTriggers[0];
+    if (temporaryTrigger !== undefined) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: temporary trigger ${temporaryTrigger.name} on ` +
+          `${temporaryTrigger.tbl_name} would be lost while rebuilding saved_views`,
+      );
+    }
+  }
+
   for (const name of reservedIndexNames) {
     const expected = indexByName.get(name.toLowerCase());
     for (const { object, temporary } of schemaObjectsWithName(db, name)) {
