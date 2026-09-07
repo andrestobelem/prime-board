@@ -13,6 +13,8 @@ La base SQLite es la **fuente operativa** de prime-board. Todas las escrituras p
 - El export excluye API keys y secretos de webhooks. El rebuild conserva las keys locales que puede asociar al mismo Actor. Si no encuentra una correspondencia, no inventa credenciales.
 - El formato de las entidades usa Identifiers naturales y eventos para regenerar el índice. `meta/actors.json` conserva el id local del Actor solo para volver a asociar API keys después de un rebuild. Nunca contiene hashes ni secretos.
 
+Las migraciones de esquema también forman parte de la operación controlada. Una migración que reconstruye tablas debe inspeccionar y conservar los objetos de esquema dependientes que SQLite registra, incluidas VIEW, TRIGGER y sus referencias `INDEXED BY`. Si no puede demostrar que la definición y el comportamiento se conservan, debe fallar antes de ejecutar DDL, datos o marker. La réplica `.prime-board` no sustituye este preflight: solo una migración validada cambia la DB fuente.
+
 Todo cambio persistente de una Issue forma parte del historial append-only. Las asignaciones de `cycle_id` se registran como `cycle_changed` y las de `sort_order` como `sort_order_changed`; ambos eventos incluyen `from` y `to`. El export identifica Cycles mediante la clave estable `TEAM/number`, para que esos eventos sobrevivan a un rebuild. Al eliminar un Cycle, el sistema canoniza a esa clave los payloads históricos que aún lo referencian antes de borrar la fila.
 
 ## Contexto histórico del MVP
