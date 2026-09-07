@@ -3494,6 +3494,12 @@ describe("colisión de migraciones SQLite", () => {
         CREATE VIEW dependent_cte AS
           WITH actors AS (SELECT 'cte-row' AS id)
           SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+        CREATE VIEW dependent_nested_cte AS
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view
+          WHERE id IN (
+            WITH actors AS (SELECT 'cte-row' AS id)
+            SELECT id FROM actors
+          );
       `);
 
       expect(() => migrate(db)).toThrow(/CTE/i);
@@ -3523,6 +3529,7 @@ describe("colisión de migraciones SQLite", () => {
       expect(db.query("SELECT id FROM dependent_cte").all()).toEqual(
         db.query("SELECT id FROM actors ORDER BY id").all(),
       );
+      expect(db.query("SELECT id FROM dependent_nested_cte").all()).toEqual([]);
     } finally {
       db.close();
     }
