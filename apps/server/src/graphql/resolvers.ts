@@ -189,10 +189,12 @@ import { mapActivity } from "../domain/activity.ts";
 import { mapIssue } from "../domain/issues.ts";
 import {
   advanceCycle,
+  autoAddActiveIssues,
   carryOverCycle,
   createCycle,
   createCycleFromCadence,
   ensureUpcomingCadenceCycles,
+  findAutoAddCycle,
   cycleProgress,
   deleteCycle,
   getCycle,
@@ -202,10 +204,12 @@ import {
 } from "../domain/cycles.ts";
 import {
   advancePostgresCycle,
+  autoAddPostgresActiveIssues,
   carryOverPostgresCycle,
   createPostgresCycle,
   createPostgresCycleFromCadence,
   ensureUpcomingPostgresCadenceCyclesInTransaction,
+  findPostgresAutoAddCycle,
   cycleProgress as postgresCycleProgress,
   deletePostgresCycle,
   getPostgresCycle,
@@ -1863,6 +1867,14 @@ export const resolvers = {
               ) {
                 await ensureUpcomingPostgresCadenceCyclesInTransaction(tx, changed);
               }
+              if (
+                team.cycle_auto_add_enabled !== true &&
+                team.cycle_auto_add_enabled !== 1 &&
+                (changed.cycle_auto_add_enabled === true || changed.cycle_auto_add_enabled === 1)
+              ) {
+                const target = await findPostgresAutoAddCycle(tx, changed.id, "started");
+                if (target) await autoAddPostgresActiveIssues(tx, viewer.id, target);
+              }
               return changed;
             });
             return { success: true, team: mapPostgresTeam(updated) };
@@ -1885,6 +1897,26 @@ export const resolvers = {
                     updated.id,
                     context.workspace.workspaceId,
                   );
+                }
+                if (
+                  scopedTeam.cycle_auto_add_enabled !== true &&
+                  scopedTeam.cycle_auto_add_enabled !== 1 &&
+                  (updated.cycle_auto_add_enabled === true || updated.cycle_auto_add_enabled === 1)
+                ) {
+                  const target = findAutoAddCycle(
+                    context.db,
+                    updated.id,
+                    "started",
+                    context.workspace.workspaceId,
+                  );
+                  if (target) {
+                    autoAddActiveIssues(
+                      context.db,
+                      viewer.id,
+                      target,
+                      context.workspace.workspaceId,
+                    );
+                  }
                 }
               },
             ),
