@@ -11,3 +11,16 @@ export function parseDateTime(value: unknown, field: string): number {
   }
   return timestamp;
 }
+
+/** Rechaza una fecha que ya alcanzó el instante de referencia. */
+export function parseFutureDateTime(
+  value: unknown,
+  field: string,
+  referenceTimestamp = Date.now(),
+): number {
+  const timestamp = parseDateTime(value, field);
+  if (timestamp <= referenceTimestamp) {
+    throw apiError("VALIDATION_FAILED", `${field} must be in the future`);
+  }
+  return timestamp;
+}

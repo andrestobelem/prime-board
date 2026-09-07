@@ -1,7 +1,7 @@
 import type { Persistence, PersistenceTransaction, SqlValue } from "../db/persistence.ts";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
-import { parseDateTime } from "./datetime.ts";
+import { parseDateTime, parseFutureDateTime } from "./datetime.ts";
 import {
   assertCanManagePostgresTeam,
   canDiscoverPostgresTeam,
@@ -305,8 +305,14 @@ export async function updatePostgresCycle(
 
     const startsAt = input.startsAt ?? current.starts_at;
     const endsAt = input.endsAt ?? current.ends_at;
-    if ((input.startsAt != null || input.endsAt != null) && current.state !== "upcoming") {
+    const datesChanged = input.startsAt != null || input.endsAt != null;
+    if (datesChanged && current.state !== "upcoming") {
       throw apiError("VALIDATION_FAILED", "Only future cycle dates can be adjusted");
+    }
+    if (datesChanged) {
+      const referenceTimestamp = Date.now();
+      parseFutureDateTime(startsAt, "Cycle startsAt", referenceTimestamp);
+      parseFutureDateTime(endsAt, "Cycle endsAt", referenceTimestamp);
     }
     validateDates(startsAt, endsAt);
     const nextState = input.state != null ? resolveState(input.state) : current.state;
