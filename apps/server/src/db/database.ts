@@ -786,6 +786,29 @@ function indexTerms(db: Database, name: string): IndexTermRow[] {
     .all(name);
 }
 
+function mainIndexList(db: Database, table: string): IndexListRow[] {
+  return db
+    .query<
+      { seq: number; name: string; unique: number; origin: string; partial: number },
+      SQLQueryBindings[]
+    >(`PRAGMA main.index_list(${quoteIdentifier(table)})`)
+    .all()
+    .map(({ name, unique, origin, partial }) => ({
+      name,
+      unique_value: unique,
+      origin,
+      partial,
+    }));
+}
+
+function mainIndexTerms(db: Database, name: string): IndexTermRow[] {
+  return db
+    .query<IndexTermRow, SQLQueryBindings[]>(`PRAGMA main.index_xinfo(${quoteIdentifier(name)})`)
+    .all()
+    .filter((term) => term.key === 1)
+    .sort((left, right) => left.seqno - right.seqno);
+}
+
 function indexHasColumns(
   index: IndexListRow,
   terms: readonly IndexTermRow[],
@@ -1203,7 +1226,7 @@ function indexedByCteScopeAt(
     const namePosition = cursor;
     const name = tokens[namePosition];
     if (!isSqlNameToken(name)) return null;
-    names.add(name.value.toLowerCase());
+    names.add(normalizeSqliteIdentifier(name.value));
     namePositions.add(namePosition);
     cursor += 1;
     if (tokens[cursor]?.value === "(") {
@@ -1269,7 +1292,7 @@ function indexedByReferenceUsesCte(
   tableSchema: string | undefined,
 ): boolean {
   if (tableSchema !== undefined) return false;
-  const normalizedName = tableName.toLowerCase();
+  const normalizedName = normalizeSqliteIdentifier(tableName);
   return scopes.some(
     (scope) => position >= scope.start && position < scope.end && scope.names.has(normalizedName),
   );
@@ -1471,7 +1494,7 @@ function indexedByReferences(sql: string): readonly IndexedByReference[] | null 
     if (scope.phase === "expect_update_modifier") {
       if (
         token.kind === "identifier" &&
-        INDEXED_BY_UPDATE_MODIFIERS.has(token.value.toLowerCase())
+        INDEXED_BY_UPDATE_MODIFIERS.has(normalizeSqliteIdentifier(token.value))
       ) {
         scopes[scopeIndex] = expectIndexedByTable(scope);
       } else {
@@ -1502,7 +1525,7 @@ function indexedByReferences(sql: string): readonly IndexedByReference[] | null 
       }
       if (
         token.kind === "identifier" &&
-        INDEXED_BY_SOURCE_BOUNDARIES.has(token.value.toLowerCase()) &&
+        INDEXED_BY_SOURCE_BOUNDARIES.has(normalizeSqliteIdentifier(token.value)) &&
         !(isSqlKeyword(tokens[position + 1], "indexed") && isSqlKeyword(tokens[position + 2], "by"))
       ) {
         scopes[scopeIndex] = { phase: "none" };
@@ -1521,7 +1544,7 @@ function rewriteIndexedBySql(
   const replacementsToApply = references
     .map((reference) => ({
       token: reference.token,
-      name: replacements.get(reference.indexName.toLowerCase()),
+      name: replacements.get(normalizeSqliteIdentifier(reference.indexName)),
     }))
     .filter((value): value is { token: SqlToken; name: string } => value.name !== undefined);
   if (replacementsToApply.length === 0) return definition;
@@ -1642,11 +1665,26 @@ function executableSchemaDefinition(db: Database, definition: string): boolean {
   }
 }
 
+function executableIndexDefinition(
+  db: Database,
+  definition: string,
+  table: string,
+  name: string,
+): boolean {
+  let probeName = "__prb669_index_probe";
+  for (let suffix = 2; indexNameInUse(db, probeName); suffix += 1) {
+    probeName = `__prb669_index_probe_${suffix}`;
+  }
+  const probe = renamedIndexSql(definition, probeName, table, name);
+  return probe !== null && executableSchemaDefinition(db, probe);
+}
+
 interface ParsedIndexDefinition {
   name: string;
   table: string;
   unique: boolean;
   terms: readonly SqlToken[][];
+  predicate: readonly SqlToken[];
 }
 
 function isSqlNameToken(token: SqlToken | undefined): token is SqlToken {
@@ -1729,12 +1767,17 @@ interface WorkspaceConstraintTriggerSnapshot {
   canonical: boolean;
 }
 
+interface WorkspaceConstraintIndexSnapshot extends Omit<SavedViewsIndexDefinition, "sql"> {
+  table: string;
+  sql: string;
+}
+
 const VIEWS_MIGRATION_CANONICAL_TRIGGER_NAMES = new Set(
-  VIEWS_MIGRATION_TRIGGER_CONTRACTS.map((contract) => contract.name.toLowerCase()),
+  VIEWS_MIGRATION_TRIGGER_CONTRACTS.map((contract) => normalizeSqliteIdentifier(contract.name)),
 );
 
 function isViewsMigrationCanonicalTrigger(name: string): boolean {
-  return VIEWS_MIGRATION_CANONICAL_TRIGGER_NAMES.has(name.toLowerCase());
+  return VIEWS_MIGRATION_CANONICAL_TRIGGER_NAMES.has(normalizeSqliteIdentifier(name));
 }
 
 /**
@@ -1924,7 +1967,7 @@ function migrationTriggerDefinitions(sql: string): Map<string, ParsedTriggerDefi
     if (startToken === undefined || endToken === undefined) continue;
     const definition = sql.slice(startToken.start, endToken.end);
     const parsed = triggerDefinitionFromSql(definition);
-    if (parsed !== null) definitions.set(parsed.name.toLowerCase(), parsed);
+    if (parsed !== null) definitions.set(normalizeSqliteIdentifier(parsed.name), parsed);
     if (end !== null) position = end;
   }
   return definitions;
@@ -1933,7 +1976,7 @@ function migrationTriggerDefinitions(sql: string): Map<string, ParsedTriggerDefi
 const WORKSPACE_CONSTRAINTS_CANONICAL_TRIGGER_DEFINITIONS = new Map(
   [...migrationTriggerDefinitions(migration0025)].filter(([, definition]) =>
     WORKSPACE_CONSTRAINTS_REBUILT_TABLES.some(
-      (table) => table.toLowerCase() === definition.table.toLowerCase(),
+      (table) => normalizeSqliteIdentifier(table) === normalizeSqliteIdentifier(definition.table),
     ),
   ),
 );
@@ -1980,12 +2023,13 @@ function triggerSqlForTable(
   const actual = triggerDefinitionFromSql(definition);
   if (
     actual === null ||
-    actual.name.toLowerCase() !== expectedName.toLowerCase() ||
-    actual.table.toLowerCase() !== expectedTable.toLowerCase()
+    normalizeSqliteIdentifier(actual.name) !== normalizeSqliteIdentifier(expectedName) ||
+    normalizeSqliteIdentifier(actual.table) !== normalizeSqliteIdentifier(expectedTable)
   ) {
     return null;
   }
-  if (actual.table.toLowerCase() === targetTable.toLowerCase()) return definition;
+  if (normalizeSqliteIdentifier(actual.table) === normalizeSqliteIdentifier(targetTable))
+    return definition;
   return `${definition.slice(0, actual.tableToken.start)}${quoteIdentifier(targetTable)}${definition.slice(actual.tableToken.end)}`;
 }
 
@@ -2003,7 +2047,11 @@ function triggerOperationForExplain(
       const columns = tableInfo(db, definition.table);
       if (
         definition.event.columns.some(
-          (column) => !columns.some((value) => value.name.toLowerCase() === column.toLowerCase()),
+          (column) =>
+            !columns.some(
+              (value) =>
+                normalizeSqliteIdentifier(value.name) === normalizeSqliteIdentifier(column),
+            ),
         )
       ) {
         return null;
@@ -2178,9 +2226,11 @@ function renamedSchemaObjectSql(options: RenamedSchemaObjectSqlOptions): string 
 function indexedByReferenceUsesExistingIndex({
   db,
   reference,
+  temporary,
 }: {
   db: Database;
   reference: IndexedByReference;
+  temporary?: boolean;
 }): boolean {
   switch (reference.source.kind) {
     case "cte":
@@ -2192,14 +2242,19 @@ function indexedByReferenceUsesExistingIndex({
       return _exhaustive;
     }
   }
-  const schema = reference.tableSchema?.toLowerCase();
+  const schema =
+    reference.tableSchema === undefined
+      ? undefined
+      : normalizeSqliteIdentifier(reference.tableSchema);
   if (schema !== undefined && schema !== "main" && schema !== "temp") return false;
   const schemas =
     schema === "main"
       ? ["sqlite_master"]
       : schema === "temp"
         ? ["sqlite_temp_master"]
-        : ["sqlite_temp_master", "sqlite_master"];
+        : temporary
+          ? ["sqlite_temp_master", "sqlite_master"]
+          : ["sqlite_master", "sqlite_temp_master"];
   for (const master of schemas) {
     const table = db
       .query<SchemaObjectRow, SQLQueryBindings[]>(
@@ -2221,9 +2276,102 @@ function indexedByReferenceUsesExistingIndex({
   return false;
 }
 
+function indexedByReferenceUsesMainSchema(
+  db: Database,
+  reference: IndexedByReference,
+  temporary: boolean,
+): boolean {
+  const schema = normalizeSqliteIdentifier(reference.tableSchema ?? "");
+  if (schema === "temp") return false;
+  if (schema === "main" || !temporary) return true;
+  return (
+    db
+      .query<SchemaObjectRow, SQLQueryBindings[]>(
+        "SELECT type, name, tbl_name, sql FROM sqlite_temp_master " +
+          "WHERE type = 'table' AND name = ?1 COLLATE NOCASE",
+      )
+      .get(reference.tableName) === null
+  );
+}
+
+function validateWorkspaceConstraintLegacyIndexDependencies(
+  db: Database,
+  dependencies: readonly IndexedByDependency[],
+  migrationVersion: number,
+): void {
+  const rebuiltTables = new Set(
+    WORKSPACE_CONSTRAINTS_REBUILT_TABLES.map((table) => normalizeSqliteIdentifier(table)),
+  );
+  const migrationLabel = migrationVersion.toString().padStart(4, "0");
+  for (const dependency of dependencies) {
+    if (dependency.object.sql === null) continue;
+    const references = indexedByReferences(dependency.object.sql);
+    if (references === null) continue;
+    for (const reference of references) {
+      if (
+        !indexedByReferenceUsesMainSchema(db, reference, dependency.temporary) ||
+        !rebuiltTables.has(normalizeSqliteIdentifier(reference.tableName))
+      ) {
+        continue;
+      }
+      const previousOwner = WORKSPACE_CONSTRAINTS_PREVIOUS_OWNER_INDEX_DEFINITIONS.get(
+        normalizeSqliteIdentifier(reference.indexName),
+      );
+      if (
+        previousOwner === undefined ||
+        !sameSqliteIdentifier(previousOwner.table, reference.tableName) ||
+        WORKSPACE_CONSTRAINTS_CANONICAL_INDEX_DEFINITIONS.has(
+          normalizeSqliteIdentifier(reference.indexName),
+        )
+      ) {
+        continue;
+      }
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: ${dependency.temporary ? "temporary " : ""}` +
+          `${dependency.object.type} ${dependency.object.name} depends on legacy index ` +
+          `${reference.indexName} removed from rebuilt table ${reference.tableName}`,
+      );
+    }
+  }
+}
+
+function validateWorkspaceConstraintAutoindexDependencies(
+  db: Database,
+  dependencies: readonly IndexedByDependency[],
+  migrationVersion: number,
+): void {
+  const rebuiltTables = new Set(
+    WORKSPACE_CONSTRAINTS_REBUILT_TABLES.map((table) => normalizeSqliteIdentifier(table)),
+  );
+  const migrationLabel = migrationVersion.toString().padStart(4, "0");
+  for (const dependency of dependencies) {
+    if (dependency.object.sql === null) continue;
+    const references = indexedByReferences(dependency.object.sql);
+    if (references === null) continue;
+    for (const reference of references) {
+      if (
+        !normalizeSqliteIdentifier(reference.indexName).startsWith("sqlite_autoindex_") ||
+        !indexedByReferenceUsesMainSchema(db, reference, dependency.temporary)
+      ) {
+        continue;
+      }
+      if (!rebuiltTables.has(normalizeSqliteIdentifier(reference.tableName))) continue;
+      const index = mainIndexList(db, reference.tableName).find((candidate) =>
+        sameSqliteIdentifier(candidate.name, reference.indexName),
+      );
+      if (index?.origin !== "pk" && index?.origin !== "u") continue;
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: ${dependency.temporary ? "temporary " : ""}` +
+          `${dependency.object.type} ${dependency.object.name} depends on autoindex ` +
+          `${reference.indexName} of rebuilt table ${reference.tableName}`,
+      );
+    }
+  }
+}
+
 function schemaObjectsWithIndexedByDependencies(
   db: Database,
-  migrationVersion: 32 | 33 = 33,
+  migrationVersion: 25 | 32 | 33 = 33,
 ): IndexedByDependency[] {
   const objects = [
     ...schemaObjectsFromMaster(db, false, "views_and_triggers"),
@@ -2252,7 +2400,7 @@ function schemaObjectsWithIndexedByDependencies(
             `${object.name} uses INDEXED BY ${reference.indexName} on CTE ${reference.tableName}`,
         );
       }
-      if (!indexedByReferenceUsesExistingIndex({ db, reference })) {
+      if (!indexedByReferenceUsesExistingIndex({ db, reference, temporary })) {
         throw new Error(
           `Cannot apply migration ${migrationVersion} safely: ${temporary ? "temporary " : ""}${object.type} ` +
             `${object.name} references missing or unrelated index ${reference.indexName} for table ` +
@@ -2418,20 +2566,28 @@ function indexDefinitionFromSql(definition: string): ParsedIndexDefinition | nul
     position += 3;
   }
 
-  const indexToken = tokens[position];
-  const onToken = tokens[position + 1];
-  const tableToken = tokens[position + 2];
-  const opening = tokens[position + 3];
-  if (
-    !isSqlNameToken(indexToken) ||
-    !isSqlKeyword(onToken, "on") ||
-    !isSqlNameToken(tableToken) ||
-    opening?.value !== "("
-  ) {
-    return null;
+  let indexToken = tokens[position];
+  if (!isSqlNameToken(indexToken)) return null;
+  if (tokens[position + 1]?.value === ".") {
+    indexToken = tokens[position + 2];
+    if (!isSqlNameToken(indexToken)) return null;
+    position += 2;
   }
+  position += 1;
 
-  position += 4;
+  if (!isSqlKeyword(tokens[position], "on")) return null;
+  position += 1;
+  let tableToken = tokens[position];
+  if (!isSqlNameToken(tableToken)) return null;
+  if (tokens[position + 1]?.value === ".") {
+    tableToken = tokens[position + 2];
+    if (!isSqlNameToken(tableToken)) return null;
+    position += 2;
+  }
+  position += 1;
+
+  if (tokens[position]?.value !== "(") return null;
+  position += 1;
   const terms: SqlToken[][] = [];
   let termStart = position;
   let depth = 0;
@@ -2462,14 +2618,111 @@ function indexDefinitionFromSql(definition: string): ParsedIndexDefinition | nul
     }
   }
 
-  if (!closed || position !== tokens.length - 1) return null;
+  if (!closed) return null;
+  position += 1;
+  let predicate: readonly SqlToken[] = [];
+  if (isSqlKeyword(tokens[position], "where")) {
+    predicate = tokens.slice(position + 1);
+    if (predicate.length === 0) return null;
+    position = tokens.length;
+  }
+  if (position !== tokens.length) return null;
   return {
     name: indexToken.value,
     table: tableToken.value,
     unique,
     terms,
+    predicate,
   };
 }
+
+function migrationIndexDefinitions(sql: string): Map<string, ParsedIndexDefinition> {
+  const tokens = sqliteTokens(sql);
+  const definitions = new Map<string, ParsedIndexDefinition>();
+  if (tokens === null) return definitions;
+
+  for (let position = 0; position < tokens.length; position += 1) {
+    if (!isSqlKeyword(tokens[position], "create")) continue;
+    let cursor = position + 1;
+    if (isSqlKeyword(tokens[cursor], "unique")) cursor += 1;
+    if (!isSqlKeyword(tokens[cursor], "index")) continue;
+    const end = tokens.findIndex((token, index) => index > position && token.value === ";");
+    const last = end < 0 ? tokens[tokens.length - 1] : tokens[end - 1];
+    const start = tokens[position];
+    if (start === undefined || last === undefined) continue;
+    const parsed = indexDefinitionFromSql(sql.slice(start.start, last.end));
+    if (parsed !== null) {
+      definitions.set(normalizeSqliteIdentifier(parsed.name), parsed);
+    }
+    if (end >= 0) position = end;
+  }
+  return definitions;
+}
+
+// 0025 recrea solo los índices de este contrato. Los índices owner-managed de <=0024
+// que no aparecen aquí (por ejemplo, idx_*_workspace) son retiros intencionales,
+// no índices custom que deban capturarse; una dependencia INDEXED BY a un nombre retirado
+// falla cerrada antes del DDL. saved_views mantiene su ownership de PRB-620/0033.
+const WORKSPACE_CONSTRAINTS_CANONICAL_INDEX_DEFINITIONS = migrationIndexDefinitions(migration0025);
+const WORKSPACE_CONSTRAINTS_OWNER_INDEX_DEFINITIONS = new Map(
+  MIGRATIONS.filter((migration) => migration.version <= 25).flatMap((migration) => [
+    ...migrationIndexDefinitions(migration.sql).entries(),
+  ]),
+);
+const WORKSPACE_CONSTRAINTS_PREVIOUS_OWNER_INDEX_DEFINITIONS = new Map(
+  MIGRATIONS.filter((migration) => migration.version < 25).flatMap((migration) => [
+    ...migrationIndexDefinitions(migration.sql).entries(),
+  ]),
+);
+
+function workspaceConstraintTargetColumnCollations(): Map<string, Map<string, string>> {
+  const tokens = sqliteTokens(migration0025);
+  const result = new Map<string, Map<string, string>>();
+  if (tokens === null) return result;
+  for (let position = 0; position < tokens.length; position += 1) {
+    if (!isSqlKeyword(tokens[position], "create")) continue;
+    let cursor = position + 1;
+    if (isSqlKeyword(tokens[cursor], "temporary")) cursor += 1;
+    if (!isSqlKeyword(tokens[cursor], "table")) continue;
+    cursor += 1;
+    if (isSqlKeyword(tokens[cursor], "if")) {
+      if (!isSqlKeyword(tokens[cursor + 1], "not") || !isSqlKeyword(tokens[cursor + 2], "exists")) {
+        continue;
+      }
+      cursor += 3;
+    }
+    const tableToken = tokens[cursor];
+    if (!isSqlNameToken(tableToken)) continue;
+    const opening = tokens.findIndex((token, index) => index > cursor && token.value === "(");
+    if (opening < 0) continue;
+    let depth = 0;
+    let closing = -1;
+    for (let index = opening; index < tokens.length; index += 1) {
+      if (tokens[index]?.value === "(") depth += 1;
+      if (tokens[index]?.value === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          closing = index;
+          break;
+        }
+      }
+    }
+    const closingToken = tokens[closing];
+    if (closing < 0 || closingToken === undefined) continue;
+    const definition = migration0025.slice(tokens[position]?.start ?? 0, closingToken.end);
+    const tableName = normalizeSqliteIdentifier(tableToken.value);
+    if (tableName.startsWith("_prb25_")) {
+      result.set(
+        tableName.slice("_prb25_".length),
+        tableColumnCollationsFromDefinition(definition),
+      );
+    }
+    position = closing;
+  }
+  return result;
+}
+
+const WORKSPACE_CONSTRAINTS_TARGET_COLUMN_COLLATIONS = workspaceConstraintTargetColumnCollations();
 
 function renamedIndexSql(
   definition: string,
@@ -2494,12 +2747,26 @@ function renamedIndexSql(
     position += 3;
   }
 
-  const indexToken = tokens[position];
-  const tableToken = tokens[position + 2];
+  let indexToken = tokens[position];
+  if (!isSqlNameToken(indexToken)) return null;
+  if (tokens[position + 1]?.value === ".") {
+    if (!sameSqliteIdentifier(indexToken.value, "main")) return null;
+    indexToken = tokens[position + 2];
+    if (!isSqlNameToken(indexToken)) return null;
+    position += 2;
+  }
+  position += 1;
+  if (!isSqlKeyword(tokens[position], "on")) return null;
+  position += 1;
+  let tableToken = tokens[position];
+  if (!isSqlNameToken(tableToken)) return null;
+  if (tokens[position + 1]?.value === ".") {
+    if (!sameSqliteIdentifier(tableToken.value, "main")) return null;
+    tableToken = tokens[position + 2];
+    if (!isSqlNameToken(tableToken)) return null;
+    position += 2;
+  }
   if (
-    !isSqlNameToken(indexToken) ||
-    !isSqlKeyword(tokens[position + 1], "on") ||
-    !isSqlNameToken(tableToken) ||
     !sameSqliteIdentifier(tableToken.value, expectedTable) ||
     (expectedName !== undefined && !sameSqliteIdentifier(indexToken.value, expectedName))
   ) {
@@ -2902,7 +3169,7 @@ function migrationNameCollisionPlan(
 
   for (const name of options.reservedNames) {
     for (const { object, temporary } of schemaObjectsWithName(db, name)) {
-      if (temporary) {
+      if (temporary && object.type !== "trigger") {
         throw new Error(
           `${options.errorPrefix}: temporary ${object.type} ${object.name} ` +
             `blocks the global index/table name ${name}`,
@@ -3021,7 +3288,7 @@ function validateWorkspaceConstraintTemporaryTriggers(
     const temporaryTrigger = temporaryTriggers.find(
       (definition) =>
         typeof definition.tbl_name === "string" &&
-        definition.tbl_name.toLowerCase() === table.toLowerCase(),
+        normalizeSqliteIdentifier(definition.tbl_name) === normalizeSqliteIdentifier(table),
     );
     if (temporaryTrigger === undefined) continue;
     throw new Error(
@@ -3185,23 +3452,23 @@ function indexedByDependencyCollisions(
   db: Database,
   collisions: MigrationNameCollision[],
   dependencies?: readonly IndexedByDependency[],
-  migrationVersion: 32 | 33 = 33,
+  migrationVersion: 25 | 32 | 33 = 33,
 ): MigrationNameCollision[] {
   const indexedByDependencies =
     dependencies ?? schemaObjectsWithIndexedByDependencies(db, migrationVersion);
   const indexReplacements = new Map(
     collisions
       .filter((collision) => collision.type === "index")
-      .map((collision) => [collision.name.toLowerCase(), collision.replacementName]),
+      .map((collision) => [normalizeSqliteIdentifier(collision.name), collision.replacementName]),
   );
   if (indexReplacements.size === 0) return collisions;
 
   for (const dependency of indexedByDependencies) {
     const replacements = new Map<string, string>();
     for (const indexName of dependency.indexNames) {
-      const replacementName = indexReplacements.get(indexName.toLowerCase());
+      const replacementName = indexReplacements.get(normalizeSqliteIdentifier(indexName));
       if (replacementName !== undefined) {
-        replacements.set(indexName.toLowerCase(), replacementName);
+        replacements.set(normalizeSqliteIdentifier(indexName), replacementName);
       }
     }
     if (replacements.size === 0) continue;
@@ -3231,7 +3498,8 @@ function indexedByDependencyCollisions(
       (candidate) =>
         candidate.type === dependency.object.type &&
         candidate.temporary === dependency.temporary &&
-        candidate.name.toLowerCase() === dependency.object.name.toLowerCase(),
+        normalizeSqliteIdentifier(candidate.name) ===
+          normalizeSqliteIdentifier(dependency.object.name),
     );
     if (collision !== undefined) {
       const collisionSql = rewriteIndexedBySql(collision.sql, replacements);
@@ -3298,8 +3566,10 @@ function captureMigrationTrigger(
   const canonicalMatches =
     options.canonicalContract === undefined ||
     (parsed !== null &&
-      parsed.name.toLowerCase() === options.canonicalContract.name.toLowerCase() &&
-      parsed.table.toLowerCase() === options.canonicalContract.table.toLowerCase() &&
+      normalizeSqliteIdentifier(parsed.name) ===
+        normalizeSqliteIdentifier(options.canonicalContract.name) &&
+      normalizeSqliteIdentifier(parsed.table) ===
+        normalizeSqliteIdentifier(options.canonicalContract.table) &&
       sameTriggerBehavior(parsed, options.canonicalContract));
   if (!canonicalMatches && canonical) {
     throw new Error(
@@ -3315,12 +3585,12 @@ function captureMigrationTrigger(
         executableTriggerDefinition(db, recreatedSql);
   if (
     parsed === null ||
-    parsed.name.toLowerCase() !== triggerName.toLowerCase() ||
-    parsed.table.toLowerCase() !== triggerTable.toLowerCase() ||
+    normalizeSqliteIdentifier(parsed.name) !== normalizeSqliteIdentifier(triggerName) ||
+    normalizeSqliteIdentifier(parsed.table) !== normalizeSqliteIdentifier(triggerTable) ||
     recreatedSql === null ||
     recreated === null ||
-    recreated.name.toLowerCase() !== triggerName.toLowerCase() ||
-    recreated.table.toLowerCase() !== triggerTable.toLowerCase() ||
+    normalizeSqliteIdentifier(recreated.name) !== normalizeSqliteIdentifier(triggerName) ||
+    normalizeSqliteIdentifier(recreated.table) !== normalizeSqliteIdentifier(triggerTable) ||
     !sameTriggerBehavior(parsed, recreated) ||
     !executable
   ) {
@@ -3378,7 +3648,7 @@ function captureViewsMigrationTriggers(
       !canonical ||
       VIEWS_MIGRATION_TRIGGER_CONTRACTS.some(
         (contract) =>
-          contract.name.toLowerCase() === triggerName.toLowerCase() &&
+          normalizeSqliteIdentifier(contract.name) === normalizeSqliteIdentifier(triggerName) &&
           matchesTriggerContract(
             { name: triggerName, tbl_name: triggerTable, sql: triggerSql },
             contract,
@@ -3396,12 +3666,12 @@ function captureViewsMigrationTriggers(
     if (
       !canonicalMatches ||
       parsed === null ||
-      parsed.name.toLowerCase() !== triggerName.toLowerCase() ||
-      parsed.table.toLowerCase() !== triggerTable.toLowerCase() ||
+      normalizeSqliteIdentifier(parsed.name) !== normalizeSqliteIdentifier(triggerName) ||
+      normalizeSqliteIdentifier(parsed.table) !== normalizeSqliteIdentifier(triggerTable) ||
       recreatedSql === null ||
       recreated === null ||
-      recreated.name.toLowerCase() !== triggerName.toLowerCase() ||
-      recreated.table.toLowerCase() !== table.toLowerCase() ||
+      normalizeSqliteIdentifier(recreated.name) !== normalizeSqliteIdentifier(triggerName) ||
+      normalizeSqliteIdentifier(recreated.table) !== normalizeSqliteIdentifier(table) ||
       !sameTriggerBehavior(parsed, recreated) ||
       !executable
     ) {
@@ -3421,6 +3691,718 @@ function captureViewsMigrationTriggers(
   });
 }
 
+function stripRedundantParentheses(tokens: readonly SqlToken[]): readonly SqlToken[] {
+  let result = tokens;
+  while (
+    result.length >= 2 &&
+    result[0]?.value === "(" &&
+    result[result.length - 1]?.value === ")"
+  ) {
+    let depth = 0;
+    let closesAtEnd = true;
+    for (let position = 0; position < result.length; position += 1) {
+      const token = result[position];
+      if (token?.value === "(") depth += 1;
+      if (token?.value === ")") depth -= 1;
+      if (depth === 0 && position < result.length - 1) {
+        closesAtEnd = false;
+        break;
+      }
+      if (depth < 0) return result;
+    }
+    if (!closesAtEnd || depth !== 0) return result;
+    result = result.slice(1, -1);
+  }
+  return result;
+}
+
+function tableColumnCollationsFromDefinition(definition: string): Map<string, string> {
+  const tokens = sqliteTokens(definition);
+  if (tokens === null) return new Map();
+  const opening = tokens.findIndex((token) => token.value === "(");
+  if (opening < 0) return new Map();
+  const collations = new Map<string, string>();
+  let segmentStart = opening + 1;
+  let depth = 0;
+  const addSegment = (segment: readonly SqlToken[]): void => {
+    const column = segment[0];
+    if (!isSqlNameToken(column)) return;
+    if (
+      isSqlKeyword(column, "constraint") ||
+      isSqlKeyword(column, "primary") ||
+      isSqlKeyword(column, "unique") ||
+      isSqlKeyword(column, "check") ||
+      isSqlKeyword(column, "foreign")
+    ) {
+      return;
+    }
+    let collation = "BINARY";
+    let segmentDepth = 0;
+    for (let position = 1; position + 1 < segment.length; position += 1) {
+      const token = segment[position];
+      if (token?.value === "(") {
+        segmentDepth += 1;
+        continue;
+      }
+      if (token?.value === ")") {
+        segmentDepth -= 1;
+        continue;
+      }
+      if (segmentDepth === 0 && isSqlKeyword(token, "collate")) {
+        const value = segment[position + 1];
+        if (isSqlNameToken(value)) collation = value.value;
+        break;
+      }
+    }
+    collations.set(normalizeSqliteIdentifier(column.value), collation);
+  };
+  for (let position = opening + 1; position < tokens.length; position += 1) {
+    const token = tokens[position];
+    if (token?.value === "(") {
+      depth += 1;
+    } else if (token?.value === ")") {
+      if (depth === 0) {
+        addSegment(tokens.slice(segmentStart, position));
+        break;
+      }
+      depth -= 1;
+    } else if (token?.value === "," && depth === 0) {
+      addSegment(tokens.slice(segmentStart, position));
+      segmentStart = position + 1;
+    }
+  }
+  return collations;
+}
+
+const INDEX_PSEUDO_COLUMNS = new Set(["rowid", "_rowid_", "oid"]);
+
+const INDEX_EXPRESSION_OPERATOR_KEYWORDS = new Set([
+  "glob",
+  "isnull",
+  "like",
+  "match",
+  "notnull",
+  "regexp",
+]);
+
+function isIndexExpressionOperandToken(token: SqlToken | undefined): boolean {
+  if (token === undefined) return false;
+  if (token.kind === "quoted_identifier" || token.kind === "string" || token.kind === "number") {
+    return true;
+  }
+  if (token.value === ")") return true;
+  if (token.kind !== "identifier") return false;
+  const name = normalizeSqliteIdentifier(token.value);
+  if (INDEX_EXPRESSION_SYNTAX_KEYWORDS.has(name)) return false;
+  if (INDEX_EXPRESSION_KEYWORDS.has(name)) {
+    return name === "null" || name === "true" || name === "false";
+  }
+  return true;
+}
+
+function isIndexExpressionOperatorKeyword(
+  expression: readonly SqlToken[],
+  position: number,
+  name: string,
+): boolean {
+  if (!INDEX_EXPRESSION_OPERATOR_KEYWORDS.has(name)) return false;
+  if (name === "isnull" || name === "notnull") return true;
+  let previousPosition = position - 1;
+  if (isSqlKeyword(expression[previousPosition], "not")) previousPosition -= 1;
+  const closingEnds = indexExpressionCaseClosingEnds(expression);
+  const previous = expression[previousPosition];
+  const isCompletedOperand = (operandPosition: number): boolean => {
+    const operand = expression[operandPosition];
+    return (
+      isIndexExpressionOperandToken(operand) ||
+      (isSqlKeyword(operand, "end") && closingEnds.has(operandPosition))
+    );
+  };
+  if (isCompletedOperand(previousPosition)) return true;
+  if (isSqlKeyword(previous, "isnull") || isSqlKeyword(previous, "notnull")) {
+    return isCompletedOperand(previousPosition - 1);
+  }
+  if (isSqlKeyword(previous, "null")) {
+    let operandPosition = previousPosition - 1;
+    if (isSqlKeyword(expression[operandPosition], "not")) operandPosition -= 1;
+    if (isSqlKeyword(expression[operandPosition], "is")) operandPosition -= 1;
+    return isCompletedOperand(operandPosition);
+  }
+  return false;
+}
+
+const INDEX_EXPRESSION_SYNTAX_KEYWORDS = new Set([
+  "and",
+  "as",
+  "between",
+  "case",
+  "collate",
+  "distinct",
+  "else",
+  "escape",
+  "from",
+  "in",
+  "is",
+  "isnull",
+  "not",
+  "notnull",
+  "null",
+  "or",
+  "then",
+  "when",
+]);
+
+const INDEX_EXPRESSION_KEYWORDS = new Set([
+  "and",
+  "asc",
+  "between",
+  "as",
+  "case",
+  "cast",
+  "collate",
+  "desc",
+  "distinct",
+  "else",
+  "end",
+  "escape",
+  "false",
+  "from",
+  "in",
+  "is",
+  "isnull",
+  "like",
+  "match",
+  "not",
+  "notnull",
+  "null",
+  "or",
+  "regexp",
+  "text",
+  "then",
+  "true",
+  "when",
+  "glob",
+]);
+
+function indexExpressionTokenHasExplicitCollation(
+  expression: readonly SqlToken[],
+  position: number,
+): boolean {
+  if (isSqlKeyword(expression[position + 1], "collate")) return true;
+  if (expression[position + 1]?.value !== ")") return false;
+  let closing = position + 1;
+  while (expression[closing]?.value === ")") closing += 1;
+  if (!isSqlKeyword(expression[closing], "collate")) return false;
+  if (expression[position - 1]?.value !== "(") return false;
+
+  let depth = 0;
+  let groupOpen = -1;
+  for (let index = closing - 1; index >= 0; index -= 1) {
+    if (expression[index]?.value === ")") depth += 1;
+    if (expression[index]?.value === "(") {
+      depth -= 1;
+      if (depth === 0) {
+        groupOpen = index;
+        break;
+      }
+    }
+  }
+  if (groupOpen < 0) return false;
+  const preceding = expression[groupOpen - 1];
+  if (preceding?.kind === "operator") return false;
+  if (
+    isSqlNameToken(preceding) &&
+    !["case", "when", "then", "else"].includes(normalizeSqliteIdentifier(preceding.value))
+  ) {
+    return false;
+  }
+  const group = stripRedundantParentheses(expression.slice(groupOpen + 1, closing - 1));
+  return group.length === 1 && isSqlNameToken(group[0]);
+}
+
+function indexExpressionCaseClosingEnds(expression: readonly SqlToken[]): Set<number> {
+  const cases: number[] = [];
+  const closingEnds = new Set<number>();
+  for (let position = 0; position < expression.length; position += 1) {
+    const token = expression[position];
+    if (isSqlKeyword(token, "case")) {
+      cases.push(position);
+      continue;
+    }
+    if (!isSqlKeyword(token, "end") || cases.length === 0) continue;
+    const previous = expression[position - 1];
+    const previousIsNullTest =
+      isSqlKeyword(previous, "isnull") ||
+      isSqlKeyword(previous, "notnull") ||
+      isSqlKeyword(previous, "null");
+    if (
+      isSqlKeyword(previous, "case") ||
+      isSqlKeyword(previous, "when") ||
+      isSqlKeyword(previous, "then") ||
+      isSqlKeyword(previous, "else") ||
+      previous?.value === "(" ||
+      previous?.value === "," ||
+      previous?.kind === "operator" ||
+      (!previousIsNullTest &&
+        previous?.kind === "identifier" &&
+        INDEX_EXPRESSION_SYNTAX_KEYWORDS.has(normalizeSqliteIdentifier(previous.value)))
+    ) {
+      continue;
+    }
+    cases.pop();
+    closingEnds.add(position);
+  }
+  return closingEnds;
+}
+
+function indexExpressionIsSimpleColumn(expression: readonly SqlToken[]): boolean {
+  let core = expression;
+  const order = core[core.length - 1];
+  if (core.length > 1 && (isSqlKeyword(order, "asc") || isSqlKeyword(order, "desc"))) {
+    core = core.slice(0, -1);
+  }
+  core = stripRedundantParentheses(core);
+  let collationPosition = -1;
+  let depth = 0;
+  for (let position = 0; position < core.length; position += 1) {
+    const token = core[position];
+    if (token?.value === "(") depth += 1;
+    if (token?.value === ")") depth -= 1;
+    if (depth === 0 && isSqlKeyword(token, "collate")) collationPosition = position;
+  }
+  if (collationPosition >= 0) {
+    if (!isSqlNameToken(core[collationPosition + 1]) || collationPosition + 2 !== core.length) {
+      return false;
+    }
+    core = stripRedundantParentheses(core.slice(0, collationPosition));
+  }
+  return core.length === 1 && isSqlNameToken(core[0]);
+}
+
+function indexExpressionCollationMismatch(
+  db: Database,
+  table: string,
+  expression: readonly SqlToken[],
+  predicate = false,
+): boolean {
+  if (expression.length === 0) return false;
+  const sourceRow = db
+    .query<SqlDefinitionRow, SQLQueryBindings[]>(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE NOCASE",
+    )
+    .get(table);
+  if (sourceRow?.sql === null || sourceRow?.sql === undefined) return true;
+  const sourceCollations = tableColumnCollationsFromDefinition(sourceRow.sql);
+  const targetCollations = WORKSPACE_CONSTRAINTS_TARGET_COLUMN_COLLATIONS.get(
+    normalizeSqliteIdentifier(table),
+  );
+  if (targetCollations === undefined) return false;
+  for (let position = 0; position < expression.length; position += 1) {
+    const token = expression[position];
+    if (!isSqlNameToken(token) || expression[position + 1]?.value === "(") continue;
+    const name = normalizeSqliteIdentifier(token.value);
+    const nextToken = expression[position + 1];
+    if (
+      token.kind === "identifier" &&
+      name === "x" &&
+      nextToken?.kind === "string" &&
+      token.end === nextToken.start
+    ) {
+      continue;
+    }
+    if (
+      token.kind === "identifier" &&
+      isIndexExpressionOperatorKeyword(expression, position, name)
+    ) {
+      continue;
+    }
+    if (
+      token.kind === "identifier" &&
+      INDEX_PSEUDO_COLUMNS.has(name) &&
+      !sourceCollations.has(name)
+    ) {
+      return true;
+    }
+    if (
+      token.kind === "identifier" &&
+      name === "end" &&
+      indexExpressionCaseClosingEnds(expression).has(position)
+    ) {
+      continue;
+    }
+    if (token.kind === "identifier" && INDEX_EXPRESSION_SYNTAX_KEYWORDS.has(name)) {
+      continue;
+    }
+    if (isSqlKeyword(expression[position - 1], "as")) continue;
+    if (
+      token.kind === "identifier" &&
+      INDEX_EXPRESSION_KEYWORDS.has(name) &&
+      !sourceCollations.has(name) &&
+      !targetCollations.has(name)
+    ) {
+      continue;
+    }
+    if (isSqlKeyword(token, "collate") || isSqlKeyword(expression[position - 1], "collate")) {
+      continue;
+    }
+    if (indexExpressionTokenHasExplicitCollation(expression, position)) {
+      if (!sourceCollations.has(name)) return true;
+      if (!targetCollations.has(name)) {
+        if (
+          predicate ||
+          (token.kind === "identifier" &&
+            INDEX_EXPRESSION_KEYWORDS.has(name) &&
+            !indexExpressionIsSimpleColumn(expression))
+        ) {
+          return true;
+        }
+        continue;
+      }
+      continue;
+    }
+    if (
+      expression[position + 1] !== undefined &&
+      isSqlKeyword(expression[position + 1], "collate")
+    ) {
+      continue;
+    }
+    const sourceCollation = sourceCollations.get(name);
+    const targetCollation = targetCollations.get(name);
+    if (sourceCollation === undefined || targetCollation === undefined) {
+      if (sourceCollation !== undefined && targetCollation === undefined) {
+        if (
+          predicate ||
+          (token.kind === "identifier" &&
+            INDEX_EXPRESSION_KEYWORDS.has(name) &&
+            !indexExpressionIsSimpleColumn(expression))
+        ) {
+          return true;
+        }
+        continue;
+      }
+      if (targetCollation !== undefined) return true;
+      if (expression[position + 1]?.value === ".") continue;
+      return true;
+    }
+    if (!sameSqliteIdentifier(sourceCollation, targetCollation)) return true;
+  }
+  return false;
+}
+
+function indexPredicateCollationMismatch(
+  db: Database,
+  table: string,
+  predicate: readonly SqlToken[],
+): boolean {
+  return indexExpressionCollationMismatch(db, table, predicate, true);
+}
+
+function parsedIndexTermMetadata(
+  term: readonly SqlToken[],
+  tableColumns: ReadonlySet<string> = new Set(),
+): {
+  name: string | null;
+  coll: string | null;
+  desc: number;
+} | null {
+  if (term.length === 0) return null;
+  let end = term.length;
+  let desc = 0;
+  const order = term[end - 1];
+  if (end > 1 && (isSqlKeyword(order, "asc") || isSqlKeyword(order, "desc"))) {
+    desc = isSqlKeyword(order, "desc") ? 1 : 0;
+    end -= 1;
+  }
+
+  const core = stripRedundantParentheses(term.slice(0, end));
+  let collationPosition = -1;
+  let depth = 0;
+  for (let position = 0; position < core.length; position += 1) {
+    const token = core[position];
+    if (token?.value === "(") {
+      depth += 1;
+      continue;
+    }
+    if (token?.value === ")") {
+      if (depth === 0) return null;
+      depth -= 1;
+      continue;
+    }
+    if (depth === 0 && isSqlKeyword(token, "collate")) {
+      collationPosition = position;
+    }
+  }
+  if (depth !== 0) return null;
+
+  let expression = core;
+  let collation: string | null = null;
+  if (collationPosition >= 0) {
+    const collationToken = core[collationPosition + 1];
+    if (isSqlNameToken(collationToken) && collationPosition + 2 === core.length) {
+      collation = collationToken.value;
+      expression = core.slice(0, collationPosition);
+    }
+  }
+  expression = stripRedundantParentheses(expression);
+  const name =
+    expression.length === 1 &&
+    isSqlNameToken(expression[0]) &&
+    (expression[0].kind !== "identifier" ||
+      (!INDEX_EXPRESSION_SYNTAX_KEYWORDS.has(normalizeSqliteIdentifier(expression[0].value)) &&
+        tableColumns.has(normalizeSqliteIdentifier(expression[0].value))))
+      ? expression[0].value
+      : null;
+  return { name, coll: collation, desc };
+}
+
+function indexTermsMatchMetadata(
+  actualTerms: readonly IndexTermRow[],
+  expectedTerms: readonly IndexTermRow[],
+): boolean {
+  if (actualTerms.length !== expectedTerms.length) return false;
+  return actualTerms.every((actual, position) => {
+    const expected = expectedTerms[position];
+    return (
+      expected !== undefined &&
+      actual.seqno === expected.seqno &&
+      (actual.name === null
+        ? expected.name === null
+        : expected.name !== null && sameSqliteIdentifier(actual.name, expected.name)) &&
+      actual.desc === expected.desc &&
+      sameSqliteIdentifier(actual.coll, expected.coll)
+    );
+  });
+}
+
+function tableColumnNames(db: Database, table: string): Set<string> {
+  return new Set(tableInfo(db, table).map((column) => normalizeSqliteIdentifier(column.name)));
+}
+
+function indexDefinitionMatchesMetadata(
+  db: Database,
+  index: IndexListRow,
+  definition: ParsedIndexDefinition,
+): boolean {
+  if (index.unique_value !== (definition.unique ? 1 : 0)) return false;
+  if (index.partial !== (definition.predicate.length > 0 ? 1 : 0)) return false;
+  const actualTerms = mainIndexTerms(db, index.name);
+  if (actualTerms.length !== definition.terms.length) return false;
+  const columns = tableColumnNames(db, definition.table);
+  return actualTerms.every((actual, position) => {
+    const expected = definition.terms[position];
+    const expectedMetadata =
+      expected === undefined ? null : parsedIndexTermMetadata(expected, columns);
+    return (
+      expectedMetadata !== null &&
+      actual.seqno === position &&
+      (actual.name === null
+        ? expectedMetadata.name === null
+        : expectedMetadata.name !== null &&
+          sameSqliteIdentifier(actual.name, expectedMetadata.name)) &&
+      actual.desc === expectedMetadata.desc &&
+      (expectedMetadata.coll === null || sameSqliteIdentifier(actual.coll, expectedMetadata.coll))
+    );
+  });
+}
+
+function indexDefinitionMatchesExpectedMetadata(
+  db: Database,
+  index: IndexListRow,
+  actual: ParsedIndexDefinition,
+  expected: ParsedIndexDefinition,
+): boolean {
+  if (
+    actual.unique !== expected.unique ||
+    actual.predicate.length !== expected.predicate.length ||
+    !sameSqlTokens(comparableSqlTokens(actual.predicate), comparableSqlTokens(expected.predicate))
+  ) {
+    return false;
+  }
+  const actualTerms = mainIndexTerms(db, index.name);
+  if (actualTerms.length !== expected.terms.length) return false;
+  const columns = tableColumnNames(db, expected.table);
+  return actualTerms.every((term, position) => {
+    const expectedTerm = expected.terms[position];
+    const expectedMetadata =
+      expectedTerm === undefined ? null : parsedIndexTermMetadata(expectedTerm, columns);
+    const actualTerm = actual.terms[position];
+    const actualMetadata =
+      actualTerm === undefined ? null : parsedIndexTermMetadata(actualTerm, columns);
+    const termsMatch =
+      actualTerm !== undefined &&
+      expectedTerm !== undefined &&
+      sameSqlTokens(comparableSqlTokens(actualTerm), comparableSqlTokens(expectedTerm));
+    return (
+      expectedMetadata !== null &&
+      actualMetadata !== null &&
+      termsMatch &&
+      (term.name === null
+        ? expectedMetadata.name === null
+        : expectedMetadata.name !== null &&
+          sameSqliteIdentifier(term.name, expectedMetadata.name)) &&
+      term.desc === expectedMetadata.desc &&
+      (expectedMetadata.coll === null
+        ? actualMetadata.coll === null
+        : actualMetadata.coll !== null &&
+          sameSqliteIdentifier(actualMetadata.coll, expectedMetadata.coll)) &&
+      sameSqliteIdentifier(term.coll, expectedMetadata.coll ?? "BINARY")
+    );
+  });
+}
+
+function workspaceConstraintCanonicalIndexMatches(db: Database, name: string): boolean {
+  const candidates = [
+    WORKSPACE_CONSTRAINTS_CANONICAL_INDEX_DEFINITIONS.get(normalizeSqliteIdentifier(name)),
+    WORKSPACE_CONSTRAINTS_PREVIOUS_OWNER_INDEX_DEFINITIONS.get(normalizeSqliteIdentifier(name)),
+  ].filter((definition): definition is ParsedIndexDefinition => definition !== undefined);
+  return candidates.some((expected) => {
+    const index = mainIndexList(db, expected.table).find((candidate) =>
+      sameSqliteIdentifier(candidate.name, name),
+    );
+    if (index === undefined) return false;
+    const row = db
+      .query<SqlDefinitionRow, SQLQueryBindings[]>(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1 COLLATE NOCASE",
+      )
+      .get(name);
+    if (row?.sql === null || row?.sql === undefined) return false;
+    const actual = indexDefinitionFromSql(row.sql);
+    if (
+      actual === null ||
+      !sameSqliteIdentifier(actual.name, expected.name) ||
+      !sameSqliteIdentifier(actual.table, expected.table) ||
+      !indexDefinitionMatchesExpectedMetadata(db, index, actual, expected) ||
+      actual.terms.some((term) => indexExpressionCollationMismatch(db, expected.table, term)) ||
+      indexPredicateCollationMismatch(db, expected.table, actual.predicate)
+    ) {
+      return false;
+    }
+    return indexDefinitionMatchesMetadata(db, index, actual);
+  });
+}
+
+function captureWorkspaceConstraintIndexes(
+  db: Database,
+  migrationVersion: number,
+): WorkspaceConstraintIndexSnapshot[] {
+  const rebuiltTables = new Set(
+    WORKSPACE_CONSTRAINTS_REBUILT_TABLES.map((table) => normalizeSqliteIdentifier(table)),
+  );
+  const mainDefinitions = db
+    .query<SchemaObjectRow, SQLQueryBindings[]>(
+      "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type = 'index' ORDER BY rowid",
+    )
+    .all();
+  const migrationLabel = migrationVersion.toString().padStart(4, "0");
+  const snapshots: WorkspaceConstraintIndexSnapshot[] = [];
+
+  for (const table of WORKSPACE_CONSTRAINTS_REBUILT_TABLES) {
+    const indexes = mainIndexList(db, table);
+    for (const index of indexes) {
+      if (index.origin === "pk" || index.origin === "u") continue;
+      if (index.origin !== "c") {
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: index ${index.name} on ${table} ` +
+            `has unsupported origin ${index.origin}`,
+        );
+      }
+      const definitions = mainDefinitions.filter((definition) =>
+        sameSqliteIdentifier(definition.name, index.name),
+      );
+      if (
+        definitions.length !== 1 ||
+        !sameSqliteIdentifier(definitions[0]?.tbl_name ?? "", table)
+      ) {
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: index ${index.name} has an invalid ` +
+            `table association for ${table}`,
+        );
+      }
+      const temporaryObjects = db
+        .query<SchemaObjectRow, SQLQueryBindings[]>(
+          "SELECT type, name, tbl_name, sql FROM sqlite_temp_master WHERE name = ?1 COLLATE NOCASE",
+        )
+        .all(index.name);
+      if (temporaryObjects.some((object) => object.type !== "trigger")) {
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: MAIN index ${index.name} on ${table} ` +
+            "collides with a TEMP schema object",
+        );
+      }
+      const canonical = WORKSPACE_CONSTRAINTS_OWNER_INDEX_DEFINITIONS.get(
+        normalizeSqliteIdentifier(index.name),
+      );
+      if (canonical !== undefined && sameSqliteIdentifier(canonical.table, table)) {
+        if (!workspaceConstraintCanonicalIndexMatches(db, index.name)) {
+          throw new Error(
+            `Cannot apply migration ${migrationLabel} safely: canonical index ${index.name} on ` +
+              `${table} is incompatible`,
+          );
+        }
+        continue;
+      }
+      const definition = definitions[0];
+      if (definition?.sql === null || definition?.sql === undefined) {
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: custom index ${index.name} on ${table} ` +
+            "has no recoverable definition",
+        );
+      }
+      const parsed = indexDefinitionFromSql(definition.sql);
+      if (
+        parsed === null ||
+        !sameSqliteIdentifier(parsed.name, index.name) ||
+        !sameSqliteIdentifier(parsed.table, table) ||
+        !indexDefinitionMatchesMetadata(db, index, parsed) ||
+        parsed.terms.some((term) => indexExpressionCollationMismatch(db, table, term)) ||
+        indexPredicateCollationMismatch(db, table, parsed.predicate) ||
+        !executableIndexDefinition(db, definition.sql, table, index.name)
+      ) {
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: custom index ${index.name} on ${table} ` +
+            "cannot be preserved safely",
+        );
+      }
+
+      if (
+        schemaObjects(db, index.name).some(
+          (object) => object.type !== "index" && object.type !== "trigger",
+        )
+      ) {
+        throw new Error(
+          `Cannot apply migration ${migrationLabel} safely: index ${index.name} has an invalid ` +
+            "MAIN namespace collision",
+        );
+      }
+      snapshots.push({
+        ...index,
+        table,
+        sql: definition.sql,
+        terms: mainIndexTerms(db, index.name),
+      });
+    }
+  }
+
+  for (const definition of mainDefinitions) {
+    if (
+      definition.tbl_name === null ||
+      !rebuiltTables.has(normalizeSqliteIdentifier(definition.tbl_name))
+    ) {
+      continue;
+    }
+    const associated = mainIndexList(db, definition.tbl_name).some((index) =>
+      sameSqliteIdentifier(index.name, definition.name),
+    );
+    if (!associated) {
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: index ${definition.name} has an invalid ` +
+          `table association for ${definition.tbl_name}`,
+      );
+    }
+  }
+  return snapshots;
+}
+
 /**
  * Captura los triggers MAIN de todas las tablas que 0025 elimina. Los
  * canónicos solo se validan: el SQL de 0025 los recrea en su orden contractual.
@@ -3431,7 +4413,7 @@ function captureWorkspaceConstraintTriggers(
   migrationVersion: number,
 ): WorkspaceConstraintTriggerSnapshot[] {
   const rebuiltTables = new Set(
-    WORKSPACE_CONSTRAINTS_REBUILT_TABLES.map((table) => table.toLowerCase()),
+    WORKSPACE_CONSTRAINTS_REBUILT_TABLES.map((table) => normalizeSqliteIdentifier(table)),
   );
   const definitions = db
     .query<TriggerDefinitionRow, SQLQueryBindings[]>(
@@ -3445,7 +4427,9 @@ function captureWorkspaceConstraintTriggers(
     const triggerName = typeof definition.name === "string" ? definition.name : "unknown";
     const canonicalDefinition =
       typeof definition.name === "string"
-        ? WORKSPACE_CONSTRAINTS_CANONICAL_TRIGGER_DEFINITIONS.get(definition.name.toLowerCase())
+        ? WORKSPACE_CONSTRAINTS_CANONICAL_TRIGGER_DEFINITIONS.get(
+            normalizeSqliteIdentifier(definition.name),
+          )
         : undefined;
     if (canonicalDefinition !== undefined) {
       // 0025 recrea este trigger en el orden canónico de su propio SQL. Solo
@@ -3458,7 +4442,7 @@ function captureWorkspaceConstraintTriggers(
     }
     if (
       typeof definition.tbl_name !== "string" ||
-      !rebuiltTables.has(definition.tbl_name.toLowerCase())
+      !rebuiltTables.has(normalizeSqliteIdentifier(definition.tbl_name))
     ) {
       continue;
     }
@@ -3470,6 +4454,39 @@ function captureWorkspaceConstraintTriggers(
   }
 
   return snapshots;
+}
+
+const WORKSPACE_CONSTRAINTS_STAGING_TABLE_NAMES = [
+  ...WORKSPACE_CONSTRAINTS_REBUILT_TABLES,
+  "saved_views",
+].map((table) => `_prb25_${table}`);
+
+function workspaceConstraintNameCollisionPlan(db: Database): MigrationNameCollision[] {
+  const migrationLabel = "0025";
+  for (const stagingName of WORKSPACE_CONSTRAINTS_STAGING_TABLE_NAMES) {
+    const blockingIndex = schemaObjectsWithName(db, stagingName).find(
+      ({ object, temporary }) => !temporary && object.type === "index",
+    );
+    if (blockingIndex !== undefined) {
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: custom index ${blockingIndex.object.name} ` +
+          `on ${blockingIndex.object.tbl_name} uses reserved staging name ${stagingName}`,
+      );
+    }
+  }
+  const expectedByName = WORKSPACE_CONSTRAINTS_CANONICAL_INDEX_DEFINITIONS;
+  const reservedNames = [
+    ...[...expectedByName.values()].map((definition) => definition.name),
+    ...WORKSPACE_CONSTRAINTS_STAGING_TABLE_NAMES,
+  ];
+  return migrationNameCollisionPlan(db, {
+    reservedNames,
+    errorPrefix: "Cannot apply migration 0025 safely",
+    expectedIndexTable: (name) => expectedByName.get(normalizeSqliteIdentifier(name))?.table,
+    indexMatches: (database, name) => workspaceConstraintCanonicalIndexMatches(database, name),
+    replacementNameInUse: (database, name) =>
+      schemaObjectsWithName(database, name).some(({ object }) => object.type !== "trigger"),
+  });
 }
 
 const NOTIFICATION_MIGRATION_RESERVED_NAMES = [
@@ -3504,26 +4521,117 @@ function applyMigrationNameCollisions(
 function restoreWorkspaceConstraintTriggers(
   db: Database,
   definitions: readonly WorkspaceConstraintTriggerSnapshot[],
+  indexReplacements: ReadonlyMap<string, string> = new Map(),
 ): void {
   // Los canónicos de 0025 ya quedaron en el orden declarado por su SQL. Esta
   // captura solo contiene triggers custom u otros contratos instalados fuera de
   // 0025; recrearlos después del DDL conserva su definición sin tocar ese orden.
   for (const definition of definitions) {
+    const recreatedSql = rewriteIndexedBySql(definition.recreatedSql, indexReplacements);
+    if (recreatedSql === null) {
+      throw new Error(
+        `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
+          `${definition.table} has an invalid INDEXED BY dependency`,
+      );
+    }
     try {
-      db.exec(definition.recreatedSql);
+      db.exec(recreatedSql);
     } catch {
       throw new Error(
         `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
           `${definition.table} cannot be preserved safely`,
       );
     }
-    if (!executableTriggerDefinition(db, definition.recreatedSql)) {
+    if (!executableTriggerDefinition(db, recreatedSql)) {
       throw new Error(
         `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
           `${definition.table} cannot be preserved safely`,
       );
     }
   }
+}
+
+interface RestoreWorkspaceConstraintIndexesOptions {
+  db: Database;
+  definitions: readonly WorkspaceConstraintIndexSnapshot[];
+  previousReplacements?: ReadonlyMap<string, string>;
+  migrationVersion?: 25 | 32 | 33;
+}
+
+function restoreWorkspaceConstraintIndexes({
+  db,
+  definitions,
+  previousReplacements = new Map(),
+  migrationVersion = 25,
+}: RestoreWorkspaceConstraintIndexesOptions): Map<string, string> {
+  const replacements = new Map(previousReplacements);
+  const migrationLabel = migrationVersion.toString().padStart(4, "0");
+  for (const definition of definitions) {
+    const replacementName =
+      replacements.get(normalizeSqliteIdentifier(definition.name)) ?? definition.name;
+    if (replacementName !== definition.name) {
+      replacements.set(normalizeSqliteIdentifier(definition.name), replacementName);
+    }
+    const temporaryObjects = db
+      .query<SchemaObjectRow, SQLQueryBindings[]>(
+        "SELECT type, name, tbl_name, sql FROM sqlite_temp_master WHERE name = ?1 COLLATE NOCASE",
+      )
+      .all(replacementName);
+    if (
+      temporaryObjects.some((object) => object.type !== "trigger") ||
+      indexNameInUse(db, replacementName)
+    ) {
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: custom index ${definition.name} on ` +
+          `${definition.table} has a blocking name collision`,
+      );
+    }
+    const sql =
+      replacementName === definition.name
+        ? definition.sql
+        : renamedIndexSql(definition.sql, replacementName, definition.table, definition.name);
+    if (sql === null || !executableSchemaDefinition(db, sql)) {
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: custom index ${definition.name} on ` +
+          `${definition.table} cannot be restored safely`,
+      );
+    }
+    const parsed = indexDefinitionFromSql(sql);
+    if (
+      parsed === null ||
+      !sameSqliteIdentifier(parsed.name, replacementName) ||
+      !sameSqliteIdentifier(parsed.table, definition.table) ||
+      parsed.terms.some((term) => indexExpressionCollationMismatch(db, definition.table, term)) ||
+      indexPredicateCollationMismatch(db, definition.table, parsed.predicate)
+    ) {
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: custom index ${definition.name} on ` +
+          `${definition.table} has an invalid restored definition`,
+      );
+    }
+    try {
+      db.exec(sql);
+    } catch {
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: custom index ${definition.name} on ` +
+          `${definition.table} cannot be restored safely`,
+      );
+    }
+    const restored = mainIndexList(db, definition.table).find((index) =>
+      sameSqliteIdentifier(index.name, replacementName),
+    );
+    if (
+      restored === undefined ||
+      !indexDefinitionMatchesMetadata(db, restored, parsed) ||
+      !indexTermsMatchMetadata(mainIndexTerms(db, replacementName), definition.terms)
+    ) {
+      throw new Error(
+        `Cannot apply migration ${migrationLabel} safely: custom index ${definition.name} on ` +
+          `${definition.table} changed its metadata during restoration`,
+      );
+    }
+  }
+  return replacements;
 }
 
 function restoreViewsMigrationTriggers(
@@ -3584,7 +4692,8 @@ function findIndexedByDependencyObject(
     (collision) =>
       collision.type === dependency.object.type &&
       collision.temporary === dependency.temporary &&
-      collision.name.toLowerCase() === dependency.object.name.toLowerCase(),
+      normalizeSqliteIdentifier(collision.name) ===
+        normalizeSqliteIdentifier(dependency.object.name),
   );
   if (renamed !== undefined && renamed.replacementName !== dependency.object.name) {
     return schemaObjectWithTypeAndName({
@@ -3633,7 +4742,7 @@ function applyIndexedByDependencyRewrites(
   dependencies: readonly IndexedByDependency[],
   replacements: ReadonlyMap<string, string>,
   renamedObjects: readonly MigrationNameCollision[],
-  migrationVersion: 32 | 33 = 33,
+  migrationVersion: 25 | 32 | 33 = 33,
 ): void {
   if (replacements.size === 0) return;
   const operations: Array<{
@@ -3647,9 +4756,9 @@ function applyIndexedByDependencyRewrites(
   for (const dependency of dependencies) {
     const dependencyReplacements = new Map<string, string>();
     for (const indexName of dependency.indexNames) {
-      const replacementName = replacements.get(indexName.toLowerCase());
+      const replacementName = replacements.get(normalizeSqliteIdentifier(indexName));
       if (replacementName !== undefined) {
-        dependencyReplacements.set(indexName.toLowerCase(), replacementName);
+        dependencyReplacements.set(normalizeSqliteIdentifier(indexName), replacementName);
       }
     }
     if (dependencyReplacements.size === 0) continue;
@@ -3659,7 +4768,8 @@ function applyIndexedByDependencyRewrites(
       (collision) =>
         collision.type === dependency.object.type &&
         collision.temporary === dependency.temporary &&
-        collision.name.toLowerCase() === dependency.object.name.toLowerCase(),
+        normalizeSqliteIdentifier(collision.name) ===
+          normalizeSqliteIdentifier(dependency.object.name),
     );
     if (current === null && renamed !== undefined && renamed.replacementName !== renamed.name) {
       throw new Error(
@@ -3765,8 +4875,10 @@ function restoreSavedViewsIndexes({
       predicate ?? undefined,
     );
     if (equivalentName !== null) {
-      if (definition.name.toLowerCase() !== equivalentName.toLowerCase()) {
-        replacements.set(definition.name.toLowerCase(), equivalentName);
+      if (
+        normalizeSqliteIdentifier(definition.name) !== normalizeSqliteIdentifier(equivalentName)
+      ) {
+        replacements.set(normalizeSqliteIdentifier(definition.name), equivalentName);
       }
       continue;
     }
@@ -3779,8 +4891,8 @@ function restoreSavedViewsIndexes({
       if (sql === null) {
         throw new Error(`Cannot restore saved_views index ${definition.name} safely`);
       }
-      if (definition.name.toLowerCase() !== indexName.toLowerCase()) {
-        replacements.set(definition.name.toLowerCase(), indexName);
+      if (normalizeSqliteIdentifier(definition.name) !== normalizeSqliteIdentifier(indexName)) {
+        replacements.set(normalizeSqliteIdentifier(definition.name), indexName);
       }
       db.exec(sql);
       continue;
@@ -3808,8 +4920,8 @@ function restoreSavedViewsIndexes({
         return `${column} COLLATE ${collation}${term.desc === 1 ? " DESC" : ""}`;
       })
       .join(", ");
-    if (definition.name.toLowerCase() !== indexName.toLowerCase()) {
-      replacements.set(definition.name.toLowerCase(), indexName);
+    if (normalizeSqliteIdentifier(definition.name) !== normalizeSqliteIdentifier(indexName)) {
+      replacements.set(normalizeSqliteIdentifier(definition.name), indexName);
     }
     db.exec(
       `CREATE ${unique ? "UNIQUE " : ""}INDEX ${quoteIdentifier(indexName)} ON saved_views(${terms})`,
@@ -4987,9 +6099,23 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
     }
     if (migration.version === 33) validateViewsMigrationPrerequisites(db);
     const indexedByDependencies =
-      migration.version === 32 || migration.version === 33
+      migration.version === 25 || migration.version === 32 || migration.version === 33
         ? schemaObjectsWithIndexedByDependencies(db, migration.version)
         : [];
+    if (migration.version === 25) {
+      validateWorkspaceConstraintLegacyIndexDependencies(
+        db,
+        indexedByDependencies,
+        migration.version,
+      );
+      validateWorkspaceConstraintAutoindexDependencies(
+        db,
+        indexedByDependencies,
+        migration.version,
+      );
+    }
+    const workspaceConstraintIndexSnapshots =
+      migration.version === 25 ? captureWorkspaceConstraintIndexes(db, migration.version) : [];
     // PRB-472 y PRB-390 reconstruyen el grafo de tablas para reemplazar FKs
     // simples por FKs compuestas. SQLite no permite cambiar foreign_keys dentro
     // de una transacción activa. El runner desactiva las comprobaciones solo
@@ -5014,10 +6140,24 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
             32,
           )
         : [];
+    const workspaceNameCollisionPlan =
+      migration.version === 25
+        ? indexedByDependencyCollisions(
+            db,
+            workspaceConstraintNameCollisionPlan(db),
+            indexedByDependencies,
+            25,
+          )
+        : [];
     const previousIndexReplacements = new Map(
       nameCollisionPlan
         .filter((collision) => collision.type === "index")
-        .map((collision) => [collision.name.toLowerCase(), collision.replacementName]),
+        .map((collision) => [normalizeSqliteIdentifier(collision.name), collision.replacementName]),
+    );
+    const workspaceIndexReplacements = new Map(
+      workspaceNameCollisionPlan
+        .filter((collision) => collision.type === "index")
+        .map((collision) => [normalizeSqliteIdentifier(collision.name), collision.replacementName]),
     );
     const savedViewsTriggerSnapshots =
       migration.version === 25 || migration.version === 33
@@ -5034,9 +6174,20 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
         if (migration.version === 32) {
           applyMigrationNameCollisions(db, notificationNameCollisionPlan);
         }
+        if (migration.version === 25) {
+          applyMigrationNameCollisions(db, workspaceNameCollisionPlan);
+        }
         if (migration.version === 33) applyMigrationNameCollisions(db, nameCollisionPlan);
         db.exec(migration.sql);
         if (migration.version === 32) validateNotificationPreferences(db);
+        if (migration.version === 25) {
+          restoreWorkspaceConstraintIndexes({
+            db,
+            definitions: workspaceConstraintIndexSnapshots,
+            previousReplacements: workspaceIndexReplacements,
+            migrationVersion: 25,
+          });
+        }
         if (migration.version === 33) {
           restoreSavedViewsIndexes({
             db,
@@ -5050,7 +6201,20 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
           restoreViewsMigrationTriggers(db, savedViewsTriggerSnapshots);
         }
         if (workspaceConstraintTriggerSnapshots.length > 0) {
-          restoreWorkspaceConstraintTriggers(db, workspaceConstraintTriggerSnapshots);
+          restoreWorkspaceConstraintTriggers(
+            db,
+            workspaceConstraintTriggerSnapshots,
+            workspaceIndexReplacements,
+          );
+        }
+        if (migration.version === 25) {
+          applyIndexedByDependencyRewrites(
+            db,
+            indexedByDependencies,
+            workspaceIndexReplacements,
+            workspaceNameCollisionPlan,
+            25,
+          );
         }
         if (migration.version === 24) {
           normalizeBackfilledMembershipIds(db);

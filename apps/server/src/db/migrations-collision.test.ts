@@ -5859,6 +5859,7 @@ describe("colisión de migraciones SQLite", () => {
     try {
       db.exec(`
         ALTER TABLE teams ADD COLUMN legacy_custom_value TEXT;
+        CREATE INDEX custom_teams_name_rollback ON teams(name);
         CREATE TABLE custom_teams_trigger_log (value TEXT NOT NULL);
         CREATE TRIGGER custom_teams_dropped_column
         AFTER INSERT ON teams
@@ -5884,6 +5885,7 @@ describe("colisión de migraciones SQLite", () => {
         /migration 0025.*custom trigger custom_teams_dropped_column on teams.*cannot be preserved safely/i,
       );
       expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(
         db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
       ).toEqual(beforeSchema);
@@ -5892,6 +5894,46 @@ describe("colisión de migraciones SQLite", () => {
       expect(
         db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
       ).toEqual(beforeSchema);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("revierte un fallo al restaurar un índice custom y permite reparar y reintentar", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(
+        "ALTER TABLE teams ADD COLUMN legacy_custom_value TEXT COLLATE NOCASE; CREATE INDEX custom_bad_restore ON teams(legacy_custom_value)",
+      );
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = (): string => {
+        try {
+          migrate(db);
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+        return "migration unexpectedly succeeded";
+      };
+
+      expect(runMigration()).toMatch(
+        /migration 0025.*custom index custom_bad_restore on teams cannot be restored safely/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+      db.exec("DROP INDEX custom_bad_restore; ALTER TABLE teams DROP COLUMN legacy_custom_value;");
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.query("SELECT version FROM _migrations WHERE version = 25").get()).toEqual({
+        version: 25,
+      });
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
       db.close();
     }
@@ -6008,6 +6050,551 @@ describe("colisión de migraciones SQLite", () => {
       expect(db.query("SELECT version FROM _migrations WHERE version = 25").get()).toEqual({
         version: 25,
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserva predicados explícitos y rechaza collations heredadas mixtas sin escribir", () => {
+    const explicit = databaseWithMigrationsThrough(24);
+    try {
+      explicit.exec(`
+        ALTER TABLE teams ADD COLUMN "when" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "as" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "is" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "null" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "end" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "like" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "isnull" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "notnull" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "glob" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "match" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "regexp" TEXT COLLATE NOCASE;
+        CREATE INDEX custom_explicit_pred ON teams(id) WHERE name COLLATE NOCASE = 'Foo';
+        CREATE INDEX custom_parenthesized_pred ON teams(id) WHERE (name) COLLATE NOCASE = 'Foo';
+        CREATE INDEX custom_nested_parenthesized_pred ON teams(id)
+          WHERE ((name)) COLLATE NOCASE = 'Foo';
+        CREATE INDEX custom_predicate_forms ON teams(id)
+          WHERE (name COLLATE NOCASE IN ('Foo', 'Bar'))
+            AND CASE WHEN name LIKE 'F%' THEN 1 ELSE 0 END = 1
+            AND name BETWEEN 'A' AND 'Z';
+        CREATE INDEX custom_keyword_expression ON teams(
+          CASE WHEN id IS TRUE THEN CAST(id AS TEXT) ELSE 0 END
+        ) WHERE id IS DISTINCT FROM NULL;
+        CREATE INDEX custom_keyword_types ON teams(
+          CAST(id AS INTEGER), CAST(id AS REAL), CAST(id AS BLOB), CAST(id AS NUMERIC)
+        ) WHERE id ISNULL OR id NOTNULL;
+        CREATE INDEX custom_operator_keywords ON teams(id)
+          WHERE id NOT LIKE 'F%'
+            AND id NOT GLOB 'F*'
+            AND id ISNULL
+            AND id NOTNULL;
+        CREATE INDEX custom_literal_collation ON teams(id)
+          WHERE NULL COLLATE NOCASE IS NULL AND TRUE COLLATE NOCASE;
+        CREATE INDEX custom_cast_collation ON teams(
+          CAST(id AS TEXT) COLLATE NOCASE
+        ) WHERE CAST(id / 'x' AS TEXT) COLLATE NOCASE = '0';
+        CREATE INDEX custom_blob_literal_term ON teams(X'78' COLLATE NOCASE);
+        CREATE INDEX custom_inner_collation_terms ON teams(
+          upper((name) COLLATE NOCASE),
+          upper(((name)) COLLATE NOCASE),
+          upper(trim((name) COLLATE NOCASE)),
+          min((name) COLLATE NOCASE, key)
+        );
+        CREATE INDEX custom_outer_comparison_collation ON teams(
+          ((name = key) COLLATE NOCASE)
+        ) WHERE ((name = key) COLLATE NOCASE);
+        CREATE INDEX custom_case_closing_keywords ON teams(
+          CASE WHEN id THEN NULL END,
+          CASE WHEN id THEN id IS NULL END,
+          CASE WHEN id THEN id ISNULL END,
+          CASE WHEN id THEN id IS DISTINCT FROM NULL END,
+          CASE WHEN id THEN CASE WHEN id THEN NULL END ELSE NULL END
+        ) WHERE CASE WHEN id THEN id ISNULL END;
+        CREATE INDEX custom_case_postfix_operators ON teams(id)
+          WHERE CASE WHEN id THEN 'x' ELSE 'y' END LIKE 'x'
+            AND CASE WHEN id THEN 'x' ELSE 'y' END NOT LIKE 'z'
+            AND CASE WHEN id THEN 'x' ELSE 'y' END GLOB 'x'
+            AND CASE WHEN id THEN 'x' ELSE 'y' END NOT GLOB 'z'
+            AND id ISNULL LIKE 'x'
+            AND id IS NULL LIKE 'x'
+            AND id NOTNULL GLOB 'x';
+        CREATE INDEX custom_keyword_constants ON teams(NULL, TRUE, FALSE);
+      `);
+      expect(() => migrate(explicit)).not.toThrow();
+      expect(
+        explicit
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'custom_explicit_pred'",
+          )
+          .get(),
+      ).toEqual({
+        sql: "CREATE INDEX custom_explicit_pred ON teams(id) WHERE name COLLATE NOCASE = 'Foo'",
+      });
+    } finally {
+      explicit.close();
+    }
+
+    const mixed = databaseWithMigrationsThrough(24);
+    try {
+      mixed.exec(`
+        ALTER TABLE teams ADD COLUMN legacy_case_name TEXT COLLATE NOCASE;
+        CREATE INDEX custom_mixed_pred ON teams(id)
+          WHERE name COLLATE NOCASE = 'Foo' AND legacy_case_name = 'Bar';
+      `);
+      const beforeSchema = mixed
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = mixed.query("SELECT * FROM _migrations ORDER BY version").all();
+      const beforeForeignKeys = mixed.query("PRAGMA foreign_keys").get();
+      expect(() => migrate(mixed)).toThrow(
+        /migration 0025.*custom index custom_mixed_pred on teams cannot be preserved safely/i,
+      );
+      expect(
+        mixed
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(mixed.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      expect(mixed.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+    } finally {
+      mixed.close();
+    }
+
+    const quoted = databaseWithMigrationsThrough(24);
+    try {
+      quoted.exec(`
+        CREATE INDEX custom_quoted_case ON teams(
+          CASE "case" WHEN 'Foo' THEN 1 ELSE 0 END
+        );
+      `);
+      const beforeSchema = quoted
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = quoted.query("SELECT * FROM _migrations ORDER BY version").all();
+      const beforeForeignKeys = quoted.query("PRAGMA foreign_keys").get();
+      expect(() => migrate(quoted)).toThrow(
+        /migration 0025.*custom index custom_quoted_case on teams cannot be preserved safely/i,
+      );
+      expect(
+        quoted
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(quoted.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      expect(quoted.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+    } finally {
+      quoted.close();
+    }
+
+    const outer = databaseWithMigrationsThrough(24);
+    try {
+      outer.exec(`
+        ALTER TABLE teams ADD COLUMN legacy_case_name TEXT COLLATE NOCASE;
+        CREATE INDEX custom_outer_collate_pred ON teams(id)
+          WHERE ((legacy_case_name = 'Foo') COLLATE NOCASE);
+      `);
+      const beforeSchema = outer
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = outer.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(outer)).toThrow(
+        /migration 0025.*custom index custom_outer_collate_pred on teams cannot be preserved safely/i,
+      );
+      expect(
+        outer
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(outer.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+    } finally {
+      outer.close();
+    }
+
+    const outerTerm = databaseWithMigrationsThrough(24);
+    try {
+      outerTerm.exec(`
+        ALTER TABLE teams ADD COLUMN legacy_case_name TEXT COLLATE NOCASE;
+        CREATE INDEX custom_outer_collate_term ON teams(
+          ((legacy_case_name = 'Foo') COLLATE NOCASE)
+        );
+      `);
+      const beforeSchema = outerTerm
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = outerTerm.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(outerTerm)).toThrow(
+        /migration 0025.*custom index custom_outer_collate_term on teams cannot be restored safely/i,
+      );
+      expect(
+        outerTerm
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(outerTerm.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+    } finally {
+      outerTerm.close();
+    }
+
+    const dqs = databaseWithMigrationsThrough(24);
+    try {
+      dqs.exec(`
+        ALTER TABLE teams ADD COLUMN legacy_pred TEXT;
+        INSERT INTO teams (id, name, key, created_at, updated_at)
+        VALUES ('dqs-team', 'DQS Team', 'DQS', '2026-01-01', '2026-01-01');
+        UPDATE teams SET legacy_pred = 'foo' WHERE id = 'dqs-team';
+        CREATE INDEX custom_dqs_pred ON teams(id) WHERE "legacy_pred" = 'foo';
+      `);
+      const beforeRows = dqs.query("SELECT id, legacy_pred FROM teams ORDER BY id").all();
+      const beforeSchema = dqs
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = dqs.query("SELECT * FROM _migrations ORDER BY version").all();
+      const beforeForeignKeys = dqs.query("PRAGMA foreign_keys").get();
+      expect(() => migrate(dqs)).toThrow(
+        /migration 0025.*custom index custom_dqs_pred on teams cannot be preserved safely/i,
+      );
+      expect(dqs.query("SELECT id, legacy_pred FROM teams ORDER BY id").all()).toEqual(beforeRows);
+      expect(
+        dqs.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(dqs.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(dqs.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+    } finally {
+      dqs.close();
+    }
+
+    const rowid = databaseWithMigrationsThrough(24);
+    try {
+      rowid.exec(`
+        INSERT INTO teams (id, name, key, created_at, updated_at) VALUES
+          ('rowid-a', 'Rowid A', 'RDA', '2026-01-01', '2026-01-01'),
+          ('rowid-b', 'Rowid B', 'RDB', '2026-01-01', '2026-01-01'),
+          ('rowid-c', 'Rowid C', 'RDC', '2026-01-01', '2026-01-01');
+        DELETE FROM teams WHERE rowid = 2;
+        CREATE INDEX custom_rowid_pred_plain ON teams(id) WHERE rowid = 3;
+        CREATE INDEX custom_rowid_pred_paren ON teams(id) WHERE (rowid) COLLATE NOCASE = 3;
+        CREATE INDEX custom_rowid_pred_nested ON teams(id) WHERE ((rowid)) COLLATE NOCASE = 3;
+      `);
+      const beforeRows = rowid.query("SELECT rowid, id FROM teams ORDER BY rowid").all();
+      const beforeSchema = rowid
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = rowid.query("SELECT * FROM _migrations ORDER BY version").all();
+      const beforeForeignKeys = rowid.query("PRAGMA foreign_keys").get();
+      expect(() => migrate(rowid)).toThrow(
+        /migration 0025.*custom index custom_rowid_pred_(plain|paren|nested) on teams cannot be preserved safely/i,
+      );
+      expect(rowid.query("SELECT rowid, id FROM teams ORDER BY rowid").all()).toEqual(beforeRows);
+      expect(
+        rowid
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(rowid.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      expect(rowid.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+    } finally {
+      rowid.close();
+    }
+
+    const keywordColumn = databaseWithMigrationsThrough(24);
+    try {
+      keywordColumn.exec(`
+        ALTER TABLE teams ADD COLUMN "true" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "false" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "like" TEXT COLLATE NOCASE;
+        INSERT INTO teams (id, name, key, created_at, updated_at)
+        VALUES ('keyword-team', 'Keyword Team', 'KWD', '2026-01-01', '2026-01-01');
+        UPDATE teams SET "true" = 'FOO', "false" = 'BAR', "like" = 'BAZ' WHERE id = 'keyword-team';
+        CREATE INDEX custom_keyword_column_pred ON teams(id)
+          WHERE true = 'foo' AND false = 'bar' AND like = 'baz';
+      `);
+      const beforeRows = keywordColumn
+        .query('SELECT id, "true", "false", "like" FROM teams ORDER BY id')
+        .all();
+      const beforeSchema = keywordColumn
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = keywordColumn.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(keywordColumn)).toThrow(
+        /migration 0025.*custom index custom_keyword_column_pred on teams cannot be preserved safely/i,
+      );
+      expect(
+        keywordColumn.query('SELECT id, "true", "false", "like" FROM teams ORDER BY id').all(),
+      ).toEqual(beforeRows);
+      expect(
+        keywordColumn
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(keywordColumn.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+    } finally {
+      keywordColumn.close();
+    }
+
+    const keywordTerm = databaseWithMigrationsThrough(24);
+    try {
+      keywordTerm.exec(`
+        ALTER TABLE teams ADD COLUMN "true" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "false" TEXT COLLATE NOCASE;
+        INSERT INTO teams (id, name, key, created_at, updated_at)
+        VALUES ('keyword-term-team', 'Keyword Term', 'KWT', '2026-01-01', '2026-01-01');
+        UPDATE teams SET "true" = 'FOO', "false" = 'BAR' WHERE id = 'keyword-term-team';
+        CREATE INDEX custom_keyword_term ON teams(
+          true + 0,
+          false + 0,
+          CAST(true AS TEXT),
+          CASE WHEN true THEN 1 ELSE 0 END
+        );
+      `);
+      const beforeRows = keywordTerm.query('SELECT id, "true", "false" FROM teams').all();
+      const beforeSchema = keywordTerm
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = keywordTerm.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(keywordTerm)).toThrow(
+        /migration 0025.*custom index custom_keyword_term on teams cannot be preserved safely/i,
+      );
+      expect(keywordTerm.query('SELECT id, "true", "false" FROM teams').all()).toEqual(beforeRows);
+      expect(
+        keywordTerm
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(keywordTerm.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+    } finally {
+      keywordTerm.close();
+    }
+
+    const keywordSimple = databaseWithMigrationsThrough(24);
+    try {
+      keywordSimple.exec(`
+        ALTER TABLE teams ADD COLUMN "true" TEXT COLLATE NOCASE;
+        INSERT INTO teams (id, name, key, created_at, updated_at)
+        VALUES ('keyword-simple-team', 'Keyword Simple', 'KWS', '2026-01-01', '2026-01-01');
+        UPDATE teams SET "true" = 'FOO' WHERE id = 'keyword-simple-team';
+        CREATE INDEX custom_keyword_simple ON teams(true COLLATE NOCASE);
+      `);
+      const beforeRows = keywordSimple.query('SELECT id, "true" FROM teams').all();
+      const beforeSchema = keywordSimple
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = keywordSimple.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(keywordSimple)).toThrow(
+        /migration 0025.*custom index custom_keyword_simple on teams changed its metadata during restoration/i,
+      );
+      expect(keywordSimple.query('SELECT id, "true" FROM teams').all()).toEqual(beforeRows);
+      expect(
+        keywordSimple
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeSchema);
+      expect(keywordSimple.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      keywordSimple.exec('DROP INDEX custom_keyword_simple; ALTER TABLE teams DROP COLUMN "true";');
+      expect(() => migrate(keywordSimple)).not.toThrow();
+      expect(
+        keywordSimple.query("SELECT version FROM _migrations WHERE version = 25").get(),
+      ).toEqual({
+        version: 25,
+      });
+    } finally {
+      keywordSimple.close();
+    }
+
+    const keywordEnd = databaseWithMigrationsThrough(24);
+    try {
+      keywordEnd.exec(`
+        ALTER TABLE teams ADD COLUMN "end" TEXT COLLATE NOCASE;
+        INSERT INTO teams (id, name, key, created_at, updated_at)
+        VALUES ('keyword-end-team', 'Keyword End', 'KWE', '2026-01-01', '2026-01-01');
+        UPDATE teams SET "end" = 'FOO' WHERE id = 'keyword-end-team';
+        CREATE INDEX custom_keyword_end ON teams(end);
+      `);
+      const beforeRows = keywordEnd.query('SELECT id, "end" FROM teams').all();
+      const beforeMarkers = keywordEnd.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(keywordEnd)).toThrow(
+        /migration 0025.*custom index custom_keyword_end on teams cannot be restored safely/i,
+      );
+      expect(keywordEnd.query('SELECT id, "end" FROM teams').all()).toEqual(beforeRows);
+      expect(keywordEnd.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      keywordEnd.exec('DROP INDEX custom_keyword_end; ALTER TABLE teams DROP COLUMN "end";');
+      expect(() => migrate(keywordEnd)).not.toThrow();
+      expect(keywordEnd.query("SELECT version FROM _migrations WHERE version = 25").get()).toEqual({
+        version: 25,
+      });
+    } finally {
+      keywordEnd.close();
+    }
+
+    const endCase = databaseWithMigrationsThrough(24);
+    try {
+      endCase.exec(`
+        ALTER TABLE teams ADD COLUMN "end" TEXT COLLATE NOCASE;
+        INSERT INTO teams (id, name, key, created_at, updated_at)
+        VALUES ('end-case-team', 'End Case', 'ECA', '2026-01-01', '2026-01-01');
+        UPDATE teams SET "end" = 'FOO' WHERE id = 'end-case-team';
+        CREATE INDEX custom_end_case_pred ON teams(id)
+          WHERE CASE WHEN end = 'foo' THEN 1 ELSE 0 END = 1;
+        CREATE INDEX custom_end_nested_case_pred ON teams(id)
+          WHERE CASE WHEN id THEN CASE WHEN end = 'foo' THEN 1 ELSE 0 END ELSE 0 END;
+      `);
+      const beforeRows = endCase.query('SELECT id, "end" FROM teams').all();
+      const beforeMarkers = endCase.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(endCase)).toThrow(
+        /migration 0025.*custom index custom_end_(case|nested_case)_pred on teams cannot be preserved safely/i,
+      );
+      expect(endCase.query('SELECT id, "end" FROM teams').all()).toEqual(beforeRows);
+      expect(endCase.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+    } finally {
+      endCase.close();
+    }
+
+    const keywordOrder = databaseWithMigrationsThrough(24);
+    try {
+      keywordOrder.exec(`
+        ALTER TABLE teams ADD COLUMN "asc" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "desc" TEXT COLLATE NOCASE;
+        INSERT INTO teams (id, name, key, created_at, updated_at)
+        VALUES ('keyword-order-team', 'Keyword Order', 'KWO', '2026-01-01', '2026-01-01');
+        UPDATE teams SET "asc" = 'ASC', "desc" = 'DESC' WHERE id = 'keyword-order-team';
+        CREATE INDEX custom_keyword_asc ON teams(asc);
+        CREATE INDEX custom_keyword_desc ON teams("desc");
+        CREATE INDEX custom_keyword_ordered ON teams(name DESC);
+      `);
+      const beforeRows = keywordOrder.query('SELECT id, "asc", "desc" FROM teams').all();
+      const beforeMarkers = keywordOrder.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(keywordOrder)).toThrow(
+        /migration 0025.*custom index custom_keyword_(asc|desc|ordered) on teams/i,
+      );
+      expect(keywordOrder.query('SELECT id, "asc", "desc" FROM teams').all()).toEqual(beforeRows);
+      expect(keywordOrder.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      keywordOrder.exec(`
+        DROP INDEX custom_keyword_asc;
+        DROP INDEX custom_keyword_desc;
+        DROP INDEX custom_keyword_ordered;
+        ALTER TABLE teams DROP COLUMN "asc";
+        ALTER TABLE teams DROP COLUMN "desc";
+      `);
+      expect(() => migrate(keywordOrder)).not.toThrow();
+      expect(
+        keywordOrder.query("SELECT version FROM _migrations WHERE version = 25").get(),
+      ).toEqual({
+        version: 25,
+      });
+    } finally {
+      keywordOrder.close();
+    }
+
+    const outerScope = databaseWithMigrationsThrough(24);
+    try {
+      outerScope.exec(`
+        ALTER TABLE teams ADD COLUMN "legacy_name" TEXT COLLATE NOCASE;
+        ALTER TABLE teams ADD COLUMN "legacy_key" TEXT COLLATE NOCASE;
+        INSERT INTO teams (id, name, key, created_at, updated_at)
+        VALUES ('outer-scope-team', 'Outer Scope', 'OSS', '2026-01-01', '2026-01-01');
+        UPDATE teams
+        SET "legacy_name" = 'FOO', "legacy_key" = 'BAR'
+        WHERE id = 'outer-scope-team';
+        CREATE INDEX custom_outer_compound_term ON teams(
+          ((legacy_name = legacy_key) COLLATE NOCASE)
+        );
+        CREATE INDEX custom_outer_compound_pred ON teams(id)
+          WHERE ((legacy_name = legacy_key) COLLATE NOCASE);
+      `);
+      const beforeRows = outerScope
+        .query('SELECT id, "legacy_name", "legacy_key" FROM teams')
+        .all();
+      const beforeMarkers = outerScope.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(outerScope)).toThrow(
+        /migration 0025.*custom index custom_outer_compound_(pred|term) on teams/i,
+      );
+      expect(outerScope.query('SELECT id, "legacy_name", "legacy_key" FROM teams').all()).toEqual(
+        beforeRows,
+      );
+      expect(outerScope.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      outerScope.exec(`
+        DROP INDEX custom_outer_compound_term;
+        DROP INDEX custom_outer_compound_pred;
+        ALTER TABLE teams DROP COLUMN "legacy_name";
+        ALTER TABLE teams DROP COLUMN "legacy_key";
+      `);
+      expect(() => migrate(outerScope)).not.toThrow();
+      expect(outerScope.query("SELECT version FROM _migrations WHERE version = 25").get()).toEqual({
+        version: 25,
+      });
+    } finally {
+      outerScope.close();
+    }
+  });
+
+  it("rechaza una colisión canónica con COLLATE incompatible antes del DDL", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(
+        "CREATE UNIQUE INDEX idx_teams_workspace_key ON teams(workspace_id COLLATE NOCASE, key) WHERE workspace_id IS NOT NULL",
+      );
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const beforeForeignKeys = db.query("PRAGMA foreign_keys").get();
+
+      expect(() => migrate(db)).toThrow(
+        /migration 0025.*canonical index idx_teams_workspace_key on teams is incompatible/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza una expresión canónica incompatible antes del DDL", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec("DROP INDEX idx_actor_invitations_pending_email");
+      db.exec(
+        "CREATE UNIQUE INDEX idx_actor_invitations_pending_email ON actor_invitations(workspace_id, upper(trim(email))) WHERE status = 'pending' AND email IS NOT NULL",
+      );
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(
+        /migration 0025.*canonical index idx_actor_invitations_pending_email on actor_invitations is incompatible/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
     } finally {
       db.close();
     }
@@ -6397,6 +6984,483 @@ describe("colisión de migraciones SQLite", () => {
           .sort((left, right) => left.name.localeCompare(right.name)),
       );
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("mantiene un índice custom después de abrir y reintentar una instalación fresh", () => {
+    const db = openDatabase(":memory:");
+    try {
+      db.exec("CREATE INDEX custom_fresh_teams_name ON teams(name)");
+      migrate(db);
+      expect(
+        db
+          .query(
+            "SELECT name, origin FROM pragma_index_list('teams') WHERE name = 'custom_fresh_teams_name'",
+          )
+          .all(),
+      ).toEqual([{ name: "custom_fresh_teams_name", origin: "c" }]);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserva índices custom MAIN de las 23 tablas reconstruidas y deja intacta una tabla ajena", () => {
+    const db = databaseWithMigrationsThrough(24);
+    const rebuiltTables = [
+      "teams",
+      "workflow_states",
+      "projects",
+      "milestones",
+      "issues",
+      "labels",
+      "cycles",
+      "project_teams",
+      "issue_labels",
+      "issue_relations",
+      "comments",
+      "activity",
+      "webhooks",
+      "reviews",
+      "initiatives",
+      "initiative_projects",
+      "initiative_teams",
+      "project_updates",
+      "team_memberships",
+      "api_key_team_limits",
+      "inbox_receipts",
+      "favorites",
+      "actor_invitations",
+    ];
+    try {
+      for (const table of rebuiltTables) {
+        const column = String(
+          db.query(`PRAGMA main.table_info(${quoteTestIdentifier(table)})`).values()[0]?.[1] ?? "",
+        );
+        db.exec(
+          `CREATE INDEX ${quoteTestIdentifier(`custom_rebuild_${table}`)} ` +
+            `ON ${quoteTestIdentifier(table)}(${quoteTestIdentifier(column)})`,
+        );
+      }
+      db.exec("CREATE INDEX custom_teams_name ON teams(name)");
+      db.exec("CREATE INDEX custom_actor_name ON actors(name)");
+      const beforeCustom = db
+        .query(
+          "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index' AND (name LIKE 'custom_rebuild_%' OR name IN ('custom_teams_name', 'custom_actor_name')) ORDER BY name",
+        )
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      migrate(db);
+      bootstrap(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index' AND (name LIKE 'custom_rebuild_%' OR name IN ('custom_teams_name', 'custom_actor_name')) ORDER BY name",
+          )
+          .all(),
+      ).toEqual(beforeCustom);
+      expect(
+        db
+          .query(
+            "SELECT name, origin FROM pragma_index_list('teams') WHERE name IN ('custom_teams_name', 'custom_rebuild_teams') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "custom_rebuild_teams", origin: "c" },
+        { name: "custom_teams_name", origin: "c" },
+      ]);
+      expect(
+        db
+          .query(
+            "SELECT version, name FROM _migrations WHERE version IN (25, 32, 33) ORDER BY version",
+          )
+          .all(),
+      ).toEqual([
+        { version: 25, name: "workspace_constraints" },
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+      const afterMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(afterMarkers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      expect(beforeMarkers.length).toBe(24);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("conserva SQL, xinfo, dependencias INDEXED BY y triggers de un índice custom", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        CREATE TABLE custom_index_log (value TEXT NOT NULL);
+        CREATE INDEX custom_team_name ON teams(name);
+        CREATE INDEX custom_team_name_duplicate ON teams(name);
+        CREATE INDEX custom_project_name ON projects(name);
+        CREATE UNIQUE INDEX "Custom Team Unique"
+          ON teams((name COLLATE NOCASE), CASE WHEN name IS NULL THEN key COLLATE NOCASE ELSE name END DESC)
+          WHERE name IS NOT NULL;
+        CREATE VIEW dep_direct AS SELECT name FROM teams INDEXED BY custom_team_name;
+        CREATE VIEW dep_parenthesized AS SELECT name FROM (teams INDEXED BY custom_team_name);
+        CREATE VIEW dep_join AS
+          SELECT first.name
+            FROM teams AS first INDEXED BY custom_team_name
+            JOIN teams AS other INDEXED BY custom_team_name ON other.id = first.id;
+        CREATE VIEW dep_qualifier AS SELECT name FROM main.teams INDEXED BY custom_team_name;
+        CREATE TRIGGER dep_trigger
+        AFTER INSERT ON teams
+        BEGIN
+          INSERT INTO custom_index_log(value)
+          SELECT name FROM teams INDEXED BY custom_team_name WHERE id = NEW.id;
+        END;
+        CREATE TRIGGER dep_cross_table_trigger
+        AFTER INSERT ON teams
+        BEGIN
+          INSERT INTO custom_index_log(value)
+          SELECT name FROM projects INDEXED BY custom_project_name WHERE id = NEW.id;
+        END;
+      `);
+      const beforeIndexes = db
+        .query(
+          `SELECT name, tbl_name, sql FROM sqlite_master
+           WHERE type = 'index' AND name IN ('custom_team_name', 'custom_team_name_duplicate', 'custom_project_name', 'Custom Team Unique')
+           ORDER BY name`,
+        )
+        .all();
+      const beforeXinfo = db.query("SELECT * FROM pragma_index_xinfo('Custom Team Unique')").all();
+      const beforeDependencies = db
+        .query(
+          `SELECT type, name, tbl_name, sql FROM sqlite_master
+           WHERE name IN ('dep_direct', 'dep_parenthesized', 'dep_join', 'dep_qualifier', 'dep_trigger', 'dep_cross_table_trigger')
+           ORDER BY type, name`,
+        )
+        .all();
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            `SELECT name, tbl_name, sql FROM sqlite_master
+             WHERE type = 'index' AND name IN ('custom_team_name', 'custom_team_name_duplicate', 'custom_project_name', 'Custom Team Unique')
+             ORDER BY name`,
+          )
+          .all(),
+      ).toEqual(beforeIndexes);
+      expect(db.query("SELECT * FROM pragma_index_xinfo('Custom Team Unique')").all()).toEqual(
+        beforeXinfo,
+      );
+      expect(
+        db
+          .query(
+            `SELECT type, name, tbl_name, sql FROM sqlite_master
+             WHERE name IN ('dep_direct', 'dep_parenthesized', 'dep_join', 'dep_qualifier', 'dep_trigger', 'dep_cross_table_trigger')
+             ORDER BY type, name`,
+          )
+          .all(),
+      ).toEqual(beforeDependencies);
+      expect(db.query("SELECT count(*) AS count FROM dep_direct").get()).toEqual({ count: 0 });
+      expect(db.query("SELECT count(*) AS count FROM dep_parenthesized").get()).toEqual({
+        count: 0,
+      });
+      expect(db.query("SELECT count(*) AS count FROM dep_join").get()).toEqual({ count: 0 });
+      expect(db.query("SELECT count(*) AS count FROM dep_qualifier").get()).toEqual({ count: 0 });
+
+      db.query(
+        "INSERT INTO teams (id, name, key, created_at, updated_at) VALUES ('dep-team', 'Dep Team', 'DPT', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM custom_index_log").all()).toEqual([{ value: "Dep Team" }]);
+      migrate(db);
+      expect(db.query("SELECT value FROM custom_index_log").all()).toEqual([{ value: "Dep Team" }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("aplica el mapping determinista de un índice custom que ocupa un nombre canónico", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        CREATE INDEX main.idx_teams_workspace_key ON projects(name);
+        CREATE VIEW custom_rename_dependency AS
+          SELECT name FROM projects INDEXED BY idx_teams_workspace_key;
+        CREATE TEMP VIEW custom_rename_dependency_temp AS
+          SELECT name FROM projects INDEXED BY idx_teams_workspace_key;
+        CREATE TEMP TRIGGER custom_rename_dependency_trigger
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT name FROM projects INDEXED BY idx_teams_workspace_key;
+        END;
+      `);
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index' AND name IN ('idx_teams_workspace_key', 'idx_teams_workspace_key_legacy') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        {
+          name: "idx_teams_workspace_key",
+          tbl_name: "teams",
+          sql: "CREATE UNIQUE INDEX idx_teams_workspace_key ON teams(workspace_id, key) WHERE workspace_id IS NOT NULL",
+        },
+        {
+          name: "idx_teams_workspace_key_legacy",
+          tbl_name: "projects",
+          sql: 'CREATE INDEX "idx_teams_workspace_key_legacy" ON projects(name)',
+        },
+      ]);
+      expect(
+        db.query("SELECT sql FROM sqlite_master WHERE name = 'custom_rename_dependency'").get(),
+      ).toEqual({
+        sql: 'CREATE VIEW custom_rename_dependency AS\n          SELECT name FROM projects INDEXED BY "idx_teams_workspace_key_legacy"',
+      });
+      expect(db.query("SELECT count(*) AS count FROM custom_rename_dependency").get()).toEqual({
+        count: 0,
+      });
+      expect(db.query("SELECT count(*) AS count FROM custom_rename_dependency_temp").get()).toEqual(
+        { count: 0 },
+      );
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_temp_master WHERE type = 'trigger' AND name = 'custom_rename_dependency_trigger'",
+          )
+          .get(),
+      ).toEqual({
+        sql: `CREATE TRIGGER custom_rename_dependency_trigger
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT name FROM projects INDEXED BY "idx_teams_workspace_key_legacy";
+        END`,
+      });
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).not.toEqual(
+        beforeMarkers,
+      );
+      const after = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(after);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserva un índice MAIN y un trigger TEMP con el mismo nombre legacy", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        CREATE INDEX idx_teams_workspace_key ON projects(name);
+        CREATE TEMP TRIGGER idx_teams_workspace_key
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT 1;
+        END;
+        CREATE TEMP TRIGGER idx_teams_workspace_key_legacy
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT 1;
+        END;
+        CREATE VIEW custom_cross_type_dependency AS
+          SELECT name FROM projects INDEXED BY idx_teams_workspace_key;
+      `);
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'idx_teams_workspace_key_legacy'",
+          )
+          .all(),
+      ).toEqual([{ name: "idx_teams_workspace_key_legacy", tbl_name: "projects" }]);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_temp_master WHERE type = 'trigger' AND name = 'idx_teams_workspace_key_legacy'",
+          )
+          .all(),
+      ).toEqual([{ name: "idx_teams_workspace_key_legacy", tbl_name: "actors" }]);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_temp_master WHERE type = 'trigger' AND name = 'idx_teams_workspace_key'",
+          )
+          .all(),
+      ).toEqual([{ name: "idx_teams_workspace_key", tbl_name: "actors" }]);
+      expect(db.query("SELECT count(*) AS count FROM custom_cross_type_dependency").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla sin escribir ante una colisión MAIN/TEMP de un índice custom y permite reparar", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        CREATE INDEX custom_temp_collision ON teams(name);
+        CREATE TEMP TABLE temp_collision_table (value TEXT);
+        CREATE INDEX custom_temp_collision ON temp_collision_table(value);
+      `);
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = (): string => {
+        try {
+          migrate(db);
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+        return "migration unexpectedly succeeded";
+      };
+
+      expect(runMigration()).toMatch(/migration 0025.*MAIN index custom_temp_collision.*TEMP/i);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      db.exec("DROP INDEX temp.custom_temp_collision; DROP TABLE temp.temp_collision_table;");
+      expect(() => migrate(db)).not.toThrow();
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM pragma_index_list('teams') WHERE name = 'custom_temp_collision'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado ante dependencias INDEXED BY de índices legacy retirados por 0025", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        CREATE VIEW dependent_legacy_workspace_index AS
+          SELECT id FROM teams INDEXED BY idx_teams_workspace;
+      `);
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(
+        /migration 0025.*dependent_legacy_workspace_index.*legacy index idx_teams_workspace.*removed/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado para cada índice owner legacy retirado con INDEXED BY", () => {
+    const db = databaseWithMigrationsThrough(24);
+    const retiredIndexes: ReadonlyArray<readonly [string, string]> = [
+      ["idx_cycles_team", "cycles"],
+      ["idx_teams_workspace", "teams"],
+      ["idx_projects_workspace", "projects"],
+      ["idx_issues_workspace", "issues"],
+      ["idx_labels_workspace", "labels"],
+      ["idx_webhooks_workspace", "webhooks"],
+      ["idx_cycles_workspace", "cycles"],
+      ["idx_reviews_workspace", "reviews"],
+      ["idx_initiatives_workspace", "initiatives"],
+      ["idx_project_updates_workspace", "project_updates"],
+      ["idx_actor_invitations_workspace", "actor_invitations"],
+    ];
+    try {
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      for (const [indexName, table] of retiredIndexes) {
+        const viewName = `dependent_retired_${indexName}`;
+        db.exec(
+          `CREATE VIEW ${quoteTestIdentifier(viewName)} AS ` +
+            `SELECT id FROM ${quoteTestIdentifier(table)} INDEXED BY ${quoteTestIdentifier(indexName)}`,
+        );
+      }
+      for (const [indexName] of retiredIndexes) {
+        const viewName = `dependent_retired_${indexName}`;
+        expect(() => migrate(db)).toThrow(
+          new RegExp(`migration 0025.*${viewName}.*legacy index ${indexName}.*removed`, "i"),
+        );
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(
+          db
+            .query("SELECT name FROM sqlite_master WHERE type = 'view' AND name = ?1")
+            .get(viewName),
+        ).toEqual({ name: viewName });
+        db.exec(`DROP VIEW ${quoteTestIdentifier(viewName)}`);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado ante dependencias INDEXED BY de autoíndices en tablas reconstruidas", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      const autoIndex = String(
+        db
+          .query(
+            "SELECT name FROM pragma_index_list('workflow_states') WHERE origin = 'u' ORDER BY seq LIMIT 1",
+          )
+          .values()[0]?.[0] ?? "",
+      );
+      expect(autoIndex).toMatch(/^sqlite_autoindex_workflow_states_/);
+      db.exec(
+        `CREATE VIEW dependent_autoindex AS
+         SELECT id FROM workflow_states INDEXED BY ${quoteTestIdentifier(autoIndex)}`,
+      );
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(
+        new RegExp(`migration 0025.*dependent_autoindex.*autoindex.*${autoIndex}`, "i"),
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado si un índice custom usa un nombre de tabla staging de 0025", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec("CREATE INDEX _prb25_teams ON actors(name)");
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(
+        /migration 0025.*custom index _prb25_teams on actors.*reserved staging name/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
     } finally {
       db.close();
     }
