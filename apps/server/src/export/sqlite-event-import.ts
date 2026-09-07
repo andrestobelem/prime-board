@@ -43,6 +43,9 @@ interface ActivityRow {
   readonly activity_workspace_id: string | null;
   readonly issue_workspace_id: string | null;
   readonly team_workspace_id: string | null;
+  /** IDs de Activity, aunque un JOIN acotado no encuentre el padre. */
+  readonly source_issue_id: string | null;
+  readonly source_actor_id: string | null;
   readonly type: string;
   readonly payload: string;
   readonly occurred_at: string;
@@ -51,6 +54,71 @@ interface ActivityRow {
 interface ResolvedTable {
   readonly canonicalName: string;
   readonly physicalName: string;
+}
+
+type SourceRow = Record<string, unknown>;
+
+interface SourceTable {
+  readonly table: ResolvedTable | undefined;
+  readonly rows: readonly SourceRow[];
+  readonly rowsById: ReadonlyMap<string, readonly SourceRow[]>;
+  readonly workspaceLookup: SQLiteColumnLookup;
+  readonly malformed: number;
+}
+
+const SCOPED_REFERENCE_TABLES = [
+  "activity",
+  "actors",
+  "teams",
+  "issues",
+  "workflow_states",
+  "projects",
+  "project_teams",
+  "milestones",
+  "cycles",
+  "labels",
+  "issue_labels",
+  "issue_relations",
+  "comments",
+  "team_memberships",
+  "initiatives",
+  "initiative_projects",
+  "initiative_teams",
+  "project_updates",
+  "reviews",
+  "issue_subscribers",
+  "saved_views",
+] as const;
+
+type ScopedReferenceTable = (typeof SCOPED_REFERENCE_TABLES)[number];
+
+type WorkspaceObservation =
+  | {
+      readonly kind: "value";
+      readonly table: ScopedReferenceTable;
+      readonly workspaceId: string;
+      readonly id: string | undefined;
+    }
+  | {
+      readonly kind: "unknown";
+      readonly table: ScopedReferenceTable;
+      readonly id: string | undefined;
+      readonly reason: "absent" | "null";
+    }
+  | {
+      readonly kind: "invalid";
+      readonly table: ScopedReferenceTable;
+      readonly id: string | undefined;
+    };
+
+interface ActivityScopeEvidence {
+  readonly observations: readonly WorkspaceObservation[];
+  readonly missingReference: boolean;
+  readonly ambiguousReference: boolean;
+  readonly hasScopedObservation: boolean;
+  readonly directActivityWorkspaceId: string | undefined;
+  readonly rootIssueId: string | undefined;
+  readonly actorWorkspaceRefs: readonly ReadonlySet<string>[];
 }
 
 type WorkspaceMembershipMetadataState = "found" | "missing" | "ambiguous" | "invalid";
@@ -63,8 +131,10 @@ interface WorkspaceMembershipMetadata {
   readonly workspaceIds: ReadonlySet<string>;
 }
 
-type ActorScopeDecision =
-  { readonly kind: "membership" } | { readonly kind: "legacy" } | { readonly kind: "ambiguous" };
+interface ActorWorkspaceIndex {
+  readonly workspaceMembershipMetadata: WorkspaceMembershipMetadata;
+  readonly actorWorkspaceIds: ReadonlyMap<string, ReadonlySet<string>>;
+}
 
 interface ImportScope {
   readonly workspaceId: string | undefined;
@@ -84,6 +154,7 @@ interface ImportScope {
   readonly hasWorkspaceTable: boolean;
   /** Workspace, Membership o columnas de alcance prueban que no es legacy puro. */
   readonly hasScopedMetadata: boolean;
+  readonly scopedTables: ReadonlyMap<ScopedReferenceTable, SourceTable>;
   readonly workspaceMembershipMetadata: WorkspaceMembershipMetadata;
   readonly actorWorkspaceIds: ReadonlyMap<string, ReadonlySet<string>>;
 }
@@ -158,6 +229,8 @@ function normalizedActivityRow(value: unknown): ActivityRow | undefined {
   const actor = nullableTextValue(row.actor);
   const issueId = nullableTextValue(row.issue_id);
   const teamId = nullableTextValue(row.team_id);
+  const sourceIssueId = nullableTextValue(row.source_issue_id);
+  const sourceActorId = nullableTextValue(row.source_actor_id);
   const activityWorkspaceId = nullableTextValue(row.activity_workspace_id);
   const issueWorkspaceId = nullableTextValue(row.issue_workspace_id);
   const teamWorkspaceId = nullableTextValue(row.team_workspace_id);
@@ -173,7 +246,9 @@ function normalizedActivityRow(value: unknown): ActivityRow | undefined {
     teamId === undefined ||
     activityWorkspaceId === undefined ||
     issueWorkspaceId === undefined ||
-    teamWorkspaceId === undefined
+    teamWorkspaceId === undefined ||
+    sourceIssueId === undefined ||
+    sourceActorId === undefined
   ) {
     return undefined;
   }
@@ -187,15 +262,596 @@ function normalizedActivityRow(value: unknown): ActivityRow | undefined {
     activity_workspace_id: activityWorkspaceId,
     issue_workspace_id: issueWorkspaceId,
     team_workspace_id: teamWorkspaceId,
+    source_issue_id: sourceIssueId,
+    source_actor_id: sourceActorId,
     type,
     payload,
     occurred_at: occurredAt,
   };
 }
 
-interface ActorWorkspaceIndex {
-  readonly workspaceMembershipMetadata: WorkspaceMembershipMetadata;
-  readonly actorWorkspaceIds: ReadonlyMap<string, ReadonlySet<string>>;
+function readSourceTable(db: Database, table: ResolvedTable | undefined): SourceTable {
+  if (table === undefined) {
+    return {
+      table: undefined,
+      rows: [],
+      rowsById: new Map(),
+      workspaceLookup: { kind: "missing" },
+      malformed: 0,
+    };
+  }
+  const values = db
+    .query(`SELECT * FROM ${quoteSqliteIdentifier(table.physicalName)}`)
+    .all() as unknown[];
+  const rows: SourceRow[] = [];
+  let malformed = 0;
+  for (const value of values) {
+    const row = normalizeSqliteResultRow(value);
+    if (row === undefined) malformed += 1;
+    else rows.push(row);
+  }
+  const rowsById = new Map<string, SourceRow[]>();
+  for (const row of rows) {
+    const id = textValue(row.id);
+    if (id === undefined) continue;
+    const matches = rowsById.get(id) ?? [];
+    matches.push(row);
+    rowsById.set(id, matches);
+  }
+  return {
+    table,
+    rows,
+    rowsById,
+    workspaceLookup: sqliteColumnName(db, table.physicalName, "workspace_id"),
+    malformed,
+  };
+}
+
+function readScopedTables(
+  db: Database,
+  tables: ReadonlyMap<ScopedReferenceTable, ResolvedTable | undefined>,
+): ReadonlyMap<ScopedReferenceTable, SourceTable> {
+  return new Map(
+    SCOPED_REFERENCE_TABLES.map((name) => [name, readSourceTable(db, tables.get(name))]),
+  );
+}
+
+function sourceRows(
+  scope: ImportScope,
+  table: ScopedReferenceTable,
+  id: string,
+): readonly SourceRow[] {
+  return scope.scopedTables.get(table)?.rowsById.get(id) ?? [];
+}
+
+function sourceTable(scope: ImportScope, table: ScopedReferenceTable): SourceTable {
+  return (
+    scope.scopedTables.get(table) ?? {
+      table: undefined,
+      rows: [],
+      rowsById: new Map(),
+      workspaceLookup: { kind: "missing" },
+      malformed: 0,
+    }
+  );
+}
+
+type DirectWorkspace =
+  | { readonly kind: "absent" }
+  | { readonly kind: "null" }
+  | { readonly kind: "value"; readonly workspaceId: string }
+  | { readonly kind: "invalid" };
+
+function directWorkspace(row: SourceRow, source: SourceTable): DirectWorkspace {
+  if (source.table === undefined || source.workspaceLookup.kind === "missing") {
+    return { kind: "absent" };
+  }
+  if (source.workspaceLookup.kind === "ambiguous" || source.workspaceLookup.kind === "invalid") {
+    return { kind: "invalid" };
+  }
+  const value = row[source.workspaceLookup.name.toLowerCase()];
+  if (value === null || value === undefined) return { kind: "null" };
+  const workspaceId = textValue(value);
+  return workspaceId === undefined ? { kind: "invalid" } : { kind: "value", workspaceId };
+}
+
+function addWorkspaceObservation(
+  observations: WorkspaceObservation[],
+  table: ScopedReferenceTable,
+  row: SourceRow,
+  source: SourceTable,
+): DirectWorkspace {
+  const id = textValue(row.id);
+  const direct = directWorkspace(row, source);
+  if (direct.kind === "value")
+    observations.push({ kind: "value", table, workspaceId: direct.workspaceId, id });
+  else if (direct.kind === "null" || direct.kind === "absent")
+    observations.push({ kind: "unknown", table, id, reason: direct.kind });
+  else observations.push({ kind: "invalid", table, id });
+  return direct;
+}
+
+function addReferencedRows(
+  scope: ImportScope,
+  observations: WorkspaceObservation[],
+  queue: Array<{ readonly table: ScopedReferenceTable; readonly row: SourceRow }>,
+  table: ScopedReferenceTable,
+  id: string | undefined,
+  required: boolean,
+  missing: { value: boolean },
+  ambiguous: { value: boolean },
+): void {
+  if (id === undefined) {
+    if (required) {
+      missing.value = true;
+    }
+    return;
+  }
+  const source = sourceTable(scope, table);
+  if (source.table === undefined) {
+    missing.value = true;
+    return;
+  }
+  const rows = source.rowsById.get(id) ?? [];
+  if (rows.length === 0) {
+    missing.value = true;
+    return;
+  }
+  if (rows.length > 1) {
+    ambiguous.value = true;
+    return;
+  }
+  const row = rows[0];
+  if (row === undefined) {
+    missing.value = true;
+    return;
+  }
+  addWorkspaceObservation(observations, table, row, source);
+  queue.push({ table, row });
+}
+
+function textReference(row: SourceRow, field: string): string | undefined {
+  const value = row[field];
+  return value === null || value === undefined ? undefined : textValue(value);
+}
+
+type RowReference = readonly [field: string, table: ScopedReferenceTable, required: boolean];
+
+const ROW_REFERENCES: Partial<Record<ScopedReferenceTable, readonly RowReference[]>> = {
+  teams: [["default_state_id", "workflow_states", false]],
+  workflow_states: [["team_id", "teams", true]],
+  projects: [],
+  project_teams: [
+    ["project_id", "projects", true],
+    ["team_id", "teams", true],
+  ],
+  milestones: [["project_id", "projects", true]],
+  cycles: [["team_id", "teams", true]],
+  issues: [
+    ["team_id", "teams", true],
+    ["state_id", "workflow_states", false],
+    ["parent_id", "issues", false],
+    ["project_id", "projects", false],
+    ["milestone_id", "milestones", false],
+    ["cycle_id", "cycles", false],
+  ],
+  labels: [["team_id", "teams", false]],
+  issue_labels: [
+    ["issue_id", "issues", true],
+    ["label_id", "labels", true],
+  ],
+  issue_relations: [
+    ["issue_id", "issues", true],
+    ["related_id", "issues", true],
+  ],
+  comments: [["issue_id", "issues", true]],
+  team_memberships: [["team_id", "teams", true]],
+  initiatives: [],
+  initiative_projects: [
+    ["initiative_id", "initiatives", true],
+    ["project_id", "projects", true],
+  ],
+  initiative_teams: [
+    ["initiative_id", "initiatives", true],
+    ["team_id", "teams", true],
+  ],
+  project_updates: [["project_id", "projects", true]],
+  reviews: [["issue_id", "issues", true]],
+  issue_subscribers: [["issue_id", "issues", true]],
+};
+
+type ActorReference = readonly [field: string, required: boolean];
+
+const ACTOR_REFERENCES: Partial<Record<ScopedReferenceTable, readonly ActorReference[]>> = {
+  issues: [
+    ["assignee_id", false],
+    ["creator_id", true],
+  ],
+  projects: [["lead_id", false]],
+  initiatives: [["owner_id", false]],
+  comments: [["actor_id", true]],
+  team_memberships: [["actor_id", true]],
+  project_updates: [["author_id", true]],
+  reviews: [
+    ["requester_id", true],
+    ["reviewer_id", true],
+  ],
+  issue_subscribers: [["actor_id", true]],
+  saved_views: [["owner_id", true]],
+};
+
+interface RelationLink {
+  readonly relationTable:
+    | "project_teams"
+    | "issue_relations"
+    | "issue_labels"
+    | "team_memberships"
+    | "initiative_projects"
+    | "initiative_teams"
+    | "project_updates"
+    | "reviews"
+    | "issue_subscribers"
+    | "comments";
+  readonly sourceTable: ScopedReferenceTable;
+  readonly field: string;
+}
+
+const RELATION_LINKS: readonly RelationLink[] = [
+  { relationTable: "project_teams", sourceTable: "projects", field: "project_id" },
+  { relationTable: "project_teams", sourceTable: "teams", field: "team_id" },
+  { relationTable: "initiative_projects", sourceTable: "projects", field: "project_id" },
+  { relationTable: "initiative_projects", sourceTable: "initiatives", field: "initiative_id" },
+  { relationTable: "initiative_teams", sourceTable: "teams", field: "team_id" },
+  { relationTable: "initiative_teams", sourceTable: "initiatives", field: "initiative_id" },
+  { relationTable: "project_updates", sourceTable: "projects", field: "project_id" },
+  { relationTable: "issue_relations", sourceTable: "issues", field: "issue_id" },
+  { relationTable: "issue_relations", sourceTable: "issues", field: "related_id" },
+  { relationTable: "issue_labels", sourceTable: "issues", field: "issue_id" },
+  { relationTable: "comments", sourceTable: "issues", field: "issue_id" },
+  { relationTable: "reviews", sourceTable: "issues", field: "issue_id" },
+  { relationTable: "issue_subscribers", sourceTable: "issues", field: "issue_id" },
+  { relationTable: "team_memberships", sourceTable: "teams", field: "team_id" },
+];
+
+function referencedId(
+  row: SourceRow,
+  field: string,
+  required: boolean,
+  missing: { value: boolean },
+  ambiguous: { value: boolean },
+): string | undefined {
+  if (!Object.prototype.hasOwnProperty.call(row, field)) {
+    if (required) missing.value = true;
+    return undefined;
+  }
+  const value = row[field];
+  if (value === null || value === undefined) {
+    if (required) missing.value = true;
+    return undefined;
+  }
+  const id = textValue(value);
+  if (id === undefined) ambiguous.value = true;
+  return id;
+}
+
+function addActorReference(
+  scope: ImportScope,
+  observations: WorkspaceObservation[],
+  id: string | undefined,
+  missing: { value: boolean },
+  ambiguous: { value: boolean },
+  actorWorkspaceRefs: Array<ReadonlySet<string>>,
+): void {
+  if (id === undefined) {
+    missing.value = true;
+    return;
+  }
+  const source = sourceTable(scope, "actors");
+  if (source.table === undefined) {
+    missing.value = true;
+    return;
+  }
+  const rows = source.rowsById.get(id) ?? [];
+  if (rows.length === 0) {
+    missing.value = true;
+    return;
+  }
+  if (rows.length > 1) {
+    ambiguous.value = true;
+    return;
+  }
+  const actor = rows[0];
+  if (actor === undefined) {
+    missing.value = true;
+    return;
+  }
+  // Actor es una identidad global. Su columna legacy de Workspace no es una
+  // prueba de pertenencia, porque un Actor puede pertenecer a varios Workspaces.
+  // La Membership sigue siendo la autoridad y se valida aparte.
+  const membershipState = scope.workspaceMembershipMetadata.state;
+  if (membershipState === "ambiguous" || membershipState === "invalid") {
+    ambiguous.value = true;
+    return;
+  }
+  if (membershipState === "missing") {
+    const missingMembershipMetadata =
+      scope.multipleWorkspaces ||
+      scope.workspaceMembershipMetadata.tablePresent ||
+      (!scope.hasWorkspaceTable && scope.hasScopedMetadata);
+    if (missingMembershipMetadata) ambiguous.value = true;
+    return;
+  }
+  const workspaces = scope.actorWorkspaceIds.get(id);
+  if (workspaces === undefined || workspaces.size === 0) {
+    missing.value = true;
+    return;
+  }
+  actorWorkspaceRefs.push(workspaces);
+}
+
+function addActorFieldReference(
+  scope: ImportScope,
+  observations: WorkspaceObservation[],
+  row: SourceRow,
+  field: string,
+  required: boolean,
+  missing: { value: boolean },
+  ambiguous: { value: boolean },
+  actorWorkspaceRefs: Array<ReadonlySet<string>>,
+): void {
+  // Las columnas históricas pueden no existir. Una columna existente con NULL,
+  // en cambio, no prueba la relación cuando el contrato la exige.
+  if (!Object.prototype.hasOwnProperty.call(row, field)) return;
+  const id = referencedId(row, field, required, missing, ambiguous);
+  if (id !== undefined) {
+    addActorReference(scope, observations, id, missing, ambiguous, actorWorkspaceRefs);
+  }
+}
+
+function collectActivityScopeEvidence(scope: ImportScope, row: ActivityRow): ActivityScopeEvidence {
+  const observations: WorkspaceObservation[] = [];
+  const missing = { value: false };
+  const ambiguous = { value: false };
+  const actorWorkspaceRefs: Array<ReadonlySet<string>> = [];
+  const visited = new Set<SourceRow>();
+  const queue: Array<{ readonly table: ScopedReferenceTable; readonly row: SourceRow }> = [];
+  let directActivityWorkspaceId: string | undefined;
+  const activityMatches = sourceRows(scope, "activity", row.id);
+  if (activityMatches.length > 1) {
+    ambiguous.value = true;
+  } else if (activityMatches.length === 1) {
+    const activity = activityMatches[0];
+    if (activity === undefined) {
+      ambiguous.value = true;
+    } else {
+      const direct = addWorkspaceObservation(
+        observations,
+        "activity",
+        activity,
+        sourceTable(scope, "activity"),
+      );
+      if (direct.kind === "value") directActivityWorkspaceId = direct.workspaceId;
+      const issueId = referencedId(activity, "issue_id", true, missing, ambiguous);
+      if (issueId !== undefined) {
+        addReferencedRows(scope, observations, queue, "issues", issueId, true, missing, ambiguous);
+      }
+    }
+  } else if (scope.activityHasWorkspace) {
+    const syntheticActivity: SourceRow = {
+      id: row.id,
+      workspace_id: row.activity_workspace_id,
+    };
+    const direct = addWorkspaceObservation(
+      observations,
+      "activity",
+      syntheticActivity,
+      sourceTable(scope, "activity"),
+    );
+    if (direct.kind === "value") directActivityWorkspaceId = direct.workspaceId;
+    if (row.source_issue_id === null) missing.value = true;
+    else {
+      addReferencedRows(
+        scope,
+        observations,
+        queue,
+        "issues",
+        row.source_issue_id,
+        true,
+        missing,
+        ambiguous,
+      );
+    }
+  } else if (row.source_issue_id === null) {
+    missing.value = true;
+  } else {
+    addReferencedRows(
+      scope,
+      observations,
+      queue,
+      "issues",
+      row.source_issue_id,
+      true,
+      missing,
+      ambiguous,
+    );
+  }
+
+  if (row.source_actor_id === null) {
+    missing.value = true;
+  } else {
+    addActorReference(
+      scope,
+      observations,
+      row.source_actor_id,
+      missing,
+      ambiguous,
+      actorWorkspaceRefs,
+    );
+  }
+
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (item === undefined || visited.has(item.row)) continue;
+    visited.add(item.row);
+    const { table, row: sourceRow } = item;
+    for (const [field, targetTable, required] of ROW_REFERENCES[table] ?? []) {
+      const reference = referencedId(sourceRow, field, required, missing, ambiguous);
+      if (reference !== undefined) {
+        addReferencedRows(
+          scope,
+          observations,
+          queue,
+          targetTable,
+          reference,
+          required,
+          missing,
+          ambiguous,
+        );
+      }
+    }
+    for (const [field, required] of ACTOR_REFERENCES[table] ?? []) {
+      addActorFieldReference(
+        scope,
+        observations,
+        sourceRow,
+        field,
+        required,
+        missing,
+        ambiguous,
+        actorWorkspaceRefs,
+      );
+    }
+    const id = textValue(sourceRow.id);
+    if (id === undefined) continue;
+    for (const link of RELATION_LINKS) {
+      if (link.sourceTable !== table) continue;
+      const relationSource = sourceTable(scope, link.relationTable);
+      for (const relation of relationSource.rows) {
+        if (textReference(relation, link.field) !== id) continue;
+        addWorkspaceObservation(observations, link.relationTable, relation, relationSource);
+        queue.push({ table: link.relationTable, row: relation });
+      }
+    }
+  }
+
+  return {
+    observations,
+    missingReference: missing.value,
+    ambiguousReference: ambiguous.value,
+    hasScopedObservation:
+      observations.some(
+        (observation) =>
+          scope.scopedTables.get(observation.table)?.workspaceLookup.kind === "found",
+      ) ||
+      observations.some(
+        (observation) =>
+          observation.kind === "unknown" &&
+          observation.table === "issues" &&
+          observation.id !== (row.source_issue_id ?? undefined),
+      ) ||
+      (scope.workspaceMembershipMetadata.tablePresent &&
+        observations.some(
+          (observation) =>
+            observation.kind === "unknown" &&
+            observation.table !== "activity" &&
+            observation.table !== "issues" &&
+            observation.table !== "teams",
+        )),
+    directActivityWorkspaceId,
+    rootIssueId: row.source_issue_id ?? undefined,
+    actorWorkspaceRefs,
+  };
+}
+
+type ActivityScopeDecision =
+  | { readonly kind: "valid"; readonly workspaceId: string | undefined }
+  | { readonly kind: "orphaned" }
+  | { readonly kind: "outOfScope" }
+  | { readonly kind: "ambiguous" };
+
+function activityScopeDecision(row: ActivityRow, scope: ImportScope): ActivityScopeDecision {
+  const evidence = collectActivityScopeEvidence(scope, row);
+  if (evidence.ambiguousReference) return { kind: "ambiguous" };
+  if (evidence.missingReference) {
+    return { kind: "orphaned" };
+  }
+  if (evidence.observations.some((observation) => observation.kind === "invalid")) {
+    return { kind: "ambiguous" };
+  }
+
+  const workspaceIds = new Set(
+    evidence.observations
+      .filter(
+        (observation): observation is Extract<WorkspaceObservation, { kind: "value" }> =>
+          observation.kind === "value",
+      )
+      .map((observation) => observation.workspaceId),
+  );
+  for (const workspaceId of workspaceIds) {
+    if (!scope.workspaceIds.has(workspaceId)) return { kind: "orphaned" };
+  }
+  if (workspaceIds.size > 1) return { kind: "orphaned" };
+
+  const unknown = evidence.observations.filter(
+    (observation): observation is Extract<WorkspaceObservation, { kind: "unknown" }> =>
+      observation.kind === "unknown",
+  );
+  const unknownIssueReferences = unknown.filter((observation) => observation.table === "issues");
+  const hasUnknownRootIssue = unknownIssueReferences.some(
+    (observation) => observation.id === evidence.rootIssueId,
+  );
+  const hasUnknownNonRootIssue = unknownIssueReferences.some(
+    (observation) => observation.id !== evidence.rootIssueId,
+  );
+  const hasUnknownParent = unknown.some((observation) => observation.table !== "issues");
+  const hasUnprovenScope =
+    hasUnknownParent ||
+    hasUnknownNonRootIssue ||
+    (unknownIssueReferences.length > 0 && !hasUnknownRootIssue);
+  if (scope.multipleWorkspaces && unknown.some((observation) => observation.reason === "null")) {
+    return { kind: "orphaned" };
+  }
+
+  const candidate = [...workspaceIds][0];
+  if (candidate !== undefined) {
+    if (scope.workspaceId !== undefined && candidate !== scope.workspaceId) {
+      // Un scope seleccionado de Activity con un padre distinto indica una
+      // relación corrupta, no una fila normal fuera de alcance.
+      if (evidence.directActivityWorkspaceId === scope.workspaceId) {
+        return { kind: "orphaned" };
+      }
+      return { kind: "outOfScope" };
+    }
+    for (const actorWorkspaces of evidence.actorWorkspaceRefs) {
+      if (!actorWorkspaces.has(candidate)) return { kind: "orphaned" };
+    }
+    if (hasUnprovenScope && !(scope.hasWorkspaceTable && !scope.multipleWorkspaces)) {
+      return { kind: scope.multipleWorkspaces ? "orphaned" : "ambiguous" };
+    }
+    return { kind: "valid", workspaceId: candidate };
+  }
+
+  if (scope.workspaceId !== undefined) {
+    for (const actorWorkspaces of evidence.actorWorkspaceRefs) {
+      if (!actorWorkspaces.has(scope.workspaceId)) return { kind: "outOfScope" };
+    }
+  }
+  if (!evidence.hasScopedObservation) {
+    // Una Membership única puede conservar la inferencia legacy. Varias
+    // Memberships no demuestran cuál era el Workspace del evento si no existe
+    // una observación directa en Activity o en sus padres.
+    if (evidence.actorWorkspaceRefs.some((workspaces) => workspaces.size > 1)) {
+      return { kind: "ambiguous" };
+    }
+    return {
+      kind: "valid",
+      workspaceId: scope.hasWorkspaceTable ? scope.workspaceId : undefined,
+    };
+  }
+  if (scope.hasWorkspaceTable && !scope.multipleWorkspaces) {
+    return { kind: "valid", workspaceId: scope.workspaceId };
+  }
+  return { kind: scope.multipleWorkspaces ? "orphaned" : "ambiguous" };
 }
 
 function actorWorkspaceIndexes(
@@ -222,10 +878,21 @@ function actorWorkspaceIndexes(
   });
   const actorLookup = sqliteColumnName(db, membershipsTable.physicalName, "actor_id");
   const workspaceLookup = sqliteColumnName(db, membershipsTable.physicalName, "workspace_id");
-  if (actorLookup.kind === "invalid" || workspaceLookup.kind === "invalid") return empty("invalid");
-  if (actorLookup.kind === "ambiguous" || workspaceLookup.kind === "ambiguous")
+  if (actorLookup.kind === "invalid" || workspaceLookup.kind === "invalid") {
+    return empty("invalid");
+  }
+  if (actorLookup.kind === "ambiguous" || workspaceLookup.kind === "ambiguous") {
     return empty("ambiguous");
-  if (actorLookup.kind === "missing" || workspaceLookup.kind === "missing") return empty("missing");
+  }
+  if (actorLookup.kind === "missing" || workspaceLookup.kind === "missing") {
+    return empty("missing");
+  }
+  const rawRows = db
+    .query(`SELECT * FROM ${quoteSqliteIdentifier(membershipsTable.physicalName)}`)
+    .all() as unknown[];
+  if (rawRows.some((value) => normalizeSqliteResultRow(value) === undefined)) {
+    return empty("invalid");
+  }
   const rows = db
     .query(
       `SELECT ${quoteSqliteIdentifier(actorLookup.name)} AS actor_id, ${quoteSqliteIdentifier(workspaceLookup.name)} AS workspace_id FROM ${quoteSqliteIdentifier(membershipsTable.physicalName)}`,
@@ -238,8 +905,8 @@ function actorWorkspaceIndexes(
     if (row === undefined) return empty("invalid");
     const actorId = textValue(row.actor_id);
     const workspaceId = textValue(row.workspace_id);
-    // Una fila incompleta no demuestra una pertenencia. No construyas un
-    // mapa parcial ni uses luego el scope directo de Activity como fallback.
+    // Una fila NULL o vacía no prueba ninguna pertenencia. No construyas un
+    // mapa parcial ni recurras al singleton legacy cuando existe la tabla.
     if (actorId === undefined || workspaceId === undefined) return empty("invalid");
     const workspaces = result.get(actorId) ?? new Set<string>();
     workspaces.add(workspaceId);
@@ -265,27 +932,6 @@ function validateRequestedWorkspace(workspaceId: string | undefined): void {
   }
 }
 
-function hasScopedWorkspaceColumns(
-  db: Database,
-  tables: readonly (ResolvedTable | undefined)[],
-): boolean {
-  return tables.some(
-    (table) => table !== undefined && columnLookup(db, table, "workspace_id").kind !== "missing",
-  );
-}
-
-/**
- * Share the Actor metadata policy with every low-level Activity decision.
- * A present but incomplete Membership table is never the legacy fallback.
- */
-function actorScopeDecision(scope: ImportScope): ActorScopeDecision {
-  const metadata = scope.workspaceMembershipMetadata;
-  if (metadata.state === "found") return { kind: "membership" };
-  if (metadata.tablePresent || metadata.state !== "missing") return { kind: "ambiguous" };
-  if (!scope.hasWorkspaceTable && scope.hasScopedMetadata) return { kind: "ambiguous" };
-  return { kind: "legacy" };
-}
-
 function resolveImportScope(db: Database, requestedWorkspaceId: string | undefined): ImportScope {
   validateRequestedWorkspace(requestedWorkspaceId);
   const workspaceTable = resolveTable(db, "workspace");
@@ -294,16 +940,26 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
   const teamTable = resolveTable(db, "teams");
   const actorTable = resolveTable(db, "actors");
   const membershipsTable = resolveTable(db, "workspace_memberships");
+  const resolvedScopedTables = new Map<ScopedReferenceTable, ResolvedTable | undefined>(
+    SCOPED_REFERENCE_TABLES.map((name) => {
+      if (name === "activity") return [name, activityTable];
+      if (name === "issues") return [name, issueTable];
+      if (name === "teams") return [name, teamTable];
+      if (name === "actors") return [name, actorTable];
+      return [name, resolveTable(db, name)];
+    }),
+  );
+  const scopedTables = readScopedTables(db, resolvedScopedTables);
   const actorWorkspaceIndex = actorWorkspaceIndexes(db, membershipsTable);
-  const membershipMetadata = actorWorkspaceIndex.workspaceMembershipMetadata;
+  let membershipMetadata = actorWorkspaceIndex.workspaceMembershipMetadata;
   const hasScopedMetadata =
     workspaceTable !== undefined ||
     membershipMetadata.tablePresent ||
-    hasScopedWorkspaceColumns(db, [activityTable, issueTable, teamTable, actorTable]);
+    [...scopedTables.values()].some((source) => source.workspaceLookup.kind !== "missing");
   if (
     requestedWorkspaceId !== undefined &&
     workspaceTable === undefined &&
-    membershipMetadata.state !== "found" &&
+    !membershipMetadata.tablePresent &&
     hasScopedMetadata
   ) {
     throw new Error(
@@ -338,12 +994,22 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
       workspaceIds.push(id);
     }
   } else if (membershipMetadata.state === "found") {
-    // Memberships can demonstrate the topology before the Workspace table is
-    // present in a legacy SQLite snapshot.
+    // Una fuente sin tabla Workspace puede demostrar su topología con las
+    // referencias completas de sus Memberships.
     workspaceIds.push(...membershipMetadata.workspaceIds);
   }
   if (workspaceTable !== undefined && workspaceIds.length === 0) {
     throw new Error("SQLite event import requires at least one Workspace");
+  }
+  if (
+    workspaceTable !== undefined &&
+    membershipMetadata.state === "found" &&
+    [...membershipMetadata.workspaceIds].some((id) => !workspaceIds.includes(id))
+  ) {
+    membershipMetadata = {
+      ...membershipMetadata,
+      state: "invalid",
+    };
   }
   const multipleWorkspaces = workspaceIds.length > 1;
   if (multipleWorkspaces && requestedWorkspaceId === undefined) {
@@ -367,17 +1033,20 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
     ["issues", issueWorkspaceLookup],
     ["teams", teamWorkspaceLookup],
   ] as const;
-  const scopedTables = [
-    ["activity", activityTable],
-    ["issues", issueTable],
-    ["teams", teamTable],
-    ["actors", actorTable],
-  ] as const;
-  const ambiguousTables: string[] = scopedTables
+  const scopedEntityTables = SCOPED_REFERENCE_TABLES.map(
+    (table) => [table, scopedTables.get(table)?.table] as const,
+  );
+  const ambiguousTables: string[] = scopedEntityTables
     .filter(([, table]) => hasAmbiguousTableMetadata(db, table))
     .map(([table]) => table);
   for (const [table, lookup] of workspaceColumnLookups) {
     if (isAmbiguousColumn(lookup) && !ambiguousTables.includes(table)) {
+      ambiguousTables.push(table);
+    }
+  }
+  for (const table of SCOPED_REFERENCE_TABLES) {
+    const lookup = scopedTables.get(table)?.workspaceLookup;
+    if (lookup !== undefined && isAmbiguousColumn(lookup) && !ambiguousTables.includes(table)) {
       ambiguousTables.push(table);
     }
   }
@@ -386,6 +1055,9 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
       `SQLite event import rejected ambiguous column metadata on ${ambiguousTables.join(", ")}`,
     );
   }
+  // Una topología inferida desde Memberships puede clasificar las filas por
+  // Actor aunque las tablas legacy aún no tengan workspace_id. La exigencia de
+  // columnas directas se conserva para una tabla Workspace multi-Workspace.
   if (
     workspaceTable !== undefined &&
     multipleWorkspaces &&
@@ -396,14 +1068,7 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
     );
   }
 
-  if (
-    hasAmbiguousTableMetadata(db, membershipsTable) &&
-    !ambiguousTables.includes("workspace_memberships")
-  ) {
-    ambiguousTables.push("workspace_memberships");
-  }
   const uniqueAmbiguousTables = [...new Set(ambiguousTables)];
-
   return {
     workspaceId: requestedWorkspaceId ?? workspaceIds[0],
     workspaceIds: new Set(workspaceIds),
@@ -421,6 +1086,7 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
     actorTable,
     hasWorkspaceTable: workspaceTable !== undefined,
     hasScopedMetadata,
+    scopedTables,
     workspaceMembershipMetadata: membershipMetadata,
     actorWorkspaceIds:
       uniqueAmbiguousTables.length > 0 ? new Map() : actorWorkspaceIndex.actorWorkspaceIds,
@@ -483,6 +1149,8 @@ function activityQuery(scope: ImportScope): string {
                  actors.name AS actor,
                  issues.id AS issue_id,
                  teams.id AS team_id,
+                 activity.issue_id AS source_issue_id,
+                 activity.actor_id AS source_actor_id,
                  ${activityWorkspace},
                  ${issueWorkspace},
                  ${teamWorkspace},
@@ -596,71 +1264,16 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
       warning(warnings, "rejected", "unknown");
       continue;
     }
-    const rowWorkspaceId =
-      row.activity_workspace_id ?? row.issue_workspace_id ?? row.team_workspace_id;
-    if (rowWorkspaceId !== undefined && rowWorkspaceId !== null) {
-      if (!scope.workspaceIds.has(rowWorkspaceId)) {
-        orphaned += 1;
-        warning(warnings, "orphaned", row.id);
-        continue;
-      }
-      if (scope.workspaceId !== undefined && rowWorkspaceId !== scope.workspaceId) {
-        outOfScope += 1;
-        warning(warnings, "out_of_scope", row.id);
-        continue;
-      }
-    }
-    if (scope.hasWorkspaceTable && scope.multipleWorkspaces && row.activity_workspace_id == null) {
-      orphaned += 1;
-      warning(warnings, "orphaned", row.id);
+    const scopeDecision = activityScopeDecision(row, scope);
+    if (scopeDecision.kind !== "valid") {
+      const finding = scopeDecision.kind;
+      if (finding === "orphaned") orphaned += 1;
+      else if (finding === "outOfScope") outOfScope += 1;
+      else ambiguous += 1;
+      warning(warnings, finding === "outOfScope" ? "out_of_scope" : finding, row.id);
       continue;
     }
-
-    const actorPolicy = actorScopeDecision(scope);
-    if (actorPolicy.kind === "ambiguous") {
-      // A present but incomplete Membership table cannot authorize an Actor
-      // from Activity's direct workspace_id.
-      ambiguous += 1;
-      warning(warnings, "ambiguous", row.id);
-      continue;
-    }
-    const actorWorkspaces = row.actor_id ? scope.actorWorkspaceIds.get(row.actor_id) : undefined;
-    if (actorPolicy.kind === "membership") {
-      if (actorWorkspaces === undefined || actorWorkspaces.size === 0) {
-        orphaned += 1;
-        warning(warnings, "orphaned", row.id);
-        continue;
-      }
-      const directActivityWorkspace = row.activity_workspace_id !== null;
-      const derivedWorkspace =
-        rowWorkspaceId !== null && rowWorkspaceId !== undefined && !directActivityWorkspace;
-      // El importador completo trata el scope directo de Activity como autoridad,
-      // pero combina Membership con el scope heredado o con un esquema legacy.
-      // Conserva esa distinción para impedir un cruce entre Workspaces.
-      if (directActivityWorkspace) {
-        if (rowWorkspaceId === null || !actorWorkspaces.has(rowWorkspaceId)) {
-          orphaned += 1;
-          warning(warnings, "orphaned", row.id);
-          continue;
-        }
-      } else if (derivedWorkspace) {
-        if (!actorWorkspaces.has(rowWorkspaceId) || actorWorkspaces.size > 1) {
-          ambiguous += 1;
-          warning(warnings, "ambiguous", row.id);
-          continue;
-        }
-      } else if (scope.workspaceId !== undefined) {
-        if (!actorWorkspaces.has(scope.workspaceId)) {
-          outOfScope += 1;
-          warning(warnings, "out_of_scope", row.id);
-          continue;
-        }
-      } else if (actorWorkspaces.size > 1) {
-        ambiguous += 1;
-        warning(warnings, "ambiguous", row.id);
-        continue;
-      }
-    }
+    const rowWorkspaceId = scopeDecision.workspaceId;
 
     const actor = row.actor_id ?? row.actor;
     if (!row.issue_identifier || !actor || !row.issue_id || !row.team_id) {
@@ -668,7 +1281,7 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
       warning(warnings, "orphaned", row.id);
       continue;
     }
-    // Un esquema legacy singleton o un selector explícito aporta el Workspace
+    // Un esquema legacy singleton o un selector explícito aportan el Workspace
     // para filas anteriores a workspace_id. Una fuente multi-Workspace sin
     // selector ya fue rechazada antes de llegar a este punto.
     const eventWorkspaceId = rowWorkspaceId ?? scope.workspaceId;

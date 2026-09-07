@@ -121,6 +121,56 @@ function legacySingletonDatabase(): Database {
   return db;
 }
 
+function membershipActivityDatabase(): Database {
+  const db = new Database(":memory:");
+  db.exec(`
+    CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE teams (id TEXT PRIMARY KEY, key TEXT NOT NULL);
+    CREATE TABLE issues (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, number INTEGER NOT NULL);
+    CREATE TABLE activity (
+      id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+      type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE TABLE workspace_memberships (
+      id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT
+    );
+  `);
+  db.query("INSERT INTO actors VALUES ('a1', 'Actor One'), ('a2', 'Actor Two')").run();
+  db.query("INSERT INTO teams VALUES ('t1', 'ONE'), ('t2', 'TWO')").run();
+  db.query("INSERT INTO issues VALUES ('i1', 't1', 1), ('i2', 't2', 1)").run();
+  db.query(
+    "INSERT INTO activity VALUES ('activity-1', 'i1', 'a1', 'created', '{\"title\":\"One\"}', '2025-01-01T00:00:00.000Z'), ('activity-2', 'i2', 'a2', 'created', '{\"title\":\"Two\"}', '2025-01-01T00:00:01.000Z')",
+  ).run();
+  db.query(
+    "INSERT INTO workspace_memberships VALUES ('membership-1', 'w1', 'a1'), ('membership-2', 'w2', 'a2')",
+  ).run();
+  return db;
+}
+
+function mixedScopeActivityDatabase(teamWorkspaceId: string | null): Database {
+  const db = new Database(":memory:");
+  db.exec(`
+    CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE teams (id TEXT PRIMARY KEY, key TEXT NOT NULL, workspace_id TEXT);
+    CREATE TABLE issues (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, number INTEGER NOT NULL);
+    CREATE TABLE activity (
+      id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+      workspace_id TEXT, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE TABLE workspace_memberships (
+      id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT
+    );
+  `);
+  db.query("INSERT INTO actors VALUES ('a1', 'Actor One')").run();
+  db.query("INSERT INTO teams VALUES ('t1', 'TWO', ?1)").run(teamWorkspaceId);
+  db.query("INSERT INTO issues VALUES ('i1', 't1', 1)").run();
+  db.query(
+    "INSERT INTO activity VALUES ('mixed-scope', 'i1', 'a1', 'w1', 'created', '{\"title\":\"Mixed\"}', '2025-01-01T00:00:00.000Z')",
+  ).run();
+  db.query("INSERT INTO workspace_memberships VALUES ('membership-1', 'w1', 'a1')").run();
+  return db;
+}
+
 function addWorkspaceActivity(
   db: Database,
   workspaceId: string | null,
@@ -159,6 +209,387 @@ function addActivity(
 }
 
 describe("SQLite history import", () => {
+  it("requires a selector when Memberships infer multiple Workspaces without the Workspace table", () => {
+    const db = membershipActivityDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-inferred-multi-"));
+    try {
+      expect(() => importSqliteActivity({ db, rootDir: root, dryRun: true })).toThrow(
+        "requires workspaceId",
+      );
+      expect(() => importSqliteActivity({ db, rootDir: root })).toThrow("requires workspaceId");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("uses an explicit selector to import only the matching inferred Membership scope", () => {
+    const db = membershipActivityDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-inferred-selector-"));
+    try {
+      db.query("INSERT INTO workspace_memberships VALUES ('membership-1-other', 'w2', 'a1')").run();
+      const dry = importSqliteActivity({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+      });
+      expect(dry).toMatchObject({
+        scanned: 2,
+        emitted: 0,
+        orphaned: 0,
+        outOfScope: 1,
+        ambiguous: 1,
+        rejected: 0,
+      });
+      expect(dry.warnings).toContain("ambiguous:activity-1");
+      expect(dry.warnings).toContain("out_of_scope:activity-2");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root, workspaceId: "w1" });
+      expect(applied).toMatchObject({ emitted: 0, outOfScope: 1, orphaned: 0, ambiguous: 1 });
+      expect(readEventLog(root)).toEqual([]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("infers a singleton Workspace from one complete Membership", () => {
+    const db = membershipActivityDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-inferred-singleton-"));
+    try {
+      db.query("DELETE FROM workspace_memberships WHERE id = 'membership-2'").run();
+      const dry = importSqliteActivity({ db, rootDir: root, dryRun: true });
+      expect(dry).toMatchObject({
+        scanned: 2,
+        emitted: 1,
+        orphaned: 1,
+        outOfScope: 0,
+        rejected: 0,
+        ambiguous: 0,
+      });
+      expect(dry.warnings).toContain("orphaned:activity-2");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root });
+      expect(applied).toMatchObject({ emitted: 1, orphaned: 1 });
+      expect(readEventLog(root).map((event) => event.eventId)).toEqual(["activity-1"]);
+      expect(readEventLog(root)[0]?.workspaceId).toBe("w1");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the legacy singleton fallback when Workspace and Membership tables are absent", () => {
+    const db = database();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-legacy-no-scope-metadata-"));
+    try {
+      addActivity(
+        db,
+        "legacy-no-scope",
+        JSON.stringify({ title: "Legacy" }),
+        "issue-1",
+        "actor-1",
+        "created",
+      );
+      const dry = importSqliteActivity({ db, rootDir: root, dryRun: true });
+      expect(dry).toMatchObject({ scanned: 1, emitted: 1, orphaned: 0, ambiguous: 0 });
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root });
+      expect(applied).toMatchObject({ emitted: 1, orphaned: 0 });
+      expect(readEventLog(root)[0]?.workspaceId).toBeUndefined();
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts uppercase Membership columns while inferring a singleton Workspace", () => {
+    const db = membershipActivityDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-inferred-uppercase-"));
+    try {
+      db.query("DELETE FROM workspace_memberships WHERE id = 'membership-2'").run();
+      db.exec(
+        'ALTER TABLE workspace_memberships RENAME COLUMN id TO "ID"; ALTER TABLE workspace_memberships RENAME COLUMN workspace_id TO "WORKSPACE_ID"; ALTER TABLE workspace_memberships RENAME COLUMN actor_id TO "ACTOR_ID";',
+      );
+      const dry = importSqliteActivity({ db, rootDir: root, dryRun: true });
+      expect(dry).toMatchObject({ scanned: 2, emitted: 1, orphaned: 1, ambiguous: 0 });
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root });
+      expect(applied).toMatchObject({ emitted: 1, orphaned: 1 });
+      expect(readEventLog(root)[0]?.workspaceId).toBe("w1");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not use legacy fallback when a Membership row has a NULL scope", () => {
+    const db = membershipActivityDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-inferred-null-membership-"));
+    try {
+      db.query("DELETE FROM workspace_memberships WHERE id = 'membership-2'").run();
+      db.query(
+        "UPDATE workspace_memberships SET workspace_id = NULL WHERE id = 'membership-1'",
+      ).run();
+      const dry = importSqliteActivity({ db, rootDir: root, dryRun: true });
+      expect(dry).toMatchObject({ scanned: 2, emitted: 0, ambiguous: 2, orphaned: 0 });
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root });
+      expect(applied).toMatchObject({ emitted: 0, ambiguous: 2 });
+      expect(readEventLog(root)).toEqual([]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not use legacy fallback when Membership metadata is ambiguous", () => {
+    const db = membershipActivityDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-inferred-ambiguous-membership-"));
+    try {
+      db.query("DELETE FROM workspace_memberships WHERE id = 'membership-2'").run();
+      db.exec(
+        'ALTER TABLE workspace_memberships ADD COLUMN "İD" TEXT; ALTER TABLE workspace_memberships ADD COLUMN "i̇d" TEXT;',
+      );
+      const dry = importSqliteActivity({ db, rootDir: root, dryRun: true });
+      expect(dry).toMatchObject({ scanned: 2, emitted: 0, ambiguous: 2, orphaned: 0 });
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root });
+      expect(applied).toMatchObject({ emitted: 0, ambiguous: 2 });
+      expect(readEventLog(root)).toEqual([]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports an Activity Actor with no source row while keeping the selected inferred scope", () => {
+    const db = membershipActivityDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-inferred-missing-actor-"));
+    try {
+      db.query("DELETE FROM actors WHERE id = 'a2'").run();
+      const dry = importSqliteActivity({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+      });
+      expect(dry).toMatchObject({ scanned: 2, emitted: 1, orphaned: 1, outOfScope: 0 });
+      expect(dry.warnings).toContain("orphaned:activity-2");
+      expect(existsSync(join(root, ".prime-board", "log", "events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root, workspaceId: "w1" });
+      expect(applied).toMatchObject({ emitted: 1, orphaned: 1 });
+      expect(readEventLog(root).map((event) => event.eventId)).toEqual(["activity-1"]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects Activity and Team scope mismatches without writing a Log event", () => {
+    for (const [label, teamWorkspaceId, finding] of [
+      ["other Workspace", "w2", "orphaned"],
+      ["NULL Workspace", null, "ambiguous"],
+    ] as const) {
+      const db = mixedScopeActivityDatabase(teamWorkspaceId);
+      const root = mkdtempSync(
+        join(tmpdir(), `pb-sqlite-import-team-${label.replaceAll(" ", "-")}-`),
+      );
+      try {
+        const dry = importSqliteActivity({
+          db,
+          rootDir: root,
+          workspaceId: "w1",
+          dryRun: true,
+        });
+        expect(dry).toMatchObject({ scanned: 1, emitted: 0 });
+        expect(dry[finding]).toBe(1);
+        expect(dry.warnings).toContain(`${finding}:mixed-scope`);
+        expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+
+        const applied = importSqliteActivity({ db, rootDir: root, workspaceId: "w1" });
+        expect(applied).toMatchObject({ scanned: 1, emitted: 0 });
+        expect(applied[finding]).toBe(1);
+        expect(readEventLog(root)).toEqual([]);
+        expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+      } finally {
+        db.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("rejects a mixed scope when Activity is scoped and Issue is legacy", () => {
+    const db = mixedScopeActivityDatabase("w2");
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-mixed-issue-legacy-"));
+    try {
+      db.query("INSERT INTO actors VALUES ('a2', 'Actor Two')").run();
+      db.query("INSERT INTO workspace_memberships VALUES ('membership-2', 'w2', 'a2')").run();
+
+      for (const dryRun of [true, false]) {
+        const result = importSqliteActivity({ db, rootDir: root, workspaceId: "w1", dryRun });
+        expect(result).toMatchObject({
+          scanned: 1,
+          emitted: 0,
+          orphaned: 1,
+          outOfScope: 0,
+          ambiguous: 0,
+          rejected: 0,
+        });
+        expect(result.warnings).toContain("orphaned:mixed-scope");
+        expect(readEventLog(root)).toEqual([]);
+        expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+      }
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an explicit NULL Issue scope in an inferred multi-Workspace source", () => {
+    const db = mixedScopeActivityDatabase("w1");
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-issue-null-scope-"));
+    try {
+      db.exec("ALTER TABLE issues ADD COLUMN workspace_id TEXT");
+      db.query("UPDATE issues SET workspace_id = NULL WHERE id = 'i1'").run();
+      db.query("INSERT INTO actors VALUES ('a2', 'Actor Two')").run();
+      db.query("INSERT INTO workspace_memberships VALUES ('membership-2', 'w2', 'a2')").run();
+
+      for (const dryRun of [true, false]) {
+        const result = importSqliteActivity({ db, rootDir: root, workspaceId: "w1", dryRun });
+        expect(result).toMatchObject({ scanned: 1, emitted: 0, orphaned: 1, ambiguous: 0 });
+        expect(result.warnings).toContain("orphaned:mixed-scope");
+        expect(readEventLog(root)).toEqual([]);
+        expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+      }
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("imports an Activity row when every available scope has the selected Workspace", () => {
+    const db = mixedScopeActivityDatabase("w1");
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-team-same-scope-"));
+    try {
+      const dry = importSqliteActivity({
+        db,
+        rootDir: root,
+        workspaceId: "w1",
+        dryRun: true,
+      });
+      expect(dry).toMatchObject({ scanned: 1, emitted: 1, orphaned: 0, ambiguous: 0 });
+      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root, workspaceId: "w1" });
+      expect(applied).toMatchObject({ emitted: 1, orphaned: 0, ambiguous: 0 });
+      expect(readEventLog(root)).toHaveLength(1);
+      expect(readEventLog(root)[0]).toMatchObject({
+        eventId: "mixed-scope",
+        aggregateKey: "TWO-1",
+        workspaceId: "w1",
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("compares Project and relationship scopes before importing Activity", () => {
+    for (const scenario of [
+      {
+        name: "same-scope",
+        projectWorkspaceId: "w1",
+        relationWorkspaceId: "w1",
+        leadWorkspaceId: null,
+        finding: null,
+      },
+      {
+        name: "project-other-workspace",
+        projectWorkspaceId: "w2",
+        relationWorkspaceId: "w1",
+        leadWorkspaceId: null,
+        finding: "orphaned",
+      },
+      {
+        name: "relation-other-workspace",
+        projectWorkspaceId: "w1",
+        relationWorkspaceId: "w2",
+        leadWorkspaceId: null,
+        finding: "orphaned",
+      },
+      {
+        name: "project-lead-other-workspace",
+        projectWorkspaceId: "w1",
+        relationWorkspaceId: "w1",
+        leadWorkspaceId: "w2",
+        finding: "orphaned",
+      },
+    ] as const) {
+      const db = mixedScopeActivityDatabase("w1");
+      const root = mkdtempSync(join(tmpdir(), `pb-sqlite-import-project-${scenario.name}-`));
+      try {
+        db.exec(
+          `ALTER TABLE issues ADD COLUMN project_id TEXT;
+           CREATE TABLE projects (id TEXT PRIMARY KEY, workspace_id TEXT, lead_id TEXT);
+           CREATE TABLE project_teams (project_id TEXT, team_id TEXT, workspace_id TEXT);`,
+        );
+        db.query("UPDATE issues SET project_id = 'p1' WHERE id = 'i1'").run();
+        db.query("INSERT INTO projects VALUES ('p1', ?1, ?2)").run(
+          scenario.projectWorkspaceId,
+          scenario.leadWorkspaceId === null ? null : "a2",
+        );
+        db.query("INSERT INTO project_teams VALUES ('p1', 't1', ?1)").run(
+          scenario.relationWorkspaceId,
+        );
+        if (scenario.leadWorkspaceId !== null) {
+          db.query("INSERT INTO actors VALUES ('a2', 'Actor Two')").run();
+          db.query("INSERT INTO workspace_memberships VALUES ('membership-2', ?1, 'a2')").run(
+            scenario.leadWorkspaceId,
+          );
+        }
+
+        const dry = importSqliteActivity({
+          db,
+          rootDir: root,
+          workspaceId: "w1",
+          dryRun: true,
+        });
+        if (scenario.finding === null) {
+          expect(dry).toMatchObject({ scanned: 1, emitted: 1, orphaned: 0, ambiguous: 0 });
+          expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+          const applied = importSqliteActivity({ db, rootDir: root, workspaceId: "w1" });
+          expect(applied).toMatchObject({ emitted: 1, orphaned: 0, ambiguous: 0 });
+          expect(readEventLog(root)[0]).toMatchObject({
+            eventId: "mixed-scope",
+            aggregateKey: "TWO-1",
+            workspaceId: "w1",
+          });
+        } else {
+          expect(dry).toMatchObject({ scanned: 1, emitted: 0 });
+          expect(dry[scenario.finding]).toBe(1);
+          expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+          const applied = importSqliteActivity({ db, rootDir: root, workspaceId: "w1" });
+          expect(applied).toMatchObject({ emitted: 0 });
+          expect(applied[scenario.finding]).toBe(1);
+          expect(readEventLog(root)).toEqual([]);
+          expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+        }
+      } finally {
+        db.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("normalizes case-variant membership columns before enforcing Activity scope", () => {
     const db = workspaceDatabase();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-case-membership-"));
@@ -383,10 +814,83 @@ describe("SQLite history import", () => {
     }
   });
 
+  it("rejects an Activity Actor without a Membership row in a multi-Workspace source", () => {
+    const db = workspaceDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-membership-actor-absent-multi-"));
+    try {
+      db.query("INSERT INTO actors VALUES (?1, ?2)").run("actor-2", "unmapped");
+      db.exec(
+        "CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT, status TEXT)",
+      );
+      db.query(
+        "INSERT INTO workspace_memberships VALUES ('membership-1', 'workspace-1', 'actor-1', 'active')",
+      ).run();
+      db.query(
+        "INSERT INTO activity(workspace_id, id, issue_id, actor_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+      ).run(
+        "workspace-1",
+        "membership-actor-absent-multi",
+        "issue-1",
+        "actor-2",
+        "updated",
+        JSON.stringify({ title: "unmapped" }),
+        "2025-01-01T00:00:00.000Z",
+      );
+
+      const dry = importSqliteActivity({
+        db,
+        rootDir: root,
+        workspaceId: "workspace-1",
+        dryRun: true,
+      });
+      expect(dry).toMatchObject({ scanned: 1, emitted: 0, orphaned: 1 });
+      expect(dry.warnings).toContain("orphaned:membership-actor-absent-multi");
+      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root, workspaceId: "workspace-1" });
+      expect(applied).toMatchObject({ scanned: 1, emitted: 0, orphaned: 1 });
+      expect(readEventLog(root)).toEqual([]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an Activity Actor without a Membership row in a singleton source", () => {
+    const db = legacySingletonDatabase();
+    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-membership-actor-absent-singleton-"));
+    try {
+      db.exec(
+        "CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT, status TEXT)",
+      );
+      db.query(
+        "INSERT INTO workspace_memberships VALUES ('membership-other', 'legacy-workspace', 'other-actor', 'active')",
+      ).run();
+
+      const dry = importSqliteActivity({ db, rootDir: root, dryRun: true });
+      expect(dry).toMatchObject({ scanned: 1, emitted: 0, orphaned: 1 });
+      expect(dry.warnings).toContain("orphaned:legacy-activity");
+      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
+
+      const applied = importSqliteActivity({ db, rootDir: root });
+      expect(applied).toMatchObject({ scanned: 1, emitted: 0, orphaned: 1 });
+      expect(readEventLog(root)).toEqual([]);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("requires an explicit Workspace and imports only the selected scope", () => {
     const db = workspaceDatabase();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));
     try {
+      db.exec(
+        "CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT, status TEXT)",
+      );
+      db.query(
+        "INSERT INTO workspace_memberships VALUES ('membership-1', 'workspace-1', 'actor-1', 'active')",
+      ).run();
       addWorkspaceActivity(db, "workspace-1", "workspace-1-event", "issue-1");
       addWorkspaceActivity(db, "workspace-2", "workspace-2-event", "issue-2");
 
@@ -448,6 +952,12 @@ describe("SQLite history import", () => {
     const db = workspaceDatabase();
     const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-"));
     try {
+      db.exec(
+        "CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT, status TEXT)",
+      );
+      db.query(
+        "INSERT INTO workspace_memberships VALUES ('membership-1', 'workspace-1', 'actor-1', 'active')",
+      ).run();
       addWorkspaceActivity(db, null, "legacy-event", "issue-1");
       addWorkspaceActivity(db, "workspace-1", "scoped-event", "issue-1");
       const result = importSqliteActivity({ db, rootDir: root, workspaceId: "workspace-1" });
@@ -509,99 +1019,6 @@ describe("SQLite history import", () => {
       const result = importSqliteActivity({ db, rootDir: root });
       expect(result).toMatchObject({ scanned: 1, emitted: 1, orphaned: 0, outOfScope: 0 });
       expect(readEventLog(root).map((event) => event.eventId)).toEqual(["legacy-singleton-event"]);
-    } finally {
-      db.close();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts an explicit selector for legacy rows without scoped metadata", () => {
-    const db = legacySingletonDatabase();
-    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-legacy-selected-"));
-    try {
-      db.exec("DROP TABLE workspace");
-      const result = importSqliteActivity({
-        db,
-        rootDir: root,
-        workspaceId: "operator-selected-workspace",
-      });
-      expect(result).toMatchObject({ scanned: 1, emitted: 1, orphaned: 0, outOfScope: 0 });
-      expect(readEventLog(root)[0]?.workspaceId).toBe("operator-selected-workspace");
-    } finally {
-      db.close();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("blocks Activity Actor scope when a singleton Membership table is incomplete", () => {
-    const db = workspaceDatabase(1);
-    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-membership-incomplete-singleton-"));
-    try {
-      db.exec("CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, role TEXT)");
-      db.query("INSERT INTO workspace_memberships VALUES ('broken-membership', 'admin')").run();
-      addWorkspaceActivity(db, "workspace-1", "incomplete-membership-event", "issue-1");
-
-      const dry = importSqliteActivity({
-        db,
-        rootDir: root,
-        workspaceId: "workspace-1",
-        dryRun: true,
-      });
-      expect(dry).toMatchObject({ scanned: 1, emitted: 0, ambiguous: 1, orphaned: 0 });
-      expect(dry.warnings).toContain("ambiguous:incomplete-membership-event");
-      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
-
-      const applied = importSqliteActivity({ db, rootDir: root, workspaceId: "workspace-1" });
-      expect(applied).toMatchObject({ emitted: 0, ambiguous: 1, orphaned: 0 });
-      expect(readEventLog(root)).toEqual([]);
-    } finally {
-      db.close();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects an arbitrary selector with invalid Membership metadata", () => {
-    const db = workspaceDatabase(1);
-    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-membership-invalid-selector-"));
-    try {
-      db.exec(
-        "CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT)",
-      );
-      db.query(
-        "INSERT INTO workspace_memberships VALUES ('invalid-membership', NULL, 'actor-1')",
-      ).run();
-      db.exec("DROP TABLE workspace");
-      const options = { db, rootDir: root, workspaceId: "arbitrary-workspace" } as const;
-      expect(() => importSqliteActivity({ ...options, dryRun: true })).toThrow(
-        "valid workspace membership metadata",
-      );
-      expect(() => importSqliteActivity(options)).toThrow("valid workspace membership metadata");
-      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
-    } finally {
-      db.close();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("infers a singleton Workspace from complete Membership metadata", () => {
-    const db = workspaceDatabase(1);
-    const root = mkdtempSync(join(tmpdir(), "pb-sqlite-import-membership-singleton-"));
-    try {
-      db.exec(
-        "CREATE TABLE workspace_memberships (id TEXT PRIMARY KEY, workspace_id TEXT, actor_id TEXT)",
-      );
-      db.query(
-        "INSERT INTO workspace_memberships VALUES ('membership-1', 'workspace-1', 'actor-1')",
-      ).run();
-      db.exec("DROP TABLE workspace");
-      addWorkspaceActivity(db, "workspace-1", "inferred-membership-event", "issue-1");
-      const result = importSqliteActivity({ db, rootDir: root, dryRun: true });
-      expect(result).toMatchObject({ scanned: 1, emitted: 1, ambiguous: 0, orphaned: 0 });
-      expect(existsSync(join(root, ".prime-board/log/events.jsonl"))).toBe(false);
-
-      const applied = importSqliteActivity({ db, rootDir: root });
-      expect(applied).toMatchObject({ emitted: 1, ambiguous: 0, orphaned: 0 });
-      expect(readEventLog(root)[0]?.workspaceId).toBe("workspace-1");
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
