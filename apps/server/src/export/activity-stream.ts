@@ -18,6 +18,10 @@ export interface ActivityEventRow {
   readonly payload: string;
   /** Effective Workspace. Legacy fixtures may omit it. */
   readonly workspace_id?: string | null;
+  /** Workspace derived from the Issue resource. */
+  readonly issue_workspace_id?: string | null;
+  /** Workspace derived from the Team resource. */
+  readonly team_workspace_id?: string | null;
   readonly occurred_at: string;
 }
 
@@ -25,9 +29,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasActivityWorkspaceColumn(db: Database): boolean {
-  const columns = db.query("PRAGMA table_info(activity)").all() as Array<{ name: string }>;
-  return columns.some((column) => column.name === "workspace_id");
+function hasTableColumn(db: Database, table: string, columnName: string): boolean {
+  const columns = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return columns.some((column) => column.name === columnName);
 }
 
 export function isSharedActivityType(type: string): boolean {
@@ -87,7 +91,15 @@ export function appendActivityEvents(
   }),
   onEventIds?: (eventIds: readonly string[]) => void,
 ): number {
-  const workspaceColumn = hasActivityWorkspaceColumn(db) ? "activity.workspace_id" : "NULL";
+  const activityWorkspaceColumn = hasTableColumn(db, "activity", "workspace_id")
+    ? "activity.workspace_id"
+    : "NULL";
+  const issueWorkspaceColumn = hasTableColumn(db, "issues", "workspace_id")
+    ? "issues.workspace_id"
+    : "NULL";
+  const teamWorkspaceColumn = hasTableColumn(db, "teams", "workspace_id")
+    ? "teams.workspace_id"
+    : "NULL";
   const rows = db
     .query(
       `SELECT activity.id,
@@ -96,7 +108,9 @@ export function appendActivityEvents(
               actors.name AS actor,
               activity.type,
               activity.payload,
-              ${workspaceColumn} AS workspace_id,
+              ${activityWorkspaceColumn} AS workspace_id,
+              ${issueWorkspaceColumn} AS issue_workspace_id,
+              ${teamWorkspaceColumn} AS team_workspace_id,
               activity.created_at AS occurred_at
        FROM activity
        JOIN issues ON issues.id = activity.issue_id
@@ -107,7 +121,24 @@ export function appendActivityEvents(
     .all() as ActivityEventRow[];
   eventLog.recover?.();
   const events = rows.flatMap((row) => {
-    const event = activityToDomainEvent(row);
+    // Issue es la fuente de verdad del Workspace del Activity. Las columnas
+    // propias de Activity/Team solo validan que no exista un cruce de scopes.
+    const issueWorkspaceId = row.issue_workspace_id;
+    if (typeof issueWorkspaceId !== "string" || issueWorkspaceId.length === 0) return [];
+    const relatedWorkspaceIds = [row.workspace_id, row.team_workspace_id];
+    if (
+      relatedWorkspaceIds.some(
+        (workspaceId) =>
+          workspaceId !== null &&
+          workspaceId !== undefined &&
+          (typeof workspaceId !== "string" ||
+            workspaceId.length === 0 ||
+            workspaceId !== issueWorkspaceId),
+      )
+    ) {
+      return [];
+    }
+    const event = activityToDomainEvent({ ...row, workspace_id: issueWorkspaceId });
     return event ? [event] : [];
   });
   if (events.length === 0) return 0;
