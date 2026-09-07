@@ -1813,8 +1813,23 @@ function renamedSchemaObjectSql(options: RenamedSchemaObjectSqlOptions): string 
   }
 }
 
-function indexedByReferenceUsesExistingIndex(db: Database, reference: IndexedByReference): boolean {
-  if (reference.source.kind === "cte") return false;
+function indexedByReferenceUsesExistingIndex({
+  db,
+  reference,
+}: {
+  db: Database;
+  reference: IndexedByReference;
+}): boolean {
+  switch (reference.source.kind) {
+    case "cte":
+      return false;
+    case "table":
+      break;
+    default: {
+      const _exhaustive: never = reference.source;
+      return _exhaustive;
+    }
+  }
   const schema = reference.tableSchema?.toLowerCase();
   if (schema !== undefined && schema !== "main" && schema !== "temp") return false;
   const schemas =
@@ -1875,7 +1890,7 @@ function schemaObjectsWithIndexedByDependencies(
             `${object.name} uses INDEXED BY ${reference.indexName} on CTE ${reference.tableName}`,
         );
       }
-      if (!indexedByReferenceUsesExistingIndex(db, reference)) {
+      if (!indexedByReferenceUsesExistingIndex({ db, reference })) {
         throw new Error(
           `Cannot apply migration ${migrationVersion} safely: ${temporary ? "temporary " : ""}${object.type} ` +
             `${object.name} references missing or unrelated index ${reference.indexName} for table ` +
@@ -1888,7 +1903,11 @@ function schemaObjectsWithIndexedByDependencies(
     const executable = temporary ? temporarySchemaDefinition(object.sql, type) : object.sql;
     if (
       executable === null ||
-      !executableIndexedByDependencyDefinition(db, { object, temporary }, executable)
+      !executableIndexedByDependencyDefinition({
+        db,
+        dependency: { object, temporary },
+        definition: executable,
+      })
     ) {
       throw new Error(
         `Cannot apply migration ${migrationVersion} safely: cannot recreate ${temporary ? "temporary " : ""}` +
@@ -2677,12 +2696,17 @@ function viewsMigrationNameCollisionPlan(
   return collisions;
 }
 
-function recreatedSchemaObjectNameInUse(
-  db: Database,
-  type: RecreatedSchemaObjectType,
-  temporary: boolean,
-  name: string,
-): boolean {
+function recreatedSchemaObjectNameInUse({
+  db,
+  type,
+  temporary,
+  name,
+}: {
+  db: Database;
+  type: RecreatedSchemaObjectType;
+  temporary: boolean;
+  name: string;
+}): boolean {
   switch (type) {
     case "trigger":
       return schemaObjectsWithName(db, name).some(
@@ -2697,13 +2721,22 @@ function recreatedSchemaObjectNameInUse(
   }
 }
 
-function executableIndexedByDependencyDefinition(
-  db: Database,
-  dependency: { object: RecreatedSchemaObject; temporary: boolean },
-  definition: string,
-): boolean {
+function executableIndexedByDependencyDefinition({
+  db,
+  dependency,
+  definition,
+}: {
+  db: Database;
+  dependency: { object: RecreatedSchemaObject; temporary: boolean };
+  definition: string;
+}): boolean {
   const probeInUse = (name: string) =>
-    recreatedSchemaObjectNameInUse(db, dependency.object.type, dependency.temporary, name);
+    recreatedSchemaObjectNameInUse({
+      db,
+      type: dependency.object.type,
+      temporary: dependency.temporary,
+      name,
+    });
   let probeName = `__prb656_${dependency.object.type}_probe`;
   for (let suffix = 2; probeInUse(probeName); suffix += 1) {
     probeName = `__prb656_${dependency.object.type}_probe_${suffix}`;
@@ -2764,7 +2797,7 @@ function indexedByDependencyCollisions(
       : rewritten;
     if (
       executable === null ||
-      !executableIndexedByDependencyDefinition(db, dependency, executable)
+      !executableIndexedByDependencyDefinition({ db, dependency, definition: executable })
     ) {
       throw new Error(
         `Cannot apply migration ${migrationVersion} safely: cannot rewrite ${dependency.temporary ? "temporary " : ""}` +
@@ -2844,12 +2877,17 @@ function savedViewsIndexProblems(definitions: readonly SavedViewsIndexDefinition
     .map((definition) => `index ${definition.name} has no recoverable column definition`);
 }
 
-function schemaObjectWithTypeAndName(
-  db: Database,
-  type: RecreatedSchemaObjectType,
-  name: string,
-  temporary: boolean,
-): { object: RecreatedSchemaObject; temporary: boolean } | null {
+function schemaObjectWithTypeAndName({
+  db,
+  type,
+  name,
+  temporary,
+}: {
+  db: Database;
+  type: RecreatedSchemaObjectType;
+  name: string;
+  temporary: boolean;
+}): { object: RecreatedSchemaObject; temporary: boolean } | null {
   for (const candidate of schemaObjectsWithName(db, name)) {
     if (
       candidate.temporary === temporary &&
@@ -2874,27 +2912,32 @@ function findIndexedByDependencyObject(
       collision.name.toLowerCase() === dependency.object.name.toLowerCase(),
   );
   if (renamed !== undefined && renamed.replacementName !== dependency.object.name) {
-    return schemaObjectWithTypeAndName(
+    return schemaObjectWithTypeAndName({
       db,
-      dependency.object.type,
-      renamed.replacementName,
-      dependency.temporary,
-    );
+      type: dependency.object.type,
+      name: renamed.replacementName,
+      temporary: dependency.temporary,
+    });
   }
-  return schemaObjectWithTypeAndName(
+  return schemaObjectWithTypeAndName({
     db,
-    dependency.object.type,
-    dependency.object.name,
-    dependency.temporary,
-  );
+    type: dependency.object.type,
+    name: dependency.object.name,
+    temporary: dependency.temporary,
+  });
 }
 
-function dropSchemaObject(
-  db: Database,
-  type: RecreatedSchemaObjectType,
-  name: string,
-  temporary: boolean,
-): void {
+function dropSchemaObject({
+  db,
+  type,
+  name,
+  temporary,
+}: {
+  db: Database;
+  type: RecreatedSchemaObjectType;
+  name: string;
+  temporary: boolean;
+}): void {
   const schema = temporary ? "temp." : "";
   switch (type) {
     case "trigger":
@@ -2973,7 +3016,11 @@ function applyIndexedByDependencyRewrites(
     const executableDependency = { object, temporary };
     if (
       executable === null ||
-      !executableIndexedByDependencyDefinition(db, executableDependency, executable)
+      !executableIndexedByDependencyDefinition({
+        db,
+        dependency: executableDependency,
+        definition: executable,
+      })
     ) {
       throw new Error(
         `Cannot apply migration ${migrationVersion} safely: cannot recreate ${temporary ? "temporary " : ""}` +
@@ -2991,7 +3038,12 @@ function applyIndexedByDependencyRewrites(
 
   for (const operation of operations) {
     if (operation.current !== null) {
-      dropSchemaObject(db, operation.type, operation.name, operation.temporary);
+      dropSchemaObject({
+        db,
+        type: operation.type,
+        name: operation.name,
+        temporary: operation.temporary,
+      });
     }
     db.exec(operation.sql);
   }
