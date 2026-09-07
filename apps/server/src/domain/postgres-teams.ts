@@ -6,6 +6,19 @@ import type { TeamRow, WorkflowStateRow } from "./teams.ts";
 
 const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"] as const;
 type StateType = (typeof STATE_TYPES)[number];
+const RESERVED_DUPLICATE_STATE_NAME = "Duplicate";
+
+export function normalizePostgresAutomationPeriod(
+  value: number | null | undefined,
+  field: string,
+): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === 0) return null;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw apiError("VALIDATION_FAILED", `${field} must be a positive number of days or null`);
+  }
+  return value;
+}
 
 function isUniqueViolation(error: unknown): boolean {
   let current: unknown = error;
@@ -26,6 +39,13 @@ export function mapPostgresTeam(row: TeamRow) {
     accessPolicy: row.access_policy,
     createdAt: row.created_at,
     archivedAt: row.archived_at,
+    autoClosePeriod: row.auto_close_period,
+    autoArchivePeriod: row.auto_archive_period,
+    autoCloseStateId: row.auto_close_state_id,
+    autoCloseParentIssues:
+      row.auto_close_parent_issues == null ? null : Boolean(row.auto_close_parent_issues),
+    autoCloseChildIssues:
+      row.auto_close_child_issues == null ? null : Boolean(row.auto_close_child_issues),
     _row: row,
   };
 }
@@ -37,6 +57,8 @@ export function mapPostgresWorkflowState(row: WorkflowStateRow) {
     type: row.type,
     color: row.color,
     position: row.position,
+    description: row.description,
+    isReserved: Boolean(row.is_reserved),
   };
 }
 
@@ -129,9 +151,19 @@ async function seedPostgresWorkflow(tx: PersistenceTransaction, teamId: string, 
     firstId ??= id;
     await tx.execute(
       `INSERT INTO workflow_states
-       (id, team_id, name, type, color, position, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-      [id, teamId, state.name, state.type, state.color, index, timestamp],
+       (id, team_id, name, type, color, position, created_at, updated_at, description, is_reserved)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9)`,
+      [
+        id,
+        teamId,
+        state.name,
+        state.type,
+        state.color,
+        index,
+        timestamp,
+        "description" in state ? state.description : null,
+        "isReserved" in state && state.isReserved,
+      ],
     );
   }
   await tx.execute("UPDATE teams SET default_state_id = $1 WHERE id = $2", [firstId, teamId]);
@@ -145,6 +177,8 @@ export async function createPostgresTeam(
     description?: string | null;
     visibility?: "public" | "private" | null;
     accessPolicy?: "workspace_members" | "team_members" | null;
+    autoClosePeriod?: number | null;
+    autoArchivePeriod?: number | null;
   },
   ownerId?: string,
 ): Promise<TeamRow> {
@@ -152,14 +186,19 @@ export async function createPostgresTeam(
   if (await getPostgresTeam(persistence, { key: values.key })) {
     throw apiError("VALIDATION_FAILED", `Team key ${values.key} is already in use`);
   }
+  const autoClosePeriod =
+    normalizePostgresAutomationPeriod(input.autoClosePeriod, "autoClosePeriod") ?? null;
+  const autoArchivePeriod =
+    normalizePostgresAutomationPeriod(input.autoArchivePeriod, "autoArchivePeriod") ?? null;
   const id = newId();
   try {
     await persistence.transaction(async (tx) => {
       const timestamp = now();
       await tx.execute(
         `INSERT INTO teams
-         (id, name, key, description, visibility, access_policy, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+         (id, name, key, description, visibility, access_policy,
+          auto_close_period, auto_archive_period, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
         [
           id,
           values.name,
@@ -167,6 +206,8 @@ export async function createPostgresTeam(
           input.description ?? null,
           values.visibility,
           values.accessPolicy,
+          autoClosePeriod,
+          autoArchivePeriod,
           timestamp,
         ],
       );
@@ -194,6 +235,11 @@ export interface PostgresTeamUpdateInput {
   defaultStateId?: string | null;
   visibility?: "public" | "private" | null;
   accessPolicy?: "workspace_members" | "team_members" | null;
+  autoClosePeriod?: number | null;
+  autoArchivePeriod?: number | null;
+  autoCloseStateId?: string | null;
+  autoCloseParentIssues?: boolean | null;
+  autoCloseChildIssues?: boolean | null;
 }
 
 export async function updatePostgresTeam(
@@ -217,12 +263,47 @@ export async function updatePostgresTeam(
   if (input.description !== undefined) push("description", input.description);
   if (input.defaultStateId != null) {
     const state = await persistence.one(
-      "SELECT id FROM workflow_states WHERE id = $1 AND team_id = $2",
+      "SELECT id, is_reserved FROM workflow_states WHERE id = $1 AND team_id = $2",
       [input.defaultStateId, team.id],
     );
     if (!state) throw apiError("VALIDATION_FAILED", "Default state must belong to the team");
+    if (Boolean((state as { is_reserved: boolean }).is_reserved)) {
+      throw apiError("VALIDATION_FAILED", "Duplicate cannot be the default workflow state");
+    }
     push("default_state_id", input.defaultStateId);
   }
+  const autoClosePeriod = normalizePostgresAutomationPeriod(
+    input.autoClosePeriod,
+    "autoClosePeriod",
+  );
+  const autoArchivePeriod = normalizePostgresAutomationPeriod(
+    input.autoArchivePeriod,
+    "autoArchivePeriod",
+  );
+  if (autoClosePeriod !== undefined) push("auto_close_period", autoClosePeriod);
+  if (autoArchivePeriod !== undefined) push("auto_archive_period", autoArchivePeriod);
+  if (input.autoCloseStateId !== undefined) {
+    if (input.autoCloseStateId === null) {
+      push("auto_close_state_id", null);
+    } else {
+      const state = await persistence.one<{ id: string; type: string; is_reserved: boolean }>(
+        "SELECT id, type, is_reserved FROM workflow_states WHERE id = $1 AND team_id = $2",
+        [input.autoCloseStateId, team.id],
+      );
+      if (!state) throw apiError("VALIDATION_FAILED", "Auto-close state must belong to the team");
+      if (state.type !== "completed") {
+        throw apiError("VALIDATION_FAILED", "Auto-close state must be completed");
+      }
+      if (Boolean(state.is_reserved)) {
+        throw apiError("VALIDATION_FAILED", "Auto-close state cannot be reserved");
+      }
+      push("auto_close_state_id", state.id);
+    }
+  }
+  if (input.autoCloseParentIssues !== undefined)
+    push("auto_close_parent_issues", input.autoCloseParentIssues);
+  if (input.autoCloseChildIssues !== undefined)
+    push("auto_close_child_issues", input.autoCloseChildIssues);
   const visibility = input.visibility ?? team.visibility;
   const accessPolicy = input.accessPolicy ?? team.access_policy;
   if (visibility !== "public" && visibility !== "private") {
@@ -272,13 +353,13 @@ export async function getPostgresDefaultState(
 ): Promise<WorkflowStateRow> {
   if (team.default_state_id) {
     const state = await persistence.one<WorkflowStateRow>(
-      "SELECT * FROM workflow_states WHERE id = $1 AND team_id = $2",
+      "SELECT * FROM workflow_states WHERE id = $1 AND team_id = $2 AND is_reserved = FALSE",
       [team.default_state_id, team.id],
     );
     if (state) return state;
   }
   const state = await persistence.one<WorkflowStateRow>(
-    "SELECT * FROM workflow_states WHERE team_id = $1 ORDER BY position LIMIT 1",
+    "SELECT * FROM workflow_states WHERE team_id = $1 AND is_reserved = FALSE ORDER BY position LIMIT 1",
     [team.id],
   );
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
@@ -293,20 +374,24 @@ export async function createPostgresWorkflowState(
     type: string;
     color?: string | null;
     position?: number | null;
+    description?: string | null;
   },
 ): Promise<WorkflowStateRow> {
   const team = await getPostgresTeam(persistence, { id: input.teamId });
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "State name cannot be empty");
+  if (name.toLowerCase() === RESERVED_DUPLICATE_STATE_NAME.toLowerCase()) {
+    throw apiError("VALIDATION_FAILED", "Duplicate is a reserved workflow state name");
+  }
   if (!STATE_TYPES.includes(input.type as StateType)) {
     throw apiError("VALIDATION_FAILED", `Invalid state type: ${input.type}`);
   }
   if (
-    await persistence.one("SELECT id FROM workflow_states WHERE team_id = $1 AND name = $2", [
-      team.id,
-      name,
-    ])
+    await persistence.one(
+      "SELECT id FROM workflow_states WHERE team_id = $1 AND lower(name) = lower($2)",
+      [team.id, name],
+    )
   ) {
     throw apiError("VALIDATION_FAILED", "State name already exists in this team");
   }
@@ -319,8 +404,8 @@ export async function createPostgresWorkflowState(
   try {
     const row = await persistence.one<WorkflowStateRow>(
       `INSERT INTO workflow_states
-       (id, team_id, name, type, color, position, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING *`,
+       (id, team_id, name, type, color, position, created_at, updated_at, description, is_reserved)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, FALSE) RETURNING *`,
       [
         id,
         team.id,
@@ -329,6 +414,7 @@ export async function createPostgresWorkflowState(
         input.color ?? "#95a2b3",
         input.position ?? (max?.max ?? -1) + 1,
         timestamp,
+        input.description?.trim() || null,
       ],
     );
     if (!row) throw new Error("PostgreSQL workflow state insert returned no row");
@@ -348,14 +434,31 @@ export async function updatePostgresWorkflowState(
     type?: string | null;
     color?: string | null;
     position?: number | null;
+    description?: string | null;
   },
 ): Promise<WorkflowStateRow> {
   const state = await getPostgresWorkflowState(persistence, id);
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
+  if (
+    Boolean(state.is_reserved) &&
+    Object.keys(input).some((key) => input[key as keyof typeof input] !== undefined)
+  ) {
+    throw apiError("VALIDATION_FAILED", "The Duplicate workflow state is managed by the system");
+  }
   if (input.type != null && !STATE_TYPES.includes(input.type as StateType)) {
     throw apiError("VALIDATION_FAILED", `Invalid state type: ${input.type}`);
   }
   if (input.type != null && input.type !== state.type && state.type === "completed") {
+    const configured = await persistence.one(
+      "SELECT id FROM teams WHERE id = $1 AND auto_close_state_id = $2",
+      [state.team_id, state.id],
+    );
+    if (configured) {
+      throw apiError(
+        "VALIDATION_FAILED",
+        "The auto-close target state must remain completed or be cleared first",
+      );
+    }
     const count = await persistence.one<{ n: number }>(
       "SELECT count(*)::int AS n FROM workflow_states WHERE team_id = $1 AND type = 'completed' AND id <> $2",
       [state.team_id, id],
@@ -367,9 +470,12 @@ export async function updatePostgresWorkflowState(
   if (input.name != null) {
     name = input.name.trim();
     if (!name) throw apiError("VALIDATION_FAILED", "State name cannot be empty");
+    if (name.toLowerCase() === RESERVED_DUPLICATE_STATE_NAME.toLowerCase()) {
+      throw apiError("VALIDATION_FAILED", "Duplicate is a reserved workflow state name");
+    }
     if (
       await persistence.one(
-        "SELECT id FROM workflow_states WHERE team_id = $1 AND name = $2 AND id <> $3",
+        "SELECT id FROM workflow_states WHERE team_id = $1 AND lower(name) = lower($2) AND id <> $3",
         [state.team_id, name, id],
       )
     ) {
@@ -386,6 +492,7 @@ export async function updatePostgresWorkflowState(
   if (input.type != null) push("type", input.type);
   if (input.color != null) push("color", input.color);
   if (input.position != null) push("position", input.position);
+  if (input.description !== undefined) push("description", input.description?.trim() || null);
   if (!sets.length) return state;
   push("updated_at", now());
   params.push(id);
@@ -441,6 +548,19 @@ export async function deletePostgresWorkflowState(
 ): Promise<number> {
   const state = await getPostgresWorkflowState(persistence, id);
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
+  if (Boolean(state.is_reserved)) {
+    throw apiError("VALIDATION_FAILED", "The Duplicate workflow state cannot be deleted");
+  }
+  const automation = await persistence.one(
+    "SELECT id FROM teams WHERE id = $1 AND auto_close_state_id = $2",
+    [state.team_id, state.id],
+  );
+  if (automation) {
+    throw apiError(
+      "VALIDATION_FAILED",
+      "The auto-close target state must be cleared before deleting this state",
+    );
+  }
   const siblings = await persistence.many<WorkflowStateRow>(
     "SELECT * FROM workflow_states WHERE team_id = $1 AND id <> $2",
     [state.team_id, id],
@@ -466,6 +586,9 @@ export async function deletePostgresWorkflowState(
     target = siblings.find((candidate) => candidate.id === moveToStateId) ?? null;
     if (!target)
       throw apiError("VALIDATION_FAILED", "moveToStateId must be another state of the same team");
+    if (Boolean(target.is_reserved)) {
+      throw apiError("VALIDATION_FAILED", "Issues cannot be moved to the reserved Duplicate state");
+    }
   }
   const team = await getPostgresTeam(persistence, { id: state.team_id });
   if (!team) throw apiError("NOT_FOUND", "Team not found");

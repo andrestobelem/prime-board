@@ -12,8 +12,9 @@ const QUERY = `query($key: String) {
   viewer { id workspaceRole }
   team(key: $key, includeArchived: true) {
     id key name archivedAt visibility accessPolicy
+    autoClosePeriod autoArchivePeriod autoCloseStateId autoCloseParentIssues autoCloseChildIssues
     defaultState { id }
-    states { id name type color position }
+    states { id name type color position description isReserved }
     labels { id name color teamId }
     memberships { id actor { id name type } role }
   }
@@ -21,6 +22,17 @@ const QUERY = `query($key: String) {
 }`;
 
 const STATE_TYPES = ["TRIAGE", "BACKLOG", "UNSTARTED", "STARTED", "COMPLETED", "CANCELED"];
+
+/** Normaliza el período visible a la representación canónica de la API. */
+export function normalizeAutomationPeriodInput(raw: string): number | null {
+  const value = raw.trim();
+  if (value === "") return null;
+  const period = Number(value);
+  if (!Number.isFinite(period) || period < 0) {
+    throw new Error("Automation period must be a non-negative number of days or empty.");
+  }
+  return period === 0 ? null : period;
+}
 
 type DeleteTarget = { id: string; kind: "state" | "label"; name: string };
 type MembershipTarget = { id: string; name: string };
@@ -31,6 +43,7 @@ type TeamAccessPolicy = "WORKSPACE_MEMBERS" | "TEAM_MEMBERS";
 export function TeamSettingsView({ teamKey }: { teamKey: string }) {
   const result = useQuery<any>(QUERY, { key: teamKey });
   const [stateName, setStateName] = useState("");
+  const [stateDescription, setStateDescription] = useState("");
   const [stateType, setStateType] = useState("UNSTARTED");
   const [labelName, setLabelName] = useState("");
   const [labelColor, setLabelColor] = useState("#95a2b3");
@@ -72,6 +85,20 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
     } finally {
       setSaving(null);
     }
+  }
+
+  async function updateTeamAutomation(input: Record<string, unknown>): Promise<void> {
+    if (!canManage) return;
+    await runMutation("team-automation", async () => {
+      const response = await mutate<{ teamUpdate: { success: boolean } }>(
+        `mutation($id: ID!, $input: TeamUpdateInput!) {
+          teamUpdate(id: $id, input: $input) { success }
+        }`,
+        { id: team.id, input },
+      );
+      if (!response.teamUpdate.success)
+        throw new Error("Could not update team automation settings.");
+    });
   }
 
   async function updateTeamAccess(
@@ -155,10 +182,20 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
         `mutation($input: WorkflowStateCreateInput!) {
         workflowStateCreate(input: $input) { success }
       }`,
-        { input: { teamId: team.id, name: stateName.trim(), type: stateType } },
+        {
+          input: {
+            teamId: team.id,
+            name: stateName.trim(),
+            type: stateType,
+            description: stateDescription.trim() || null,
+          },
+        },
       ),
     );
-    if (created) setStateName("");
+    if (created) {
+      setStateName("");
+      setStateDescription("");
+    }
   }
 
   async function updateState(id: string, input: Record<string, unknown>): Promise<void> {
@@ -367,6 +404,143 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
         </div>
       </section>
 
+      <section className="settings-panel" aria-labelledby="team-automation-title">
+        <div className="settings-panel-header">
+          <div>
+            <h2 id="team-automation-title">Workflow automation</h2>
+            <p>
+              Configure future maintenance checks. Prime Board does not run a scheduler yet, so
+              these settings do not change issues automatically.
+            </p>
+          </div>
+        </div>
+        <div className="settings-list">
+          <div className="team-setting-row" aria-busy={saving === "team-automation"}>
+            <div className="team-setting-identity">
+              <div>
+                <strong>Auto-close after inactivity</strong>
+                <span className="settings-row-meta">
+                  Days. Leave empty or use 0 to disable; the API stores disabled as null.
+                </span>
+              </div>
+            </div>
+            <div className="team-setting-controls">
+              <input
+                aria-label="Auto-close period in days"
+                type="number"
+                min="0"
+                step="0.1"
+                defaultValue={team.autoClosePeriod ?? ""}
+                disabled={!canManage || saving === "team-automation"}
+                onBlur={(event) => {
+                  try {
+                    void updateTeamAutomation({
+                      autoClosePeriod: normalizeAutomationPeriodInput(event.target.value),
+                    });
+                  } catch (cause) {
+                    setError(cause instanceof Error ? cause.message : "Invalid automation period.");
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <div className="team-setting-row" aria-busy={saving === "team-automation"}>
+            <div className="team-setting-identity">
+              <div>
+                <strong>Auto-archive after closing</strong>
+                <span className="settings-row-meta">
+                  Days. Leave empty or use 0 to disable; the API stores disabled as null.
+                </span>
+              </div>
+            </div>
+            <div className="team-setting-controls">
+              <input
+                aria-label="Auto-archive period in days"
+                type="number"
+                min="0"
+                step="0.1"
+                defaultValue={team.autoArchivePeriod ?? ""}
+                disabled={!canManage || saving === "team-automation"}
+                onBlur={(event) => {
+                  try {
+                    void updateTeamAutomation({
+                      autoArchivePeriod: normalizeAutomationPeriodInput(event.target.value),
+                    });
+                  } catch (cause) {
+                    setError(cause instanceof Error ? cause.message : "Invalid automation period.");
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <div className="team-setting-row" aria-busy={saving === "team-automation"}>
+            <div className="team-setting-identity">
+              <div>
+                <strong>Auto-close state</strong>
+                <span className="settings-row-meta">
+                  The completed state used by a future worker.
+                </span>
+              </div>
+            </div>
+            <div className="team-setting-controls">
+              <select
+                aria-label="Auto-close state"
+                value={team.autoCloseStateId ?? ""}
+                disabled={!canManage || saving === "team-automation"}
+                onChange={(event) =>
+                  void updateTeamAutomation({ autoCloseStateId: event.target.value || null })
+                }
+              >
+                <option value="">First completed state</option>
+                {team.states
+                  .filter((state: any) => state.type === "COMPLETED")
+                  .map((state: any) => (
+                    <option key={state.id} value={state.id}>
+                      {state.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          </div>
+          <div className="team-setting-row" aria-busy={saving === "team-automation"}>
+            <div className="team-setting-identity">
+              <div>
+                <strong>Issue hierarchy</strong>
+                <span className="settings-row-meta">
+                  Choose which parent and child issues can be considered by auto-close.
+                </span>
+              </div>
+            </div>
+            <div className="team-setting-controls">
+              <label>
+                <input
+                  aria-label="Auto-close parent issues"
+                  type="checkbox"
+                  checked={team.autoCloseParentIssues !== false}
+                  disabled={!canManage || saving === "team-automation"}
+                  onChange={(event) =>
+                    void updateTeamAutomation({ autoCloseParentIssues: event.target.checked })
+                  }
+                />
+                Parent issues
+              </label>
+              <label>
+                <input
+                  aria-label="Auto-close child issues"
+                  type="checkbox"
+                  checked={team.autoCloseChildIssues !== false}
+                  disabled={!canManage || saving === "team-automation"}
+                  onChange={(event) =>
+                    void updateTeamAutomation({ autoCloseChildIssues: event.target.checked })
+                  }
+                />
+                Child issues
+              </label>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section className="settings-panel" aria-labelledby="team-members-title">
         <div className="settings-panel-header">
           <div>
@@ -458,14 +632,28 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                       className="settings-name-input"
                       aria-label={`Name for ${state.name}`}
                       defaultValue={state.name}
-                      disabled={!canManage || stateSaving}
+                      disabled={!canManage || stateSaving || state.isReserved}
                       onBlur={(event) => {
                         const next = event.target.value.trim();
                         if (next && next !== state.name) void updateState(state.id, { name: next });
                       }}
                     />
+                    <textarea
+                      className="settings-description-input"
+                      aria-label={`Description for ${state.name}`}
+                      defaultValue={state.description ?? ""}
+                      placeholder="Describe this state…"
+                      rows={2}
+                      disabled={!canManage || stateSaving || state.isReserved}
+                      onBlur={(event) => {
+                        const next = event.target.value.trim();
+                        if (next !== (state.description ?? ""))
+                          void updateState(state.id, { description: next || null });
+                      }}
+                    />
                     <span className="settings-row-meta">
                       {state.type.toLowerCase()}
+                      {state.isReserved && <span className="default-badge">System managed</span>}
                       {state.id === team.defaultState.id && (
                         <span className="default-badge">Default</span>
                       )}
@@ -476,7 +664,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                   <select
                     aria-label={`Type for ${state.name}`}
                     value={state.type}
-                    disabled={!canManage || stateSaving}
+                    disabled={!canManage || stateSaving || state.isReserved}
                     onChange={(event) => void updateState(state.id, { type: event.target.value })}
                   >
                     {STATE_TYPES.map((type) => (
@@ -490,10 +678,10 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     aria-label={`Color for ${state.name}`}
                     type="color"
                     value={state.color}
-                    disabled={!canManage || stateSaving}
+                    disabled={!canManage || stateSaving || state.isReserved}
                     onChange={(event) => void updateState(state.id, { color: event.target.value })}
                   />
-                  {canManage && state.id !== team.defaultState.id && (
+                  {canManage && !state.isReserved && state.id !== team.defaultState.id && (
                     <button
                       className="btn secondary compact"
                       disabled={!canManage || stateSaving}
@@ -515,7 +703,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     className="icon-action danger"
                     aria-label={`Delete ${state.name}`}
                     title="Delete state"
-                    disabled={!canManage || stateSaving}
+                    disabled={!canManage || stateSaving || state.isReserved}
                     onClick={() =>
                       setDeleteTarget({ id: state.id, kind: "state", name: state.name })
                     }
@@ -526,7 +714,7 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     className="icon-action"
                     aria-label={`Move ${state.name} up`}
                     title="Move up"
-                    disabled={!canManage || stateSaving || index === 0}
+                    disabled={!canManage || stateSaving || state.isReserved || index === 0}
                     onClick={() => void moveState(index, -1)}
                   >
                     <Icon name="arrow-up" size={14} />
@@ -535,7 +723,12 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
                     className="icon-action"
                     aria-label={`Move ${state.name} down`}
                     title="Move down"
-                    disabled={!canManage || stateSaving || index === team.states.length - 1}
+                    disabled={
+                      !canManage ||
+                      stateSaving ||
+                      state.isReserved ||
+                      index === team.states.length - 1
+                    }
                     onClick={() => void moveState(index, 1)}
                   >
                     <Icon name="arrow-down" size={14} />
@@ -559,6 +752,13 @@ export function TeamSettingsView({ teamKey }: { teamKey: string }) {
               value={stateName}
               disabled={saving === "new-state"}
               onChange={(event) => setStateName(event.target.value)}
+            />
+            <input
+              aria-label="New state description"
+              placeholder="Description (optional)"
+              value={stateDescription}
+              disabled={saving === "new-state"}
+              onChange={(event) => setStateDescription(event.target.value)}
             />
             <select
               aria-label="New state type"

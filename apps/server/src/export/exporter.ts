@@ -583,7 +583,10 @@ export function exportBoard(
 
   const teams = db
     .query(
-      `SELECT id, key, name, description, default_state_id, visibility, access_policy, archived_at FROM teams ${teamFilter ? "WHERE id = ?1" : ""} ORDER BY key`,
+      `SELECT id, key, name, description, default_state_id, visibility, access_policy,
+              auto_close_period, auto_archive_period, auto_close_state_id,
+              auto_close_parent_issues, auto_close_child_issues, archived_at
+       FROM teams ${teamFilter ? "WHERE id = ?1" : ""} ORDER BY key`,
     )
     .all(...((teamFilter ? [teamFilter.id] : []) as never[])) as Array<{
     id: string;
@@ -593,6 +596,11 @@ export function exportBoard(
     default_state_id: string | null;
     visibility: "public" | "private";
     access_policy: "workspace_members" | "team_members";
+    auto_close_period: number | null;
+    auto_archive_period: number | null;
+    auto_close_state_id: string | null;
+    auto_close_parent_issues: number | boolean | null;
+    auto_close_child_issues: number | boolean | null;
     archived_at: string | null;
   }>;
   write(
@@ -605,14 +613,35 @@ export function exportBoard(
         visibility: team.visibility,
         accessPolicy: team.access_policy,
         archived: Boolean(team.archived_at),
+        autoClosePeriod: team.auto_close_period,
+        autoArchivePeriod: team.auto_archive_period,
+        autoCloseState: team.auto_close_state_id
+          ? (lookups.states.get(team.auto_close_state_id) ?? null)
+          : null,
+        autoCloseParentIssues:
+          team.auto_close_parent_issues == null ? null : Boolean(team.auto_close_parent_issues),
+        autoCloseChildIssues:
+          team.auto_close_child_issues == null ? null : Boolean(team.auto_close_child_issues),
         defaultState: team.default_state_id
           ? (lookups.states.get(team.default_state_id) ?? null)
           : null,
-        states: db
-          .query(
-            "SELECT name, type, color, position FROM workflow_states WHERE team_id = ?1 ORDER BY position, name",
-          )
-          .all(team.id),
+        states: (
+          db
+            .query(
+              "SELECT name, type, color, position, description, is_reserved AS isReserved FROM workflow_states WHERE team_id = ?1 ORDER BY position, name",
+            )
+            .all(team.id) as Array<{
+            name: string;
+            type: string;
+            color: string;
+            position: number;
+            description: string | null;
+            isReserved: number | boolean;
+          }>
+        ).map((state) => ({
+          ...state,
+          isReserved: Boolean(state.isReserved),
+        })),
         labels: db
           .query("SELECT name, color FROM labels WHERE team_id = ?1 ORDER BY name")
           .all(team.id),

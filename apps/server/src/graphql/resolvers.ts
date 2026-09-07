@@ -1668,6 +1668,8 @@ export const resolvers = {
               description?: string | null;
               visibility?: "public" | "private" | null;
               accessPolicy?: "workspace_members" | "team_members" | null;
+              autoClosePeriod?: number | null;
+              autoArchivePeriod?: number | null;
             };
           },
           context: Context,
@@ -2381,6 +2383,7 @@ export const resolvers = {
               type: string;
               color?: string | null;
               position?: number | null;
+              description?: string | null;
             };
           },
           context: Context,

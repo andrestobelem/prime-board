@@ -144,6 +144,7 @@ export interface CreatedRelation {
   view: RelationView;
   issue: IssueRow;
   relatedIssue: IssueRow;
+  stateChange?: { issueId: string; from: string; to: string };
 }
 
 export function createRelation(
@@ -191,13 +192,52 @@ export function createRelation(
   if (type === "blocks") assertNoBlockingCycle(db, source, target, workspaceId);
 
   const id = newId();
+  let stateChange: CreatedRelation["stateChange"];
   db.transaction(() => {
     const timestamp = now();
+    let duplicateStateId: string | null = null;
+    if (type === "duplicate_of") {
+      const duplicate = db
+        .query(
+          `SELECT id FROM workflow_states
+           WHERE team_id = ?1 AND lower(name) = lower('Duplicate') AND is_reserved = 1
+           ORDER BY position, id LIMIT 1`,
+        )
+        .get(source.team_id) as { id: string } | null;
+      if (!duplicate) {
+        throw apiError(
+          "VALIDATION_FAILED",
+          "The source Team must have the reserved Duplicate state",
+        );
+      }
+      duplicateStateId = duplicate.id;
+    }
     db.query(
       `INSERT INTO issue_relations
         (id, issue_id, related_id, type, created_at, workspace_id)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
     ).run(id, source.id, target.id, type, timestamp, workspaceId ?? null);
+    if (duplicateStateId && source.state_id !== duplicateStateId) {
+      db.query(
+        workspaceId
+          ? "UPDATE issues SET state_id = ?1, updated_at = ?2 WHERE id = ?3 AND workspace_id = ?4"
+          : "UPDATE issues SET state_id = ?1, updated_at = ?2 WHERE id = ?3",
+      ).run(
+        ...(workspaceId
+          ? [duplicateStateId, timestamp, source.id, workspaceId]
+          : [duplicateStateId, timestamp, source.id]),
+      );
+      recordActivity(
+        db,
+        source.id,
+        actorId,
+        "state_changed",
+        { from: source.state_id, to: duplicateStateId, reason: "duplicate_of" },
+        undefined,
+        workspaceId,
+      );
+      stateChange = { issueId: source.id, from: source.state_id, to: duplicateStateId };
+    }
     if (workspaceId) {
       db.query("UPDATE issues SET updated_at = ?1 WHERE workspace_id = ?4 AND id IN (?2, ?3)").run(
         timestamp,
@@ -235,11 +275,14 @@ export function createRelation(
 
   const row = getRelation(db, id, workspaceId);
   if (!row) throw apiError("NOT_FOUND", `Relation not found: ${id}`);
+  const refreshedIssue = getIssue(db, issue.id, workspaceId);
+  const refreshedRelated = getIssue(db, related.id, workspaceId);
+  if (!refreshedIssue || !refreshedRelated) throw apiError("NOT_FOUND", "Issue not found");
   const view: RelationView =
     row.issue_id === issue.id
       ? { id: row.id, type: row.type, relatedId: row.related_id, createdAt: row.created_at }
       : { id: row.id, type: INVERSE[row.type], relatedId: row.issue_id, createdAt: row.created_at };
-  return { row, view, issue, relatedIssue: related };
+  return { row, view, issue: refreshedIssue, relatedIssue: refreshedRelated, stateChange };
 }
 
 export function deleteRelation(

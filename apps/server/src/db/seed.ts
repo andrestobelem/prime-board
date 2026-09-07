@@ -41,7 +41,9 @@ export interface WorkspaceSeedResult {
 export function seedTeamWorkflow(db: Database, teamId: string, workspaceId: string): void {
   const timestamp = now();
   const insert = db.query(
-    "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    `INSERT INTO workflow_states
+      (id, team_id, name, type, color, position, created_at, updated_at, workspace_id, description, is_reserved)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
   );
   let firstId: string | null = null;
   DEFAULT_WORKFLOW.forEach((state, index) => {
@@ -57,6 +59,8 @@ export function seedTeamWorkflow(db: Database, teamId: string, workspaceId: stri
       timestamp,
       timestamp,
       workspaceId,
+      "description" in state ? state.description : null,
+      "isReserved" in state && state.isReserved ? 1 : 0,
     );
   });
   db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(firstId, teamId);

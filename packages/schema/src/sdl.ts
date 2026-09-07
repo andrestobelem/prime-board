@@ -81,6 +81,8 @@ export const typeDefs = /* GraphQL */ `
     type: StateType!
     color: String!
     position: Float!
+    description: String
+    isReserved: Boolean!
   }
 
   enum TeamVisibility {
@@ -110,6 +112,26 @@ export const typeDefs = /* GraphQL */ `
     cycles: [Cycle!]!
     memberships: [TeamMembership!]!
     documents(includeArchived: Boolean = false): [Document!]!
+    """
+    Number of inactive days before a future maintenance worker may auto-close issues. Null disables the automation.
+    """
+    autoClosePeriod: Float
+    """
+    Number of days after closing before a future maintenance worker may auto-archive issues.
+    """
+    autoArchivePeriod: Float
+    """
+    Completed state used by auto-close. Null uses a deterministic completed state.
+    """
+    autoCloseStateId: ID
+    """
+    Whether parent issues participate in auto-close eligibility.
+    """
+    autoCloseParentIssues: Boolean
+    """
+    Whether child issues participate in auto-close eligibility.
+    """
+    autoCloseChildIssues: Boolean
     createdAt: DateTime!
     archivedAt: DateTime
   }
@@ -646,6 +668,8 @@ export const typeDefs = /* GraphQL */ `
     description: String
     visibility: TeamVisibility
     accessPolicy: TeamAccessPolicy
+    autoClosePeriod: Float
+    autoArchivePeriod: Float
   }
 
   input TeamUpdateInput {
@@ -657,6 +681,11 @@ export const typeDefs = /* GraphQL */ `
     Must be a state in the Team.
     """
     defaultStateId: ID
+    autoClosePeriod: Float
+    autoArchivePeriod: Float
+    autoCloseStateId: ID
+    autoCloseParentIssues: Boolean
+    autoCloseChildIssues: Boolean
   }
 
   input ActorCreateInput {
@@ -691,6 +720,7 @@ export const typeDefs = /* GraphQL */ `
     type: StateType!
     color: String
     position: Float
+    description: String
   }
 
   type TeamPayload {
@@ -736,6 +766,7 @@ export const typeDefs = /* GraphQL */ `
     type: StateType
     color: String
     position: Float
+    description: String
   }
 
   input LabelUpdateInput {

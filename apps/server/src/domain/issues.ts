@@ -131,15 +131,21 @@ function scopedTeam(
 
 function validateState(db: Database, teamId: string, stateId: string, workspaceId?: string): void {
   const state = workspaceId
-    ? db
+    ? (db
         .query(
-          "SELECT id FROM workflow_states WHERE id = ?1 AND team_id = ?2 AND workspace_id = ?3",
+          "SELECT id, is_reserved FROM workflow_states WHERE id = ?1 AND team_id = ?2 AND workspace_id = ?3",
         )
-        .get(stateId, teamId, workspaceId)
-    : db
-        .query("SELECT id FROM workflow_states WHERE id = ?1 AND team_id = ?2")
-        .get(stateId, teamId);
+        .get(stateId, teamId, workspaceId) as { id: string; is_reserved: number | boolean } | null)
+    : (db
+        .query("SELECT id, is_reserved FROM workflow_states WHERE id = ?1 AND team_id = ?2")
+        .get(stateId, teamId) as { id: string; is_reserved: number | boolean } | null);
   if (!state) throw apiError("VALIDATION_FAILED", "State does not belong to the issue's team");
+  if (Boolean(state.is_reserved)) {
+    throw apiError(
+      "VALIDATION_FAILED",
+      "Issues cannot transition into the reserved Duplicate state",
+    );
+  }
 }
 
 function validateAssignee(db: Database, assigneeId: string, workspaceId?: string): void {

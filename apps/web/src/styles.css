@@ -1655,6 +1655,24 @@ kbd {
   background: var(--surface);
   border-color: var(--border);
 }
+.settings-description-input {
+  display: block;
+  width: 100%;
+  min-width: 190px;
+  min-height: 42px;
+  margin-top: 4px;
+  padding: 3px 4px;
+  resize: vertical;
+  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+  font-size: 12px;
+}
+.settings-description-input:hover,
+.settings-description-input:focus {
+  background: var(--surface);
+  border-color: var(--border);
+}
 .settings-row-meta {
   display: flex;
   align-items: center;
@@ -1696,7 +1714,8 @@ kbd {
   color: var(--danger);
 }
 .icon-action:disabled,
-.settings-name-input:disabled {
+.settings-name-input:disabled,
+.settings-description-input:disabled {
   opacity: 0.45;
   cursor: default;
 }

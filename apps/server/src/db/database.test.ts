@@ -135,6 +135,7 @@ describe("bootstrap", () => {
       "started",
       "completed",
       "canceled",
+      "canceled",
     ]);
     const storedKey = db.query("SELECT hash FROM api_keys").get() as { hash: string };
     expect(storedKey.hash).toBe(hashApiKey(result.adminApiKey!));
@@ -440,7 +441,18 @@ describe("multi-workspace root migration", () => {
     });
     expect(membership.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 29 });
+    expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 31 });
+    expect(db.query("SELECT max(version) AS version FROM _migrations").get()).toEqual({
+      version: 34,
+    });
+    expect(
+      db
+        .query("SELECT version, name FROM _migrations WHERE version IN (33, 34) ORDER BY version")
+        .all(),
+    ).toEqual([
+      { version: 33, name: "workflow_state_description_reserved" },
+      { version: 34, name: "team_workflow_automation" },
+    ]);
 
     migrate(db);
     expect(db.query("SELECT count(*) AS count FROM workspace_memberships").get()).toEqual({
@@ -557,12 +569,12 @@ describe("API key Workspace grants and Workspace seed", () => {
       db
         .query("SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1")
         .get(firstTeam.id),
-    ).toEqual({ count: 5 });
+    ).toEqual({ count: 6 });
     expect(
       db
         .query("SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1")
         .get(second.teamId),
-    ).toEqual({ count: 5 });
+    ).toEqual({ count: 6 });
     expect(db.query("SELECT key FROM teams WHERE id = ?1").get(second.teamId)).toEqual({
       key: "PB",
     });
@@ -572,7 +584,7 @@ describe("API key Workspace grants and Workspace seed", () => {
           "SELECT count(*) AS count FROM workflow_states WHERE team_id = ?1 AND workspace_id = ?2",
         )
         .get(second.teamId, second.workspaceId),
-    ).toEqual({ count: 5 });
+    ).toEqual({ count: 6 });
     expect(
       db
         .query("SELECT workspace_id FROM team_memberships WHERE team_id = ?1 AND actor_id = ?2")

@@ -95,6 +95,7 @@ export async function createPostgresRelation(
   view: PostgresRelationView;
   issue: IssueRow;
   relatedIssue: IssueRow;
+  stateChange?: { issueId: string; from: string; to: string };
 }> {
   return persistence.transaction(async (tx) => {
     const issue = await getPostgresIssueByRef(tx, input.issueId);
@@ -107,6 +108,23 @@ export async function createPostgresRelation(
     if (!normalized) throw apiError("VALIDATION_FAILED", "Invalid relation type");
     const source = normalized.invert ? related : issue;
     const target = normalized.invert ? issue : related;
+    let stateChange: { issueId: string; from: string; to: string } | undefined;
+    let duplicateStateId: string | null = null;
+    if (normalized.type === "duplicate_of") {
+      const duplicate = await tx.one<{ id: string }>(
+        `SELECT id FROM workflow_states
+         WHERE team_id = $1 AND lower(name) = lower('Duplicate') AND is_reserved = TRUE
+         ORDER BY position, id LIMIT 1`,
+        [source.team_id],
+      );
+      if (!duplicate) {
+        throw apiError(
+          "VALIDATION_FAILED",
+          "The source Team must have the reserved Duplicate state",
+        );
+      }
+      duplicateStateId = duplicate.id;
+    }
     const existing =
       normalized.type === "related"
         ? await tx.one(
@@ -126,6 +144,25 @@ export async function createPostgresRelation(
       "INSERT INTO issue_relations (id, issue_id, related_id, type, created_at) VALUES ($1, $2, $3, $4, $5)",
       [id, source.id, target.id, normalized.type, timestamp],
     );
+    if (duplicateStateId && source.state_id !== duplicateStateId) {
+      await tx.execute("UPDATE issues SET state_id = $1, updated_at = $2 WHERE id = $3", [
+        duplicateStateId,
+        timestamp,
+        source.id,
+      ]);
+      await tx.execute(
+        `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
+         VALUES ($1, $2, $3, 'state_changed', $4, $5)`,
+        [
+          newId(),
+          source.id,
+          actorId,
+          JSON.stringify({ from: source.state_id, to: duplicateStateId, reason: "duplicate_of" }),
+          timestamp,
+        ],
+      );
+      stateChange = { issueId: source.id, from: source.state_id, to: duplicateStateId };
+    }
     await tx.execute("UPDATE issues SET updated_at = $1 WHERE id IN ($2, $3)", [
       timestamp,
       source.id,
@@ -149,6 +186,9 @@ export async function createPostgresRelation(
         [newId(), issueId, actorId, payload, timestamp],
       );
     }
+    const refreshedIssue = await getPostgresIssue(tx, issue.id);
+    const refreshedRelated = await getPostgresIssue(tx, related.id);
+    if (!refreshedIssue || !refreshedRelated) throw apiError("NOT_FOUND", "Issue not found");
     return {
       view: viewFromRow(
         {
@@ -160,8 +200,9 @@ export async function createPostgresRelation(
         },
         issue.id,
       ),
-      issue,
-      relatedIssue: related,
+      issue: refreshedIssue,
+      relatedIssue: refreshedRelated,
+      stateChange,
     };
   });
 }

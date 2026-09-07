@@ -470,6 +470,13 @@ export function rebuildFromRepo(
     const stateIds = new Map<string, string>();
     const labelIds = new Map<string, string>();
     const legacyLabelIds = new Map<string, Array<{ id: string; team: string | null }>>();
+    const reservedDuplicate = {
+      name: "Duplicate",
+      type: "canceled",
+      color: "#95a2b3",
+      description: "System-managed status for duplicate issues.",
+      isReserved: true,
+    };
     const addLegacyLabel = (name: string, id: string, team: string | null) => {
       const entries = legacyLabelIds.get(name) ?? [];
       entries.push({ id, team });
@@ -483,10 +490,48 @@ export function rebuildFromRepo(
         team.accessPolicy === "workspace_members" || team.accessPolicy === "team_members"
           ? team.accessPolicy
           : "team_members";
+      const automationPeriod = (value: unknown): number | null =>
+        typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+      const automationFlag = (value: unknown): number | null =>
+        typeof value === "boolean" ? (value ? 1 : 0) : null;
+      const states: Array<Record<string, any>> = Array.isArray(team.states)
+        ? (team.states as Array<Record<string, any>>)
+        : [];
+      let reservedStateFound = false;
+      const normalizedStates: Array<Record<string, any>> = states.map(
+        (state: Record<string, any>, index: number) => {
+          const reserved =
+            Boolean(state.isReserved) || String(state.name).toLowerCase() === "duplicate";
+          if (!reserved) return { ...state, isReserved: false };
+          if (reservedStateFound) {
+            throw new Error(`Team "${team.key}" contains more than one Duplicate state`);
+          }
+          reservedStateFound = true;
+          return {
+            ...state,
+            name: reservedDuplicate.name,
+            type: reservedDuplicate.type,
+            color: reservedDuplicate.color,
+            description: reservedDuplicate.description,
+            isReserved: true,
+            position: typeof state.position === "number" ? state.position : index,
+          };
+        },
+      );
+      if (!reservedStateFound) {
+        const maxPosition = normalizedStates.reduce(
+          (max, state, index) =>
+            Math.max(max, typeof state.position === "number" ? state.position : index),
+          -1,
+        );
+        normalizedStates.push({ ...reservedDuplicate, position: maxPosition + 1 });
+      }
       db.query(
         `INSERT INTO teams
-         (id, name, key, description, visibility, access_policy, created_at, updated_at, archived_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)`,
+         (id, name, key, description, visibility, access_policy,
+          auto_close_period, auto_archive_period, auto_close_parent_issues,
+          auto_close_child_issues, created_at, updated_at, archived_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)`,
       ).run(
         teamId,
         team.name,
@@ -494,15 +539,31 @@ export function rebuildFromRepo(
         team.description ?? null,
         visibility,
         visibility === "private" ? "team_members" : accessPolicy,
+        automationPeriod(team.autoClosePeriod),
+        automationPeriod(team.autoArchivePeriod),
+        automationFlag(team.autoCloseParentIssues),
+        automationFlag(team.autoCloseChildIssues),
         timestamp,
         team.archived ? timestamp : null,
       );
-      for (const state of team.states ?? []) {
+      for (const state of normalizedStates) {
         const stateId = newId();
         stateIds.set(`${team.key}/${state.name}`, stateId);
         db.query(
-          "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-        ).run(stateId, teamId, state.name, state.type, state.color, state.position, timestamp);
+          `INSERT INTO workflow_states
+           (id, team_id, name, type, color, position, description, is_reserved, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)`,
+        ).run(
+          stateId,
+          teamId,
+          state.name,
+          state.type,
+          state.color,
+          state.position,
+          state.description ?? null,
+          state.isReserved ? 1 : 0,
+          timestamp,
+        );
       }
       for (const label of team.labels ?? []) {
         const labelId = newId();
@@ -514,16 +575,35 @@ export function rebuildFromRepo(
       }
       // Estado default explícito (AT-180); exports viejos sin el campo caen al
       // primero por posición (los estados vienen ordenados así en el export).
-      const defaultState = team.defaultState
-        ? (stateIds.get(`${team.key}/${team.defaultState}`) ?? null)
-        : null;
-      const firstState = team.states?.[0]
-        ? (stateIds.get(`${team.key}/${team.states[0].name}`) ?? null)
-        : null;
-      db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2").run(
-        defaultState ?? firstState,
-        teamId,
+      const defaultStateName = team.defaultState != null ? String(team.defaultState) : null;
+      const defaultStateRecord = normalizedStates.find(
+        (state) =>
+          String(state.name) === defaultStateName ||
+          `${team.key}/${state.name}` === defaultStateName,
       );
+      const defaultState =
+        defaultStateRecord && !defaultStateRecord.isReserved
+          ? (stateIds.get(`${team.key}/${defaultStateRecord.name}`) ?? null)
+          : null;
+      const firstState = normalizedStates.find((state) => !state.isReserved)
+        ? (stateIds.get(
+            `${team.key}/${normalizedStates.find((state) => !state.isReserved)!.name}`,
+          ) ?? null)
+        : null;
+      const autoCloseStateName = team.autoCloseState != null ? String(team.autoCloseState) : null;
+      const autoCloseStateRecord = normalizedStates.find(
+        (state) =>
+          !state.isReserved &&
+          (String(state.name) === autoCloseStateName ||
+            `${team.key}/${state.name}` === autoCloseStateName) &&
+          state.type === "completed",
+      );
+      const autoCloseState = autoCloseStateRecord
+        ? (stateIds.get(`${team.key}/${autoCloseStateRecord.name}`) ?? null)
+        : null;
+      db.query(
+        "UPDATE teams SET default_state_id = ?1, auto_close_state_id = ?2 WHERE id = ?3",
+      ).run(defaultState ?? firstState, autoCloseState, teamId);
 
       const members = Array.isArray(team.members)
         ? team.members
@@ -945,7 +1025,20 @@ export function rebuildFromRepo(
       }
       for (const ref of issue.duplicateOf ?? []) {
         const canonical = issueIds.get(ref);
-        if (canonical) insertRelation(self, canonical, "duplicate_of");
+        if (canonical) {
+          insertRelation(self, canonical, "duplicate_of");
+          // Los exports históricos registraban la relación, pero no exponían el
+          // estado en el snapshot del issue. Rebuild completa la invariante de PRB-383.
+          const teamKey = String(issue.team);
+          const duplicateStateId = stateIds.get(`${teamKey}/Duplicate`);
+          if (!duplicateStateId) {
+            throw new Error(`Issue ${issue.id} references a Team without Duplicate state`);
+          }
+          db.query("UPDATE issues SET state_id = ?1 WHERE id = ?2 AND state_id <> ?1").run(
+            duplicateStateId,
+            self,
+          );
+        }
       }
     }
 

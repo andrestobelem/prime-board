@@ -9,6 +9,9 @@ import workspaceAuth from "./0007_workspace_auth.sql" with { type: "text" };
 import apiKeyTeamLimitsWorkspace from "./0008_api_key_team_limits_workspace.sql" with { type: "text" };
 import apiKeyWorkspaceGrantScope from "./0009_api_key_workspace_grant_scope.sql" with { type: "text" };
 import projectorCheckpoints from "./0010_projector_checkpoints.sql" with { type: "text" };
+import workflowStateDescriptionReserved from "./0014_workflow_state_description_reserved.sql" with { type: "text" };
+import teamWorkflowAutomation from "./0015_team_workflow_automation.sql" with { type: "text" };
+import { newId, now } from "../util.ts";
 
 export interface PostgresMigration {
   readonly version: number;
@@ -27,6 +30,12 @@ export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
   { version: 8, name: "api_key_team_limits_workspace", sql: apiKeyTeamLimitsWorkspace },
   { version: 9, name: "api_key_workspace_grant_scope", sql: apiKeyWorkspaceGrantScope },
   { version: 10, name: "projector_checkpoints", sql: projectorCheckpoints },
+  {
+    version: 14,
+    name: "workflow_state_description_reserved",
+    sql: workflowStateDescriptionReserved,
+  },
+  { version: 15, name: "team_workflow_automation", sql: teamWorkflowAutomation },
 ];
 
 interface AppliedMigration {
@@ -99,6 +108,53 @@ function validateAppliedRows(
   }
 }
 
+async function seedPostgresReservedDuplicateStates(sql: PostgresSql): Promise<void> {
+  const teams = await sql<{ id: string; default_state_id: string | null }[]>`
+    SELECT id, default_state_id FROM teams
+  `;
+  for (const team of teams) {
+    const duplicateRows = await sql<{ id: string }[]>`
+      SELECT id FROM workflow_states
+      WHERE team_id = ${team.id} AND lower(name) = lower('Duplicate')
+      LIMIT 1
+    `;
+    const maxRows = await sql<{ max: number }[]>`
+      SELECT coalesce(max(position), -1) AS max
+      FROM workflow_states WHERE team_id = ${team.id}
+    `;
+    const duplicateId = duplicateRows[0]?.id ?? newId();
+    const timestamp = now();
+    if (duplicateRows[0]) {
+      await sql`
+        UPDATE workflow_states
+        SET name = 'Duplicate', type = 'canceled', color = '#95a2b3',
+            description = 'System-managed status for duplicate issues.',
+            is_reserved = TRUE, position = ${(maxRows[0]?.max ?? -1) + 1}, updated_at = ${timestamp}
+        WHERE id = ${duplicateId}
+      `;
+    } else {
+      await sql`
+        INSERT INTO workflow_states
+          (id, team_id, name, type, color, position, created_at, updated_at, description, is_reserved)
+        VALUES
+          (${duplicateId}, ${team.id}, 'Duplicate', 'canceled', '#95a2b3',
+           ${(maxRows[0]?.max ?? -1) + 1}, ${timestamp}, ${timestamp},
+           'System-managed status for duplicate issues.', TRUE)
+      `;
+    }
+    if (team.default_state_id === duplicateId) {
+      const fallbackRows = await sql<{ id: string }[]>`
+        SELECT id FROM workflow_states
+        WHERE team_id = ${team.id} AND is_reserved = FALSE
+        ORDER BY position, id LIMIT 1
+      `;
+      if (fallbackRows[0]) {
+        await sql`UPDATE teams SET default_state_id = ${fallbackRows[0].id} WHERE id = ${team.id}`;
+      }
+    }
+  }
+}
+
 /**
  * Applies trusted, versioned PostgreSQL SQL while holding an advisory
  * transaction lock. Migration SQL is repository-owned and is intentionally
@@ -133,6 +189,7 @@ export async function migratePostgres(
       if (appliedVersions.has(migration.version)) continue;
       try {
         await tx.unsafe(migration.sql).simple();
+        if (migration.version === 14) await seedPostgresReservedDuplicateStates(tx);
         await tx`
           INSERT INTO schema_migrations (version, name, checksum)
           VALUES (${migration.version}, ${migration.name}, ${checksum(migration.sql)})

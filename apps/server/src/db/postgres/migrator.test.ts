@@ -5,6 +5,15 @@ import { POSTGRES_MIGRATIONS, migratePostgres } from "./migrator.ts";
 const postgresUrl = process.env.PRIME_BOARD_POSTGRES_URL;
 
 describe("PostgreSQL projector checkpoint migration", () => {
+  it("keeps PRB-383 workflow migrations after Documents retirement", () => {
+    expect(POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 14)).toMatchObject({
+      name: "workflow_state_description_reserved",
+    });
+    expect(POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 15)).toMatchObject({
+      name: "team_workflow_automation",
+    });
+  });
+
   it("registers migration 0010 with the checkpoint schema", () => {
     const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 10);
     expect(migration).toMatchObject({ name: "projector_checkpoints" });

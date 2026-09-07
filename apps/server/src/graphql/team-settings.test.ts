@@ -56,6 +56,40 @@ describe("estados del workflow", () => {
     expect(dup.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
   });
 
+  it("expone y protege el estado reservado Duplicate", async () => {
+    const team = await gql(
+      app,
+      `{ team(key: "PB") { id states { id name type description isReserved } } }`,
+    );
+    const duplicate = team.data!.team.states.find((state: any) => state.name === "Duplicate");
+    expect(duplicate).toMatchObject({
+      type: "CANCELED",
+      description: "System-managed status for duplicate issues.",
+      isReserved: true,
+    });
+
+    const update = await gql(
+      app,
+      `mutation($id: ID!) { workflowStateUpdate(id: $id, input: { name: "Closed" }) { success } }`,
+      { id: duplicate.id },
+    );
+    expect(update.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const deleted = await gql(
+      app,
+      `mutation($id: ID!) { workflowStateDelete(id: $id) { success } }`,
+      { id: duplicate.id },
+    );
+    expect(deleted.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const defaultUpdate = await gql(
+      app,
+      `mutation($id: ID!, $state: ID!) { teamUpdate(id: $id, input: { defaultStateId: $state }) { success } }`,
+      { id: team.data!.team.id, state: duplicate.id },
+    );
+    expect(defaultUpdate.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+
   it("rechaza convertir el último estado completed a otro tipo", async () => {
     const result = await gql(
       app,

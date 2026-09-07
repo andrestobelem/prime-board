@@ -9,6 +9,11 @@ const REPO_ROOT = resolve(import.meta.dir, "../../../..");
 const EXPECTED_PUBLIC_DESCRIPTIONS = [
   "Workspaces granted to this Actor through the current credential.",
   "The default destination for issues created without an explicit state. Editable through teamUpdate.",
+  "Number of inactive days before a future maintenance worker may auto-close issues. Null disables the automation.",
+  "Number of days after closing before a future maintenance worker may auto-archive issues.",
+  "Completed state used by auto-close. Null uses a deterministic completed state.",
+  "Whether parent issues participate in auto-close eligibility.",
+  "Whether child issues participate in auto-close eligibility.",
   "NULL for Workspace labels.",
   "Team IDs allowed by this key; empty means every Team.",
   "Plaintext token; returned only when the invitation is created.",

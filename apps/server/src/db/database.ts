@@ -31,6 +31,8 @@ import migration0026 from "./migrations/0026_api_key_workspaces.sql" with { type
 import migration0027 from "./migrations/0027_documents.sql" with { type: "text" };
 import migration0028 from "./migrations/0028_issue_subscribers.sql" with { type: "text" };
 import migration0029 from "./migrations/0029_comments_fts.sql" with { type: "text" };
+import migration0033 from "./migrations/0033_workflow_state_description_reserved.sql" with { type: "text" };
+import migration0034 from "./migrations/0034_team_workflow_automation.sql" with { type: "text" };
 import { newId, now } from "./util.ts";
 
 interface Migration {
@@ -69,6 +71,8 @@ const MIGRATIONS: Migration[] = [
   { version: 27, name: "documents", sql: migration0027 },
   { version: 28, name: "issue_subscribers", sql: migration0028 },
   { version: 29, name: "comments_fts", sql: migration0029 },
+  { version: 33, name: "workflow_state_description_reserved", sql: migration0033 },
+  { version: 34, name: "team_workflow_automation", sql: migration0034 },
 ];
 
 const WORKSPACE_ROOT_TABLES = [
@@ -193,6 +197,78 @@ function validateApiKeyWorkspaceMigration(db: Database, phase: "before" | "after
   }
 }
 
+const RESERVED_DUPLICATE_STATE = {
+  name: "Duplicate",
+  type: "canceled",
+  color: "#95a2b3",
+  description: "System-managed status for duplicate issues.",
+} as const;
+
+/** Completa el estado reservado Duplicate en Teams creados antes de PRB-383. */
+function seedReservedDuplicateStates(db: Database): void {
+  const teams = db.query("SELECT id, workspace_id, default_state_id FROM teams").all() as Array<{
+    id: string;
+    workspace_id: string | null;
+    default_state_id: string | null;
+  }>;
+  const findDuplicate = db.query(
+    "SELECT id FROM workflow_states WHERE team_id = ?1 AND lower(name) = lower(?2) LIMIT 1",
+  );
+  const insert = db.query(
+    `INSERT INTO workflow_states
+      (id, team_id, name, type, color, position, created_at, updated_at, workspace_id, description, is_reserved)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9, 1)`,
+  );
+  const update = db.query(
+    `UPDATE workflow_states
+     SET name = ?1, type = ?2, color = ?3, description = ?4, is_reserved = 1, position = ?5, updated_at = ?6
+     WHERE id = ?7`,
+  );
+  const setDefault = db.query("UPDATE teams SET default_state_id = ?1 WHERE id = ?2");
+  const fallback = db.query(
+    `SELECT id FROM workflow_states
+     WHERE team_id = ?1 AND is_reserved = 0
+     ORDER BY position, id LIMIT 1`,
+  );
+  for (const team of teams) {
+    const max = db
+      .query("SELECT coalesce(max(position), -1) AS max FROM workflow_states WHERE team_id = ?1")
+      .get(team.id) as { max: number };
+    const timestamp = now();
+    const existing = findDuplicate.get(team.id, RESERVED_DUPLICATE_STATE.name) as {
+      id: string;
+    } | null;
+    const duplicateId = existing?.id ?? newId();
+    if (existing) {
+      update.run(
+        RESERVED_DUPLICATE_STATE.name,
+        RESERVED_DUPLICATE_STATE.type,
+        RESERVED_DUPLICATE_STATE.color,
+        RESERVED_DUPLICATE_STATE.description,
+        max.max + 1,
+        timestamp,
+        duplicateId,
+      );
+    } else {
+      insert.run(
+        duplicateId,
+        team.id,
+        RESERVED_DUPLICATE_STATE.name,
+        RESERVED_DUPLICATE_STATE.type,
+        RESERVED_DUPLICATE_STATE.color,
+        max.max + 1,
+        timestamp,
+        team.workspace_id,
+        RESERVED_DUPLICATE_STATE.description,
+      );
+    }
+    if (team.default_state_id === duplicateId) {
+      const first = fallback.get(team.id) as { id: string } | null;
+      if (first) setDefault.run(first.id, team.id);
+    }
+  }
+}
+
 function hardenDatabaseFiles(path: string): void {
   for (const file of [path, `${path}-wal`, `${path}-shm`]) {
     if (existsSync(file)) chmodSync(file, 0o600);
@@ -254,6 +330,7 @@ export function migrate(db: Database): void {
         if (migration.version === 24) validateWorkspaceMigration(db, "before");
         if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "before");
         db.exec(migration.sql);
+        if (migration.version === 33) seedReservedDuplicateStates(db);
         if (migration.version === 24) {
           normalizeBackfilledMembershipIds(db);
           validateWorkspaceMigration(db, "after");

@@ -1083,6 +1083,13 @@ export const issueResolvers = {
             to: { type: inverse[created.view.type], issue: identifierOf(created.issue) },
           },
         });
+        if (created.stateChange) {
+          const changedIssue =
+            created.issue.id === created.stateChange.issueId ? created.issue : created.relatedIssue;
+          context.events.emit("issue.updated", viewer, issueEventData(changedIssue), {
+            state: { from: created.stateChange.from, to: created.stateChange.to },
+          });
+        }
         return {
           success: true,
           relation: {
@@ -1118,6 +1125,13 @@ export const issueResolvers = {
           to: { type: inverse[created.view.type], issue: identifierOf(created.issue) },
         },
       });
+      if (created.stateChange) {
+        const changedIssue =
+          created.issue.id === created.stateChange.issueId ? created.issue : created.relatedIssue;
+        context.events.emit("issue.updated", viewer, issueEventData(changedIssue), {
+          state: { from: created.stateChange.from, to: created.stateChange.to },
+        });
+      }
       return {
         success: true,
         relation: { ...mapRelation(created.view), _sourceTeamId: created.issue.team_id },

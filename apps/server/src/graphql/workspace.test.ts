@@ -131,7 +131,7 @@ describe("Workspace GraphQL contract", () => {
       lifecycleApp.db
         .query("SELECT count(*) AS count FROM workflow_states WHERE workspace_id = ?1")
         .get(secondWorkspaceId),
-    ).toEqual({ count: 5 });
+    ).toEqual({ count: 6 });
 
     const selected = await gqlWithWorkspace(`{ workspace { id urlKey } }`, secondWorkspaceId);
     expect(selected.errors).toBeUndefined();
