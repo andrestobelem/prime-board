@@ -36,11 +36,15 @@ function installUppercaseNotificationSchema(db: Database): void {
       "ACTOR_ID" TEXT NOT NULL,
       "CATEGORY" TEXT NOT NULL,
       "CHANNEL" TEXT NOT NULL,
-      "ENABLED" INTEGER NOT NULL DEFAULT 1,
-      "EMAIL_DELIVERY" TEXT,
+      "ENABLED" INTEGER NOT NULL DEFAULT 1 CHECK ("ENABLED" IN (0, 1)),
+      "EMAIL_DELIVERY" TEXT CHECK ("EMAIL_DELIVERY" IN ('digest', 'immediate')),
       "CREATED_AT" TEXT NOT NULL,
       "UPDATED_AT" TEXT NOT NULL,
       PRIMARY KEY ("WORKSPACE_ID", "ACTOR_ID", "CATEGORY", "CHANNEL"),
+      CHECK ("CATEGORY" IN ('assignments', 'mentions', 'comments', 'status_changes', 'reviews', 'project_updates')),
+      CHECK ("CHANNEL" IN ('inbox', 'desktop', 'mobile', 'email', 'slack')),
+      CHECK (("CHANNEL" = 'email' AND "EMAIL_DELIVERY" IS NOT NULL)
+        OR ("CHANNEL" <> 'email' AND "EMAIL_DELIVERY" IS NULL)),
       FOREIGN KEY ("WORKSPACE_ID", "ACTOR_ID")
         REFERENCES "WORKSPACE_MEMBERSHIPS"("WORKSPACE_ID", "ACTOR_ID") ON DELETE CASCADE
     );
@@ -49,6 +53,73 @@ function installUppercaseNotificationSchema(db: Database): void {
     INSERT INTO _migrations (version, name, applied_at)
       VALUES (32, 'notification_preferences', '2026-01-01T00:00:00.000Z');
   `);
+}
+
+function replaceNotificationSchema(db: Database, transform: (sql: string) => string): void {
+  db.exec(
+    "DROP INDEX idx_notification_preferences_actor_workspace; DROP TABLE notification_preferences;",
+  );
+  const migration = readFileSync(
+    join(import.meta.dir, "migrations", "0032_notification_preferences.sql"),
+    "utf8",
+  );
+  db.exec(transform(migration));
+}
+
+function restoreNotificationSchema(db: Database): void {
+  db.exec(
+    "DROP INDEX IF EXISTS idx_notification_preferences_actor_workspace; DROP TABLE notification_preferences;",
+  );
+  db.exec(
+    readFileSync(join(import.meta.dir, "migrations", "0032_notification_preferences.sql"), "utf8"),
+  );
+}
+
+function notificationSchemaSnapshot(db: Database): unknown[] {
+  return db
+    .query(
+      `SELECT type, name, tbl_name, sql
+       FROM sqlite_master
+       WHERE tbl_name = 'notification_preferences'
+          OR name = 'idx_notification_preferences_actor_workspace'
+       ORDER BY type, name`,
+    )
+    .all();
+}
+
+function insertInvalidNotificationRow(
+  db: Database,
+  category: string,
+  channel: string,
+  enabled: number | string,
+  emailDelivery: string | null,
+): void {
+  db.exec("PRAGMA ignore_check_constraints = ON");
+  try {
+    db.query(
+      `INSERT INTO notification_preferences
+           (workspace_id, actor_id, category, channel, enabled, email_delivery, created_at, updated_at)
+         SELECT workspace.id, actors.id, ?1, ?2, ?3, ?4, ?5, ?5
+           FROM workspace
+           JOIN actors ON actors.name = 'admin'
+          LIMIT 1`,
+    ).run(category, channel, enabled, emailDelivery, "2026-01-01");
+  } finally {
+    db.exec("PRAGMA ignore_check_constraints = OFF");
+  }
+}
+
+function insertOrphanNotificationRow(db: Database): void {
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.query(
+      `INSERT INTO notification_preferences
+         (workspace_id, actor_id, category, channel, enabled, email_delivery, created_at, updated_at)
+       VALUES ('workspace-missing', 'actor-missing', 'mentions', 'inbox', 1, NULL, '2026-01-01', '2026-01-01')`,
+    ).run();
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
 }
 
 function quoteTestIdentifier(identifier: string): string {
@@ -696,6 +767,345 @@ describe("colisión de migraciones SQLite", () => {
       expect(db.query("SELECT count(*) AS count FROM notification_preferences").get()).toEqual({
         count: 1,
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("valida el contrato completo de Notifications y permite reparar cada restricción", () => {
+    const cases = [
+      {
+        description: "tipo y default de enabled",
+        transform: (sql: string) =>
+          sql.replace("enabled INTEGER NOT NULL DEFAULT 1", "enabled TEXT NOT NULL DEFAULT 'bad'"),
+        expected: /enabled has type TEXT|enabled has default 'bad'/i,
+      },
+      {
+        description: "NOT NULL de actor_id",
+        transform: (sql: string) => sql.replace("actor_id TEXT NOT NULL", "actor_id TEXT"),
+        expected: /actor_id has NOT NULL=0/i,
+      },
+      {
+        description: "default de enabled",
+        transform: (sql: string) => sql.replace("DEFAULT 1", "DEFAULT 0"),
+        expected: /enabled has default 0/i,
+      },
+      {
+        description: "orden de la PK",
+        transform: (sql: string) =>
+          sql.replace(
+            "PRIMARY KEY (workspace_id, actor_id, category, channel)",
+            "PRIMARY KEY (workspace_id, category, actor_id, channel)",
+          ),
+        expected: /incompatible primary key|PRIMARY KEY autoindex/i,
+      },
+      {
+        description: "UNIQUE en lugar de PK",
+        transform: (sql: string) =>
+          sql.replace(
+            "PRIMARY KEY (workspace_id, actor_id, category, channel)",
+            "UNIQUE (workspace_id, actor_id, category, channel)",
+          ),
+        expected: /incompatible primary key|PRIMARY KEY autoindex/i,
+      },
+      {
+        description: "CHECK de category",
+        transform: (sql: string) => sql.replace("'reviews'", "'review'"),
+        expected: /missing CHECK \(category IN/i,
+      },
+      {
+        description: "CHECK de channel",
+        transform: (sql: string) => sql.replace("'slack'", "'teams'"),
+        expected: /missing CHECK \(channel IN/i,
+      },
+      {
+        description: "CHECK de enabled",
+        transform: (sql: string) => sql.replace("enabled IN (0, 1)", "enabled IN (0, 2)"),
+        expected: /missing CHECK \(enabled IN/i,
+      },
+      {
+        description: "CHECK de email_delivery",
+        transform: (sql: string) =>
+          sql.replace(
+            "email_delivery IN ('digest', 'immediate')",
+            "email_delivery IN ('digest', 'immediately')",
+          ),
+        expected: /missing CHECK \(email_delivery IN/i,
+      },
+      {
+        description: "CHECK de relación entre canal y email_delivery",
+        transform: (sql: string) => sql.replace("channel <> 'email'", "channel <> 'inbox'"),
+        expected: /missing CHECK \(\(channel = 'email'/i,
+      },
+      {
+        description: "FK ausente",
+        transform: (sql: string) =>
+          sql.replace(
+            `,
+  FOREIGN KEY (workspace_id, actor_id)
+    REFERENCES workspace_memberships(workspace_id, actor_id) ON DELETE CASCADE`,
+            "",
+          ),
+        expected: /missing foreign keys.*workspace_id, actor_id.*workspace_memberships/i,
+      },
+      {
+        description: "tabla destino de FK",
+        transform: (sql: string) =>
+          sql.replace("REFERENCES workspace_memberships", "REFERENCES actors"),
+        expected: /missing foreign keys.*workspace_id, actor_id.*workspace_memberships/i,
+      },
+      {
+        description: "columnas destino de FK",
+        transform: (sql: string) =>
+          sql.replace(
+            "workspace_memberships(workspace_id, actor_id)",
+            "workspace_memberships(actor_id, workspace_id)",
+          ),
+        expected: /missing foreign keys.*workspace_id, actor_id.*workspace_memberships/i,
+      },
+      {
+        description: "orden de columnas de FK",
+        transform: (sql: string) =>
+          sql.replace(
+            "FOREIGN KEY (workspace_id, actor_id)",
+            "FOREIGN KEY (actor_id, workspace_id)",
+          ),
+        expected: /missing foreign keys.*workspace_id, actor_id.*workspace_memberships/i,
+      },
+      {
+        description: "acción ON DELETE de FK",
+        transform: (sql: string) => sql.replace("ON DELETE CASCADE", "ON DELETE RESTRICT"),
+        expected: /missing foreign keys.*workspace_id, actor_id.*workspace_memberships/i,
+      },
+      {
+        description: "acción ON UPDATE de FK",
+        transform: (sql: string) =>
+          sql.replace("ON DELETE CASCADE", "ON UPDATE CASCADE ON DELETE CASCADE"),
+        expected: /missing foreign keys.*workspace_id, actor_id.*workspace_memberships/i,
+      },
+      {
+        description: "FK inesperada",
+        transform: (sql: string) =>
+          sql.replace(
+            `  FOREIGN KEY (workspace_id, actor_id)
+    REFERENCES workspace_memberships(workspace_id, actor_id) ON DELETE CASCADE`,
+            `  FOREIGN KEY (workspace_id, actor_id)
+    REFERENCES workspace_memberships(workspace_id, actor_id) ON DELETE CASCADE,
+  FOREIGN KEY (category) REFERENCES actors(id)`,
+          ),
+        expected: /unexpected foreign key/i,
+      },
+      {
+        description: "columnas del índice",
+        transform: (sql: string) =>
+          sql.replace(
+            "ON notification_preferences(actor_id, workspace_id)",
+            "ON notification_preferences(workspace_id, actor_id)",
+          ),
+        expected: /incompatible index idx_notification_preferences_actor_workspace/i,
+      },
+      {
+        description: "unicidad del índice",
+        transform: (sql: string) =>
+          sql.replace(
+            "CREATE INDEX idx_notification_preferences_actor_workspace",
+            "CREATE UNIQUE INDEX idx_notification_preferences_actor_workspace",
+          ),
+        expected: /incompatible index idx_notification_preferences_actor_workspace/i,
+      },
+      {
+        description: "índice ausente",
+        transform: (sql: string) =>
+          sql.replace(
+            `CREATE INDEX idx_notification_preferences_actor_workspace
+  ON notification_preferences(actor_id, workspace_id);
+`,
+            "",
+          ),
+        expected: /incompatible index idx_notification_preferences_actor_workspace/i,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const db = databaseWithMigrationsThrough(32);
+      try {
+        bootstrap(db);
+        replaceNotificationSchema(db, testCase.transform);
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const beforeSchema = notificationSchemaSnapshot(db);
+        const runMigration = () => migrate(db);
+
+        expect(runMigration).toThrow(testCase.expected);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(notificationSchemaSnapshot(db)).toEqual(beforeSchema);
+        expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+
+        expect(runMigration).toThrow(testCase.expected);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(notificationSchemaSnapshot(db)).toEqual(beforeSchema);
+
+        restoreNotificationSchema(db);
+        expect(runMigration).not.toThrow();
+        expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+          version: 33,
+        });
+        const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        expect(runMigration).not.toThrow();
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("rechaza valores incompatibles de Notifications antes de DDL y permite reparar", () => {
+    const cases = [
+      {
+        description: "category",
+        category: "invalid-category",
+        channel: "inbox",
+        enabled: 1,
+        emailDelivery: null,
+        expected: /category has an invalid value/i,
+      },
+      {
+        description: "channel",
+        category: "comments",
+        channel: "invalid-channel",
+        enabled: 1,
+        emailDelivery: null,
+        expected: /channel has an invalid value/i,
+      },
+      {
+        description: "enabled",
+        category: "status_changes",
+        channel: "desktop",
+        enabled: 2,
+        emailDelivery: null,
+        expected: /enabled has an invalid value/i,
+      },
+      {
+        description: "tipo de enabled",
+        category: "comments",
+        channel: "mobile",
+        enabled: "bad",
+        emailDelivery: null,
+        expected: /enabled has an invalid value/i,
+      },
+      {
+        description: "email_delivery desconocido",
+        category: "reviews",
+        channel: "email",
+        enabled: 1,
+        emailDelivery: "invalid-delivery",
+        expected: /email_delivery has an invalid value/i,
+      },
+      {
+        description: "email_delivery requerido",
+        category: "project_updates",
+        channel: "email",
+        enabled: 1,
+        emailDelivery: null,
+        expected: /email_delivery does not match channel/i,
+      },
+      {
+        description: "email_delivery ausente para canales no email",
+        category: "assignments",
+        channel: "inbox",
+        enabled: 1,
+        emailDelivery: "digest",
+        expected: /email_delivery does not match channel/i,
+      },
+      {
+        description: "Workspace y Membership",
+        orphan: true,
+        expected: /missing Workspace|missing Workspace Membership/i,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const db = databaseWithMigrationsThrough(32);
+      try {
+        bootstrap(db);
+        if ("orphan" in testCase) {
+          insertOrphanNotificationRow(db);
+        } else {
+          insertInvalidNotificationRow(
+            db,
+            testCase.category,
+            testCase.channel,
+            testCase.enabled,
+            testCase.emailDelivery,
+          );
+        }
+        const beforeRows = db.query("SELECT * FROM notification_preferences ORDER BY rowid").all();
+        const beforeSchema = notificationSchemaSnapshot(db);
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const runMigration = () => migrate(db);
+        let firstError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          firstError = error instanceof Error ? error.message : String(error);
+        }
+
+        expect(firstError).toMatch(testCase.expected);
+        expect(db.query("SELECT * FROM notification_preferences ORDER BY rowid").all()).toEqual(
+          beforeRows,
+        );
+        expect(notificationSchemaSnapshot(db)).toEqual(beforeSchema);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+
+        let secondError = "";
+        try {
+          runMigration();
+        } catch (error) {
+          secondError = error instanceof Error ? error.message : String(error);
+        }
+        expect(secondError).toBe(firstError);
+        expect(db.query("SELECT * FROM notification_preferences ORDER BY rowid").all()).toEqual(
+          beforeRows,
+        );
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+        db.query("DELETE FROM notification_preferences").run();
+        expect(() => migrate(db)).not.toThrow();
+        expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+          version: 33,
+        });
+        const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        expect(() => migrate(db)).not.toThrow();
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("revalida los datos de Notifications cuando ya existen markers 32 y 33", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      bootstrap(db);
+      migrate(db);
+      insertInvalidNotificationRow(db, "mentions", "email", 1, null);
+      const beforeRows = db.query("SELECT * FROM notification_preferences ORDER BY rowid").all();
+      const beforeSchema = notificationSchemaSnapshot(db);
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      expect(runMigration).toThrow(/email_delivery does not match channel/i);
+      expect(db.query("SELECT * FROM notification_preferences ORDER BY rowid").all()).toEqual(
+        beforeRows,
+      );
+      expect(notificationSchemaSnapshot(db)).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(runMigration).toThrow(/email_delivery does not match channel/i);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+      db.query("DELETE FROM notification_preferences").run();
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
     } finally {
       db.close();
     }

@@ -466,16 +466,49 @@ const VIEW_SUBSCRIPTIONS_COLUMN_CONTRACT = [
   { name: "updated_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
 ] satisfies readonly ColumnContract[];
 
-const NOTIFICATION_PREFERENCES_COLUMNS = [
-  "workspace_id",
-  "actor_id",
-  "category",
-  "channel",
-  "enabled",
-  "email_delivery",
-  "created_at",
-  "updated_at",
-];
+const NOTIFICATION_PREFERENCES_COLUMN_CONTRACT = [
+  { name: "workspace_id", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 1 },
+  { name: "actor_id", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 2 },
+  { name: "category", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 3 },
+  { name: "channel", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 4 },
+  { name: "enabled", type: "INTEGER", notNull: 1, defaultValue: "1", primaryKey: 0 },
+  { name: "email_delivery", type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+  { name: "created_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+  { name: "updated_at", type: "TEXT", notNull: 1, defaultValue: null, primaryKey: 0 },
+] satisfies readonly ColumnContract[];
+
+const NOTIFICATION_PREFERENCES_CHECKS = [
+  "category IN ('assignments', 'mentions', 'comments', 'status_changes', 'reviews', 'project_updates')",
+  "channel IN ('inbox', 'desktop', 'mobile', 'email', 'slack')",
+  "enabled IN (0, 1)",
+  "email_delivery IN ('digest', 'immediate')",
+  "(channel = 'email' AND email_delivery IS NOT NULL) OR (channel <> 'email' AND email_delivery IS NULL)",
+] satisfies readonly string[];
+
+const NOTIFICATION_PREFERENCES_REQUIRED_FOREIGN_KEYS = [
+  {
+    table: "workspace_memberships",
+    columns: [
+      { from: "workspace_id", to: "workspace_id" },
+      { from: "actor_id", to: "actor_id" },
+    ],
+    onUpdate: "NO ACTION",
+    onDelete: "CASCADE",
+    match: "NONE",
+  },
+] satisfies readonly SavedViewsForeignKeyDefinition[];
+
+const NOTIFICATION_PREFERENCES_REQUIRED_INDEX = {
+  table: "notification_preferences",
+  name: "idx_notification_preferences_actor_workspace",
+  columns: ["actor_id", "workspace_id"],
+  unique: false,
+} satisfies ViewsMigrationIndexArtifact;
+
+const NOTIFICATION_PREFERENCES_REFERENCE_TABLES = [
+  { table: "workspace", columns: ["id"] },
+  { table: "workspace_memberships", columns: ["workspace_id", "actor_id"] },
+] satisfies readonly { table: string; columns: readonly string[] }[];
 
 interface MigrationMarkerRow {
   version: number;
@@ -808,19 +841,35 @@ function hasUniqueConstraintWithColumns(
   );
 }
 
-function hasPrimaryKeyColumns(db: Database, table: string, columns: readonly string[]): boolean {
-  const primaryKeyColumns = tableInfo(db, table).filter((column) => column.pk > 0);
-  return (
-    primaryKeyColumns.length === columns.length &&
-    primaryKeyColumns.every((column, position) => {
-      const expected = columns[position];
-      return (
-        expected !== undefined &&
-        column.pk === position + 1 &&
-        sameSqliteIdentifier(column.name, expected)
-      );
-    })
+function notificationPreferencesIndexProblems(db: Database): string[] {
+  const indexes = indexList(db, NOTIFICATION_PREFERENCES_REQUIRED_INDEX.table);
+  const namedIndex = indexes.find((index) =>
+    sameSqliteIdentifier(index.name, NOTIFICATION_PREFERENCES_REQUIRED_INDEX.name),
   );
+  const hasRequiredIndex =
+    namedIndex !== undefined &&
+    indexHasColumns(
+      namedIndex,
+      indexTerms(db, namedIndex.name),
+      NOTIFICATION_PREFERENCES_REQUIRED_INDEX.columns,
+      NOTIFICATION_PREFERENCES_REQUIRED_INDEX.unique,
+    );
+  const primaryKeyColumns = NOTIFICATION_PREFERENCES_COLUMN_CONTRACT.filter(
+    (column) => column.primaryKey > 0,
+  ).map((column) => column.name);
+  const hasPrimaryKeyIndex = indexes.some(
+    (index) =>
+      index.origin === "pk" &&
+      indexHasColumns(index, indexTerms(db, index.name), primaryKeyColumns, true),
+  );
+  return [
+    ...(!hasRequiredIndex
+      ? [`missing or incompatible index ${NOTIFICATION_PREFERENCES_REQUIRED_INDEX.name}`]
+      : []),
+    ...(!hasPrimaryKeyIndex
+      ? ["notification_preferences is missing its canonical PRIMARY KEY autoindex"]
+      : []),
+  ];
 }
 
 function hasNamedIndex(db: Database, table: string, name: string): boolean {
@@ -4608,45 +4657,138 @@ function validateViewsMigrationSchema(db: Database, requireWorkspaceIndex: boole
 }
 
 function notificationPreferencesSchemaProblems(db: Database): string[] {
-  const problems: string[] = [];
   if (!hasTable(db, "notification_preferences")) {
     return ["missing table notification_preferences"];
   }
-  const missingColumns = NOTIFICATION_PREFERENCES_COLUMNS.filter(
-    (column) => !hasColumn(db, "notification_preferences", column),
-  );
-  if (missingColumns.length > 0) {
-    problems.push(`notification_preferences missing columns: ${missingColumns.join(", ")}`);
-  }
-  if (
-    !hasPrimaryKeyColumns(db, "notification_preferences", [
-      "workspace_id",
-      "actor_id",
-      "category",
-      "channel",
-    ])
-  ) {
-    problems.push("notification_preferences has an incompatible primary key");
-  }
-  if (
-    !hasNamedIndexWithColumns(
+  const problems = [
+    ...canonicalTableProblems(
       db,
       "notification_preferences",
-      "idx_notification_preferences_actor_workspace",
-      ["actor_id", "workspace_id"],
-      false,
-    )
+      NOTIFICATION_PREFERENCES_COLUMN_CONTRACT,
+      NOTIFICATION_PREFERENCES_CHECKS,
+    ),
+    ...foreignKeyProblems(
+      db,
+      "notification_preferences",
+      NOTIFICATION_PREFERENCES_REQUIRED_FOREIGN_KEYS,
+    ),
+    ...notificationPreferencesIndexProblems(db),
+  ];
+  return problems;
+}
+
+function notificationPreferencesDataProblems(db: Database): string[] {
+  if (!hasTable(db, "notification_preferences")) return [];
+  const columns = NOTIFICATION_PREFERENCES_COLUMN_CONTRACT.map((column) => column.name);
+  if (!hasAllColumns(db, "notification_preferences", columns)) return [];
+
+  const problems: string[] = [];
+  for (const reference of NOTIFICATION_PREFERENCES_REFERENCE_TABLES) {
+    if (!hasTable(db, reference.table)) {
+      problems.push(`notification_preferences references missing table ${reference.table}`);
+    } else if (!hasAllColumns(db, reference.table, reference.columns)) {
+      problems.push(
+        `notification_preferences references ${reference.table} with missing columns: ${reference.columns
+          .filter((column) => !hasColumn(db, reference.table, column))
+          .join(", ")}`,
+      );
+    }
+  }
+
+  const checks = [
+    {
+      description: "required columns contain NULL",
+      query: `SELECT 1 FROM notification_preferences
+              WHERE workspace_id IS NULL OR actor_id IS NULL OR category IS NULL
+                 OR channel IS NULL OR enabled IS NULL OR created_at IS NULL
+                 OR updated_at IS NULL
+              LIMIT 1`,
+    },
+    {
+      description: "category has an invalid value",
+      query: `SELECT 1 FROM notification_preferences
+              WHERE typeof(category) <> 'text'
+                 OR category COLLATE BINARY NOT IN ('assignments', 'mentions', 'comments', 'status_changes', 'reviews', 'project_updates')
+              LIMIT 1`,
+    },
+    {
+      description: "channel has an invalid value",
+      query: `SELECT 1 FROM notification_preferences
+              WHERE typeof(channel) <> 'text'
+                 OR channel COLLATE BINARY NOT IN ('inbox', 'desktop', 'mobile', 'email', 'slack')
+              LIMIT 1`,
+    },
+    {
+      description: "enabled has an invalid value",
+      query: `SELECT 1 FROM notification_preferences
+              WHERE typeof(enabled) <> 'integer' OR enabled NOT IN (0, 1)
+              LIMIT 1`,
+    },
+    {
+      description: "email_delivery has an invalid value",
+      query: `SELECT 1 FROM notification_preferences
+              WHERE email_delivery IS NOT NULL
+                AND (typeof(email_delivery) <> 'text'
+                     OR email_delivery COLLATE BINARY NOT IN ('digest', 'immediate'))
+              LIMIT 1`,
+    },
+    {
+      description: "email_delivery does not match channel",
+      query: `SELECT 1 FROM notification_preferences
+              WHERE (channel COLLATE BINARY = 'email' AND email_delivery IS NULL)
+                 OR (channel COLLATE BINARY <> 'email' AND email_delivery IS NOT NULL)
+              LIMIT 1`,
+    },
+  ];
+  for (const check of checks) {
+    if (hasRows(db, check.query)) problems.push(check.description);
+  }
+
+  if (hasTable(db, "workspace") && hasAllColumns(db, "workspace", ["id"])) {
+    if (
+      hasRows(
+        db,
+        `SELECT 1 FROM notification_preferences
+         WHERE NOT EXISTS (
+           SELECT 1 FROM workspace
+           WHERE workspace.id COLLATE BINARY = notification_preferences.workspace_id COLLATE BINARY
+         )
+         LIMIT 1`,
+      )
+    ) {
+      problems.push("workspace_id references a missing Workspace");
+    }
+  }
+  if (
+    hasTable(db, "workspace_memberships") &&
+    hasAllColumns(db, "workspace_memberships", ["workspace_id", "actor_id"])
   ) {
-    problems.push("missing or incompatible index idx_notification_preferences_actor_workspace");
+    if (
+      hasRows(
+        db,
+        `SELECT 1 FROM notification_preferences
+         WHERE NOT EXISTS (
+           SELECT 1 FROM workspace_memberships
+           WHERE workspace_memberships.workspace_id COLLATE BINARY = notification_preferences.workspace_id COLLATE BINARY
+             AND workspace_memberships.actor_id COLLATE BINARY = notification_preferences.actor_id COLLATE BINARY
+         )
+         LIMIT 1`,
+      )
+    ) {
+      problems.push("workspace_id and actor_id reference a missing Workspace Membership");
+    }
   }
   return problems;
 }
 
-function validateNotificationPreferencesSchema(db: Database): void {
-  const problems = notificationPreferencesSchemaProblems(db);
+function validateNotificationPreferences(db: Database): void {
+  const problems = [
+    ...notificationPreferencesSchemaProblems(db),
+    ...notificationPreferencesDataProblems(db),
+  ];
   if (problems.length > 0) {
     throw new Error(
-      `Notification migration schema is incomplete or incompatible (${problems.join("; ")})`,
+      `Notification migration schema or data is incomplete or incompatible (${problems.join("; ")})`,
     );
   }
 }
@@ -4706,6 +4848,9 @@ function reconcileLegacyViewsMigration(db: Database, marker: MigrationMarkerRow)
     const appliedAt = now();
     applyMigrationNameCollisions(db, nameCollisionPlan);
     db.exec(migration0032);
+    // El SQL canónico es parte de la transacción: valida Notifications antes de
+    // cambiar cualquiera de los markers legacy.
+    validateNotificationPreferences(db);
     db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_views_workspace_id ON saved_views(workspace_id, id)",
     );
@@ -4717,7 +4862,6 @@ function reconcileLegacyViewsMigration(db: Database, marker: MigrationMarkerRow)
       "views_preferences",
       appliedAt,
     );
-    validateNotificationPreferencesSchema(db);
     validateViewsMigrationSchema(db, true);
     validateWorkspaceConstraints(db);
   })();
@@ -4760,7 +4904,7 @@ function validateMigrationMarkersAndReconcile(db: Database): void {
       );
     }
     try {
-      validateNotificationPreferencesSchema(db);
+      validateNotificationPreferences(db);
     } catch (error) {
       throw new Error(
         `Cannot apply migration 0032: marker is present but the schema is incomplete or incompatible. ${error instanceof Error ? error.message : String(error)}`,
@@ -4805,6 +4949,9 @@ function validateMigrationMarkersAndReconcile(db: Database): void {
 
 function validateViewsMigrationResult(db: Database): void {
   try {
+    // 0033 desactiva temporalmente las FKs y restaura objetos legacy; confirma
+    // también que Notifications no quedó alterado antes de registrar el marker.
+    validateNotificationPreferences(db);
     validateViewsMigrationSchema(db, true);
     validateWorkspaceConstraints(db);
   } catch (error) {
@@ -4889,6 +5036,7 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
         }
         if (migration.version === 33) applyMigrationNameCollisions(db, nameCollisionPlan);
         db.exec(migration.sql);
+        if (migration.version === 32) validateNotificationPreferences(db);
         if (migration.version === 33) {
           restoreSavedViewsIndexes({
             db,
