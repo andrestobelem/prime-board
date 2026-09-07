@@ -155,6 +155,8 @@ interface ImportScope {
   /** Workspace, Membership o columnas de alcance prueban que no es legacy puro. */
   readonly hasScopedMetadata: boolean;
   readonly scopedTables: ReadonlyMap<ScopedReferenceTable, SourceTable>;
+  /** Índices de relaciones para no recorrer cada tabla por cada Activity. */
+  readonly relationRowsByLink: ReadonlyMap<string, ReadonlyMap<string, readonly SourceRow[]>>;
   readonly workspaceMembershipMetadata: WorkspaceMembershipMetadata;
   readonly actorWorkspaceIds: ReadonlyMap<string, ReadonlySet<string>>;
 }
@@ -513,6 +515,30 @@ const RELATION_LINKS: readonly RelationLink[] = [
   { relationTable: "team_memberships", sourceTable: "teams", field: "team_id" },
 ];
 
+function relationLinkKey(link: RelationLink): string {
+  return `${link.relationTable}\u0000${link.sourceTable}\u0000${link.field}`;
+}
+
+function indexRelationRows(
+  scopedTables: ReadonlyMap<ScopedReferenceTable, SourceTable>,
+): ReadonlyMap<string, ReadonlyMap<string, readonly SourceRow[]>> {
+  const indexes = new Map<string, Map<string, SourceRow[]>>();
+  for (const link of RELATION_LINKS) {
+    const relationSource = scopedTables.get(link.relationTable);
+    if (relationSource === undefined) continue;
+    const rowsByReference = new Map<string, SourceRow[]>();
+    for (const relation of relationSource.rows) {
+      const reference = textReference(relation, link.field);
+      if (reference === undefined) continue;
+      const rows = rowsByReference.get(reference) ?? [];
+      rows.push(relation);
+      rowsByReference.set(reference, rows);
+    }
+    indexes.set(relationLinkKey(link), rowsByReference);
+  }
+  return indexes;
+}
+
 function referencedId(
   row: SourceRow,
   field: string,
@@ -726,8 +752,8 @@ function collectActivityScopeEvidence(scope: ImportScope, row: ActivityRow): Act
     for (const link of RELATION_LINKS) {
       if (link.sourceTable !== table) continue;
       const relationSource = sourceTable(scope, link.relationTable);
-      for (const relation of relationSource.rows) {
-        if (textReference(relation, link.field) !== id) continue;
+      const relations = scope.relationRowsByLink.get(relationLinkKey(link))?.get(id) ?? [];
+      for (const relation of relations) {
         addWorkspaceObservation(observations, link.relationTable, relation, relationSource);
         queue.push({ table: link.relationTable, row: relation });
       }
@@ -1087,6 +1113,7 @@ function resolveImportScope(db: Database, requestedWorkspaceId: string | undefin
     hasWorkspaceTable: workspaceTable !== undefined,
     hasScopedMetadata,
     scopedTables,
+    relationRowsByLink: indexRelationRows(scopedTables),
     workspaceMembershipMetadata: membershipMetadata,
     actorWorkspaceIds:
       uniqueAmbiguousTables.length > 0 ? new Map() : actorWorkspaceIndex.actorWorkspaceIds,
