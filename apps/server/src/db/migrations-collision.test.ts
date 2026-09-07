@@ -29,6 +29,192 @@ function databaseWithMigrationsThrough(versionLimit: number): Database {
   return db;
 }
 
+function installUppercaseNotificationSchema(db: Database): void {
+  db.exec(`
+    CREATE TABLE "NOTIFICATION_PREFERENCES" (
+      "WORKSPACE_ID" TEXT NOT NULL,
+      "ACTOR_ID" TEXT NOT NULL,
+      "CATEGORY" TEXT NOT NULL,
+      "CHANNEL" TEXT NOT NULL,
+      "ENABLED" INTEGER NOT NULL DEFAULT 1,
+      "EMAIL_DELIVERY" TEXT,
+      "CREATED_AT" TEXT NOT NULL,
+      "UPDATED_AT" TEXT NOT NULL,
+      PRIMARY KEY ("WORKSPACE_ID", "ACTOR_ID", "CATEGORY", "CHANNEL"),
+      FOREIGN KEY ("WORKSPACE_ID", "ACTOR_ID")
+        REFERENCES "WORKSPACE_MEMBERSHIPS"("WORKSPACE_ID", "ACTOR_ID") ON DELETE CASCADE
+    );
+    CREATE INDEX "IDX_NOTIFICATION_PREFERENCES_ACTOR_WORKSPACE"
+      ON "NOTIFICATION_PREFERENCES"("ACTOR_ID", "WORKSPACE_ID");
+    INSERT INTO _migrations (version, name, applied_at)
+      VALUES (32, 'notification_preferences', '2026-01-01T00:00:00.000Z');
+  `);
+}
+
+function quoteTestIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+function renameTestTable(db: Database, current: string, next: string): void {
+  const temporary = `__prb655_${current}`;
+  db.exec(
+    `ALTER TABLE ${quoteTestIdentifier(current)} RENAME TO ${quoteTestIdentifier(temporary)}`,
+  );
+  db.exec(`ALTER TABLE ${quoteTestIdentifier(temporary)} RENAME TO ${quoteTestIdentifier(next)}`);
+}
+
+function renameTestColumn(db: Database, table: string, current: string, next: string): void {
+  const temporary = `__prb655_${current}`;
+  db.exec(
+    `ALTER TABLE ${quoteTestIdentifier(table)} RENAME COLUMN ${quoteTestIdentifier(current)} TO ${quoteTestIdentifier(temporary)}`,
+  );
+  db.exec(
+    `ALTER TABLE ${quoteTestIdentifier(table)} RENAME COLUMN ${quoteTestIdentifier(temporary)} TO ${quoteTestIdentifier(next)}`,
+  );
+}
+
+function uppercaseLegacySchema(db: Database, includeNotification: boolean): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS saved_views_workspace_scope_insert;
+    DROP TRIGGER IF EXISTS saved_views_workspace_required_insert;
+    DROP TRIGGER IF EXISTS saved_views_workspace_required_update;
+  `);
+
+  const indexNames = [
+    "idx_saved_views_workspace_id",
+    "idx_saved_views_scope",
+    "idx_saved_views_owner",
+    "idx_saved_views_project",
+    "idx_saved_views_initiative",
+    "idx_view_preferences_key",
+    "idx_view_preferences_view",
+    "idx_view_preferences_actor",
+    "idx_view_subscriptions_view",
+    "idx_view_subscriptions_actor",
+    "idx_notification_preferences_actor_workspace",
+  ];
+  for (const index of indexNames) {
+    db.exec(`DROP INDEX IF EXISTS ${quoteTestIdentifier(index)}`);
+  }
+
+  const tables: Array<[string, string]> = [
+    ["saved_views", "SAVED_VIEWS"],
+    ["view_preferences", "VIEW_PREFERENCES"],
+    ["view_subscriptions", "VIEW_SUBSCRIPTIONS"],
+    ["workspace", "WORKSPACE"],
+    ["actors", "ACTORS"],
+    ["teams", "TEAMS"],
+    ["projects", "PROJECTS"],
+    ["initiatives", "INITIATIVES"],
+    ["workspace_memberships", "WORKSPACE_MEMBERSHIPS"],
+  ];
+  if (includeNotification) tables.push(["notification_preferences", "NOTIFICATION_PREFERENCES"]);
+  for (const [current, next] of tables) renameTestTable(db, current, next);
+
+  const columns: Array<[string, string, string]> = [
+    ["SAVED_VIEWS", "id", "ID"],
+    ["SAVED_VIEWS", "name", "NAME"],
+    ["SAVED_VIEWS", "scope", "SCOPE"],
+    ["SAVED_VIEWS", "team_id", "TEAM_ID"],
+    ["SAVED_VIEWS", "project_id", "PROJECT_ID"],
+    ["SAVED_VIEWS", "initiative_id", "INITIATIVE_ID"],
+    ["SAVED_VIEWS", "owner_id", "OWNER_ID"],
+    ["SAVED_VIEWS", "filter_json", "FILTER_JSON"],
+    ["SAVED_VIEWS", "order_by", "ORDER_BY"],
+    ["SAVED_VIEWS", "group_by", "GROUP_BY"],
+    ["SAVED_VIEWS", "created_at", "CREATED_AT"],
+    ["SAVED_VIEWS", "updated_at", "UPDATED_AT"],
+    ["SAVED_VIEWS", "archived_at", "ARCHIVED_AT"],
+    ["SAVED_VIEWS", "columns_json", "COLUMNS_JSON"],
+    ["SAVED_VIEWS", "workspace_id", "WORKSPACE_ID"],
+    ["VIEW_PREFERENCES", "id", "ID"],
+    ["VIEW_PREFERENCES", "workspace_id", "WORKSPACE_ID"],
+    ["VIEW_PREFERENCES", "view_id", "VIEW_ID"],
+    ["VIEW_PREFERENCES", "actor_id", "ACTOR_ID"],
+    ["VIEW_PREFERENCES", "view_type", "VIEW_TYPE"],
+    ["VIEW_PREFERENCES", "scope", "SCOPE"],
+    ["VIEW_PREFERENCES", "layout", "LAYOUT"],
+    ["VIEW_PREFERENCES", "order_by", "ORDER_BY"],
+    ["VIEW_PREFERENCES", "group_by", "GROUP_BY"],
+    ["VIEW_PREFERENCES", "columns_json", "COLUMNS_JSON"],
+    ["VIEW_PREFERENCES", "created_at", "CREATED_AT"],
+    ["VIEW_PREFERENCES", "updated_at", "UPDATED_AT"],
+    ["VIEW_SUBSCRIPTIONS", "id", "ID"],
+    ["VIEW_SUBSCRIPTIONS", "workspace_id", "WORKSPACE_ID"],
+    ["VIEW_SUBSCRIPTIONS", "view_id", "VIEW_ID"],
+    ["VIEW_SUBSCRIPTIONS", "actor_id", "ACTOR_ID"],
+    ["VIEW_SUBSCRIPTIONS", "issue_changes", "ISSUE_CHANGES"],
+    ["VIEW_SUBSCRIPTIONS", "slack", "SLACK"],
+    ["VIEW_SUBSCRIPTIONS", "created_at", "CREATED_AT"],
+    ["VIEW_SUBSCRIPTIONS", "updated_at", "UPDATED_AT"],
+    ["WORKSPACE", "id", "ID"],
+    ["ACTORS", "id", "ID"],
+    ["TEAMS", "id", "ID"],
+    ["TEAMS", "workspace_id", "WORKSPACE_ID"],
+    ["PROJECTS", "id", "ID"],
+    ["PROJECTS", "workspace_id", "WORKSPACE_ID"],
+    ["INITIATIVES", "id", "ID"],
+    ["INITIATIVES", "workspace_id", "WORKSPACE_ID"],
+    ["WORKSPACE_MEMBERSHIPS", "workspace_id", "WORKSPACE_ID"],
+    ["WORKSPACE_MEMBERSHIPS", "actor_id", "ACTOR_ID"],
+  ];
+  if (includeNotification) {
+    columns.push(
+      ["NOTIFICATION_PREFERENCES", "workspace_id", "WORKSPACE_ID"],
+      ["NOTIFICATION_PREFERENCES", "actor_id", "ACTOR_ID"],
+      ["NOTIFICATION_PREFERENCES", "category", "CATEGORY"],
+      ["NOTIFICATION_PREFERENCES", "channel", "CHANNEL"],
+      ["NOTIFICATION_PREFERENCES", "enabled", "ENABLED"],
+      ["NOTIFICATION_PREFERENCES", "email_delivery", "EMAIL_DELIVERY"],
+      ["NOTIFICATION_PREFERENCES", "created_at", "CREATED_AT"],
+      ["NOTIFICATION_PREFERENCES", "updated_at", "UPDATED_AT"],
+    );
+  }
+  for (const [table, current, next] of columns) renameTestColumn(db, table, current, next);
+
+  db.exec(`
+    CREATE UNIQUE INDEX "IDX_SAVED_VIEWS_WORKSPACE_ID"
+      ON "SAVED_VIEWS"("WORKSPACE_ID", "ID");
+    CREATE INDEX "IDX_SAVED_VIEWS_SCOPE" ON "SAVED_VIEWS"("SCOPE", "TEAM_ID");
+    CREATE INDEX "IDX_SAVED_VIEWS_OWNER" ON "SAVED_VIEWS"("OWNER_ID");
+    CREATE INDEX "IDX_SAVED_VIEWS_PROJECT" ON "SAVED_VIEWS"("WORKSPACE_ID", "PROJECT_ID");
+    CREATE INDEX "IDX_SAVED_VIEWS_INITIATIVE" ON "SAVED_VIEWS"("WORKSPACE_ID", "INITIATIVE_ID");
+    CREATE UNIQUE INDEX "IDX_VIEW_PREFERENCES_KEY"
+      ON "VIEW_PREFERENCES"("WORKSPACE_ID", ifnull("VIEW_ID", ''), "VIEW_TYPE", ifnull("ACTOR_ID", ''));
+    CREATE INDEX "IDX_VIEW_PREFERENCES_VIEW" ON "VIEW_PREFERENCES"("WORKSPACE_ID", "VIEW_ID");
+    CREATE INDEX "IDX_VIEW_PREFERENCES_ACTOR" ON "VIEW_PREFERENCES"("WORKSPACE_ID", "ACTOR_ID");
+    CREATE INDEX "IDX_VIEW_SUBSCRIPTIONS_VIEW" ON "VIEW_SUBSCRIPTIONS"("WORKSPACE_ID", "VIEW_ID");
+    CREATE INDEX "IDX_VIEW_SUBSCRIPTIONS_ACTOR" ON "VIEW_SUBSCRIPTIONS"("WORKSPACE_ID", "ACTOR_ID");
+  `);
+  if (includeNotification) {
+    db.exec(`
+      CREATE INDEX "IDX_NOTIFICATION_PREFERENCES_ACTOR_WORKSPACE"
+        ON "NOTIFICATION_PREFERENCES"("ACTOR_ID", "WORKSPACE_ID");
+    `);
+  }
+
+  db.exec(`
+    CREATE TRIGGER "SAVED_VIEWS_WORKSPACE_SCOPE_INSERT"
+    AFTER INSERT ON "SAVED_VIEWS"
+    WHEN NEW."WORKSPACE_ID" IS NULL AND (SELECT count(*) FROM "WORKSPACE") = 1
+    BEGIN
+      UPDATE "SAVED_VIEWS" SET "WORKSPACE_ID" = (SELECT "ID" FROM "WORKSPACE") WHERE "ID" = NEW."ID";
+    END;
+    CREATE TRIGGER "SAVED_VIEWS_WORKSPACE_REQUIRED_INSERT"
+    BEFORE INSERT ON "SAVED_VIEWS"
+    WHEN NEW."WORKSPACE_ID" IS NULL AND (SELECT count(*) FROM "WORKSPACE") > 1
+    BEGIN
+      SELECT RAISE(ABORT, 'Workspace context is required for saved_views');
+    END;
+    CREATE TRIGGER "SAVED_VIEWS_WORKSPACE_REQUIRED_UPDATE"
+    BEFORE UPDATE OF "WORKSPACE_ID" ON "SAVED_VIEWS"
+    WHEN NEW."WORKSPACE_ID" IS NULL AND (SELECT count(*) FROM "WORKSPACE") > 1
+    BEGIN
+      SELECT RAISE(ABORT, 'Workspace context is required for saved_views');
+    END;
+  `);
+}
+
 function dropSavedViewsTriggers(db: Database): void {
   db.exec(`
     DROP TRIGGER IF EXISTS saved_views_workspace_scope_insert;
@@ -487,6 +673,69 @@ function assertSavedViewsTriggerBehavior(db: Database): void {
 }
 
 describe("colisión de migraciones SQLite", () => {
+  it("acepta la tabla e índice quoted en mayúsculas de Notifications", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      bootstrap(db);
+      installUppercaseNotificationSchema(db);
+      db.exec(`
+        INSERT INTO notification_preferences
+          (workspace_id, actor_id, category, channel, enabled, email_delivery, created_at, updated_at)
+        SELECT workspace.id, actors.id, 'mentions', 'email', 1, 'immediate',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        FROM workspace JOIN actors ON actors.name = 'admin' LIMIT 1;
+      `);
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.query("SELECT name FROM _migrations WHERE version = 32").get()).toEqual({
+        name: "notification_preferences",
+      });
+      expect(db.query("SELECT count(*) AS count FROM notification_preferences").get()).toEqual({
+        count: 1,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reconcilia Views con tablas, columnas, FKs, índices y triggers quoted en mayúsculas", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      seedLegacyViewsMigrationMarker(db);
+      uppercaseLegacySchema(db, false);
+      expect(() => migrate(db)).not.toThrow();
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+      expect(db.query("SELECT count(*) AS count FROM saved_views").get()).toEqual({ count: 1 });
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(() => migrate(db)).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("revalida un schema completo de marker33 con identificadores quoted en mayúsculas", () => {
+    const db = openDatabase(":memory:");
+    try {
+      seedLegacyNotificationAndViewData(db);
+      uppercaseLegacySchema(db, true);
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.query("SELECT count(*) AS count FROM notification_preferences").get()).toEqual({
+        count: 1,
+      });
+      expect(db.query("SELECT count(*) AS count FROM saved_views").get()).toEqual({ count: 1 });
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(() => migrate(db)).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
   it("aplica Notifications y Views con versiones, tablas e índices únicos", () => {
     const db = openDatabase(":memory:");
     try {
