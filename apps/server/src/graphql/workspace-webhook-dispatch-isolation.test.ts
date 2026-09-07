@@ -105,7 +105,6 @@ describe("workspace scope for webhook dispatch", () => {
           attempts += 1;
           delivered.push(String(input));
           if (attempts === 1) {
-            app.db.query("UPDATE actors SET status = 'suspended' WHERE id = ?1").run(viewerId);
             app.db
               .query(
                 "UPDATE workspace_memberships SET status = 'suspended' WHERE actor_id = ?1 AND workspace_id = ?2",
@@ -128,7 +127,34 @@ describe("workspace scope for webhook dispatch", () => {
 
     expect(attempts).toBe(1);
     expect(delivered).toEqual(["https://hooks.example/a"]);
-    app.db.query("UPDATE actors SET status = 'active' WHERE id = ?1").run(viewerId);
+    app.db
+      .query(
+        "UPDATE workspace_memberships SET status = 'active' WHERE actor_id = ?1 AND workspace_id = ?2",
+      )
+      .run(viewerId, workspaceAId);
+  });
+
+  it("detiene el despacho cuando la Membership del owner queda en left", async () => {
+    delivered.length = 0;
+    bodies.length = 0;
+    app.db
+      .query(
+        "UPDATE workspace_memberships SET status = 'left' WHERE actor_id = ?1 AND workspace_id = ?2",
+      )
+      .run(viewerId, workspaceAId);
+
+    const dispatcher = new WebhookDispatcher(app.db, {
+      retryDelays: [],
+      fetchFn: makeFetch(),
+    });
+    dispatcher.emit(
+      "issue.created",
+      { id: viewerId, name: "admin", type: "HUMAN" },
+      { id: issueAId, issueId: issueAId, teamId: teamAId },
+    );
+    await dispatcher.idle();
+
+    expect(delivered).toHaveLength(0);
     app.db
       .query(
         "UPDATE workspace_memberships SET status = 'active' WHERE actor_id = ?1 AND workspace_id = ?2",

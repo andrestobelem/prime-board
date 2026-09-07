@@ -275,13 +275,20 @@ async function sqliteOwnerCanReceive(
 async function postgresOwnerCanReceive(
   persistence: Persistence,
   ownerId: string | null,
+  workspaceId: string,
   teamIds: readonly string[],
   deletedTeamOwnerIds: readonly string[] = [],
 ): Promise<boolean> {
   if (!ownerId) return false;
   const owner = await persistence.one<{ id: string; status: string; workspace_role: string }>(
-    "SELECT id, status, workspace_role FROM actors WHERE id = $1",
-    [ownerId],
+    `SELECT actors.id, actors.status, memberships.role AS workspace_role
+       FROM actors
+       JOIN workspace_memberships AS memberships
+         ON memberships.actor_id = actors.id
+        AND memberships.workspace_id = $2
+        AND memberships.status = 'active'
+      WHERE actors.id = $1`,
+    [ownerId, workspaceId],
   );
   if (!owner || owner.status !== "active") return false;
   for (const teamId of teamIds) {
@@ -371,7 +378,14 @@ export class WebhookDispatcher implements WebhookEventSink {
     const sqliteWorkspaceId = this.persistence
       ? null
       : sqliteEventWorkspaceId(this.db, event, data);
-    if (!this.persistence && !sqliteWorkspaceId) return;
+    const postgresWorkspaceId = this.persistence
+      ? typeof data._workspaceId === "string"
+        ? data._workspaceId
+        : null
+      : null;
+    if ((!this.persistence && !sqliteWorkspaceId) || (this.persistence && !postgresWorkspaceId)) {
+      return;
+    }
 
     const hooks = this.persistence
       ? await this.persistence.many<WebhookRow>("SELECT * FROM webhooks WHERE enabled = TRUE")
@@ -395,6 +409,7 @@ export class WebhookDispatcher implements WebhookEventSink {
         ? await postgresOwnerCanReceive(
             this.persistence,
             hook.owner_id,
+            postgresWorkspaceId!,
             teamIds,
             deletedTeamOwnerIds,
           )
@@ -412,6 +427,7 @@ export class WebhookDispatcher implements WebhookEventSink {
         ? postgresOwnerCanReceive(
             this.persistence,
             hook.owner_id,
+            postgresWorkspaceId!,
             [hook.team_id],
             deletedTeamOwnerIds,
           )
