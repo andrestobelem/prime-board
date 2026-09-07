@@ -2870,7 +2870,9 @@ export const resolvers = {
           assertCanManageTeam(context.db, viewer, scopedTeam.id);
           return {
             success: true,
-            cycle: mapCycle(createCycle(context.db, args.input, context.workspace.workspaceId)),
+            cycle: mapCycle(
+              createCycle(context.db, args.input, context.workspace.workspaceId, viewer.id),
+            ),
           };
         },
         cycleCreateFromCadence: async (
@@ -2901,7 +2903,12 @@ export const resolvers = {
           return {
             success: true,
             cycle: mapCycle(
-              createCycleFromCadence(context.db, args.input, context.workspace.workspaceId),
+              createCycleFromCadence(
+                context.db,
+                args.input,
+                context.workspace.workspaceId,
+                viewer.id,
+              ),
             ),
           };
         },

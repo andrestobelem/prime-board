@@ -8,7 +8,12 @@ import {
   getPostgresTeam,
 } from "./postgres-teams.ts";
 import { mapTeamPlanningSettings, type CycleCadenceSource, type TeamRow } from "./teams.ts";
-import { cadenceDates as computeCadenceDates, type CycleCadenceSettings } from "./cycle-cadence.ts";
+import {
+  addCalendarDays as addCycleCalendarDays,
+  cadenceDates as computeCadenceDates,
+  type CycleCadenceSettings,
+} from "./cycle-cadence.ts";
+import type { AutoAddStateType } from "./cycles.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 
 export type PostgresCycleState = "upcoming" | "active" | "completed";
@@ -111,6 +116,96 @@ async function assertPostgresCycleAccess(
   teamId: string,
 ): Promise<void> {
   await assertCanManagePostgresTeam(persistence, viewer, teamId);
+}
+
+async function findCurrentPostgresAutoAddCycle(
+  persistence: Persistence | PersistenceTransaction,
+  teamId: string,
+): Promise<PostgresCycleRow | null> {
+  const active = await persistence.one<PostgresCycleRow>(
+    `SELECT * FROM cycles
+     WHERE team_id = $1 AND state = 'active' AND archived_at IS NULL
+     ORDER BY number DESC LIMIT 1`,
+    [teamId],
+  );
+  if (active) return active;
+  return persistence.one<PostgresCycleRow>(
+    `SELECT * FROM cycles
+     WHERE team_id = $1 AND state = 'upcoming' AND archived_at IS NULL
+     ORDER BY number LIMIT 1`,
+    [teamId],
+  );
+}
+
+async function findNextPostgresUpcomingCycle(
+  persistence: Persistence | PersistenceTransaction,
+  cycle: PostgresCycleRow,
+): Promise<PostgresCycleRow | null> {
+  return persistence.one<PostgresCycleRow>(
+    `SELECT * FROM cycles
+     WHERE team_id = $1 AND number > $2 AND state = 'upcoming' AND archived_at IS NULL
+     ORDER BY number LIMIT 1`,
+    [cycle.team_id, cycle.number],
+  );
+}
+
+async function findPreviousPostgresCompletedCycle(
+  persistence: Persistence | PersistenceTransaction,
+  cycle: PostgresCycleRow,
+): Promise<PostgresCycleRow | null> {
+  return persistence.one<PostgresCycleRow>(
+    `SELECT * FROM cycles
+     WHERE team_id = $1 AND number < $2 AND state = 'completed' AND archived_at IS NULL
+     ORDER BY number DESC LIMIT 1`,
+    [cycle.team_id, cycle.number],
+  );
+}
+
+function isPostgresCycleCooldown(
+  team: TeamRow,
+  previous: PostgresCycleRow | null,
+  next: PostgresCycleRow,
+  referenceAt: number,
+): boolean {
+  const cooldownDays = Number(team.cycle_cooldown_days ?? 0);
+  if (!previous || cooldownDays <= 0) return false;
+  const previousEndsAt = parseDateTime(previous.ends_at, "Cycle endsAt");
+  const nextStartsAt = parseDateTime(next.starts_at, "Cycle startsAt");
+  if (referenceAt < previousEndsAt || referenceAt >= nextStartsAt) return false;
+  const configuredEnd = parseDateTime(
+    addCycleCalendarDays(previous.ends_at, cooldownDays + 1, team.timezone),
+    "Cycle cooldown end",
+  );
+  return referenceAt < Math.min(nextStartsAt, configuredEnd);
+}
+
+/**
+ * Selecciona el destino de una Issue sin Cycle para PostgreSQL.
+ * Mantiene la misma política que `findAutoAddCycle` en SQLite, incluido el
+ * desvío de Started al próximo Cycle durante el cooldown.
+ */
+export async function findPostgresAutoAddCycle(
+  persistence: Persistence | PersistenceTransaction,
+  teamId: string,
+  stateType: AutoAddStateType,
+  referenceAt = Date.now(),
+): Promise<PostgresCycleRow | null> {
+  const team = await getPostgresTeam(persistence, { id: teamId });
+  if (!team) return null;
+  if (team.cycles_enabled !== true && team.cycles_enabled !== 1) return null;
+  if (team.cycle_auto_add_enabled !== true && team.cycle_auto_add_enabled !== 1) return null;
+  const current = await findCurrentPostgresAutoAddCycle(persistence, teamId);
+  if (!current) return null;
+  const active = current.state === "active" ? current : null;
+  const next = active ? await findNextPostgresUpcomingCycle(persistence, active) : null;
+  if (stateType !== "completed") {
+    if (active && next && isPostgresCycleCooldown(team, active, next, referenceAt)) return next;
+    return current;
+  }
+  if (active && next && isPostgresCycleCooldown(team, active, next, referenceAt)) return active;
+  const previous = await findPreviousPostgresCompletedCycle(persistence, current);
+  if (isPostgresCycleCooldown(team, previous, current, referenceAt)) return previous;
+  return active;
 }
 
 async function nextPostgresCycleNumber(
@@ -240,6 +335,15 @@ export async function createPostgresCycle(
     }
     const row = await getPostgresCycle(tx, id);
     if (!row) throw new Error("PostgreSQL cycle insert returned no row");
+    if (
+      state === "active" &&
+      (lockedTeam.cycle_auto_add_enabled === true || lockedTeam.cycle_auto_add_enabled === 1)
+    ) {
+      await autoAddPostgresActiveIssues(tx, viewer.id, row);
+      const updated = await getPostgresCycle(tx, id);
+      if (!updated) throw new Error("PostgreSQL cycle insert returned no row");
+      return updated;
+    }
     return row;
   });
 }
@@ -560,17 +664,20 @@ async function rolloverPostgresCycleIssues(
   return issues.length;
 }
 
-async function autoAddPostgresActiveIssues(
+async function autoAddPostgresIssuesToCycle(
   tx: PersistenceTransaction,
   actorId: string,
   cycle: PostgresCycleRow,
+  stateTypes: readonly AutoAddStateType[],
 ): Promise<number> {
+  if (!stateTypes.length) return 0;
+  const stateFilter = stateTypes.map((state) => `'${state}'`).join(", ");
   const timestamp = now();
   const issues = await tx.many<{ id: string }>(
     `UPDATE issues SET cycle_id = $1, updated_at = $2
      WHERE team_id = $3 AND cycle_id IS NULL AND archived_at IS NULL
        AND state_id IN (
-         SELECT id FROM workflow_states WHERE team_id = $3 AND type IN ('unstarted', 'started')
+         SELECT id FROM workflow_states WHERE team_id = $3 AND type IN (${stateFilter})
        )
      RETURNING id`,
     [cycle.id, timestamp, cycle.team_id],
@@ -589,6 +696,78 @@ async function autoAddPostgresActiveIssues(
     );
   }
   return issues.length;
+}
+
+/**
+ * Asigna una Issue sin Cycle al destino que corresponde a su estado.
+ * La condición `cycle_id IS NULL` hace que los reintentos sean idempotentes.
+ */
+export async function autoAddPostgresIssue(
+  persistence: Persistence | PersistenceTransaction,
+  actorId: string,
+  issueId: string,
+  stateType: AutoAddStateType,
+  referenceAt = Date.now(),
+): Promise<boolean> {
+  const issue = await persistence.one<{
+    id: string;
+    team_id: string;
+    state_id: string;
+    cycle_id: string | null;
+    archived_at: string | null;
+    state_type: AutoAddStateType;
+  }>(
+    `SELECT issues.id, issues.team_id, issues.state_id, issues.cycle_id,
+            issues.archived_at, workflow_states.type AS state_type
+     FROM issues JOIN workflow_states ON workflow_states.id = issues.state_id
+     WHERE issues.id = $1`,
+    [issueId],
+  );
+  if (!issue || issue.cycle_id !== null || issue.archived_at !== null) return false;
+  if (issue.state_type !== stateType) return false;
+  const target = await findPostgresAutoAddCycle(persistence, issue.team_id, stateType, referenceAt);
+  if (!target) return false;
+  const updated = await persistence.one<{ id: string }>(
+    `UPDATE issues SET cycle_id = $1, updated_at = $2
+     WHERE id = $3 AND cycle_id IS NULL AND archived_at IS NULL AND state_id = $4
+     RETURNING id`,
+    [target.id, now(), issue.id, issue.state_id],
+  );
+  if (!updated) return false;
+  await recordCycleActivity(
+    persistence,
+    issue.id,
+    actorId,
+    { from: null, to: target.id, reason: "cycle_auto_add" },
+    now(),
+  );
+  return true;
+}
+
+/**
+ * Agrega las Issues activas al Cycle recién activado.
+ * Las Issues Completed se dirigen al Cycle anterior durante el cooldown.
+ */
+export async function autoAddPostgresActiveIssues(
+  tx: PersistenceTransaction,
+  actorId: string,
+  cycle: PostgresCycleRow,
+  referenceAt = Date.now(),
+): Promise<number> {
+  const activeCount = await autoAddPostgresIssuesToCycle(tx, actorId, cycle, [
+    "unstarted",
+    "started",
+  ]);
+  const completedTarget = await findPostgresAutoAddCycle(
+    tx,
+    cycle.team_id,
+    "completed",
+    referenceAt,
+  );
+  const completedCount = completedTarget
+    ? await autoAddPostgresIssuesToCycle(tx, actorId, completedTarget, ["completed"])
+    : 0;
+  return activeCount + completedCount;
 }
 
 export async function advancePostgresCycle(
@@ -689,7 +868,7 @@ async function preserveCycleActivityReferences(
 }
 
 async function recordCycleActivity(
-  tx: PersistenceTransaction,
+  tx: Persistence | PersistenceTransaction,
   issueId: string,
   actorId: string,
   payload: Record<string, unknown>,
