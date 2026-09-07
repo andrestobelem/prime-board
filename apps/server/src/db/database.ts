@@ -94,6 +94,35 @@ const WORKSPACE_ROOT_TABLES = [
   "actor_invitations",
 ] as const;
 
+// 0025 reconstruye estas tablas no-Views con DROP TABLE/ALTER TABLE RENAME.
+// Mantener la lista explícita evita que una tabla nueva quede fuera del preflight.
+// saved_views queda fuera: PRB-654 conserva su contrato en su propio helper.
+const WORKSPACE_CONSTRAINTS_REBUILT_TABLES = [
+  "teams",
+  "workflow_states",
+  "projects",
+  "milestones",
+  "issues",
+  "labels",
+  "cycles",
+  "project_teams",
+  "issue_labels",
+  "issue_relations",
+  "comments",
+  "activity",
+  "webhooks",
+  "reviews",
+  "initiatives",
+  "initiative_projects",
+  "initiative_teams",
+  "project_updates",
+  "team_memberships",
+  "api_key_team_limits",
+  "inbox_receipts",
+  "favorites",
+  "actor_invitations",
+] satisfies readonly string[];
+
 function countRows(db: Database, table: string): number {
   const row = db.query(`SELECT count(*) AS count FROM ${table}`).get() as { count: number };
   return row.count;
@@ -1150,6 +1179,14 @@ interface ViewsMigrationTriggerSnapshot {
   canonical: boolean;
 }
 
+interface WorkspaceConstraintTriggerSnapshot {
+  name: string;
+  table: string;
+  sql: string;
+  recreatedSql: string;
+  canonical: boolean;
+}
+
 const VIEWS_MIGRATION_CANONICAL_TRIGGER_NAMES = new Set(
   VIEWS_MIGRATION_TRIGGER_CONTRACTS.map((contract) => contract.name.toLowerCase()),
 );
@@ -1297,6 +1334,66 @@ function triggerDefinitionFromSql(definition: string): ParsedTriggerDefinition |
     body: tokens.slice(position + 1, end),
   };
 }
+
+function triggerEndPosition(tokens: readonly SqlToken[], start: number): number | null {
+  let depth = 0;
+  for (let position = start; position < tokens.length; position += 1) {
+    const token = tokens[position];
+    if (token?.value === "(") {
+      depth += 1;
+      continue;
+    }
+    if (token?.value === ")") {
+      if (depth === 0) return null;
+      depth -= 1;
+      continue;
+    }
+    if (depth === 0 && isSqlKeyword(token, "end")) {
+      const next = tokens[position + 1];
+      if (next === undefined || next.value === ";") return position;
+    }
+  }
+  return null;
+}
+
+/**
+ * Obtiene los contratos semánticos de los triggers que 0025 crea. El SQL de la
+ * migración es la fuente canónica; el análisis usa los mismos tokens que el
+ * preflight y no busca fragmentos textuales dentro de comentarios o literales.
+ */
+function migrationTriggerDefinitions(sql: string): Map<string, ParsedTriggerDefinition> {
+  const tokens = sqliteTokens(sql);
+  const definitions = new Map<string, ParsedTriggerDefinition>();
+  if (tokens === null) return definitions;
+
+  for (let position = 0; position < tokens.length; position += 1) {
+    if (
+      !isSqlKeyword(tokens[position], "create") ||
+      !isSqlKeyword(tokens[position + 1], "trigger")
+    ) {
+      continue;
+    }
+    const begin = triggerBeginPosition(tokens, position + 2);
+    if (begin === null) continue;
+    const end = triggerEndPosition(tokens, begin + 1);
+    const startToken = tokens[position];
+    const endToken = end === null ? undefined : tokens[end];
+    if (startToken === undefined || endToken === undefined) continue;
+    const definition = sql.slice(startToken.start, endToken.end);
+    const parsed = triggerDefinitionFromSql(definition);
+    if (parsed !== null) definitions.set(parsed.name.toLowerCase(), parsed);
+    if (end !== null) position = end;
+  }
+  return definitions;
+}
+
+const WORKSPACE_CONSTRAINTS_CANONICAL_TRIGGER_DEFINITIONS = new Map(
+  [...migrationTriggerDefinitions(migration0025)].filter(([, definition]) =>
+    WORKSPACE_CONSTRAINTS_REBUILT_TABLES.some(
+      (table) => table.toLowerCase() === definition.table.toLowerCase(),
+    ),
+  ),
+);
 
 function renamedTriggerSql(
   definition: string,
@@ -2148,6 +2245,30 @@ function validateTemporaryTriggerBeforeRebuild(
   );
 }
 
+function validateWorkspaceConstraintTemporaryTriggers(
+  db: Database,
+  migrationVersion: number,
+): void {
+  const temporaryTriggers = db
+    .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+      "SELECT name, tbl_name, sql FROM sqlite_temp_master WHERE type = 'trigger' ORDER BY rowid",
+    )
+    .all();
+  const migrationLabel = migrationVersion.toString().padStart(4, "0");
+  for (const table of WORKSPACE_CONSTRAINTS_REBUILT_TABLES) {
+    const temporaryTrigger = temporaryTriggers.find(
+      (definition) =>
+        typeof definition.tbl_name === "string" &&
+        definition.tbl_name.toLowerCase() === table.toLowerCase(),
+    );
+    if (temporaryTrigger === undefined) continue;
+    throw new Error(
+      `Cannot apply migration ${migrationLabel} safely: temporary trigger ${temporaryTrigger.name} on ` +
+        `${temporaryTrigger.tbl_name} would be lost while rebuilding ${table}`,
+    );
+  }
+}
+
 function viewsMigrationNameCollisionPlan(
   db: Database,
   includeCreatedTables = true,
@@ -2223,6 +2344,87 @@ function viewsMigrationNameCollisionPlan(
   }
 
   return collisions;
+}
+
+interface MigrationTriggerCaptureOptions {
+  migrationLabel: string;
+  canonicalContract?: ParsedTriggerDefinition;
+}
+
+/**
+ * Valida un trigger capturado y prepara su definición para recrearlo sin alterar
+ * sus nombres, eventos, predicados ni cuerpo.
+ */
+function captureMigrationTrigger(
+  db: Database,
+  definition: TriggerDefinitionRow,
+  options: MigrationTriggerCaptureOptions,
+): WorkspaceConstraintTriggerSnapshot {
+  const canonical = options.canonicalContract !== undefined;
+  const migrationLabel = options.migrationLabel;
+  if (
+    typeof definition.name !== "string" ||
+    typeof definition.tbl_name !== "string" ||
+    typeof definition.sql !== "string"
+  ) {
+    const triggerName = typeof definition.name === "string" ? definition.name : "unknown";
+    const triggerTable = typeof definition.tbl_name === "string" ? definition.tbl_name : "unknown";
+    throw new Error(
+      `Cannot apply migration ${migrationLabel} safely: ${canonical ? "canonical" : "custom"} ` +
+        `trigger ${triggerName} on ${triggerTable} has no recoverable definition`,
+    );
+  }
+  const triggerName = definition.name;
+  const triggerTable = definition.tbl_name;
+  const triggerSql = definition.sql;
+  const parsed = triggerDefinitionFromSql(triggerSql);
+  const recreatedSql =
+    parsed === null
+      ? null
+      : triggerSqlForTable(triggerSql, triggerName, triggerTable, triggerTable);
+  const recreated = recreatedSql === null ? null : triggerDefinitionFromSql(recreatedSql);
+  const canonicalMatches =
+    options.canonicalContract === undefined ||
+    (parsed !== null &&
+      parsed.name.toLowerCase() === options.canonicalContract.name.toLowerCase() &&
+      parsed.table.toLowerCase() === options.canonicalContract.table.toLowerCase() &&
+      sameTriggerBehavior(parsed, options.canonicalContract));
+  if (!canonicalMatches && canonical) {
+    throw new Error(
+      `Cannot apply migration ${migrationLabel} safely: canonical trigger ${triggerName} on ` +
+        `${triggerTable} is incompatible`,
+    );
+  }
+  const executable =
+    canonical || parsed === null || recreatedSql === null
+      ? executableTriggerSchemaDefinition(db, triggerSql) &&
+        (recreatedSql === null || executableTriggerSchemaDefinition(db, recreatedSql))
+      : executableTriggerDefinition(db, triggerSql) &&
+        executableTriggerDefinition(db, recreatedSql);
+  if (
+    parsed === null ||
+    parsed.name.toLowerCase() !== triggerName.toLowerCase() ||
+    parsed.table.toLowerCase() !== triggerTable.toLowerCase() ||
+    recreatedSql === null ||
+    recreated === null ||
+    recreated.name.toLowerCase() !== triggerName.toLowerCase() ||
+    recreated.table.toLowerCase() !== triggerTable.toLowerCase() ||
+    !sameTriggerBehavior(parsed, recreated) ||
+    !executable
+  ) {
+    throw new Error(
+      `Cannot apply migration ${migrationLabel} safely: ${canonical ? "canonical" : "custom"} ` +
+        `trigger ${triggerName} on ${triggerTable} cannot be preserved safely`,
+    );
+  }
+
+  return {
+    name: triggerName,
+    table: triggerTable,
+    sql: triggerSql,
+    recreatedSql,
+    canonical,
+  };
 }
 
 /**
@@ -2307,6 +2509,57 @@ function captureViewsMigrationTriggers(
   });
 }
 
+/**
+ * Captura los triggers MAIN de todas las tablas que 0025 elimina. Los
+ * canónicos solo se validan: el SQL de 0025 los recrea en su orden contractual.
+ * Los custom y otros contratos se capturan; un canónico incompatible falla sin DDL.
+ */
+function captureWorkspaceConstraintTriggers(
+  db: Database,
+  migrationVersion: number,
+): WorkspaceConstraintTriggerSnapshot[] {
+  const rebuiltTables = new Set(
+    WORKSPACE_CONSTRAINTS_REBUILT_TABLES.map((table) => table.toLowerCase()),
+  );
+  const definitions = db
+    .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+      "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY rowid",
+    )
+    .all();
+  const migrationLabel = migrationVersion.toString().padStart(4, "0");
+  const snapshots: WorkspaceConstraintTriggerSnapshot[] = [];
+
+  for (const definition of definitions) {
+    const triggerName = typeof definition.name === "string" ? definition.name : "unknown";
+    const canonicalDefinition =
+      typeof definition.name === "string"
+        ? WORKSPACE_CONSTRAINTS_CANONICAL_TRIGGER_DEFINITIONS.get(definition.name.toLowerCase())
+        : undefined;
+    if (canonicalDefinition !== undefined) {
+      // 0025 recrea este trigger en el orden canónico de su propio SQL. Solo
+      // se valida la definición existente; no se captura ni se vuelve a crear.
+      captureMigrationTrigger(db, definition, {
+        migrationLabel,
+        canonicalContract: canonicalDefinition,
+      });
+      continue;
+    }
+    if (
+      typeof definition.tbl_name !== "string" ||
+      !rebuiltTables.has(definition.tbl_name.toLowerCase())
+    ) {
+      continue;
+    }
+    snapshots.push(
+      captureMigrationTrigger(db, definition, {
+        migrationLabel,
+      }),
+    );
+  }
+
+  return snapshots;
+}
+
 const NOTIFICATION_MIGRATION_RESERVED_NAMES = [
   "notification_preferences",
   "idx_notification_preferences_actor_workspace",
@@ -2332,6 +2585,31 @@ function applyMigrationNameCollisions(
       db.exec(`DROP VIEW ${quoteIdentifier(collision.name)}`);
     }
     db.exec(collision.sql);
+  }
+}
+
+function restoreWorkspaceConstraintTriggers(
+  db: Database,
+  definitions: readonly WorkspaceConstraintTriggerSnapshot[],
+): void {
+  // Los canónicos de 0025 ya quedaron en el orden declarado por su SQL. Esta
+  // captura solo contiene triggers custom u otros contratos instalados fuera de
+  // 0025; recrearlos después del DDL conserva su definición sin tocar ese orden.
+  for (const definition of definitions) {
+    try {
+      db.exec(definition.recreatedSql);
+    } catch {
+      throw new Error(
+        `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
+          `${definition.table} cannot be preserved safely`,
+      );
+    }
+    if (!executableTriggerDefinition(db, definition.recreatedSql)) {
+      throw new Error(
+        `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
+          `${definition.table} cannot be preserved safely`,
+      );
+    }
   }
 }
 
@@ -3466,7 +3744,10 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
     // El preflight ocurre antes de desactivar las FKs o abrir la transacción para
     // que una base incompatible falle sin escrituras parciales y pueda repararse.
     if (migration.version === 25) {
+      // PRB-654 mantiene la protección de saved_views; PRB-659 extiende el
+      // mismo fail-closed a cada tabla no-Views que 0025 reconstruye.
       validateTemporaryTriggerBeforeRebuild(db, "saved_views", migration.version);
+      validateWorkspaceConstraintTemporaryTriggers(db, migration.version);
     }
     if (migration.version === 33) validateViewsMigrationPrerequisites(db);
     // PRB-472 y PRB-390 reconstruyen el grafo de tablas para reemplazar FKs
@@ -3482,6 +3763,8 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
       migration.version === 25 || migration.version === 33
         ? captureViewsMigrationTriggers(db, "saved_views", migration.version)
         : [];
+    const workspaceConstraintTriggerSnapshots =
+      migration.version === 25 ? captureWorkspaceConstraintTriggers(db, migration.version) : [];
     if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
@@ -3496,6 +3779,9 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
         if (migration.version === 33) restoreSavedViewsIndexes(db, savedViewIndexes);
         if (savedViewsTriggerSnapshots.length > 0) {
           restoreViewsMigrationTriggers(db, savedViewsTriggerSnapshots);
+        }
+        if (workspaceConstraintTriggerSnapshots.length > 0) {
+          restoreWorkspaceConstraintTriggers(db, workspaceConstraintTriggerSnapshots);
         }
         if (migration.version === 24) {
           normalizeBackfilledMembershipIds(db);
