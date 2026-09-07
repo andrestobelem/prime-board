@@ -1817,7 +1817,7 @@ const VIEWS_MIGRATION_CREATED_TABLES = [
   "view_subscriptions",
 ] satisfies readonly string[];
 
-interface ViewsMigrationNameCollision {
+interface MigrationNameCollision {
   type: "index" | "trigger" | "view";
   name: string;
   table: string;
@@ -1825,19 +1825,24 @@ interface ViewsMigrationNameCollision {
   sql: string;
 }
 
+function migrationObjectNameInUse(db: Database, name: string): boolean {
+  return schemaObjectsWithName(db, name).some(({ object }) => object.type !== "trigger");
+}
+
 function triggerNameInUse(db: Database, name: string): boolean {
   return schemaObjects(db, name).some((object) => object.type === "trigger");
 }
 
-function generatedViewsMigrationIndexName(
+function generatedMigrationIndexName(
   db: Database,
   name: string,
   plannedNames: Set<string>,
+  nameInUse = migrationObjectNameInUse,
 ): string {
   const base = `${name}_legacy`;
   for (let suffixNumber = 1; ; suffixNumber += 1) {
     const candidate = suffixNumber === 1 ? base : `${base}_${suffixNumber}`;
-    if (!indexNameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
+    if (!nameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
       plannedNames.add(candidate.toLowerCase());
       return candidate;
     }
@@ -1859,15 +1864,16 @@ function generatedViewsMigrationTriggerName(
   }
 }
 
-function generatedViewsMigrationViewName(
+function generatedMigrationViewName(
   db: Database,
   name: string,
   plannedNames: Set<string>,
+  nameInUse = migrationObjectNameInUse,
 ): string {
   const base = `${name}_legacy`;
   for (let suffixNumber = 1; ; suffixNumber += 1) {
     const candidate = suffixNumber === 1 ? base : `${base}_${suffixNumber}`;
-    if (!indexNameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
+    if (!nameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
       plannedNames.add(candidate.toLowerCase());
       return candidate;
     }
@@ -1896,43 +1902,32 @@ function viewsMigrationIndexHasEquivalentAlternative(
   );
 }
 
-function viewsMigrationNameCollisionPlan(
+interface MigrationNameCollisionPlanOptions {
+  reservedNames: readonly string[];
+  errorPrefix: string;
+  expectedIndexTable?: (name: string) => string | undefined;
+  indexMatches?: (db: Database, name: string) => boolean;
+  indexEquivalentAlternative?: (db: Database, name: string) => boolean;
+  replacementNameInUse?: (db: Database, name: string) => boolean;
+}
+
+/**
+ * Reserva nombres del namespace SQLite antes de ejecutar DDL. Las definiciones
+ * recuperables se renombran dentro de la misma transacción; una TEMP siempre
+ * bloquea porque puede ocultar el objeto main que el DDL no cualifica.
+ */
+function migrationNameCollisionPlan(
   db: Database,
-  includeCreatedTables = true,
-): ViewsMigrationNameCollision[] {
-  const indexByName = new Map(
-    VIEWS_MIGRATION_NAMED_INDEXES.map((index) => [index.name.toLowerCase(), index]),
-  );
-  const reservedIndexNames = [
-    ...VIEWS_MIGRATION_NAMED_INDEXES.map((index) => index.name),
-    ...(includeCreatedTables ? VIEWS_MIGRATION_CREATED_TABLES : []),
-  ];
-  const collisions: ViewsMigrationNameCollision[] = [];
-  const plannedObjectNames = new Set<string>();
-  const plannedTriggerNames = new Set<string>();
+  options: MigrationNameCollisionPlanOptions,
+): MigrationNameCollision[] {
+  const collisions: MigrationNameCollision[] = [];
+  const plannedObjectNames = new Set(options.reservedNames.map((name) => name.toLowerCase()));
 
-  if (includeCreatedTables) {
-    const temporaryTriggers = db
-      .query<TriggerDefinitionRow, SQLQueryBindings[]>(
-        "SELECT name, tbl_name, sql FROM sqlite_temp_master " +
-          "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1)",
-      )
-      .all("saved_views");
-    const temporaryTrigger = temporaryTriggers[0];
-    if (temporaryTrigger !== undefined) {
-      throw new Error(
-        `Cannot apply migration 0033 safely: temporary trigger ${temporaryTrigger.name} on ` +
-          `${temporaryTrigger.tbl_name} would be lost while rebuilding saved_views`,
-      );
-    }
-  }
-
-  for (const name of reservedIndexNames) {
-    const expected = indexByName.get(name.toLowerCase());
+  for (const name of options.reservedNames) {
     for (const { object, temporary } of schemaObjectsWithName(db, name)) {
       if (temporary) {
         throw new Error(
-          `Cannot apply migration 0033 safely: temporary ${object.type} ${object.name} ` +
+          `${options.errorPrefix}: temporary ${object.type} ${object.name} ` +
             `blocks the global index/table name ${name}`,
         );
       }
@@ -1940,16 +1935,17 @@ function viewsMigrationNameCollisionPlan(
       if (object.type === "view") {
         if (viewHasSchemaDependencies(db, object)) {
           throw new Error(
-            `Cannot apply migration 0033 safely: view ${object.name} has dependent schema objects`,
+            `${options.errorPrefix}: view ${object.name} has dependent schema objects`,
           );
         }
         if (object.sql === null) {
           throw new Error(`Cannot rename legacy view ${object.name} safely`);
         }
-        const replacementName = generatedViewsMigrationViewName(
+        const replacementName = generatedMigrationViewName(
           db,
           object.name,
           plannedObjectNames,
+          options.replacementNameInUse,
         );
         const sql = renamedViewSql(object.sql, replacementName, object.name);
         if (sql === null || !executableSchemaDefinition(db, sql)) {
@@ -1966,20 +1962,21 @@ function viewsMigrationNameCollisionPlan(
       }
       if (object.type !== "index") {
         throw new Error(
-          `Cannot apply migration 0033 safely: ${object.type} ${object.name} ` +
+          `${options.errorPrefix}: ${object.type} ${object.name} ` +
             `blocks the global index/table name ${name}`,
         );
       }
+
+      const expectedTable = options.expectedIndexTable?.(name);
       if (
-        expected !== undefined &&
-        object.tbl_name.toLowerCase() === expected.table.toLowerCase()
+        expectedTable !== undefined &&
+        object.tbl_name.toLowerCase() === expectedTable.toLowerCase()
       ) {
-        if (
-          !viewsMigrationIndexMatches(db, expected) &&
-          !viewsMigrationIndexHasEquivalentAlternative(db, expected)
-        ) {
+        const matches = options.indexMatches?.(db, name) ?? false;
+        const equivalent = options.indexEquivalentAlternative?.(db, name) ?? false;
+        if (!matches && !equivalent) {
           throw new Error(
-            `Cannot apply migration 0033 safely: same-table index ${object.name} on ` +
+            `${options.errorPrefix}: same-table index ${object.name} on ` +
               `${object.tbl_name} is incompatible`,
           );
         }
@@ -1987,10 +1984,15 @@ function viewsMigrationNameCollisionPlan(
       }
       if (object.sql === null) {
         throw new Error(
-          `Cannot apply migration 0033 safely: index ${object.name} has no recoverable definition`,
+          `${options.errorPrefix}: index ${object.name} has no recoverable definition`,
         );
       }
-      const replacementName = generatedViewsMigrationIndexName(db, object.name, plannedObjectNames);
+      const replacementName = generatedMigrationIndexName(
+        db,
+        object.name,
+        plannedObjectNames,
+        options.replacementNameInUse,
+      );
       const sql = renamedIndexSql(object.sql, replacementName, object.tbl_name, object.name);
       if (sql === null || !executableSchemaDefinition(db, sql)) {
         throw new Error(`Cannot rename legacy index ${object.name} safely`);
@@ -2002,6 +2004,54 @@ function viewsMigrationNameCollisionPlan(
         replacementName,
         sql,
       });
+    }
+  }
+
+  return collisions;
+}
+
+function viewsMigrationNameCollisionPlan(
+  db: Database,
+  includeCreatedTables = true,
+): MigrationNameCollision[] {
+  const indexByName = new Map(
+    VIEWS_MIGRATION_NAMED_INDEXES.map((index) => [index.name.toLowerCase(), index]),
+  );
+  const reservedNames = [
+    ...VIEWS_MIGRATION_NAMED_INDEXES.map((index) => index.name),
+    ...(includeCreatedTables ? VIEWS_MIGRATION_CREATED_TABLES : []),
+  ];
+  const collisions = migrationNameCollisionPlan(db, {
+    reservedNames,
+    errorPrefix: "Cannot apply migration 0033 safely",
+    expectedIndexTable: (name) => indexByName.get(name.toLowerCase())?.table,
+    indexMatches: (database, name) => {
+      const expected = indexByName.get(name.toLowerCase());
+      return expected !== undefined && viewsMigrationIndexMatches(database, expected);
+    },
+    indexEquivalentAlternative: (database, name) => {
+      const expected = indexByName.get(name.toLowerCase());
+      return (
+        expected !== undefined && viewsMigrationIndexHasEquivalentAlternative(database, expected)
+      );
+    },
+    replacementNameInUse: indexNameInUse,
+  });
+  const plannedTriggerNames = new Set<string>();
+
+  if (includeCreatedTables) {
+    const temporaryTriggers = db
+      .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+        "SELECT name, tbl_name, sql FROM sqlite_temp_master " +
+          "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1)",
+      )
+      .all("saved_views");
+    const temporaryTrigger = temporaryTriggers[0];
+    if (temporaryTrigger !== undefined) {
+      throw new Error(
+        `Cannot apply migration 0033 safely: temporary trigger ${temporaryTrigger.name} on ` +
+          `${temporaryTrigger.tbl_name} would be lost while rebuilding saved_views`,
+      );
     }
   }
 
@@ -2049,9 +2099,21 @@ function viewsMigrationNameCollisionPlan(
   return collisions;
 }
 
-function applyViewsMigrationNameCollisions(
+const NOTIFICATION_MIGRATION_RESERVED_NAMES = [
+  "notification_preferences",
+  "idx_notification_preferences_actor_workspace",
+] satisfies readonly string[];
+
+function notificationMigrationNameCollisionPlan(db: Database): MigrationNameCollision[] {
+  return migrationNameCollisionPlan(db, {
+    reservedNames: NOTIFICATION_MIGRATION_RESERVED_NAMES,
+    errorPrefix: "Cannot apply migration 0032 safely",
+  });
+}
+
+function applyMigrationNameCollisions(
   db: Database,
-  collisions: readonly ViewsMigrationNameCollision[],
+  collisions: readonly MigrationNameCollision[],
 ): void {
   for (const collision of collisions) {
     if (collision.type === "index") {
@@ -3048,10 +3110,12 @@ function reconcileLegacyViewsMigration(db: Database, marker: MigrationMarkerRow)
     );
   }
   const nameCollisionPlan = viewsMigrationNameCollisionPlan(db, false);
+  const notificationNameCollisionPlan = notificationMigrationNameCollisionPlan(db);
 
   db.transaction(() => {
     const appliedAt = now();
-    applyViewsMigrationNameCollisions(db, nameCollisionPlan);
+    applyMigrationNameCollisions(db, nameCollisionPlan);
+    applyMigrationNameCollisions(db, notificationNameCollisionPlan);
     db.exec(migration0032);
     db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_views_workspace_id ON saved_views(workspace_id, id)",
@@ -3187,13 +3251,18 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
     const rebuild = migration.version === 25 || migration.version === 33;
     const savedViewIndexes = migration.version === 33 ? savedViewsIndexDefinitions(db) : [];
     const nameCollisionPlan = migration.version === 33 ? viewsMigrationNameCollisionPlan(db) : [];
+    const notificationNameCollisionPlan =
+      migration.version === 32 ? notificationMigrationNameCollisionPlan(db) : [];
     if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
         if (migration.version === 24) validateWorkspaceMigration(db, "before");
         if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "before");
         if (migration.version === 30) verifyDocumentsBeforeRetirement(db, options);
-        if (migration.version === 33) applyViewsMigrationNameCollisions(db, nameCollisionPlan);
+        if (migration.version === 32) {
+          applyMigrationNameCollisions(db, notificationNameCollisionPlan);
+        }
+        if (migration.version === 33) applyMigrationNameCollisions(db, nameCollisionPlan);
         db.exec(migration.sql);
         if (migration.version === 33) restoreSavedViewsIndexes(db, savedViewIndexes);
         if (migration.version === 24) {
