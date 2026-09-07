@@ -25,10 +25,15 @@ import { isWorkspaceAdmin } from "../auth/permissions.ts";
 import { newId, now } from "../db/util.ts";
 import { applyPostgresLabelOps } from "./postgres-labels.ts";
 import { assertPostgresMilestoneMatchesProject } from "./postgres-milestones.ts";
-import { validatePostgresCycleForTeam } from "./postgres-cycles.ts";
+import { autoAddPostgresIssue, validatePostgresCycleForTeam } from "./postgres-cycles.ts";
+import type { AutoAddStateType } from "./cycles.ts";
 
 const SELECT_ISSUE =
   "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id";
+
+function isAutoAddStateType(value: string): value is AutoAddStateType {
+  return value === "unstarted" || value === "started" || value === "completed";
+}
 
 function postgresPlaceholders(sql: string): string {
   return sql.replace(/\?(\d+)/g, (_match, number: string) => `$${number}`);
@@ -475,6 +480,9 @@ export async function createPostgresIssue(
       },
       createdAt,
     );
+    if (isAutoAddStateType(state.type)) {
+      await autoAddPostgresIssue(tx, viewer.id, issueId, state.type);
+    }
     const row = await getPostgresIssue(tx, issueId);
     if (!row) throw apiError("NOT_FOUND", "Issue not found after creation");
     return row;
@@ -492,6 +500,8 @@ export async function updatePostgresIssue(
     if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
     const team = await requirePostgresIssueWrite(tx, viewer, issue.team_id);
     const changes: Array<{ field: string; from: unknown; to: unknown }> = [];
+    let autoAddStateType: AutoAddStateType | null = null;
+    let autoAdded = false;
     const sets: string[] = [];
     const params: SqlValue[] = [];
     const push = (column: string, value: SqlValue) => {
@@ -522,6 +532,7 @@ export async function updatePostgresIssue(
       if (!state || state.team_id !== team.id) {
         throw apiError("VALIDATION_FAILED", "Workflow state does not belong to the Team");
       }
+      if (isAutoAddStateType(state.type)) autoAddStateType = state.type;
       push("state_id", input.stateId);
       changes.push({ field: "state", from: issue.state_id, to: input.stateId });
       activity.push({
@@ -619,7 +630,11 @@ export async function updatePostgresIssue(
       for (const entry of activity)
         await recordPostgresActivity(tx, issue.id, viewer.id, entry.type, entry.payload, updatedAt);
     }
+    if (issue.cycle_id === null && autoAddStateType) {
+      autoAdded = await autoAddPostgresIssue(tx, viewer.id, issue.id, autoAddStateType);
+    }
     const row = (await getPostgresIssue(tx, issue.id))!;
+    if (autoAdded) changes.push({ field: "cycle", from: issue.cycle_id, to: row.cycle_id });
     return { row, changes };
   });
 }

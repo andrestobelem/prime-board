@@ -15,9 +15,9 @@ import {
 import { applyLabelOps, type LabelOps } from "./labels.ts";
 import { assertMilestoneMatchesProject } from "./milestones.ts";
 import { projectIncludesTeam } from "./projects.ts";
-import { validateCycleForTeam } from "./cycles.ts";
+import { autoAddIssue, validateCycleForTeam, type AutoAddStateType } from "./cycles.ts";
 import { parseDateTime } from "./datetime.ts";
-import { getDefaultState, getTeam } from "./teams.ts";
+import { getDefaultState, getTeam, getWorkflowState } from "./teams.ts";
 
 export interface IssueRow {
   id: string;
@@ -43,6 +43,10 @@ export interface IssueRow {
 
 const SELECT_ISSUE =
   "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id";
+
+function isAutoAddStateType(value: string): value is AutoAddStateType {
+  return value === "unstarted" || value === "started" || value === "completed";
+}
 
 export function identifierOf(row: IssueRow): string {
   return `${row.team_key}-${row.number}`;
@@ -358,6 +362,10 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
       if (!created) throw apiError("NOT_FOUND", `Issue not found: ${id}`);
       applyLabelOps(db, actorId, created, { labelIds: input.labelIds });
     }
+    const workflowState = getWorkflowState(db, stateId, workspaceId);
+    if (workflowState && isAutoAddStateType(workflowState.type)) {
+      autoAddIssue(db, actorId, id, workflowState.type, workspaceId);
+    }
   })();
   const created = getIssue(db, id, workspaceId);
   if (!created) throw apiError("NOT_FOUND", `Issue not found: ${id}`);
@@ -395,6 +403,8 @@ export function updateIssue(
   const issue = requireIssue(db, ref, workspaceId);
   const effectiveWorkspaceId = workspaceId ?? issue.workspace_id ?? undefined;
   const changes: IssueChange[] = [];
+  let autoAddStateType: AutoAddStateType | null = null;
+  let autoAdded = false;
   const sets: string[] = [];
   const params: unknown[] = [];
   const addActivity = (
@@ -427,6 +437,10 @@ export function updateIssue(
     }
     if (input.stateId != null && input.stateId !== issue.state_id) {
       validateState(db, issue.team_id, input.stateId, effectiveWorkspaceId);
+      const workflowState = getWorkflowState(db, input.stateId, effectiveWorkspaceId);
+      if (workflowState && isAutoAddStateType(workflowState.type)) {
+        autoAddStateType = workflowState.type;
+      }
       push("state_id", input.stateId);
       changes.push({ field: "state", from: issue.state_id, to: input.stateId });
       addActivity("state_changed", {
@@ -551,10 +565,14 @@ export function updateIssue(
       if (effectiveWorkspaceId) params.push(effectiveWorkspaceId);
       db.query(`UPDATE issues SET ${sets.join(", ")} ${where}`).run(...(params as never[]));
     }
+    if (issue.cycle_id === null && autoAddStateType) {
+      autoAdded = autoAddIssue(db, actorId, issue.id, autoAddStateType, effectiveWorkspaceId);
+    }
   })();
 
   const row = getIssue(db, issue.id, effectiveWorkspaceId);
   if (!row) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
+  if (autoAdded) changes.push({ field: "cycle", from: issue.cycle_id, to: row.cycle_id });
   return { row, changes };
 }
 
