@@ -5,6 +5,27 @@ import { createTestApp, gql } from "../test-helpers.ts";
 const app = createTestApp();
 afterAll(() => app.stop());
 
+async function createCycleForTeam(teamId: string, name: string, startsAt: string, endsAt: string) {
+  const result = await gql(
+    app,
+    `mutation($teamId: ID!, $name: String!, $startsAt: DateTime!, $endsAt: DateTime!) {
+      cycleCreate(input: {
+        teamId: $teamId, name: $name, startsAt: $startsAt, endsAt: $endsAt
+      }) { cycle { id name startsAt endsAt state cadenceSource } }
+    }`,
+    { teamId, name, startsAt, endsAt },
+  );
+  expect(result.errors).toBeUndefined();
+  return result.data!.cycleCreate.cycle as {
+    id: string;
+    name: string;
+    startsAt: string;
+    endsAt: string;
+    state: string;
+    cadenceSource: string;
+  };
+}
+
 describe("cycles", () => {
   it("crea un ciclo de team, lo lista y asigna un issue", async () => {
     const team = await gql(app, `{ team(key: "PB") { id } }`);
@@ -605,5 +626,215 @@ describe("cycles", () => {
       cadenceSource: "MANUAL",
       archivedAt: null,
     });
+  });
+
+  it("repone el horizonte tras borrar el último MANUAL y conserva el ciclo mixto", async () => {
+    const teamResult = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "PRB-624 manual horizon", key: "PR624A", cyclesEnabled: true,
+          cycleUpcomingCount: 3
+        }) { team { id } }
+      }`,
+    );
+    expect(teamResult.errors).toBeUndefined();
+    const teamId = teamResult.data!.teamCreate.team.id;
+    const manualOne = await createCycleForTeam(teamId, "Manual 1", "2031-01-01", "2031-01-14");
+    const manualTwo = await createCycleForTeam(teamId, "Manual 2", "2031-01-15", "2031-01-28");
+    const manualThree = await createCycleForTeam(teamId, "Manual 3", "2031-01-29", "2031-02-11");
+    const deleted = await gql(app, `mutation($id: ID!) { cycleDelete(id: $id) { success } }`, {
+      id: manualOne.id,
+    });
+    expect(deleted.errors).toBeUndefined();
+
+    const listed = await gql(
+      app,
+      `query($teamId: ID!) {
+        cycles(teamId: $teamId) { id name startsAt endsAt state cadenceSource }
+      }`,
+      { teamId },
+    );
+    expect(listed.errors).toBeUndefined();
+    const cycles = listed.data!.cycles as Array<{
+      id: string;
+      startsAt: string;
+      endsAt: string;
+      cadenceSource: string;
+    }>;
+    expect(cycles).toHaveLength(3);
+    expect(cycles.filter((cycle) => cycle.cadenceSource === "CADENCE")).toHaveLength(1);
+    expect(cycles).toContainEqual(
+      expect.objectContaining({
+        id: manualTwo.id,
+        name: "Manual 2",
+        startsAt: manualTwo.startsAt,
+        endsAt: manualTwo.endsAt,
+        cadenceSource: "MANUAL",
+      }),
+    );
+    expect(cycles).toContainEqual(
+      expect.objectContaining({
+        id: manualThree.id,
+        name: "Manual 3",
+        startsAt: manualThree.startsAt,
+        endsAt: manualThree.endsAt,
+        cadenceSource: "MANUAL",
+      }),
+    );
+    const ordered = [...cycles].sort(
+      (left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt),
+    );
+    for (let index = 1; index < ordered.length; index += 1) {
+      expect(Date.parse(ordered[index]!.startsAt)).toBeGreaterThanOrEqual(
+        Date.parse(ordered[index - 1]!.endsAt),
+      );
+    }
+
+    const mixedTeamResult = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "PRB-624 mixed horizon", key: "PR624M", cyclesEnabled: true,
+          cycleUpcomingCount: 3
+        }) { team { id } }
+      }`,
+    );
+    expect(mixedTeamResult.errors).toBeUndefined();
+    const mixedTeamId = mixedTeamResult.data!.teamCreate.team.id;
+    const mixedManualOne = await createCycleForTeam(
+      mixedTeamId,
+      "Mixed manual 1",
+      "2032-01-01",
+      "2032-01-14",
+    );
+    const mixedManualTwo = await createCycleForTeam(
+      mixedTeamId,
+      "Mixed manual 2",
+      "2032-01-15",
+      "2032-01-28",
+    );
+    const generated = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreateFromCadence(input: { teamId: $teamId }) {
+          cycle { id cadenceSource }
+        }
+      }`,
+      { teamId: mixedTeamId },
+    );
+    expect(generated.errors).toBeUndefined();
+    expect(generated.data!.cycleCreateFromCadence.cycle.cadenceSource).toBe("CADENCE");
+    const mixedDeleted = await gql(app, `mutation($id: ID!) { cycleDelete(id: $id) { success } }`, {
+      id: mixedManualOne.id,
+    });
+    expect(mixedDeleted.errors).toBeUndefined();
+    const mixedListed = await gql(
+      app,
+      `query($teamId: ID!) { cycles(teamId: $teamId) { id cadenceSource } }`,
+      { teamId: mixedTeamId },
+    );
+    expect(mixedListed.errors).toBeUndefined();
+    expect(mixedListed.data!.cycles).toHaveLength(3);
+    expect(
+      mixedListed.data!.cycles.filter(
+        (cycle: { cadenceSource: string }) => cycle.cadenceSource === "CADENCE",
+      ),
+    ).toHaveLength(2);
+    expect(mixedListed.data!.cycles).toContainEqual(
+      expect.objectContaining({ id: mixedManualTwo.id, cadenceSource: "MANUAL" }),
+    );
+  });
+
+  it("respeta límites 0–15 y no repone cuando Cycles está deshabilitado", async () => {
+    const zeroTeamResult = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "PRB-624 zero horizon", key: "PR624Z", cyclesEnabled: true,
+          cycleUpcomingCount: 0
+        }) { team { id } }
+      }`,
+    );
+    expect(zeroTeamResult.errors).toBeUndefined();
+    const zeroTeamId = zeroTeamResult.data!.teamCreate.team.id;
+    const zeroCycle = await createCycleForTeam(
+      zeroTeamId,
+      "Zero manual",
+      "2033-01-01",
+      "2033-01-14",
+    );
+    const zeroDeleted = await gql(app, `mutation($id: ID!) { cycleDelete(id: $id) { success } }`, {
+      id: zeroCycle.id,
+    });
+    expect(zeroDeleted.errors).toBeUndefined();
+    const zeroListed = await gql(
+      app,
+      `query($teamId: ID!) { cycles(teamId: $teamId) { id cadenceSource } }`,
+      { teamId: zeroTeamId },
+    );
+    expect(zeroListed.data!.cycles).toEqual([]);
+
+    const maxTeam = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "PRB-624 maximum horizon", key: "PR624X", cyclesEnabled: true,
+          cycleUpcomingCount: 15
+        }) { team { cycleUpcomingCount } }
+      }`,
+    );
+    expect(maxTeam.errors).toBeUndefined();
+    expect(maxTeam.data!.teamCreate.team.cycleUpcomingCount).toBe(15);
+    const aboveMaximum = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "PRB-624 invalid horizon", key: "PR624I", cycleUpcomingCount: 16
+        }) { success }
+      }`,
+    );
+    expect(aboveMaximum.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const disabledTeamResult = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "PRB-624 disabled horizon", key: "PR624D", cyclesEnabled: true,
+          cycleUpcomingCount: 3
+        }) { team { id } }
+      }`,
+    );
+    expect(disabledTeamResult.errors).toBeUndefined();
+    const disabledTeamId = disabledTeamResult.data!.teamCreate.team.id;
+    const disabledCycle = await createCycleForTeam(
+      disabledTeamId,
+      "Disabled manual",
+      "2034-01-01",
+      "2034-01-14",
+    );
+    const disabled = await gql(
+      app,
+      `mutation($id: ID!) {
+        teamUpdate(id: $id, input: { cyclesEnabled: false }) {
+          team { cycleSettings { enabled } }
+        }
+      }`,
+      { id: disabledTeamId },
+    );
+    expect(disabled.errors).toBeUndefined();
+    expect(disabled.data!.teamUpdate.team.cycleSettings.enabled).toBe(false);
+    const disabledDeleted = await gql(
+      app,
+      `mutation($id: ID!) { cycleDelete(id: $id) { success } }`,
+      { id: disabledCycle.id },
+    );
+    expect(disabledDeleted.errors).toBeUndefined();
+    const disabledListed = await gql(
+      app,
+      `query($teamId: ID!) { cycles(teamId: $teamId) { id cadenceSource } }`,
+      { teamId: disabledTeamId },
+    );
+    expect(disabledListed.data!.cycles).toEqual([]);
   });
 });
