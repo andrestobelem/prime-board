@@ -6,14 +6,18 @@ import { WebhookDispatcher, signPayload, type WebhookRow } from "./dispatcher.ts
 function fakePersistence(
   hook: WebhookRow,
   workspaceId = "workspace-1",
-  state: { membershipActive: boolean } = { membershipActive: true },
+  state: { membershipStatus: "active" | "suspended" | "left" } = {
+    membershipStatus: "active",
+  },
 ): Persistence {
   return {
     one: async <Row extends object>(sql: string, params = []) => {
       if (sql.includes("workspace_memberships")) {
-        return state.membershipActive
-          ? ({ id: hook.owner_id, status: "active", workspace_role: "admin" } as Row)
-          : null;
+        return {
+          id: hook.owner_id,
+          status: state.membershipStatus,
+          workspace_role: "admin",
+        } as Row;
       }
       if (sql.includes("FROM workspace ")) {
         return params[0] === workspaceId ? ({ id: workspaceId } as Row) : null;
@@ -194,41 +198,45 @@ describe("PostgreSQL webhook dispatcher", () => {
     expect(requests).toHaveLength(0);
   });
 
-  it("detiene los reintentos cuando la Membership PostgreSQL deja de estar activa", async () => {
-    const hook: WebhookRow = {
-      id: "hook-membership-revoked",
-      url: "https://example.test/membership-revoked",
-      secret: "SUPERSECRET",
-      events: '["issue.created"]',
-      enabled: true,
-      created_at: "2026-01-01T00:00:00.000Z",
-      owner_id: "admin-1",
-      team_id: "team-1",
-    };
-    const state = { membershipActive: true };
-    let attempts = 0;
-    const fetchFn = Object.assign(
-      async (_input: Parameters<typeof fetch>[0]) => {
-        attempts += 1;
-        state.membershipActive = false;
-        return new Response("retry", { status: 503 });
-      },
-      { preconnect: fetch.preconnect },
-    );
-    const dispatcher = new WebhookDispatcher(
-      new Database(":memory:"),
-      { fetchFn, retryDelays: [0] },
-      fakePersistence(hook, "workspace-1", state),
-    );
+  it("detiene los reintentos cuando la Membership PostgreSQL queda suspendida o retirada", async () => {
+    for (const membershipStatus of ["suspended", "left"] as const) {
+      const hook: WebhookRow = {
+        id: `hook-membership-${membershipStatus}`,
+        url: `https://example.test/membership-${membershipStatus}`,
+        secret: "SUPERSECRET",
+        events: '["issue.created"]',
+        enabled: true,
+        created_at: "2026-01-01T00:00:00.000Z",
+        owner_id: "admin-1",
+        team_id: "team-1",
+      };
+      const state: { membershipStatus: "active" | "suspended" | "left" } = {
+        membershipStatus: "active",
+      };
+      let attempts = 0;
+      const fetchFn = Object.assign(
+        async (_input: Parameters<typeof fetch>[0]) => {
+          attempts += 1;
+          state.membershipStatus = membershipStatus;
+          return new Response("retry", { status: 503 });
+        },
+        { preconnect: fetch.preconnect },
+      );
+      const dispatcher = new WebhookDispatcher(
+        new Database(":memory:"),
+        { fetchFn, retryDelays: [0] },
+        fakePersistence(hook, "workspace-1", state),
+      );
 
-    dispatcher.emitForWorkspace(
-      "workspace-1",
-      "issue.created",
-      { id: "admin-1", name: "admin", type: "human" },
-      { teamId: "team-1" },
-    );
-    await dispatcher.idle();
+      dispatcher.emitForWorkspace(
+        "workspace-1",
+        "issue.created",
+        { id: "admin-1", name: "admin", type: "human" },
+        { teamId: "team-1" },
+      );
+      await dispatcher.idle();
 
-    expect(attempts).toBe(1);
+      expect(attempts, membershipStatus).toBe(1);
+    }
   });
 });
