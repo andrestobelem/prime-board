@@ -233,6 +233,142 @@ describe("cycles", () => {
     });
   });
 
+  it("refluye la cadencia alrededor de un ciclo manual en SQLite", async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const scenarios = [
+      { key: "R622B", name: "Manual before", position: "before" },
+      { key: "R622M", name: "Manual between", position: "between" },
+      { key: "R622A", name: "Manual after", position: "after" },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const createdTeam = await gql(
+        app,
+        `mutation($name: String!, $key: String!) {
+          teamCreate(input: {
+            name: $name, key: $key, timezone: "UTC", cyclesEnabled: true,
+            cycleDurationWeeks: 1, cycleStartDay: WEDNESDAY,
+            cycleCooldownDays: 0, cycleUpcomingCount: 3
+          }) { team { id } }
+        }`,
+        { name: scenario.name, key: scenario.key },
+      );
+      expect(createdTeam.errors).toBeUndefined();
+      const teamId = createdTeam.data!.teamCreate.team.id as string;
+
+      const seeded = await gql(
+        app,
+        `mutation($teamId: ID!) {
+          cycleCreateFromCadence(input: { teamId: $teamId }) {
+            cycle { id number startsAt endsAt cadenceSource }
+          }
+        }`,
+        { teamId },
+      );
+      expect(seeded.errors).toBeUndefined();
+
+      const initial = await gql(
+        app,
+        `query($teamId: ID!) {
+          cycles(teamId: $teamId) {
+            id number startsAt endsAt cadenceSource archivedAt
+          }
+        }`,
+        { teamId },
+      );
+      expect(initial.errors).toBeUndefined();
+      const initialCycles = initial.data!.cycles as Array<{
+        id: string;
+        number: number;
+        startsAt: string;
+        endsAt: string;
+        cadenceSource: string;
+        archivedAt: string | null;
+      }>;
+      expect(initialCycles).toHaveLength(3);
+      expect(initialCycles.map((cycle) => cycle.number)).toEqual([1, 2, 3]);
+
+      const first = initialCycles[0]!;
+      const second = initialCycles[1]!;
+      const manualStartsAt =
+        scenario.position === "before"
+          ? new Date(Date.parse(first.startsAt) - 14 * day).toISOString()
+          : scenario.position === "between"
+            ? new Date(Date.parse(first.endsAt) + day).toISOString()
+            : "2030-01-01T00:00:00.000Z";
+      const manualEndsAt = new Date(Date.parse(manualStartsAt) + 6 * day).toISOString();
+      const moved = await gql(
+        app,
+        `mutation($id: ID!, $startsAt: DateTime!, $endsAt: DateTime!) {
+          cycleUpdate(id: $id, input: { startsAt: $startsAt, endsAt: $endsAt }) {
+            cycle { id number startsAt endsAt cadenceSource }
+          }
+        }`,
+        { id: second.id, startsAt: manualStartsAt, endsAt: manualEndsAt },
+      );
+      expect(moved.errors).toBeUndefined();
+      expect(moved.data!.cycleUpdate.cycle).toMatchObject({
+        id: second.id,
+        number: 2,
+        startsAt: manualStartsAt,
+        endsAt: manualEndsAt,
+        cadenceSource: "MANUAL",
+      });
+
+      const changedSettings = await gql(
+        app,
+        `mutation($id: ID!) {
+          teamUpdate(id: $id, input: { cycleStartDay: THURSDAY }) {
+            team { id cycleStartDay }
+          }
+        }`,
+        { id: teamId },
+      );
+      expect(changedSettings.errors).toBeUndefined();
+
+      const after = await gql(
+        app,
+        `query($teamId: ID!) {
+          cycles(teamId: $teamId) {
+            id number startsAt endsAt cadenceSource archivedAt
+          }
+        }`,
+        { teamId },
+      );
+      expect(after.errors).toBeUndefined();
+      const cycles = after.data!.cycles as typeof initialCycles;
+      expect(cycles).toHaveLength(3);
+      expect(cycles.map((cycle) => cycle.id)).toEqual(initialCycles.map((cycle) => cycle.id));
+      expect(cycles.map((cycle) => cycle.number)).toEqual([1, 2, 3]);
+      expect(cycles.every((cycle) => cycle.archivedAt === null)).toBe(true);
+
+      const manual = cycles.find((cycle) => cycle.number === 2)!;
+      const cadence = cycles.filter((cycle) => cycle.cadenceSource === "CADENCE");
+      expect(manual).toMatchObject({
+        id: second.id,
+        startsAt: manualStartsAt,
+        endsAt: manualEndsAt,
+        cadenceSource: "MANUAL",
+      });
+      expect(cadence).toHaveLength(2);
+      const byDate = [...cycles].sort(
+        (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt) || a.number - b.number,
+      );
+      for (let index = 1; index < byDate.length; index += 1) {
+        expect(Date.parse(byDate[index - 1]!.endsAt)).toBeLessThanOrEqual(
+          Date.parse(byDate[index]!.startsAt),
+        );
+      }
+      if (scenario.position === "before") {
+        expect(Date.parse(manual.endsAt)).toBeLessThanOrEqual(Date.parse(first.startsAt));
+      } else {
+        const lastCadence = cycles.find((cycle) => cycle.number === 3)!;
+        expect(Date.parse(first.endsAt)).toBeLessThanOrEqual(Date.parse(manual.startsAt));
+        expect(Date.parse(manual.endsAt)).toBeLessThanOrEqual(Date.parse(lastCadence.startsAt));
+      }
+    }
+  });
+
   it("serializa la creación concurrente de ciclos activos y conserva count=0", async () => {
     const activeTeam = await gql(
       app,

@@ -419,9 +419,11 @@ export async function ensureUpcomingPostgresCadenceCyclesInTransaction(
       [team.id],
     )),
   ];
+  // El número conserva la posición de la secuencia aunque un ciclo MANUAL
+  // cambie su fecha. Ordenar por starts_at movería los ciclos CADENCE de lugar.
   const upcoming = all
     .filter((cycle) => cycle.state === "upcoming")
-    .sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at) || a.number - b.number);
+    .sort((a, b) => a.number - b.number || Date.parse(a.starts_at) - Date.parse(b.starts_at));
   const manual = upcoming.filter((cycle) => cycle.cadence_source === "manual");
   const cadence = upcoming.filter((cycle) => cycle.cadence_source === "cadence");
   const settingsForCadence = cadenceSettings(team);
@@ -474,7 +476,7 @@ export async function ensureUpcomingPostgresCadenceCyclesInTransaction(
   }
 
   const updatedUpcoming = upcoming.sort(
-    (a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at) || a.number - b.number,
+    (a, b) => a.number - b.number || Date.parse(a.starts_at) - Date.parse(b.starts_at),
   );
   const updatedCadence = updatedUpcoming.filter((cycle) => cycle.cadence_source === "cadence");
   const settings = mapTeamPlanningSettings(team);

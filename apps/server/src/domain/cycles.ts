@@ -533,12 +533,14 @@ export function ensureUpcomingCadenceCycles(
           .all(teamId, workspaceId)
       : db.query("SELECT * FROM cycles WHERE team_id = ?1 AND archived_at IS NULL").all(teamId)
   ) as CycleRow[];
+  // El número conserva la posición de la secuencia aunque un ciclo MANUAL
+  // cambie su fecha. Ordenar por starts_at movería los ciclos CADENCE de lugar.
   const upcoming = all
     .filter((cycle) => cycle.state === "upcoming")
     .sort(
       (a, b) =>
-        parseDateTime(a.starts_at, "Cycle startsAt") -
-          parseDateTime(b.starts_at, "Cycle startsAt") || a.number - b.number,
+        a.number - b.number ||
+        parseDateTime(a.starts_at, "Cycle startsAt") - parseDateTime(b.starts_at, "Cycle startsAt"),
     );
   const manual = upcoming.filter((cycle) => cycle.cadence_source === "manual");
   const cadence = upcoming.filter((cycle) => cycle.cadence_source === "cadence");
@@ -602,8 +604,8 @@ export function ensureUpcomingCadenceCycles(
 
   const updatedUpcoming = upcoming.sort(
     (a, b) =>
-      parseDateTime(a.starts_at, "Cycle startsAt") - parseDateTime(b.starts_at, "Cycle startsAt") ||
-      a.number - b.number,
+      a.number - b.number ||
+      parseDateTime(a.starts_at, "Cycle startsAt") - parseDateTime(b.starts_at, "Cycle startsAt"),
   );
   const updatedCadence = updatedUpcoming.filter((cycle) => cycle.cadence_source === "cadence");
   const keepCadence = Math.max(0, settings.cycleUpcomingCount - manual.length);
