@@ -343,11 +343,16 @@ export function areDomainEventsEquivalent(left: DomainEvent, right: DomainEvent)
       isPlainObject(right.payload) && typeof right.payload.issueId === "string"
         ? right.payload.issueId
         : undefined;
-    if (leftIssueId !== undefined && rightIssueId !== undefined) return false;
+    if (leftIssueId !== undefined && rightIssueId !== undefined && leftIssueId !== rightIssueId)
+      return false;
     const leftPayload = { ...left.payload };
     const rightPayload = { ...right.payload };
     delete leftPayload.issueId;
     delete rightPayload.issueId;
+    // `__source` es metadata interna del puente Activity. No cambia la
+    // identidad del evento al migrar logs que ya tenían el mismo ID.
+    delete leftPayload.__source;
+    delete rightPayload.__source;
     const leftEnriched = { ...leftWithoutWorkspace, payload: leftPayload };
     const rightEnriched = { ...rightWithoutWorkspace, payload: rightPayload };
     if (

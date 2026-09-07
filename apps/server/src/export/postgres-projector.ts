@@ -157,6 +157,10 @@ function historicalIssuePlaceholder(event: DomainEvent, identifier: string): str
   return `historical-issue:${event.workspaceId ?? "workspace"}:${normalizedIdentifier}`;
 }
 
+function isActivityPayload(payload: Row): boolean {
+  return value(payload, "__source") === "activity";
+}
+
 function hasCompleteIssuePayload(payload: Row): boolean {
   return (
     stringValue(value(payload, "teamId", "team_id")) !== null &&
@@ -169,8 +173,24 @@ function hasCompleteIssuePayload(payload: Row): boolean {
 function isHistoricalActivityEvent(event: DomainEvent, payload: Row): boolean {
   if (isSnapshotEvent(event)) return false;
   if (event.aggregate !== "issue" && event.aggregate !== "issues") return false;
-  // Las exportaciones antiguas de Activity usan `created` sin calificar. Un
-  // payload completo aún permite reconstruir el Issue; los eventos escasos
+  // Activity relacional también actualiza la relación canónica; no lo desvíes
+  // al camino histórico solo por llevar la marca de Activity.
+  const relational = [
+    "relation_added",
+    "relation_removed",
+    "labeled",
+    "unlabeled",
+    "subscribed",
+    "unsubscribed",
+  ].some((suffix) => eventType(event, suffix));
+  if (isActivityPayload(payload) && !relational) return true;
+  // Las exportaciones antiguas de Activity usan tipos sin namespace. Un evento
+  // canónico debe conservar el namespace `issue.*`/`issues.*`.
+  if (!event.type.includes(".")) {
+    if (event.type === "created") return !hasCompleteIssuePayload(payload);
+    return !relational;
+  }
+  // Un payload completo aún permite reconstruir el Issue; los eventos escasos
   // siguen siendo historial y usan un placeholder determinista.
   if (eventType(event, "created")) return !hasCompleteIssuePayload(payload);
   return ![
@@ -1805,11 +1825,14 @@ async function projectActivity(
   const actor = actorId(event);
   if (!actor) return;
   await ensureActor(tx, event, actor);
+  const payload = Object.fromEntries(
+    Object.entries(event.payload).filter(([key]) => key !== "__source"),
+  );
   await tx.execute(
     `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, type = EXCLUDED.type`,
-    [event.eventId, issueId, actor, event.type, JSON.stringify(event.payload), event.occurredAt],
+    [event.eventId, issueId, actor, event.type, JSON.stringify(payload), event.occurredAt],
   );
 }
 

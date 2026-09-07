@@ -83,6 +83,10 @@ function isRecord(value: unknown): value is RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function publicPayload(payload: JsonObject): RecordValue {
+  return Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "__source"));
+}
+
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
@@ -211,7 +215,7 @@ function copySnapshotFields(state: MutableIssueProjection, payload: RecordValue)
 }
 
 function applyLegacyIssueEvent(state: MutableIssueProjection, event: DomainEvent): void {
-  const payload = event.payload;
+  const payload = publicPayload(event.payload);
   const to = field(payload, "to");
   switch (event.type) {
     case "created":
@@ -279,7 +283,7 @@ function applyLegacyIssueEvent(state: MutableIssueProjection, event: DomainEvent
 function applyIssueEvent(state: MutableIssueProjection, event: DomainEvent): void {
   state.eventIds.push(event.eventId);
   state.lastEventAt = event.occurredAt;
-  const payload = event.payload;
+  const payload = publicPayload(event.payload);
   if (event.type === "issue.deleted" || event.type === "deleted") {
     state.deleted = true;
     return;
@@ -401,7 +405,7 @@ function issueLogRecord(event: DomainEvent, identifier: string): RecordValue {
   return {
     actor: naturalActor(event.actor),
     issue: identifier,
-    payload: event.payload,
+    payload: publicPayload(event.payload),
     ts: event.occurredAt,
     type: event.type,
   };
@@ -496,10 +500,10 @@ export function reduceEventLog(input: readonly unknown[]): CanonicalEventProject
       eventId: event.eventId,
       type: event.type,
       occurredAt: event.occurredAt,
-      payload: event.payload,
+      payload: publicPayload(event.payload),
     });
     if (event.aggregate !== "issue" && event.aggregate !== "issues") continue;
-    const issuePayload = event.payload;
+    const issuePayload = publicPayload(event.payload);
     const identifier =
       stringValue(field(issuePayload, "identifier", "issueIdentifier")) ?? event.aggregateKey;
     let current = issues.get(identifier) ?? findIssue(field(issuePayload, "id"));
@@ -580,7 +584,7 @@ export function reduceEventLog(input: readonly unknown[]): CanonicalEventProject
   }
 
   return {
-    events,
+    events: events.map((event) => ({ ...event, payload: publicPayload(event.payload) })),
     issues: [...issues.values()]
       .filter((state) => !state.deleted)
       .map(asIssueProjection)

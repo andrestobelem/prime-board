@@ -62,6 +62,9 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
     const canonicalPayload = { ...payload };
     if (typeof row.issue_id === "string" && row.issue_id.trim().length > 0) {
       canonicalPayload.issueId = row.issue_id;
+      // Identifica el origen sin confundir un `issueId` estable con un evento
+      // canónico sparse. El proyector retira esta marca del estado público.
+      canonicalPayload.__source = "activity";
     }
     const event: Record<string, unknown> = {
       schemaVersion: CURRENT_EVENT_SCHEMA_VERSION,

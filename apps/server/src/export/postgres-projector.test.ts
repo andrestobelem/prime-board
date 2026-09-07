@@ -10,6 +10,7 @@ import type {
   SqlValue,
 } from "../db/persistence.ts";
 import { EventLogWriter, type DomainEvent, type JsonObject } from "./event-log.ts";
+import { activityToDomainEvent } from "./activity-stream.ts";
 import {
   canonicalEventFromMutation,
   canonicalEventFromWebhook,
@@ -1063,6 +1064,69 @@ it("projects legacy Activity before its source Issue snapshot without fabricatin
       (entry) => entry.sql.includes("INSERT INTO activity") && entry.params[0] === "ac1",
     ),
   ).toBe(true);
+});
+
+it("mantiene canónico un issue.created completo que también lleva issueId", async () => {
+  const fake = sqliteProjectionPersistence();
+  const event = base({
+    eventId: "canonical-created-with-issue-id",
+    payload: { ...base().payload, issueId: "issue_uuid_1" },
+  });
+  expect(event.payload.__source).toBeUndefined();
+  await applyCanonicalEvent(fake.persistence, event);
+  expect(fake.db.query("SELECT id, title FROM issues").all()).toEqual([
+    { id: "issue_uuid_1", title: "Issue" },
+  ]);
+  await fake.persistence.close();
+});
+
+it("conserva Activity legacy enriquecida con issueId en PostgreSQL vacío", async () => {
+  const fake = sqliteProjectionPersistence();
+  const occurredAt = {
+    updated: "2025-01-01T00:00:01.000Z",
+    title_changed: "2025-01-01T00:00:02.000Z",
+  } as const;
+  for (const type of ["updated", "title_changed"] as const) {
+    const event = activityToDomainEvent({
+      id: `activity-${type}`,
+      issue_identifier: "PB-1",
+      issue_id: "issue-uuid",
+      actor_id: "actor-1",
+      actor: "Agent",
+      type,
+      payload: JSON.stringify({ title: "Changed" }),
+      workspace_id: "workspace-1",
+      occurred_at: occurredAt[type],
+    });
+    expect(event).toBeDefined();
+    expect(event?.payload.__source).toBe("activity");
+    await applyCanonicalEvent(fake.persistence, event!);
+  }
+  const activity = fake.db
+    .query("SELECT id, issue_id, actor_id, type, payload, created_at FROM activity ORDER BY id")
+    .all() as Array<Record<string, string>>;
+  expect(activity).toEqual([
+    {
+      id: "activity-title_changed",
+      issue_id: "issue-uuid",
+      actor_id: "actor-1",
+      type: "title_changed",
+      payload: JSON.stringify({ title: "Changed", issueId: "issue-uuid" }),
+      created_at: occurredAt.title_changed,
+    },
+    {
+      id: "activity-updated",
+      issue_id: "issue-uuid",
+      actor_id: "actor-1",
+      type: "updated",
+      payload: JSON.stringify({ title: "Changed", issueId: "issue-uuid" }),
+      created_at: occurredAt.updated,
+    },
+  ]);
+  expect(fake.db.query("SELECT id, title FROM issues").all()).toEqual([
+    { id: "issue-uuid", title: "issue-uuid" },
+  ]);
+  await fake.persistence.close();
 });
 
 describe("PostgresRepoSync", () => {

@@ -43,6 +43,21 @@ describe("canonical event reducer", () => {
     });
   });
 
+  it("no expone la marca interna de Activity en la proyección canónica", () => {
+    const projection = reduceEventLog([
+      issueEvent("activity", "updated", {
+        issueId: "issue-1",
+        title: "Changed",
+        __source: "activity",
+      }),
+    ]);
+    expect(projection.events[0]?.payload).toEqual({ issueId: "issue-1", title: "Changed" });
+    expect(projection.aggregates[0]?.payload).toEqual({
+      issueId: "issue-1",
+      title: "Changed",
+    });
+  });
+
   it("folds snapshot relation rows into deterministic Issue projections", () => {
     const timestamp = "2025-01-01T00:00:00.000Z";
     const snapshot = (aggregate: string, key: string, payload: JsonObject): DomainEvent => ({
