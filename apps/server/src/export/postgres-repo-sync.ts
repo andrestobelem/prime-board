@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Persistence } from "../db/persistence.ts";
 import { now } from "../db/util.ts";
 import {
+  areDomainEventsEquivalent,
   EventLogWriter,
   type DomainEvent,
   type EventLogOptions,
@@ -104,8 +105,9 @@ function publicRecord(value: unknown): Record<string, unknown> {
 function eventKey(input: CanonicalWebhookEventInput): { aggregate: string; aggregateKey: string } {
   const { event, data } = input;
   const prefix = event.slice(0, event.indexOf("."));
-  // Project update mutations reuse the public project.updated webhook. Keep
-  // the durable row in its own aggregate so replay can rebuild project_updates.
+  // Las mutaciones de Project Update reutilizan el webhook público
+  // project.updated. Conserva la fila durable en su aggregate para que el
+  // replay pueda reconstruir project_updates.
   const aggregate =
     event === "project.updated" && stringValue(data.updateId)
       ? "project_update"
@@ -282,6 +284,20 @@ export function canonicalEventFromMutation(input: CanonicalMutationInput): Domai
   });
 }
 
+function disambiguateEventId(
+  event: DomainEvent,
+  eventLog: Pick<CanonicalEventLog, "read">,
+): DomainEvent {
+  const existing = eventLog.read().find((candidate) => candidate.eventId === event.eventId);
+  if (!existing || areDomainEventsEquivalent(existing, event)) return event;
+  const digest = createHash("sha256")
+    .update(stableJson({ ...event, eventId: undefined }))
+    .digest("hex")
+    .slice(0, 32);
+  const suffix = `:${digest}`;
+  return { ...event, eventId: `${event.eventId.slice(0, 512 - suffix.length)}${suffix}` };
+}
+
 /** RepoSync del backend PostgreSQL. El archivo y Git son la autoridad; PG es un índice. */
 export class PostgresRepoSync implements CanonicalEventRecorder {
   readonly root: string;
@@ -311,8 +327,11 @@ export class PostgresRepoSync implements CanonicalEventRecorder {
   }
 
   recordEvent(eventInput: DomainEvent): void {
-    const event = validateDomainEvent(eventInput);
+    const validated = validateDomainEvent(eventInput);
     withCanonicalEventLogLock(this.root, () => {
+      // Conserva el ID histórico legible cuando está libre. Agrega un digest
+      // solo ante una colisión real de fecha y clave, sin cambiar logs previos.
+      const event = disambiguateEventId(validated, this.eventLog);
       const result = this.eventLog.appendMany([event]);
       this.pending.add(result[0]!.eventId);
     });

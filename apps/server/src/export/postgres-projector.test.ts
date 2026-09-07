@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -84,7 +85,482 @@ function transactionLog() {
   return { calls, persistence };
 }
 
+function relationPersistence() {
+  const calls: Array<{ sql: string; params: readonly SqlValue[] }> = [];
+  const tx: PersistenceTransaction = {
+    one: async <Row extends object = Record<string, unknown>>(
+      sql: string,
+      params?: readonly SqlValue[],
+    ): Promise<Row | null> => {
+      const values = params ?? [];
+      if (sql.includes("SELECT id FROM issues WHERE id = $1")) {
+        const id = values[0];
+        if (id === "issue-one" || id === "issue-two") return { id } as Row;
+      }
+      if (sql.includes("SELECT issues.id FROM issues JOIN teams")) {
+        const key =
+          values[0] === "PB" && (values[1] === 1 || values[2] === 1)
+            ? "issue-one"
+            : values[0] === "PB" && (values[1] === 2 || values[2] === 2)
+              ? "issue-two"
+              : null;
+        return key ? ({ id: key } as Row) : null;
+      }
+      if (sql.includes("SELECT id FROM actors WHERE id = $1")) return { id: values[0] } as Row;
+      return null;
+    },
+    many: async <Row extends object = Record<string, unknown>>(): Promise<readonly Row[]> => [],
+    execute: async <Row extends object = Record<string, unknown>>(
+      sql: string,
+      params?: readonly SqlValue[],
+    ): Promise<PersistenceResult<Row>> => {
+      calls.push({ sql, params: params ?? [] });
+      return { rows: [], rowCount: 1 };
+    },
+  };
+  const persistence: Persistence = {
+    ...tx,
+    transaction: async <Result>(callback: (current: PersistenceTransaction) => Promise<Result>) =>
+      callback(tx),
+    close: async () => undefined,
+  };
+  return { calls, persistence };
+}
+
+function sqliteProjectionPersistence() {
+  const db = new Database(":memory:");
+  db.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE workspace (id TEXT PRIMARY KEY);
+    CREATE TABLE actors (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT, workspace_role TEXT, status TEXT, created_at TEXT, updated_at TEXT);
+    CREATE UNIQUE INDEX actors_name_lower_idx ON actors (lower(name));
+    CREATE TABLE teams (id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, description TEXT, next_issue_number INTEGER, default_state_id TEXT, created_at TEXT, updated_at TEXT, archived_at TEXT, visibility TEXT, access_policy TEXT);
+    CREATE TABLE workflow_states (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT, color TEXT, position REAL, created_at TEXT, updated_at TEXT, FOREIGN KEY (team_id) REFERENCES teams(id));
+    CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE milestones (id TEXT PRIMARY KEY, project_id TEXT, name TEXT, position REAL, created_at TEXT, updated_at TEXT);
+    CREATE TABLE cycles (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, number INTEGER, name TEXT, starts_at TEXT, ends_at TEXT, state TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE issues (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, state_id TEXT NOT NULL, priority INTEGER, assignee_id TEXT, parent_id TEXT, project_id TEXT, creator_id TEXT NOT NULL, sort_order REAL, created_at TEXT, updated_at TEXT, archived_at TEXT, milestone_id TEXT, cycle_id TEXT, UNIQUE(team_id, number), FOREIGN KEY (team_id) REFERENCES teams(id), FOREIGN KEY (state_id) REFERENCES workflow_states(id), FOREIGN KEY (creator_id) REFERENCES actors(id));
+    CREATE TABLE issue_subscribers (issue_id TEXT NOT NULL, actor_id TEXT NOT NULL, workspace_id TEXT NOT NULL, created_at TEXT, PRIMARY KEY (issue_id, actor_id));
+    CREATE TABLE issue_labels (issue_id TEXT NOT NULL, label_id TEXT NOT NULL, PRIMARY KEY (issue_id, label_id));
+    CREATE TABLE issue_relations (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, related_id TEXT NOT NULL, type TEXT NOT NULL, created_at TEXT, UNIQUE(issue_id, related_id, type));
+    CREATE TABLE reviews (id TEXT PRIMARY KEY, issue_id TEXT, requester_id TEXT, reviewer_id TEXT, status TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE comments (id TEXT PRIMARY KEY, issue_id TEXT, actor_id TEXT, body TEXT, created_at TEXT, edited_at TEXT);
+    CREATE TABLE activity (id TEXT PRIMARY KEY, issue_id TEXT, actor_id TEXT, type TEXT, payload TEXT, created_at TEXT);
+    CREATE TABLE labels (id TEXT PRIMARY KEY, name TEXT, color TEXT, team_id TEXT, created_at TEXT);
+    CREATE TABLE project_teams (project_id TEXT, team_id TEXT);
+    CREATE TABLE team_memberships (team_id TEXT, actor_id TEXT);
+    CREATE TABLE saved_views (id TEXT PRIMARY KEY, team_id TEXT);
+    CREATE TABLE webhooks (id TEXT PRIMARY KEY, team_id TEXT);
+    CREATE TABLE initiative_teams (initiative_id TEXT, team_id TEXT);
+    CREATE TABLE api_key_team_limits (api_key_id TEXT, team_id TEXT);
+  `);
+  const tx: PersistenceTransaction = {
+    one: async <Row extends object = Record<string, unknown>>(
+      sql: string,
+      params?: readonly SqlValue[],
+    ) => (db.query(sql).get(...(params ?? [])) as Row | null) ?? null,
+    many: async <Row extends object = Record<string, unknown>>(
+      sql: string,
+      params?: readonly SqlValue[],
+    ) => db.query(sql).all(...(params ?? [])) as Row[],
+    execute: async <Row extends object = Record<string, unknown>>(
+      sql: string,
+      params?: readonly SqlValue[],
+    ) => {
+      const result = db.query(sql).run(...(params ?? []));
+      return { rows: [], rowCount: result.changes } as PersistenceResult<Row>;
+    },
+  };
+  const persistence: Persistence = {
+    ...tx,
+    transaction: async <Result>(callback: (current: PersistenceTransaction) => Promise<Result>) =>
+      callback(tx),
+    close: async () => db.close(),
+  };
+  return { db, persistence };
+}
+
 describe("canonical PostgreSQL projection", () => {
+  it("normalizes relation views from both endpoints and removes the canonical row", async () => {
+    const fake = relationPersistence();
+    const relationEvent = (
+      eventId: string,
+      aggregateKey: string,
+      issueId: string,
+      eventType: string,
+      relationType: string,
+      issue: string,
+    ): DomainEvent => ({
+      schemaVersion: 1,
+      eventId,
+      aggregate: "issue",
+      aggregateKey,
+      type: eventType,
+      actor,
+      workspaceId: "workspace-1",
+      occurredAt: "2025-01-01T00:00:00.000Z",
+      payload: { issueId, type: relationType, issue },
+    });
+    await applyCanonicalEvent(
+      fake.persistence,
+      relationEvent("relation-a", "PB-1", "issue-one", "relation_added", "blocks", "PB-2"),
+    );
+    await applyCanonicalEvent(
+      fake.persistence,
+      relationEvent("relation-b", "PB-2", "issue-two", "relation_added", "blocked_by", "PB-1"),
+    );
+    const inserts = fake.calls.filter((call) => call.sql.includes("INSERT INTO issue_relations"));
+    expect(inserts).toHaveLength(2);
+    expect(inserts[0]?.params.slice(1, 4)).toEqual(["issue-one", "issue-two", "blocks"]);
+    expect(inserts[1]?.params.slice(1, 4)).toEqual(["issue-one", "issue-two", "blocks"]);
+
+    await applyCanonicalEvent(
+      fake.persistence,
+      relationEvent("remove-a", "PB-1", "issue-one", "relation_removed", "blocks", "PB-2"),
+    );
+    await applyCanonicalEvent(
+      fake.persistence,
+      relationEvent("remove-b", "PB-2", "issue-two", "relation_removed", "blocked_by", "PB-1"),
+    );
+    const deletes = fake.calls.filter((call) => call.sql.includes("DELETE FROM issue_relations"));
+    expect(deletes.map((call) => call.params)).toEqual([
+      ["issue-one", "issue-two", "blocks"],
+      ["issue-one", "issue-two", "blocks"],
+    ]);
+
+    const snapshots = relationPersistence();
+    const snapshot = (
+      id: string,
+      issueId: string,
+      relatedId: string,
+      type: string,
+    ): DomainEvent => ({
+      schemaVersion: 1,
+      eventId: id,
+      aggregate: "issue_relation",
+      aggregateKey: id,
+      type: "snapshot_imported",
+      actor,
+      workspaceId: "workspace-1",
+      occurredAt: "2025-01-01T00:00:00.000Z",
+      payload: { id, issueId, relatedId, type },
+    });
+    await applyCanonicalEvent(
+      snapshots.persistence,
+      snapshot("snapshot-blocked", "issue-one", "issue-two", "blocked_by"),
+    );
+    await applyCanonicalEvent(
+      snapshots.persistence,
+      snapshot("snapshot-related", "issue-two", "issue-one", "related"),
+    );
+    const snapshotInserts = snapshots.calls.filter((call) =>
+      call.sql.includes("INSERT INTO issue_relations"),
+    );
+    expect(snapshotInserts[0]?.params.slice(1, 4)).toEqual(["issue-two", "issue-one", "blocks"]);
+    expect(snapshotInserts[1]?.params.slice(1, 4)).toEqual(["issue-one", "issue-two", "related"]);
+    await expect(
+      applyCanonicalEvent(
+        snapshots.persistence,
+        snapshot("snapshot-self", "issue-one", "issue-one", "blocks"),
+      ),
+    ).rejects.toThrow("cannot connect an Issue to itself");
+  });
+
+  it("promotes a natural Issue row to the canonical UUID and rebinds its history", async () => {
+    const fake = sqliteProjectionPersistence();
+    const markdown: DomainEvent = {
+      schemaVersion: 1,
+      eventId: "markdown-created",
+      aggregate: "issue",
+      aggregateKey: "PB-1",
+      type: "created",
+      actor: { id: "importer", name: "Importer", type: "agent" },
+      workspaceId: "workspace-1",
+      occurredAt: "2025-01-01T00:00:00.000Z",
+      payload: {
+        identifier: "PB-1",
+        title: "Markdown issue",
+        teamId: "team:PB",
+        team: "PB",
+        number: 1,
+        stateId: "state:team:PB:Todo",
+        state: "Todo",
+        creator: "Alice",
+        priority: 0,
+        description: null,
+        assignee: null,
+        parent: null,
+        project: null,
+        milestone: null,
+        cycle: null,
+        sortOrder: 0,
+        createdAt: "2025-01-01T00:00:00.000Z",
+        updatedAt: "2025-01-01T00:00:00.000Z",
+        archivedAt: null,
+      },
+    };
+    const canonical = base({
+      eventId: "canonical-created",
+      type: "issue.created",
+      actor: { id: "actor-uuid", name: "Canonical agent", type: "human" },
+      payload: {
+        ...base().payload,
+        id: "issue-uuid",
+        title: "Canonical issue",
+        teamId: "team-uuid",
+        stateId: "state-uuid",
+        creatorId: "actor-uuid",
+        updatedAt: "2025-01-01T00:00:01.000Z",
+      },
+    });
+    await applyCanonicalEvent(fake.persistence, markdown);
+    await applyCanonicalEvent(
+      fake.persistence,
+      base({
+        eventId: "partial-updated",
+        type: "issue.updated",
+        payload: {
+          id: "issue-uuid",
+          identifier: "PB-1",
+          title: "Updated before snapshot",
+          changes: { title: { from: "Markdown issue", to: "Updated before snapshot" } },
+          updatedAt: "2025-01-01T00:00:00.500Z",
+        },
+      }),
+    );
+    expect(fake.db.query("SELECT id, title FROM issues").all()).toEqual([
+      { id: "issue:workspace-1:PB-1", title: "Updated before snapshot" },
+    ]);
+    fake.db
+      .query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) VALUES ($1, $2, 'human', $3, $3)",
+      )
+      .run("actor-uuid", "Canonical agent", "2025-01-01T00:00:00.000Z");
+    fake.db
+      .query(
+        "INSERT INTO teams (id, key, name, next_issue_number, created_at, updated_at) VALUES ($1, $2, $2, 2, $3, $3)",
+      )
+      .run("team-uuid", "OTHER", "2025-01-01T00:00:00.000Z");
+    fake.db
+      .query(
+        "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at) VALUES ($1, $2, 'Todo', 'unstarted', '#000000', 0, $3, $3)",
+      )
+      .run("state-uuid", "team-uuid", "2025-01-01T00:00:00.000Z");
+    fake.db
+      .query(
+        `INSERT INTO issues
+           (id, team_id, number, title, state_id, priority, creator_id, sort_order, created_at, updated_at)
+         VALUES ($1, $2, 1, 'Existing canonical', $3, 0, $4, 0, $5, $5)`,
+      )
+      .run("issue-uuid", "team-uuid", "state-uuid", "actor-uuid", "2025-01-01T00:00:00.000Z");
+    await applyCanonicalEvent(
+      fake.persistence,
+      base({
+        eventId: "team-snapshot",
+        aggregate: "team",
+        aggregateKey: "team-uuid",
+        type: "team.created",
+        payload: {
+          id: "team-uuid",
+          key: "PB",
+          name: "Product",
+          nextIssueNumber: 2,
+          createdAt: "2025-01-01T00:00:00.000Z",
+          updatedAt: "2025-01-01T00:00:01.000Z",
+        },
+      }),
+    );
+    await applyCanonicalEvent(fake.persistence, canonical);
+    const issues = fake.db.query("SELECT id, team_id, creator_id, state_id FROM issues").all();
+    expect(issues).toEqual([
+      {
+        id: "issue-uuid",
+        team_id: "team-uuid",
+        creator_id: "actor-uuid",
+        state_id: "state-uuid",
+      },
+    ]);
+    expect(fake.db.query("SELECT issue_id FROM activity ORDER BY id").all()).toEqual([
+      { issue_id: "issue-uuid" },
+      { issue_id: "issue-uuid" },
+      { issue_id: "issue-uuid" },
+    ]);
+    expect(fake.db.query("SELECT id FROM teams ORDER BY id").all()).toEqual([{ id: "team-uuid" }]);
+    expect(fake.db.query("SELECT id FROM workflow_states ORDER BY id").all()).toEqual([
+      { id: "state-uuid" },
+    ]);
+    await fake.persistence.close();
+  });
+
+  it("rebindea el Team antes de resolver un State sintético en un Issue canónico", async () => {
+    const fake = sqliteProjectionPersistence();
+    const legacyPayload = { ...base().payload };
+    delete legacyPayload.id;
+    const legacy = base({
+      eventId: "legacy-team-state",
+      type: "created",
+      aggregateKey: "PB-1",
+      payload: {
+        ...legacyPayload,
+        teamId: "team:PB",
+        stateId: "state:team:PB:Todo",
+        state: "Todo",
+        creatorId: "actor-1",
+      },
+    });
+    await applyCanonicalEvent(fake.persistence, legacy);
+    fake.db
+      .query(
+        "UPDATE teams SET key = 'historical:team:PB', name = 'historical:team:PB' WHERE id = 'team:PB'",
+      )
+      .run();
+    fake.db
+      .query(
+        "INSERT INTO teams (id, key, name, next_issue_number, default_state_id, created_at, updated_at) VALUES ($1, $2, $2, $3, $4, $5, $5)",
+      )
+      .run("team-canonical", "PB", 41, "state-canonical", "2025-01-01T00:00:00.000Z");
+    fake.db
+      .query(
+        "INSERT INTO workflow_states (id, team_id, name, type, color, position, created_at, updated_at) VALUES ($1, $2, 'Todo', 'unstarted', '#000000', 0, $3, $3)",
+      )
+      .run("state-canonical", "team-canonical", "2025-01-01T00:00:00.000Z");
+    await applyCanonicalEvent(
+      fake.persistence,
+      base({
+        eventId: "canonical-team-state",
+        type: "issue.created",
+        payload: {
+          ...base().payload,
+          id: "issue-canonical",
+          teamId: "team-canonical",
+          stateId: "state:team:PB:Todo",
+          state: "Todo",
+          updatedAt: "2025-01-01T00:00:01.000Z",
+        },
+      }),
+    );
+    expect(fake.db.query("SELECT id, team_id, state_id FROM issues").all()).toEqual([
+      { id: "issue-canonical", team_id: "team-canonical", state_id: "state-canonical" },
+    ]);
+    expect(fake.db.query("SELECT id FROM workflow_states ORDER BY id").all()).toEqual([
+      { id: "state-canonical" },
+    ]);
+    expect(
+      fake.db
+        .query("SELECT default_state_id, next_issue_number FROM teams WHERE id = 'team-canonical'")
+        .get(),
+    ).toEqual({ default_state_id: "state-canonical", next_issue_number: 41 });
+    await fake.persistence.close();
+  });
+
+  it("keeps sparse Activity updates on the placeholder until a full snapshot arrives", async () => {
+    const fake = sqliteProjectionPersistence();
+    fake.db
+      .query(
+        "INSERT INTO teams (id, key, name, next_issue_number, created_at, updated_at) VALUES ($1, $2, $2, 1, $3, $3)",
+      )
+      .run("team-uuid", "PB", "2025-01-01T00:00:00.000Z");
+    const sparse: DomainEvent = {
+      schemaVersion: 1,
+      eventId: "sparse-created",
+      aggregate: "issue",
+      aggregateKey: "pb-1",
+      type: "created",
+      actor: { id: "actor:Importer", name: "Importer", type: "agent" },
+      workspaceId: "workspace-1",
+      occurredAt: "2025-01-01T00:00:00.000Z",
+      payload: { title: "Sparse Activity" },
+    };
+    await applyCanonicalEvent(fake.persistence, sparse);
+    await applyCanonicalEvent(
+      fake.persistence,
+      base({
+        eventId: "sparse-archived",
+        type: "issue.archived",
+        payload: {
+          id: "issue-uuid",
+          identifier: "PB-1",
+          archivedAt: "2025-01-01T00:00:00.250Z",
+        },
+      }),
+    );
+    expect(fake.db.query("SELECT archived_at FROM issues").all()).toEqual([
+      { archived_at: "2025-01-01T00:00:00.250Z" },
+    ]);
+    await applyCanonicalEvent(
+      fake.persistence,
+      base({
+        eventId: "sparse-unarchived",
+        type: "issue.unarchived",
+        payload: { id: "issue-uuid", identifier: "PB-1", archivedAt: null },
+      }),
+    );
+    expect(fake.db.query("SELECT archived_at FROM issues").all()).toEqual([{ archived_at: null }]);
+    await applyCanonicalEvent(
+      fake.persistence,
+      base({
+        eventId: "sparse-update",
+        type: "issue.updated",
+        payload: {
+          id: "issue-uuid",
+          identifier: "PB-1",
+          title: "Updated Activity",
+          changes: { title: { from: "Sparse Activity", to: "Updated Activity" } },
+        },
+      }),
+    );
+    expect(fake.db.query("SELECT id, title FROM issues").all()).toEqual([
+      { id: "historical-issue:workspace-1:PB-1", title: "Updated Activity" },
+    ]);
+    await applyCanonicalEvent(
+      fake.persistence,
+      base({
+        eventId: "sparse-snapshot",
+        type: "issue.created",
+        actor: { id: "actor-uuid", name: "Importer", type: "human" },
+        payload: {
+          ...base().payload,
+          id: "issue-uuid",
+          title: "Canonical issue",
+          teamId: "team-uuid",
+          stateId: "state-uuid",
+          creatorId: "actor-uuid",
+          updatedAt: "2025-01-01T00:00:01.000Z",
+        },
+      }),
+    );
+    expect(fake.db.query("SELECT id, team_id FROM issues").all()).toEqual([
+      { id: "issue-uuid", team_id: "team-uuid" },
+    ]);
+    await fake.persistence.close();
+  });
+
+  it("rejects embedded Workspace scopes that cross the event or database scope", async () => {
+    const fake = transactionLog();
+    await expect(
+      applyCanonicalEvent(
+        fake.persistence,
+        base({
+          aggregate: "workspace",
+          aggregateKey: "workspace-1",
+          payload: { id: "workspace-2", name: "Other" },
+        }),
+      ),
+    ).rejects.toThrow("does not match event scope");
+    await expect(
+      applyCanonicalEvent(
+        fake.persistence,
+        base({ payload: { ...base().payload, workspaceId: "workspace-2" } }),
+      ),
+    ).rejects.toThrow("does not match event scope");
+    const scoped = sqliteProjectionPersistence();
+    scoped.db.query("INSERT INTO workspace (id) VALUES ($1)").run("workspace-1");
+    await expect(
+      applyCanonicalEvent(scoped.persistence, base({ workspaceId: "workspace-2" })),
+    ).rejects.toThrow("does not match PostgreSQL Workspace");
+    await scoped.persistence.close();
+  });
+
   it("projects a complete Issue event without reading an operational Issue row", async () => {
     const fake = transactionLog();
     await applyCanonicalEvent(fake.persistence, base());

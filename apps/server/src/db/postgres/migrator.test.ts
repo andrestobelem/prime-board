@@ -24,6 +24,14 @@ describe("PostgreSQL projector checkpoint migration", () => {
     expect(migration?.sql).toContain("updated_at TIMESTAMPTZ NOT NULL");
   });
 
+  it("registers migration 0016 with per-event projector receipts", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 16);
+    expect(migration).toMatchObject({ name: "projector_events" });
+    expect(migration?.sql).toContain("stream TEXT NOT NULL");
+    expect(migration?.sql).toContain("event_id TEXT NOT NULL");
+    expect(migration?.sql).toContain("processed_at TIMESTAMPTZ NOT NULL");
+  });
+
   const realMigrationTest = postgresUrl ? it : it.skip;
   realMigrationTest("applies migration and reruns it idempotently on PostgreSQL", async () => {
     const harness = await createPostgresHarness({
@@ -49,9 +57,9 @@ describe("PostgreSQL projector checkpoint migration", () => {
       const migrations = await harness.sql`
         SELECT count(*)::int AS count
         FROM schema_migrations
-        WHERE version = 10
+        WHERE version IN (10, 16)
       `;
-      expect(migrations[0]?.count).toBe(1);
+      expect(migrations[0]?.count).toBe(2);
     } finally {
       await harness.close();
     }

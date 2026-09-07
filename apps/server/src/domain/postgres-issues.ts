@@ -472,6 +472,9 @@ export async function createPostgresIssue(
         parentId: input.parentId ?? null,
         projectId: input.projectId ?? null,
         milestoneId: input.milestoneId ?? null,
+        cycleId: null,
+        creatorId: input.creatorId ?? viewer.id,
+        sortOrder: 0,
       },
       createdAt,
     );

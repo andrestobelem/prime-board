@@ -10,6 +10,7 @@ import apiKeyTeamLimitsWorkspace from "./0008_api_key_team_limits_workspace.sql"
 import apiKeyWorkspaceGrantScope from "./0009_api_key_workspace_grant_scope.sql" with { type: "text" };
 import projectorCheckpoints from "./0010_projector_checkpoints.sql" with { type: "text" };
 import documentsRetirement from "./0011_documents_retirement.sql" with { type: "text" };
+import projectorEvents from "./0016_projector_events.sql" with { type: "text" };
 import { verifyDocumentRows } from "../../export/documents-archive.ts";
 
 export interface PostgresMigration {
@@ -30,6 +31,7 @@ export const POSTGRES_MIGRATIONS: readonly PostgresMigration[] = [
   { version: 9, name: "api_key_workspace_grant_scope", sql: apiKeyWorkspaceGrantScope },
   { version: 10, name: "projector_checkpoints", sql: projectorCheckpoints },
   { version: 11, name: "documents_retirement", sql: documentsRetirement },
+  { version: 16, name: "projector_events", sql: projectorEvents },
 ];
 
 interface AppliedMigration {

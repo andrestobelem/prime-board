@@ -206,6 +206,7 @@ export function importSqliteActivity(options: SQLiteEventImportOptions): SQLiteE
     const event = activityToDomainEvent({
       id: row.id,
       issue_identifier: row.issue_identifier,
+      issue_id: row.issue_id ?? undefined,
       actor_id: row.actor_id ?? undefined,
       actor,
       type: row.type,

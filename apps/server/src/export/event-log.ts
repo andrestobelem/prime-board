@@ -323,11 +323,39 @@ export function serializeDomainEvent(event: DomainEvent): string {
 export function areDomainEventsEquivalent(left: DomainEvent, right: DomainEvent): boolean {
   const { workspaceId: _leftWorkspaceId, ...leftWithoutWorkspace } = left;
   const { workspaceId: _rightWorkspaceId, ...rightWithoutWorkspace } = right;
-  if (
-    canonicalJson(leftWithoutWorkspace as unknown as JsonValue) !==
-    canonicalJson(rightWithoutWorkspace as unknown as JsonValue)
-  ) {
-    return false;
+  const same = (leftValue: DomainEvent, rightValue: DomainEvent): boolean => {
+    const { workspaceId: _leftScope, ...leftValueWithoutScope } = leftValue;
+    const { workspaceId: _rightScope, ...rightValueWithoutScope } = rightValue;
+    return (
+      canonicalJson(leftValueWithoutScope as unknown as JsonValue) ===
+      canonicalJson(rightValueWithoutScope as unknown as JsonValue)
+    );
+  };
+  if (!same(left, right)) {
+    // Las importaciones Activity obtuvieron issue_id inmutable después de
+    // confirmar eventos legacy. Trata ese enriquecimiento unidireccional como
+    // equivalente, pero rechaza IDs no vacíos en conflicto.
+    const leftIssueId =
+      isPlainObject(left.payload) && typeof left.payload.issueId === "string"
+        ? left.payload.issueId
+        : undefined;
+    const rightIssueId =
+      isPlainObject(right.payload) && typeof right.payload.issueId === "string"
+        ? right.payload.issueId
+        : undefined;
+    if (leftIssueId !== undefined && rightIssueId !== undefined) return false;
+    const leftPayload = { ...left.payload };
+    const rightPayload = { ...right.payload };
+    delete leftPayload.issueId;
+    delete rightPayload.issueId;
+    const leftEnriched = { ...leftWithoutWorkspace, payload: leftPayload };
+    const rightEnriched = { ...rightWithoutWorkspace, payload: rightPayload };
+    if (
+      canonicalJson(leftEnriched as unknown as JsonValue) !==
+      canonicalJson(rightEnriched as unknown as JsonValue)
+    ) {
+      return false;
+    }
   }
   return (
     left.workspaceId === undefined ||

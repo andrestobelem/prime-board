@@ -224,7 +224,11 @@ export async function saveProjectorCheckpoint(
        event_id = EXCLUDED.event_id,
        occurred_at = EXCLUDED.occurred_at,
        processed = TRUE,
-       updated_at = now()`,
+       updated_at = now()
+     WHERE projector_checkpoints.processed = FALSE
+        OR projector_checkpoints.occurred_at < EXCLUDED.occurred_at
+        OR (projector_checkpoints.occurred_at = EXCLUDED.occurred_at
+            AND projector_checkpoints.event_id < EXCLUDED.event_id)`,
     [checkpoint.stream, checkpoint.eventId, checkpoint.occurredAt],
   );
 }
@@ -434,6 +438,57 @@ export interface PostgresReplayOptions extends ReplayOptions {
  * Replay through PostgreSQL with domain apply and checkpoint in one transaction.
  * The callback must use the supplied transaction for all domain writes.
  */
+async function projectorEventsAvailable(persistence: Persistence): Promise<boolean> {
+  try {
+    const row = await persistence.one<{ available: number }>(
+      `SELECT 1 AS available
+       FROM information_schema.tables
+       WHERE table_schema = current_schema() AND table_name = 'projector_events'
+       LIMIT 1`,
+    );
+    return row?.available === 1;
+  } catch {
+    // Las instalaciones antiguas y los adaptadores de prueba pueden usar aún
+    // el cursor único de checkpoint. La migración 0016 activa el camino seguro.
+    return false;
+  }
+}
+
+async function projectorEventProcessed(
+  persistence: Persistence,
+  stream: string,
+  eventId: string,
+): Promise<boolean> {
+  const row = await persistence.one<{ event_id: string }>(
+    "SELECT event_id FROM projector_events WHERE stream = $1 AND event_id = $2",
+    [stream, eventId],
+  );
+  return row !== null;
+}
+
+async function claimProjectorEvent(
+  tx: PersistenceTransaction,
+  stream: string,
+  event: DomainEvent,
+): Promise<boolean> {
+  const result = await tx.execute<{ event_id: string }>(
+    `INSERT INTO projector_events (stream, event_id, occurred_at)
+     VALUES ($1, $2, $3) ON CONFLICT (stream, event_id) DO NOTHING
+     RETURNING event_id`,
+    [stream, event.eventId, event.occurredAt],
+  );
+  return result.rowCount > 0;
+}
+
+function compareCheckpointOrder(left: ProjectorCheckpoint, right: ProjectorCheckpoint): number {
+  const leftTime = Date.parse(left.occurredAt);
+  const rightTime = Date.parse(right.occurredAt);
+  if (leftTime !== rightTime) return leftTime - rightTime;
+  if (left.occurredAt !== right.occurredAt) return left.occurredAt < right.occurredAt ? -1 : 1;
+  if (left.eventId === right.eventId) return 0;
+  return left.eventId < right.eventId ? -1 : 1;
+}
+
 export async function replayPostgresEvents(
   applyEvent: PostgresApplyEvent,
   options: PostgresReplayOptions,
@@ -460,21 +515,41 @@ export async function replayPostgresEvents(
     }
   }
 
+  // La migración 0016 registra cada evento aplicado. Con receipts se puede
+  // detectar un backfill aunque su fecha quede antes del checkpoint; por eso no
+  // se usa el checkpoint como límite cuando la tabla está disponible.
+  const receipts = await projectorEventsAvailable(options.persistence);
   for (let index = 0; index < events.length; index += 1) {
     const current = events[index];
     if (!current) continue;
-    if (lastCheckpoint && !isAfterCheckpoint(current, lastCheckpoint)) {
+    if (!receipts && lastCheckpoint && !isAfterCheckpoint(current, lastCheckpoint)) {
       skipped += 1;
       continue;
     }
-    const nextCheckpoint = checkpointFor(options.stream, current);
+
+    const candidate = checkpointFor(options.stream, current);
+    const nextCheckpoint =
+      !lastCheckpoint || compareCheckpointOrder(candidate, lastCheckpoint) > 0
+        ? candidate
+        : lastCheckpoint;
+    let claimed = true;
     try {
-      await options.persistence.transaction(async (tx) => {
+      claimed = await options.persistence.transaction(async (tx) => {
+        if (receipts) {
+          await tx.execute("SELECT pg_advisory_xact_lock(hashtext($1))", [options.stream]);
+          if (await projectorEventProcessed(tx, options.stream, current.eventId)) return false;
+          if (!(await claimProjectorEvent(tx, options.stream, current))) return false;
+        }
         await applyEvent(tx, current, { checkpoint: lastCheckpoint });
         await saveProjectorCheckpoint(tx, nextCheckpoint);
+        return true;
       });
     } catch (error) {
       return failed(applied, skipped, lastCheckpoint, error, events.length - index);
+    }
+    if (!claimed) {
+      skipped += 1;
+      continue;
     }
     lastCheckpoint = nextCheckpoint;
     applied += 1;

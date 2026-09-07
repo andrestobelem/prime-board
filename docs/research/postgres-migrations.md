@@ -7,7 +7,7 @@
 
 `migratePostgres(sql, migrations, lockKey, options)` ordena y valida el registro de migraciones, abre una transacción, toma `pg_advisory_xact_lock` con la clave de la instalación y crea `schema_migrations` si todavía no existe. Cada fila conserva `version`, `name`, el SHA-256 del SQL y `applied_at`.
 
-El runner ejecuta el baseline PostgreSQL como migración `0001/baseline`. `0002/workspace_singleton` garantiza la fila única. `0005` conserva el esquema histórico de Documents y `0011` lo retira después de verificar un archivo externo. Los SQL futuros deben vivir bajo el namespace PostgreSQL y nunca reutilizar archivos SQLite. El runner usa `unsafe(...).simple()` solo para SQL versionado y controlado por el repositorio, nunca para entrada de usuario.
+El runner ejecuta el baseline PostgreSQL como migración `0001/baseline`. `0002/workspace_singleton` garantiza la fila única. `0005` conserva el esquema histórico de Documents y `0011` lo retira después de verificar un archivo externo. `0016` agrega `projector_events`, que registra un receipt por evento aplicado. Las versiones `0012`–`0015` quedan reservadas para otras cadenas de migración. Los SQL futuros deben vivir bajo el namespace PostgreSQL y nunca reutilizar archivos SQLite. El runner usa `unsafe(...).simple()` solo para SQL versionado y controlado por el repositorio, nunca para entrada de usuario.
 
 ## Seguridad de arranque
 
@@ -27,6 +27,13 @@ la validación y el `DROP`. Una tabla vacía puede retirarse sin archivo de cont
 
 El comando `archive:documents` crea o completa el manifest fuera de la réplica con permisos `0600`.
 
+## Receipts del projector
+
+`0016` registra cada evento aplicado junto con su stream y su fecha. Cuando la tabla está disponible, el
+replay usa el receipt como fuente de idempotencia y también procesa eventos que llegaron después con una
+fecha anterior al checkpoint. Esto permite backfills fuera de orden; las operaciones del projector deben ser
+idempotentes para una instalación que migra con un checkpoint previo y receipts todavía vacíos.
+
 ## Validación reproducible
 
 Con `PRIME_BOARD_POSTGRES_URL` apuntando a una instancia local efímera:
@@ -43,4 +50,4 @@ El script crea una migración temporal, ejecuta dos runners concurrentes, verifi
 ```
 
 El equipo también ejecutó `migratePostgres` con la lista por defecto contra una base vacía. El runner aplicó
-las migraciones registradas, incluida `0011`, y registró sus filas en `schema_migrations`.
+las migraciones registradas, incluida `0016`, y registró sus filas en `schema_migrations`.

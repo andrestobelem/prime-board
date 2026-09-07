@@ -11,12 +11,14 @@ import type { CanonicalEventLog } from "./issue-event-pipeline.ts";
 export interface ActivityEventRow {
   readonly id: string;
   readonly issue_identifier: string;
-  /** Stable Actor ID. Legacy fixtures may provide only `actor`. */
+  /** ID estable de Issue. Los fixtures legacy pueden aportar solo `issue_identifier`. */
+  readonly issue_id?: string;
+  /** ID estable de Actor. Los fixtures legacy pueden aportar solo `actor`. */
   readonly actor_id?: string;
   readonly actor: string;
   readonly type: string;
   readonly payload: string;
-  /** Effective Workspace. Legacy fixtures may omit it. */
+  /** Workspace efectivo. Los fixtures legacy pueden omitirlo. */
   readonly workspace_id?: string | null;
   readonly occurred_at: string;
 }
@@ -54,30 +56,37 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
   }
   if (!isPlainObject(payload)) return undefined;
   try {
+    // Activity se vincula a la fila Issue, no a su identificador mutable.
+    // Conserva el identificador para el historial legible y lleva el UUID
+    // estable para vincular Activity antes del snapshot Issue.
+    const canonicalPayload = { ...payload };
+    if (typeof row.issue_id === "string" && row.issue_id.trim().length > 0) {
+      canonicalPayload.issueId = row.issue_id;
+    }
     const event: Record<string, unknown> = {
       schemaVersion: CURRENT_EVENT_SCHEMA_VERSION,
-      // Activity IDs and Actor IDs are immutable. Do not use the mutable
-      // display name as the canonical event author.
+      // Los IDs de Activity y Actor son inmutables. No uses el nombre mutable
+      // como autor del evento canónico.
       eventId: row.id,
       aggregate: "issue",
       aggregateKey: row.issue_identifier,
       type: row.type,
       actor: row.actor_id ?? row.actor,
       occurredAt: row.occurred_at,
-      payload,
+      payload: canonicalPayload,
     };
     if (typeof row.workspace_id === "string") event.workspaceId = row.workspace_id;
     return validateDomainEvent(event);
   } catch {
-    // Never copy malformed or sensitive Activity payloads into the canonical
-    // stream. The regular snapshot export remains the caller's boundary.
+    // No copies payloads Activity malformados o sensibles al stream canónico.
+    // La exportación de snapshots sigue siendo el límite del caller.
     return undefined;
   }
 }
 
 /**
- * Append the shared Activity projection to the canonical stream. This does not
- * import SQLite and does not transform the existing per-issue log files.
+ * Agrega la proyección Activity compartida al stream canónico. No importa
+ * SQLite ni transforma los logs existentes por Issue.
  */
 export function appendActivityEvents(
   db: Database,
@@ -92,6 +101,7 @@ export function appendActivityEvents(
     .query(
       `SELECT activity.id,
               teams.key || '-' || issues.number AS issue_identifier,
+              activity.issue_id AS issue_id,
               activity.actor_id AS actor_id,
               actors.name AS actor,
               activity.type,
@@ -114,13 +124,13 @@ export function appendActivityEvents(
   const before = new Set(eventLog.read().map((event) => event.eventId));
   try {
     const results: AppendResult[] = eventLog.appendMany(events);
-    // Include idempotent results: a previous process may have appended the
-    // event before its Git commit failed. The committer validates the delta
-    // against HEAD and ignores IDs that are already committed.
+    // Incluye resultados idempotentes: otro proceso puede haber agregado el
+    // evento antes de que fallara su commit Git. El committer valida el delta
+    // contra HEAD e ignora IDs ya confirmados.
     onEventIds?.(results.map((result) => result.eventId));
   } catch (error) {
-    // A batch write may leave a partial append. Preserve only IDs that appeared
-    // during this attempt so a later retry can commit the partial delta.
+    // Una escritura por lote puede dejar un append parcial. Conserva solo IDs
+    // aparecidos en este intento para que un retry posterior confirme el delta.
     const after = new Set(eventLog.read().map((event) => event.eventId));
     onEventIds?.(
       events

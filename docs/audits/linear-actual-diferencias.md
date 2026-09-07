@@ -84,8 +84,8 @@ PostgreSQL. No hay un único esquema de migraciones que describa ambos backends.
   `0024` y `0025` agregan raíces, columnas `workspace_id` e invariantes compuestas; `0026` agrega
   grants de API keys por Workspace, `0027` conserva el registro histórico de Documents y `0030` los
   retira después de verificar un archivo externo. `0028` agrega suscriptores de Issues.
-- El migrador de PostgreSQL en `apps/server/src/db/postgres/migrator.ts` aplica once migraciones
-  independientes (`0001` a `0011`). `0005` conserva Documents por compatibilidad histórica y `0011`
+- El migrador de PostgreSQL en `apps/server/src/db/postgres/migrator.ts` aplica las migraciones
+  independientes `0001`–`0011` y `0016` (las versiones intermedias quedan reservadas). `0005` conserva Documents por compatibilidad histórica y `0011`
   los retira después de verificar un archivo externo. `0006` agrega suscriptores, `0007`
   agrega Memberships y grants de Workspace, `0008` agrega `workspace_id` a los límites de Team de
   API keys y `0009` hace explícito el Workspace efectivo de cada grant. Su baseline conserva un
@@ -177,7 +177,7 @@ backends ni un servicio hosted.
 - `0002_workspace_singleton.sql` impone una única Workspace. `workspaceCreate` devuelve que la
   operación todavía no está migrada y `postgres-viewer.ts` autoriza ese singleton mediante el grant y
   la Membership efectiva.
-- El migrador PG tiene once versiones. `0005` conserva Documents históricos y `0011` los retira con
+- El migrador PG tiene las versiones `0001`–`0011` y `0016` registradas. `0005` conserva Documents históricos y `0011` los retira con
   un archivo externo verificado. `0006` agrega suscriptores, `0007`
   Memberships y grants, `0008` el alcance de Workspace de los límites de Team de API keys y `0009`
   el grant explícito del Workspace efectivo. El servidor usa un SQLite efímero o devuelve un error
@@ -209,7 +209,7 @@ importer con una ausencia del modelo.
 
 | Superficie          | Prime-board hoy                                                                                                                                                                                                               | Diferencia relevante frente a Linear                                                           | Alcance de multi-workspace                                                                         |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| DB/dominio          | SQLite tiene el modelo operativo y las migraciones `0001`–`0030`; PostgreSQL tiene once migraciones y cobertura incremental; `0010` agrega `projector_checkpoints` y `0011` retira Documents tras validar el archivo externo. | Menor cobertura de metadatos y recursos avanzados frente a Linear.                             | El alcance multi-Workspace vigente es SQLite; no asumir cutover PostgreSQL.                        |
+| DB/dominio          | SQLite tiene el modelo operativo y las migraciones `0001`–`0030`; PostgreSQL tiene las versiones `0001`–`0011` y `0016`, con cobertura incremental; `0010` agrega `projector_checkpoints` y `0011` retira Documents tras validar el archivo externo. | Menor cobertura de metadatos y recursos avanzados frente a Linear.                             | El alcance multi-Workspace vigente es SQLite; no asumir cutover PostgreSQL.                        |
 | GraphQL             | API interna coherente: 26 queries y 66 mutations en el SDL vigente.                                                                                                                                                           | Linear publica 161/361 y conexiones Relay más amplias; no es drop-in.                          | El selector funciona en SQLite; PostgreSQL requiere completar migración.                           |
 | CLI                 | `pb` cubre issues, planning, actores, keys, webhooks y selección de Workspace en el camino SQLite.                                                                                                                            | Linear no ofrece un CLI oficial equivalente; el CLI local es una ventaja agent-first.          | PostgreSQL ya tiene auth, grants y límites; faltan selección multi-Workspace y dominios restantes. |
 | MCP                 | Tools espejo de la API y actor/agente de primera clase; la sesión fija un contexto.                                                                                                                                           | Contrato de tools no es el MCP/API de Linear.                                                  | Revisar selección cuando el backend PostgreSQL migre.                                              |
@@ -259,7 +259,7 @@ esas auditorías derivaron). Los gaps que bloquean específicamente varios Works
 - `docs/audits/linear-paridad-graphql.md` conserva el snapshot 2026-08-18 (166/373/86/80 en su texto).
   El SDL local verificado contiene 26/66/25/13/2; ningún conteo implica compatibilidad drop-in.
 - `docs/audits/linear-modelo-datos.md` conserva el snapshot de migraciones SQLite hasta `0018`. El
-  runner SQLite actual llega a `0030`; el migrador PostgreSQL es independiente y llega a `0011`.
+  runner SQLite actual llega a `0030`; el migrador PostgreSQL es independiente y llega a `0016` (con `0012`–`0015` reservadas).
 - `docs/research/linear-settings-parity.md` es un snapshot histórico: varios gaps allí descritos ya
   tienen implementación en SQLite, pero no se deben proyectar automáticamente sobre PostgreSQL.
 - `docs/relevamiento-linear.md` describe FTS sobre comentarios, pero los índices actuales de SQLite y

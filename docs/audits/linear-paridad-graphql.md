@@ -25,15 +25,18 @@ El SDL es común, pero la capacidad operativa depende del backend configurado:
 - **SQLite** es el backend predeterminado. Usa `bun:sqlite`, migraciones `0001`–`0030` y
   conserva el esquema histórico de Documents solo durante la migración y no expone esa capacidad.
 - **PostgreSQL** es opcional. Se activa con `PRIME_BOARD_PERSISTENCE=postgres`, requiere
-  `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0011` y conserva una
-  única Workspace. `0010` agrega la tabla `projector_checkpoints` para checkpoints durables del projector. La migración es incremental: los dominios sin path PG usan un SQLite efímero
-  o devuelven un error explícito. `0005` agrega Documents por compatibilidad histórica; `0011` los retira después de validar el archivo externo. `0006` suscriptores, `0007` Memberships
-  y grants de Workspace, `0008` el alcance de Workspace de los límites de Team de API keys y `0009`
-  el grant explícito del Workspace efectivo. Los paths directos incluyen Issues, Teams, Projects,
-  Milestones, Cycles, Labels, Activity, suscriptores, Relations, API keys y límites de
-  Team. Relations tiene lectura y mutaciones desde PRB-437; API keys y límites desde PRB-552.
-  Comments no tiene una ruta de persistencia PostgreSQL. El event log canónico y el proyector
-  Repository Source → PostgreSQL siguen pendientes según ADR-0019 y PRB-445/453.
+  `PRIME_BOARD_POSTGRES_URL`, usa migraciones independientes `0001`–`0011` y `0016` (las
+  versiones intermedias quedan reservadas) y conserva una única Workspace. `0010` agrega la tabla
+  `projector_checkpoints` para checkpoints durables del projector y `0016` registra receipts por
+  evento. La migración es incremental: los dominios sin path PG usan un SQLite efímero o
+  devuelven un error explícito. `0005` agrega Documents por compatibilidad histórica; `0011` los
+  retira después de validar el archivo externo. `0006` suscriptores, `0007` Memberships y grants
+  de Workspace, `0008` el alcance de Workspace de los límites de Team de API keys y `0009` el grant
+  explícito del Workspace efectivo. Los paths directos incluyen Issues, Teams, Projects,
+  Milestones, Cycles, Labels, Activity, suscriptores, Relations, API keys y límites de Team.
+  Relations tiene lectura y mutaciones desde PRB-437; API keys y límites desde PRB-552. Comments no
+  tiene una ruta de persistencia PostgreSQL. El event log canónico y el proyector Repository Source
+  → PostgreSQL siguen pendientes según ADR-0019 y PRB-445/453.
 
 Por eso, un campo o una mutación presente en el SDL no implica que todos los backends la
 soporten. Esta auditoría cuenta el contrato y marca la limitación de persistencia cuando afecta
