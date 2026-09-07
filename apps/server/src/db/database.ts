@@ -653,16 +653,32 @@ const VIEWS_MIGRATION_UNIQUE_CONSTRAINTS = {
   view_subscriptions: ["workspace_id", "view_id", "actor_id"],
 } satisfies Record<string, readonly string[]>;
 
+/**
+ * SQLite aplica NOCASE solo a caracteres ASCII al resolver identificadores.
+ * Esta normalización conserva la misma regla para los valores que devuelve PRAGMA.
+ */
+function normalizeSqliteIdentifier(identifier: string): string {
+  return identifier.replace(/[A-Z]/g, (character) =>
+    String.fromCharCode(character.charCodeAt(0) + 0x20),
+  );
+}
+
+function sameSqliteIdentifier(left: string, right: string): boolean {
+  return normalizeSqliteIdentifier(left) === normalizeSqliteIdentifier(right);
+}
+
 function hasTable(db: Database, table: string): boolean {
   return Boolean(
-    db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1").get(table),
+    db
+      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE NOCASE")
+      .get(table),
   );
 }
 
 function schemaObjects(db: Database, name: string): SchemaObjectRow[] {
   return db
     .query<SchemaObjectRow, SQLQueryBindings[]>(
-      "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE lower(name) = lower(?1) ORDER BY type, name",
+      "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name = ?1 COLLATE NOCASE ORDER BY type, name",
     )
     .all(name);
 }
@@ -682,7 +698,7 @@ function tableInfo(db: Database, table: string): TableInfoRow[] {
 }
 
 function hasColumn(db: Database, table: string, column: string): boolean {
-  return tableInfo(db, table).some((value) => value.name === column);
+  return tableInfo(db, table).some((value) => sameSqliteIdentifier(value.name, column));
 }
 
 function indexList(db: Database, table: string): IndexListRow[] {
@@ -714,9 +730,11 @@ function indexHasColumns(
     terms.every(
       (term, position) =>
         term.seqno === position &&
-        term.name === columns[position] &&
+        term.name !== null &&
+        columns[position] !== undefined &&
+        sameSqliteIdentifier(term.name, columns[position]) &&
         term.desc === 0 &&
-        term.coll === "BINARY",
+        sameSqliteIdentifier(term.coll, "BINARY"),
     )
   );
 }
@@ -728,9 +746,7 @@ function hasNamedIndexWithColumns(
   columns: readonly string[],
   unique: boolean,
 ): boolean {
-  const index = indexList(db, table).find(
-    (value) => value.name.toLowerCase() === name.toLowerCase(),
-  );
+  const index = indexList(db, table).find((value) => sameSqliteIdentifier(value.name, name));
   return Boolean(index && indexHasColumns(index, indexTerms(db, index.name), columns, unique));
 }
 
@@ -762,27 +778,27 @@ function hasPrimaryKeyColumns(db: Database, table: string, columns: readonly str
     primaryKeyColumns.length === columns.length &&
     primaryKeyColumns.every((column, position) => {
       const expected = columns[position];
-      return expected !== undefined && column.pk === position + 1 && column.name === expected;
+      return (
+        expected !== undefined &&
+        column.pk === position + 1 &&
+        sameSqliteIdentifier(column.name, expected)
+      );
     })
   );
 }
 
 function hasNamedIndex(db: Database, table: string, name: string): boolean {
-  return indexList(db, table).some((index) => index.name.toLowerCase() === name.toLowerCase());
+  return indexList(db, table).some((index) => sameSqliteIdentifier(index.name, name));
 }
 
 function hasTrigger(db: Database, name: string): boolean {
   return Boolean(
     db
       .query(
-        "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND lower(name) = lower(?1) LIMIT 1",
+        "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?1 COLLATE NOCASE LIMIT 1",
       )
       .get(name),
   );
-}
-
-function normalizedSql(sql: string): string {
-  return sql.toLowerCase().replace(/\s+/g, "");
 }
 
 type SqlTokenKind =
@@ -970,7 +986,7 @@ function singleSqlStatement(tokens: readonly SqlToken[]): readonly SqlToken[] | 
 
 function comparableSqlToken(token: SqlToken): string {
   if (token.kind === "identifier" || token.kind === "quoted_identifier") {
-    return `identifier:${token.value.toLowerCase()}`;
+    return `identifier:${normalizeSqliteIdentifier(token.value)}`;
   }
   return `${token.kind}:${token.value}`;
 }
@@ -996,7 +1012,7 @@ function checkExpressionsFromDefinition(definition: string): SqlToken[][] | null
   const expressions: SqlToken[][] = [];
   for (let position = 0; position < tokens.length; position += 1) {
     const token = tokens[position];
-    if (token?.kind !== "identifier" || token.value.toLowerCase() !== "check") {
+    if (token?.kind !== "identifier" || !sameSqliteIdentifier(token.value, "check")) {
       continue;
     }
     const opening = tokens[position + 1];
@@ -1023,9 +1039,9 @@ function definitionForExplain(definition: string): string | null {
   if (
     !tokens ||
     tokens[0]?.kind !== "identifier" ||
-    tokens[0].value.toLowerCase() !== "create" ||
+    !sameSqliteIdentifier(tokens[0].value, "create") ||
     tokens[1]?.kind !== "identifier" ||
-    tokens[1].value.toLowerCase() !== "table"
+    !sameSqliteIdentifier(tokens[1].value, "table")
   ) {
     return null;
   }
@@ -1036,7 +1052,7 @@ function definitionForExplain(definition: string): string | null {
     return null;
   }
   const probeName = "__prb641_check_probe";
-  if (tableToken.value.toLowerCase() === probeName) return null;
+  if (sameSqliteIdentifier(tableToken.value, probeName)) return null;
   return `${definition.slice(0, tableToken.start)}${probeName}${definition.slice(tableToken.end)}`;
 }
 
@@ -1083,7 +1099,7 @@ function isSqlNameToken(token: SqlToken | undefined): token is SqlToken {
 }
 
 function isSqlKeyword(token: SqlToken | undefined, keyword: string): boolean {
-  return token?.kind === "identifier" && token.value.toLowerCase() === keyword;
+  return token?.kind === "identifier" && sameSqliteIdentifier(token.value, keyword);
 }
 
 type TriggerTiming = "before" | "after" | "instead of";
@@ -1296,17 +1312,14 @@ function renamedTriggerSql(
     position += 3;
   }
   const triggerToken = parsed[position];
-  if (
-    !isSqlNameToken(triggerToken) ||
-    triggerToken.value.toLowerCase() !== expectedName.toLowerCase()
-  ) {
+  if (!isSqlNameToken(triggerToken) || !sameSqliteIdentifier(triggerToken.value, expectedName)) {
     return null;
   }
   const actual = triggerDefinitionFromSql(definition);
   if (
     actual === null ||
-    actual.name.toLowerCase() !== expectedName.toLowerCase() ||
-    actual.table.toLowerCase() !== expectedTable.toLowerCase()
+    !sameSqliteIdentifier(actual.name, expectedName) ||
+    !sameSqliteIdentifier(actual.table, expectedTable)
   ) {
     return null;
   }
@@ -1328,7 +1341,7 @@ function renamedViewSql(definition: string, name: string, expectedName: string):
     position += 3;
   }
   const viewToken = tokens[position];
-  if (!isSqlNameToken(viewToken) || viewToken.value.toLowerCase() !== expectedName.toLowerCase()) {
+  if (!isSqlNameToken(viewToken) || !sameSqliteIdentifier(viewToken.value, expectedName)) {
     return null;
   }
   position += 1;
@@ -1362,7 +1375,7 @@ function sqlReferencesIdentifier(sql: string, name: string): boolean {
     parsed.some(
       (token) =>
         (token.kind === "identifier" || token.kind === "quoted_identifier") &&
-        token.value.toLowerCase() === name.toLowerCase(),
+        sameSqliteIdentifier(token.value, name),
     )
   );
 }
@@ -1391,13 +1404,13 @@ function schemaObjectsWithName(
 ): Array<{ object: SchemaObjectRow; temporary: boolean }> {
   const mainObjects = db
     .query<SchemaObjectRow, SQLQueryBindings[]>(
-      "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE lower(name) = lower(?1)",
+      "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name = ?1 COLLATE NOCASE",
     )
     .all(name)
     .map((object) => ({ object, temporary: false }));
   const temporaryObjects = db
     .query<SchemaObjectRow, SQLQueryBindings[]>(
-      "SELECT type, name, tbl_name, sql FROM sqlite_temp_master WHERE lower(name) = lower(?1)",
+      "SELECT type, name, tbl_name, sql FROM sqlite_temp_master WHERE name = ?1 COLLATE NOCASE",
     )
     .all(name)
     .map((object) => ({ object, temporary: true }));
@@ -1410,7 +1423,7 @@ function sqlIdentifierOccurrences(sql: string, name: string): number {
     tokens?.filter(
       (token) =>
         (token.kind === "identifier" || token.kind === "quoted_identifier") &&
-        token.value.toLowerCase() === name.toLowerCase(),
+        sameSqliteIdentifier(token.value, name),
     ).length ?? 0
   );
 }
@@ -1423,7 +1436,7 @@ function viewHasSchemaDependencies(db: Database, view: SchemaObjectRow): boolean
     if (sqlIdentifierOccurrences(view.sql, view.name) > 1) return true;
   }
   return schemaObjectsWithDependencies(db).some(({ object, temporary }) => {
-    if (object.type === "view" && object.name.toLowerCase() === view.name.toLowerCase()) {
+    if (object.type === "view" && sameSqliteIdentifier(object.name, view.name)) {
       if (!temporary) return false;
       // Una TEMP VIEW puede ocultar intencionadamente un objeto del esquema
       // principal. Solo es una dependencia si su consulta menciona la View
@@ -1431,7 +1444,7 @@ function viewHasSchemaDependencies(db: Database, view: SchemaObjectRow): boolean
       return object.sql !== null && sqlIdentifierOccurrences(object.sql, view.name) > 1;
     }
     return (
-      object.tbl_name.toLowerCase() === view.name.toLowerCase() ||
+      sameSqliteIdentifier(object.tbl_name, view.name) ||
       (object.sql !== null && sqlReferencesIdentifier(object.sql, view.name))
     );
   });
@@ -1442,9 +1455,10 @@ function sameTriggerEvent(left: TriggerEvent, right: TriggerEvent): boolean {
   if (left.kind !== "update" || right.kind !== "update") return true;
   return (
     left.columns.length === right.columns.length &&
-    left.columns.every(
-      (column, position) => column.toLowerCase() === right.columns[position]?.toLowerCase(),
-    )
+    left.columns.every((column, position) => {
+      const expected = right.columns[position];
+      return expected !== undefined && sameSqliteIdentifier(column, expected);
+    })
   );
 }
 
@@ -1464,11 +1478,11 @@ function matchesTriggerContract(
   const expectedWhen = sqliteTokens(contract.when);
   const expectedBody = sqliteTokens(contract.body);
   return (
-    definition.name.toLowerCase() === contract.name.toLowerCase() &&
-    definition.tbl_name.toLowerCase() === contract.table.toLowerCase() &&
+    sameSqliteIdentifier(definition.name, contract.name) &&
+    sameSqliteIdentifier(definition.tbl_name, contract.table) &&
     actual !== null &&
-    actual.name.toLowerCase() === contract.name.toLowerCase() &&
-    actual.table.toLowerCase() === contract.table.toLowerCase() &&
+    sameSqliteIdentifier(actual.name, contract.name) &&
+    sameSqliteIdentifier(actual.table, contract.table) &&
     actual.timing === contract.timing &&
     sameTriggerEvent(actual.event, contract.event) &&
     actual.forEachRow === contract.forEachRow &&
@@ -1586,8 +1600,8 @@ function renamedIndexSql(
     !isSqlNameToken(indexToken) ||
     !isSqlKeyword(tokens[position + 1], "on") ||
     !isSqlNameToken(tableToken) ||
-    tableToken.value.toLowerCase() !== expectedTable.toLowerCase() ||
-    (expectedName !== undefined && indexToken.value.toLowerCase() !== expectedName.toLowerCase())
+    !sameSqliteIdentifier(tableToken.value, expectedTable) ||
+    (expectedName !== undefined && !sameSqliteIdentifier(indexToken.value, expectedName))
   ) {
     return null;
   }
@@ -1616,14 +1630,14 @@ function sameSqlTokens(left: readonly string[], right: readonly string[]): boole
 }
 
 function hasViewPreferencesKeyIndex(db: Database): boolean {
-  const index = indexList(db, "view_preferences").find(
-    (value) => value.name.toLowerCase() === "idx_view_preferences_key",
+  const index = indexList(db, "view_preferences").find((value) =>
+    sameSqliteIdentifier(value.name, "idx_view_preferences_key"),
   );
   if (!index || index.unique_value !== 1 || index.partial !== 0) return false;
 
   const definition = db
     .query<SqlDefinitionRow, SQLQueryBindings[]>(
-      "SELECT sql FROM sqlite_master WHERE type = 'index' AND lower(name) = lower(?1)",
+      "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1 COLLATE NOCASE",
     )
     .get("idx_view_preferences_key");
   if (!definition?.sql) return false;
@@ -1632,8 +1646,8 @@ function hasViewPreferencesKeyIndex(db: Database): boolean {
   if (
     !parsed ||
     !parsed.unique ||
-    parsed.name.toLowerCase() !== index.name.toLowerCase() ||
-    parsed.table.toLowerCase() !== "view_preferences"
+    !sameSqliteIdentifier(parsed.name, index.name) ||
+    !sameSqliteIdentifier(parsed.table, "view_preferences")
   ) {
     return false;
   }
@@ -1654,9 +1668,11 @@ function hasViewPreferencesKeyIndex(db: Database): boolean {
       expectedSql !== undefined &&
       actualSql !== undefined &&
       term.seqno === position &&
-      term.name === expected.column &&
+      (expected.column === null
+        ? term.name === null
+        : term.name !== null && sameSqliteIdentifier(term.name, expected.column)) &&
       term.desc === 0 &&
-      term.coll === "BINARY" &&
+      sameSqliteIdentifier(term.coll, "BINARY") &&
       sameSqlTokens(comparableSqlTokens(actualSql), expectedSql)
     );
   });
@@ -1666,7 +1682,7 @@ function savedViewsIndexDefinitions(db: Database): SavedViewsIndexDefinition[] {
   return indexList(db, "saved_views").map((index) => {
     const definition = db
       .query<SqlDefinitionRow, SQLQueryBindings[]>(
-        "SELECT sql FROM sqlite_master WHERE type = 'index' AND lower(name) = lower(?1)",
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1 COLLATE NOCASE",
       )
       .get(index.name);
     return {
@@ -1701,9 +1717,11 @@ function equivalentIndex(
         return (
           expected !== undefined &&
           term.seqno === expected.seqno &&
-          term.name === expected.name &&
+          (term.name === null
+            ? expected.name === null
+            : expected.name !== null && sameSqliteIdentifier(term.name, expected.name)) &&
           term.desc === expected.desc &&
-          term.coll === expected.coll
+          sameSqliteIdentifier(term.coll, expected.coll)
         );
       })
     );
@@ -1842,8 +1860,8 @@ function generatedMigrationIndexName(
   const base = `${name}_legacy`;
   for (let suffixNumber = 1; ; suffixNumber += 1) {
     const candidate = suffixNumber === 1 ? base : `${base}_${suffixNumber}`;
-    if (!nameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
-      plannedNames.add(candidate.toLowerCase());
+    if (!nameInUse(db, candidate) && !plannedNames.has(normalizeSqliteIdentifier(candidate))) {
+      plannedNames.add(normalizeSqliteIdentifier(candidate));
       return candidate;
     }
   }
@@ -1857,8 +1875,11 @@ function generatedViewsMigrationTriggerName(
   const base = `${name}_legacy`;
   for (let suffixNumber = 1; ; suffixNumber += 1) {
     const candidate = suffixNumber === 1 ? base : `${base}_${suffixNumber}`;
-    if (!triggerNameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
-      plannedNames.add(candidate.toLowerCase());
+    if (
+      !triggerNameInUse(db, candidate) &&
+      !plannedNames.has(normalizeSqliteIdentifier(candidate))
+    ) {
+      plannedNames.add(normalizeSqliteIdentifier(candidate));
       return candidate;
     }
   }
@@ -1873,8 +1894,8 @@ function generatedMigrationViewName(
   const base = `${name}_legacy`;
   for (let suffixNumber = 1; ; suffixNumber += 1) {
     const candidate = suffixNumber === 1 ? base : `${base}_${suffixNumber}`;
-    if (!nameInUse(db, candidate) && !plannedNames.has(candidate.toLowerCase())) {
-      plannedNames.add(candidate.toLowerCase());
+    if (!nameInUse(db, candidate) && !plannedNames.has(normalizeSqliteIdentifier(candidate))) {
+      plannedNames.add(normalizeSqliteIdentifier(candidate));
       return candidate;
     }
   }
@@ -1921,7 +1942,7 @@ function migrationNameCollisionPlan(
   options: MigrationNameCollisionPlanOptions,
 ): MigrationNameCollision[] {
   const collisions: MigrationNameCollision[] = [];
-  const plannedObjectNames = new Set(options.reservedNames.map((name) => name.toLowerCase()));
+  const plannedObjectNames = new Set(options.reservedNames.map(normalizeSqliteIdentifier));
 
   for (const name of options.reservedNames) {
     for (const { object, temporary } of schemaObjectsWithName(db, name)) {
@@ -1968,10 +1989,7 @@ function migrationNameCollisionPlan(
       }
 
       const expectedTable = options.expectedIndexTable?.(name);
-      if (
-        expectedTable !== undefined &&
-        object.tbl_name.toLowerCase() === expectedTable.toLowerCase()
-      ) {
+      if (expectedTable !== undefined && sameSqliteIdentifier(object.tbl_name, expectedTable)) {
         const matches = options.indexMatches?.(db, name) ?? false;
         const equivalent = options.indexEquivalentAlternative?.(db, name) ?? false;
         if (!matches && !equivalent) {
@@ -2015,7 +2033,7 @@ function viewsMigrationNameCollisionPlan(
   includeCreatedTables = true,
 ): MigrationNameCollision[] {
   const indexByName = new Map(
-    VIEWS_MIGRATION_NAMED_INDEXES.map((index) => [index.name.toLowerCase(), index]),
+    VIEWS_MIGRATION_NAMED_INDEXES.map((index) => [normalizeSqliteIdentifier(index.name), index]),
   );
   const reservedNames = [
     ...VIEWS_MIGRATION_NAMED_INDEXES.map((index) => index.name),
@@ -2024,13 +2042,13 @@ function viewsMigrationNameCollisionPlan(
   const collisions = migrationNameCollisionPlan(db, {
     reservedNames,
     errorPrefix: "Cannot apply migration 0033 safely",
-    expectedIndexTable: (name) => indexByName.get(name.toLowerCase())?.table,
+    expectedIndexTable: (name) => indexByName.get(normalizeSqliteIdentifier(name))?.table,
     indexMatches: (database, name) => {
-      const expected = indexByName.get(name.toLowerCase());
+      const expected = indexByName.get(normalizeSqliteIdentifier(name));
       return expected !== undefined && viewsMigrationIndexMatches(database, expected);
     },
     indexEquivalentAlternative: (database, name) => {
-      const expected = indexByName.get(name.toLowerCase());
+      const expected = indexByName.get(normalizeSqliteIdentifier(name));
       return (
         expected !== undefined && viewsMigrationIndexHasEquivalentAlternative(database, expected)
       );
@@ -2043,7 +2061,7 @@ function viewsMigrationNameCollisionPlan(
     const temporaryTriggers = db
       .query<TriggerDefinitionRow, SQLQueryBindings[]>(
         "SELECT name, tbl_name, sql FROM sqlite_temp_master " +
-          "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1)",
+          "WHERE type = 'trigger' AND tbl_name = ?1 COLLATE NOCASE",
       )
       .all("saved_views");
     const temporaryTrigger = temporaryTriggers[0];
@@ -2063,7 +2081,7 @@ function viewsMigrationNameCollisionPlan(
         tbl_name: object.tbl_name,
         sql: object.sql,
       };
-      if (object.tbl_name.toLowerCase() === expected.table.toLowerCase()) {
+      if (sameSqliteIdentifier(object.tbl_name, expected.table)) {
         if (!matchesTriggerContract(definition, expected)) {
           throw new Error(
             `Cannot apply migration 0033 safely: same-table trigger ${object.name} on ` +
@@ -2251,9 +2269,9 @@ function matchesSavedViewsForeignKey(
     return (
       expectedColumn !== undefined &&
       row.seq === position &&
-      row.table === expected.table &&
-      row.from === expectedColumn.from &&
-      row.to === expectedColumn.to &&
+      sameSqliteIdentifier(row.table, expected.table) &&
+      sameSqliteIdentifier(row.from, expectedColumn.from) &&
+      sameSqliteIdentifier(row.to, expectedColumn.to) &&
       row.on_update === expected.onUpdate &&
       row.on_delete === expected.onDelete &&
       (expected.match === undefined || row.match === expected.match)
@@ -2280,14 +2298,17 @@ function hasSavedViewsForeignKey(
 }
 
 function normalizedContractValue(value: string | null): string | null {
-  return value === null ? null : normalizedSql(value);
+  if (value === null) return null;
+  const tokens = sqliteTokens(value);
+  // Los tokens quitan espacios de la sintaxis, pero conservan el texto de los literales.
+  return tokens === null ? value : comparableSqlTokens(tokens).join("\u001f");
 }
 
 function tableSql(db: Database, table: string): string | null {
   return (
     db
       .query<SqlDefinitionRow, SQLQueryBindings[]>(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE NOCASE",
       )
       .get(table)?.sql ?? null
   );
@@ -2302,16 +2323,16 @@ function columnContractProblems(
   const actual = tableInfo(db, table);
   const problems: string[] = [];
   if (actual.length !== expected.length) {
-    const expectedNames = new Set(expected.map((column) => column.name));
+    const expectedNames = new Set(expected.map((column) => normalizeSqliteIdentifier(column.name)));
     const unexpected = actual
-      .filter((column) => !expectedNames.has(column.name))
+      .filter((column) => !expectedNames.has(normalizeSqliteIdentifier(column.name)))
       .map((column) => column.name);
     if (unexpected.length > 0)
       problems.push(`${table} has unexpected columns: ${unexpected.join(", ")}`);
     if (actual.length < expected.length) {
-      const actualNames = new Set(actual.map((column) => column.name));
+      const actualNames = new Set(actual.map((column) => normalizeSqliteIdentifier(column.name)));
       const missing = expected
-        .filter((column) => !actualNames.has(column.name))
+        .filter((column) => !actualNames.has(normalizeSqliteIdentifier(column.name)))
         .map((column) => column.name);
       if (missing.length > 0) problems.push(`${table} missing columns: ${missing.join(", ")}`);
     }
@@ -2324,7 +2345,7 @@ function columnContractProblems(
       }
       continue;
     }
-    if (column.name !== contract.name) {
+    if (!sameSqliteIdentifier(column.name, contract.name)) {
       problems.push(`${table}.${contract.name} has an incompatible column order`);
       continue;
     }
@@ -2568,7 +2589,7 @@ function triggerProblems(db: Database, expected: readonly TriggerContract[]): st
     const definition =
       db
         .query<TriggerDefinitionRow, SQLQueryBindings[]>(
-          "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND lower(name) = lower(?1)",
+          "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1 COLLATE NOCASE",
         )
         .get(contract.name) ?? null;
     return matchesTriggerContract(definition, contract)
@@ -2584,14 +2605,14 @@ function viewsMigrationTriggerPrerequisiteProblems(
   return expected.flatMap((contract) => {
     const definitions = db
       .query<TriggerDefinitionRow, SQLQueryBindings[]>(
-        "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND lower(name) = lower(?1)",
+        "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1 COLLATE NOCASE",
       )
       .all(contract.name);
     const sameTable =
       definitions.find(
         (definition) =>
           typeof definition.tbl_name === "string" &&
-          definition.tbl_name.toLowerCase() === contract.table.toLowerCase(),
+          sameSqliteIdentifier(definition.tbl_name, contract.table),
       ) ?? null;
     if (sameTable !== null) {
       return matchesTriggerContract(sameTable, contract)
@@ -2744,8 +2765,10 @@ function viewsMigrationSchemaProblems(db: Database, requireWorkspaceIndex: boole
 
 function hasAllColumns(db: Database, table: string, columns: readonly string[]): boolean {
   if (!hasTable(db, table)) return false;
-  const actual = new Set(tableInfo(db, table).map((column) => column.name));
-  return columns.every((column) => actual.has(column));
+  const actual = new Set(
+    tableInfo(db, table).map((column) => normalizeSqliteIdentifier(column.name)),
+  );
+  return columns.every((column) => actual.has(normalizeSqliteIdentifier(column)));
 }
 
 function hasRows(db: Database, query: string): boolean {
