@@ -232,6 +232,50 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("revierte el rebuild cuando un índice legacy no puede restaurarse", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec("ALTER TABLE saved_views ADD COLUMN legacy_marker TEXT");
+      db.exec("CREATE INDEX idx_saved_views_legacy_marker ON saved_views(legacy_marker)");
+      const beforeView = db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get();
+      const beforeFavorite = db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get();
+      const beforeNotification = db
+        .query("SELECT * FROM notification_preferences WHERE category = 'mentions'")
+        .get();
+
+      expect(() => migrate(db)).toThrow(/legacy_marker/);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toBeNull();
+      expect(db.query("SELECT * FROM saved_views WHERE id = 'view-legacy'").get()).toEqual(
+        beforeView,
+      );
+      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
+        beforeFavorite,
+      );
+      expect(
+        db.query("SELECT * FROM notification_preferences WHERE category = 'mentions'").get(),
+      ).toEqual(beforeNotification);
+      expect(
+        db
+          .query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?1")
+          .get("idx_saved_views_legacy_marker"),
+      ).toEqual({ name: "idx_saved_views_legacy_marker" });
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+      db.exec("DROP INDEX idx_saved_views_legacy_marker");
+      migrate(db);
+      expect(db.query("SELECT version, name FROM _migrations WHERE version >= 32").all()).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+      expect(db.query("SELECT * FROM favorites WHERE id = 'favorite-legacy'").get()).toEqual(
+        beforeFavorite,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it("revierte el rebuild de Views si falla y permite reintentar sin pérdida", () => {
     const db = databaseWithMigrationsThrough(32);
     try {
