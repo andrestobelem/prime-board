@@ -13,6 +13,13 @@ import {
 import { getEffectiveWorkspaceContext, getUiStorageKey } from "./ui-context.ts";
 import { GROUP_LABELS, isTypingTarget, type GroupBy } from "./components/IssueList.tsx";
 import { DisplayOptions, type IssueColumn, type IssueOrder } from "./components/DisplayOptions.tsx";
+import {
+  defaultViewPreferences,
+  normalizeViewPreferences,
+  sameViewPreferences,
+  viewPreferencesInput,
+  type ViewPreferenceState,
+} from "./view-preferences.ts";
 import { ErrorState } from "./components/AsyncState.tsx";
 import { Palette } from "./components/Palette.tsx";
 import { ArchiveConfirmModal } from "./components/ArchiveConfirmModal.tsx";
@@ -75,6 +82,23 @@ const SHELL_QUERY = `{
     savedView { id name }
   }
 }`;
+
+const VIEW_PREFERENCES_QUERY = `query {
+  viewer { id }
+  workspace { id }
+  viewPreferences { layout orderBy groupBy columns }
+}`;
+
+type ViewPreferencesResponse = {
+  viewer: { id: string };
+  workspace: { id: string };
+  viewPreferences: {
+    layout: string;
+    orderBy: string;
+    groupBy: string;
+    columns: string[];
+  };
+};
 
 type CreateModal =
   | {
@@ -233,6 +257,13 @@ export function App() {
       enabled: authenticated && workspaceGate.status === "ready",
     },
   );
+  const preferences = useQuery<ViewPreferencesResponse>(
+    VIEW_PREFERENCES_QUERY,
+    {},
+    {
+      enabled: authenticated && workspaceGate.status === "ready",
+    },
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -251,20 +282,52 @@ export function App() {
   const [favorites, setFavorites] = useState<SidebarFavorite[]>([]);
   const [favoriteOperation, setFavoriteOperation] = useState<FavoriteOperationState | null>(null);
   const favoriteAttempt = useRef(0);
+  const preferenceSync = useRef<string | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>(loadGroupBy);
   const [orderBy, setOrderBy] = useState<IssueOrder>(loadOrderBy);
   const [visibleColumns, setVisibleColumns] = useState<IssueColumn[]>(loadColumns);
-  const [preferencesWorkspaceId, setPreferencesWorkspaceId] = useState<string | null>(null);
+  const [preferencesContextIdentity, setPreferencesContextIdentity] = useState<string | null>(null);
+  const [preferencesIdentity, setPreferencesIdentity] = useState<string | null>(null);
+  const workspaceId = shell.data?.workspace.id ?? null;
+  const viewerId = shell.data?.viewer.id ?? null;
+  const credentialGeneration = getCredentialGeneration();
+  const currentPreferencesIdentity =
+    workspaceId && viewerId ? `${workspaceId}:${viewerId}:${credentialGeneration}` : null;
+  const serverPreferences = preferences.data?.viewPreferences;
+  const preferencesMatchIdentity = Boolean(
+    currentPreferencesIdentity &&
+    preferences.data?.viewer?.id === viewerId &&
+    preferences.data?.workspace?.id === workspaceId,
+  );
 
   useEffect(() => {
-    const workspaceId = shell.data?.workspace.id;
-    if (!workspaceId || workspaceId === preferencesWorkspaceId) return;
-    // Load preferences only after the server validates the new Workspace context.
+    if (!currentPreferencesIdentity || currentPreferencesIdentity === preferencesContextIdentity)
+      return;
+    // Keep the local namespace usable while the API preferences are loading.
     setGroupBy(loadGroupBy());
     setOrderBy(loadOrderBy());
     setVisibleColumns(loadColumns());
-    setPreferencesWorkspaceId(workspaceId);
-  }, [preferencesWorkspaceId, shell.data?.workspace.id]);
+    setPreferencesContextIdentity(currentPreferencesIdentity);
+    setPreferencesIdentity(null);
+    preferenceSync.current = null;
+  }, [currentPreferencesIdentity, preferencesContextIdentity]);
+
+  useEffect(() => {
+    if (!currentPreferencesIdentity || !preferencesMatchIdentity || !serverPreferences) return;
+    if (currentPreferencesIdentity === preferencesIdentity) return;
+    const next = normalizeViewPreferences(serverPreferences, defaultViewPreferences());
+    setGroupBy(next.groupBy);
+    setOrderBy(next.orderBy);
+    setVisibleColumns(next.columns);
+    setPreferencesIdentity(currentPreferencesIdentity);
+    preferenceSync.current = null;
+  }, [
+    currentPreferencesIdentity,
+    preferencesContextIdentity,
+    preferencesIdentity,
+    preferencesMatchIdentity,
+    serverPreferences,
+  ]);
 
   useEffect(() => {
     if (!shell.data || getEffectiveWorkspaceContext()?.workspaceId !== shell.data.workspace.id)
@@ -272,7 +335,45 @@ export function App() {
     localStorage.setItem(getUiStorageKey("pb.group-by"), groupBy);
     localStorage.setItem(getUiStorageKey("pb.order-by"), orderBy);
     localStorage.setItem(getUiStorageKey("pb.visible-columns"), JSON.stringify(visibleColumns));
-  }, [groupBy, orderBy, visibleColumns, shell.data]);
+
+    if (
+      !currentPreferencesIdentity ||
+      preferencesIdentity !== currentPreferencesIdentity ||
+      !preferencesMatchIdentity ||
+      !serverPreferences
+    )
+      return;
+    const server = normalizeViewPreferences(serverPreferences);
+    const next: ViewPreferenceState = {
+      ...server,
+      orderBy,
+      groupBy,
+      columns: visibleColumns,
+    };
+    if (sameViewPreferences(next, server)) {
+      preferenceSync.current = null;
+      return;
+    }
+    const signature = `${currentPreferencesIdentity}:${JSON.stringify(next)}`;
+    if (preferenceSync.current === signature) return;
+    preferenceSync.current = signature;
+    void mutate(
+      `mutation($input: ViewPreferencesUpdateInput!) {
+        viewPreferencesUpdate(input: $input) { success }
+      }`,
+      { input: viewPreferencesInput(next) },
+    ).catch(() => {
+      if (preferenceSync.current === signature) preferenceSync.current = null;
+    });
+  }, [
+    currentPreferencesIdentity,
+    groupBy,
+    orderBy,
+    preferencesIdentity,
+    serverPreferences,
+    shell.data,
+    visibleColumns,
+  ]);
 
   useEffect(() => {
     if (!shell.data) {

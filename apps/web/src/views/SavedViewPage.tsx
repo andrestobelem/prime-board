@@ -1,8 +1,19 @@
 // Vista guardada (PRB-201): abre el filtro/orden/agrupación persistidos.
 import { useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState, EmptyState } from "../components/AsyncState.tsx";
-import { ISSUE_COLUMNS, type IssueColumn, type IssueOrder } from "../components/DisplayOptions.tsx";
+import {
+  DisplayOptions,
+  ISSUE_COLUMNS,
+  type IssueColumn,
+  type IssueOrder,
+} from "../components/DisplayOptions.tsx";
 import { gql, GqlError, mutate, useQuery } from "../api.ts";
+import {
+  defaultViewPreferences,
+  normalizeViewPreferences,
+  viewPreferencesInput,
+  type ViewPreferenceState,
+} from "../view-preferences.ts";
 import { navigate } from "../router.tsx";
 import { ConfirmModal } from "../components/EntityModal.tsx";
 import { ArchiveConfirmModal } from "../components/ArchiveConfirmModal.tsx";
@@ -15,6 +26,13 @@ import {
 import { ISSUE_LIST_FIELDS } from "../fragments.ts";
 import { appendUniqueById } from "../pagination.ts";
 
+interface ViewPreferencesData {
+  layout: string;
+  orderBy: string;
+  groupBy: string;
+  columns: string[];
+}
+
 interface SavedViewData {
   id: string;
   name: string;
@@ -23,12 +41,14 @@ interface SavedViewData {
   orderBy: string;
   groupBy: string;
   columns: string[];
+  preferences: ViewPreferencesData;
   team: { id: string; key: string; name: string } | null;
 }
 
 const META_QUERY = `query($id: ID!) {
   savedView(id: $id) {
     id name scope filter orderBy groupBy columns
+    preferences { layout orderBy groupBy columns }
     team { id key name }
   }
 }`;
@@ -51,13 +71,32 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
   const [orderBy, setOrderBy] = useState<IssueOrder>("UPDATED_DESC");
   const [groupByDraft, setGroupByDraft] = useState<GroupBy>("state");
   const [columns, setColumns] = useState<IssueColumn[]>(["priority", "labels", "assignee"]);
+  const [displayPreferences, setDisplayPreferences] = useState<ViewPreferenceState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const meta = useQuery<{ savedView: SavedViewData | null }>(META_QUERY, { id: viewId });
   const view = meta.data?.savedView ?? null;
+  const serverPreferences = view
+    ? normalizeViewPreferences(view.preferences, defaultViewPreferences())
+    : defaultViewPreferences();
+  const effectivePreferences = displayPreferences ?? serverPreferences;
+
+  useEffect(() => {
+    if (!view) {
+      setDisplayPreferences(null);
+      return;
+    }
+    setDisplayPreferences(serverPreferences);
+  }, [
+    view?.id,
+    view?.preferences?.layout,
+    view?.preferences?.orderBy,
+    view?.preferences?.groupBy,
+    view?.preferences?.columns,
+  ]);
 
   const listVariables = view
-    ? { filter: view.filter ?? {}, orderBy: view.orderBy }
+    ? { filter: view.filter ?? {}, orderBy: effectivePreferences.orderBy }
     : { filter: { search: "__no_view__" } };
   const pageKey = JSON.stringify(listVariables);
   const pageKeyRef = useRef(pageKey);
@@ -109,6 +148,23 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
     }
   }
 
+  async function saveDisplayPreferences(next: ViewPreferenceState): Promise<void> {
+    const previous = effectivePreferences;
+    setDisplayPreferences(next);
+    setError(null);
+    try {
+      await mutate(
+        `mutation($input: ViewPreferencesUpdateInput!) {
+          viewPreferencesUpdate(input: $input) { success }
+        }`,
+        { input: viewPreferencesInput(next, viewId) },
+      );
+    } catch (err) {
+      setDisplayPreferences(previous);
+      setError(err instanceof GqlError ? err.message : String(err));
+    }
+  }
+
   async function saveMeta() {
     if (!view) return;
     const next = name.trim();
@@ -124,6 +180,12 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
       } catch {
         throw new Error("Filter must be valid JSON.");
       }
+      const nextPreferences: ViewPreferenceState = {
+        ...effectivePreferences,
+        orderBy,
+        groupBy: groupByDraft,
+        columns: [...columns],
+      };
       await mutate(
         `mutation($id: ID!, $input: SavedViewUpdateInput!) {
         savedViewUpdate(id: $id, input: $input) { savedView { id name } }
@@ -133,6 +195,13 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
           input: { name: next, filter: parsedFilter, orderBy, groupBy: groupByDraft, columns },
         },
       );
+      await mutate(
+        `mutation($input: ViewPreferencesUpdateInput!) {
+          viewPreferencesUpdate(input: $input) { success }
+        }`,
+        { input: viewPreferencesInput(nextPreferences, view.id) },
+      );
+      setDisplayPreferences(nextPreferences);
       setEditing(false);
     } catch (err) {
       setError(err instanceof GqlError ? err.message : String(err));
@@ -169,10 +238,6 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
   if (meta.loading && !meta.data) return <LoadingState />;
   if (meta.error) return <ErrorState message={meta.error.message} onRetry={meta.refetch} />;
   if (!view) return <EmptyState title="View not found" />;
-
-  const groupBy = (
-    GROUP_OPTIONS.includes(view.groupBy as GroupBy) ? view.groupBy : "state"
-  ) as GroupBy;
 
   return (
     <div>
@@ -252,17 +317,32 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
             <strong style={{ fontSize: 15 }}>{view.name}</strong>
             <span className="label-chip">{view.scope.toLowerCase()}</span>
             <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
-              {view.orderBy} · group by {groupBy}
+              {effectivePreferences.orderBy} · group by {effectivePreferences.groupBy} ·{" "}
+              {effectivePreferences.layout.toLowerCase()}
             </span>
+            <DisplayOptions
+              groupBy={effectivePreferences.groupBy}
+              orderBy={effectivePreferences.orderBy}
+              columns={effectivePreferences.columns}
+              onGroupBy={(value) =>
+                void saveDisplayPreferences({ ...effectivePreferences, groupBy: value })
+              }
+              onOrderBy={(value) =>
+                void saveDisplayPreferences({ ...effectivePreferences, orderBy: value })
+              }
+              onColumns={(value) =>
+                void saveDisplayPreferences({ ...effectivePreferences, columns: value })
+              }
+            />
             <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
               <button
                 className="btn secondary"
                 onClick={() => {
                   setName(view.name);
                   setFilterText(JSON.stringify(view.filter ?? {}, null, 2));
-                  setOrderBy(view.orderBy as IssueOrder);
-                  setGroupByDraft(groupBy);
-                  setColumns((view.columns ?? ["priority", "labels", "assignee"]) as IssueColumn[]);
+                  setOrderBy(effectivePreferences.orderBy);
+                  setGroupByDraft(effectivePreferences.groupBy);
+                  setColumns([...effectivePreferences.columns]);
                   setEditing(true);
                   setError(null);
                 }}
@@ -319,8 +399,8 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
           />
           <IssueList
             issues={appendUniqueById(list.data?.issues.nodes ?? [], extraIssues)}
-            groupBy={groupBy}
-            visibleColumns={(view.columns ?? ["priority", "labels", "assignee"]) as IssueColumn[]}
+            groupBy={effectivePreferences.groupBy}
+            visibleColumns={effectivePreferences.columns}
           />
         </>
       )}

@@ -1015,6 +1015,8 @@ export function rebuildFromRepo(
                 name: savedView.name,
                 scope: savedView.scope,
                 team: savedView.team ?? null,
+                project: savedView.project ?? null,
+                initiative: savedView.initiative ?? null,
                 owner: savedView.owner,
               }),
             ) ?? null)
