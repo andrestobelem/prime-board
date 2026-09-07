@@ -194,6 +194,68 @@ describe("withRepoSyncDispatch", () => {
     expect(repo.syncCalls).toBe(1);
   });
 
+  it("rechaza el fallo async del sync y aborta el lease sin rechazos huérfanos", async () => {
+    let complete = 0;
+    let abort = 0;
+    const lease = {
+      complete: () => {
+        complete += 1;
+      },
+      abort: () => {
+        abort += 1;
+      },
+    };
+    const repo: RepoSync = {
+      root: "/tmp/fake-repo",
+      preflight: () => lease,
+      sync: () => Promise.reject(new Error("export failed")),
+      syncIssue: () => undefined,
+    };
+    const wrapped = withRepoSyncDispatch({
+      someMutation: (_parent: unknown, _args: unknown, _context: unknown) => ({ success: true }),
+    });
+
+    await expect(
+      Promise.resolve(wrapped.someMutation(null, {}, { repo: trackedRepoSync(repo) })),
+    ).rejects.toThrow("export failed");
+    expect(abort).toBe(1);
+    expect(complete).toBe(0);
+  });
+
+  it("aborta una sola vez si un thenable falla al leer `.then`", () => {
+    let abort = 0;
+    let complete = 0;
+    const lease = {
+      complete: () => {
+        complete += 1;
+      },
+      abort: () => {
+        abort += 1;
+      },
+    };
+    const hostile = {};
+    Object.defineProperty(hostile, "then", {
+      get: () => {
+        throw new Error("then getter failed");
+      },
+    });
+    const repo: RepoSync = {
+      root: "/tmp/fake-repo",
+      preflight: () => lease,
+      sync: () => undefined,
+      syncIssue: () => undefined,
+    };
+    const wrapped = withRepoSyncDispatch({
+      someMutation: (_parent: unknown, _args: unknown, _context: unknown) => hostile,
+    });
+
+    expect(() => wrapped.someMutation(null, {}, { repo: trackedRepoSync(repo) })).toThrow(
+      "then getter failed",
+    );
+    expect(abort).toBe(1);
+    expect(complete).toBe(0);
+  });
+
   it("sin context.repo (PRIME_BOARD_REPO no configurado) no rompe, solo pasa de largo", () => {
     const resolver = mock((..._args: unknown[]) => ({ success: true }));
     const wrapped = withRepoSyncDispatch({ teamCreate: resolver });

@@ -8,16 +8,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 export const DOCUMENT_ARCHIVE_FORMAT = "prime-board.documents-archive" as const;
 export const DOCUMENT_ARCHIVE_VERSION = 1 as const;
@@ -145,6 +149,10 @@ function validateArchiveDestination(outputPath: string): string {
   }
   return path;
 }
+/** Valida y normaliza un destino de archivo sin crear ni modificar archivos. */
+export function validateDocumentArchivePath(outputPath: string): string {
+  return validateArchiveDestination(outputPath);
+}
 
 function assertPrivateArchive(path: string): void {
   const stat = lstatSync(path);
@@ -215,6 +223,16 @@ function readArchive(path: string): DocumentArchiveFile {
   }
 }
 
+/** Indica si un archive válido ya contiene una fuente concreta. */
+export function hasDocumentArchiveSource(outputPath: string, source: string): boolean {
+  if (!/^[a-z][a-z0-9_-]*$/u.test(source)) {
+    throw new Error(`Invalid document archive source: ${source}`);
+  }
+  const path = validateArchiveDestination(outputPath);
+  if (!existsSync(path)) return false;
+  return Boolean(readArchive(path).sources[source]);
+}
+
 function writeArchive(path: string, archive: DocumentArchiveFile): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   // Do not weaken an existing operator-owned directory, but always protect the
@@ -270,45 +288,63 @@ export function verifyDocumentRows(
  * Agrega una fuente al archivo privado y verifica su checksum antes de
  * devolver. Un mismo source ya archivado solo se acepta si es idéntico.
  */
-export function archiveDocumentRows(
-  rows: readonly DocumentArchiveRecord[],
+export interface DocumentArchiveSourcesResult {
+  readonly path: string;
+  readonly count: number;
+  readonly sha256: string;
+  readonly sources: Readonly<Record<string, { sourceCount: number; sha256: string }>>;
+}
+
+/**
+ * Agrega varias fuentes en una sola escritura del manifest.
+ *
+ * La validación de todas las fuentes ocurre antes de escribir. Esto evita que
+ * un fallo en una fuente deje un archivo externo con solo una parte del lote.
+ */
+export function archiveDocumentSources(
+  rowsBySource: Readonly<Record<string, readonly DocumentArchiveRecord[]>>,
   outputPath: string,
-  source: string,
-): DocumentArchiveResult {
-  if (!/^[a-z][a-z0-9_-]*$/u.test(source)) {
-    throw new Error(`Invalid document archive source: ${source}`);
+): DocumentArchiveSourcesResult {
+  const sourceEntries = Object.entries(rowsBySource);
+  if (sourceEntries.length === 0) {
+    throw new Error("At least one document archive source is required");
+  }
+  for (const [source] of sourceEntries) {
+    if (!/^[a-z][a-z0-9_-]*$/u.test(source)) {
+      throw new Error(`Invalid document archive source: ${source}`);
+    }
   }
   const path = validateArchiveDestination(outputPath);
-  const documents = normalizedDocuments(rows);
+  const documentsBySource = Object.fromEntries(
+    sourceEntries.map(([source, rows]) => [source, normalizedDocuments(rows)]),
+  ) as Record<string, DocumentArchiveRecord[]>;
+
   let archive: DocumentArchiveFile;
   if (existsSync(path)) {
     archive = readArchive(path);
-    const previous = archive.sources[source];
-    if (previous) {
-      if (previous.count !== documents.length || previous.sha256 !== sourceDigest(documents)) {
-        throw new Error(`Document archive source ${source} does not match the existing archive`);
+    const sources = { ...archive.sources };
+    for (const [source, documents] of Object.entries(documentsBySource)) {
+      const previous = archive.sources[source];
+      if (previous) {
+        if (previous.count !== documents.length || previous.sha256 !== sourceDigest(documents)) {
+          throw new Error(`Document archive source ${source} does not match the existing archive`);
+        }
+        continue;
       }
-      // The digest is checked above; retain the existing canonical data and
-      // avoid changing its creation timestamp on retries.
-      return {
-        path,
-        source,
-        sourceCount: previous.count,
-        count: archive.count,
-        sha256: archive.sha256,
-      };
+      sources[source] = sourceSummary(documents);
     }
-    const sources = { ...archive.sources, [source]: sourceSummary(documents) };
     const manifest = manifestFor(sources);
-    archive = {
-      ...archive,
-      count: manifest.count,
-      sha256: manifest.sha256,
-      sources,
-    };
-    writeArchive(path, archive);
+    if (manifest.count !== archive.count || manifest.sha256 !== archive.sha256) {
+      archive = { ...archive, count: manifest.count, sha256: manifest.sha256, sources };
+      writeArchive(path, archive);
+    }
   } else {
-    const sources = { [source]: sourceSummary(documents) };
+    const sources = Object.fromEntries(
+      Object.entries(documentsBySource).map(([source, documents]) => [
+        source,
+        sourceSummary(documents),
+      ]),
+    );
     const manifest = manifestFor(sources);
     archive = {
       format: DOCUMENT_ARCHIVE_FORMAT,
@@ -320,17 +356,39 @@ export function archiveDocumentRows(
     };
     writeArchive(path, archive);
   }
+
   // Re-read the file. This catches an unexpected filesystem race or malformed
   // output before the caller proceeds with a destructive migration.
   const verified = readArchive(path);
-  const sourceData = verified.sources[source];
-  if (!sourceData) throw new Error(`Document archive source ${source} was not written`);
+  const resultSources = Object.fromEntries(
+    Object.entries(documentsBySource).map(([source]) => {
+      const sourceData = verified.sources[source];
+      if (!sourceData) throw new Error(`Document archive source ${source} was not written`);
+      return [source, { sourceCount: sourceData.count, sha256: sourceData.sha256 }];
+    }),
+  );
   return {
     path,
-    source,
-    sourceCount: sourceData.count,
     count: verified.count,
     sha256: verified.sha256,
+    sources: resultSources,
+  };
+}
+
+export function archiveDocumentRows(
+  rows: readonly DocumentArchiveRecord[],
+  outputPath: string,
+  source: string,
+): DocumentArchiveResult {
+  const result = archiveDocumentSources({ [source]: rows }, outputPath);
+  const sourceData = result.sources[source];
+  if (!sourceData) throw new Error(`Document archive source ${source} was not written`);
+  return {
+    path: result.path,
+    source,
+    sourceCount: sourceData.sourceCount,
+    count: result.count,
+    sha256: result.sha256,
   };
 }
 
@@ -338,11 +396,34 @@ export function archiveDocumentRows(
 export function readDocumentSnapshot(path: string): DocumentArchiveRecord[] {
   let value: unknown;
   try {
-    value = JSON.parse(readFileSync(path, "utf8"));
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) {
+      throw new Error("Documents snapshot must not be a symbolic link");
+    }
+    if (!stat.isFile()) {
+      throw new Error("Documents snapshot must be a regular file");
+    }
+    // O_NOFOLLOW evita que un reemplazo por symlink redirija esta lectura fuera
+    // de la réplica después de la comprobación de tipo.
+    const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const openedStat = fstatSync(descriptor);
+      if (!openedStat.isFile()) {
+        throw new Error("Documents snapshot must be a regular file");
+      }
+      value = JSON.parse(readFileSync(descriptor, "utf8"));
+    } finally {
+      closeSync(descriptor);
+    }
   } catch (error) {
-    throw new Error(
-      `Cannot read Documents snapshot ${path}: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    const message =
+      code === "ELOOP"
+        ? "Documents snapshot must not be a symbolic link"
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    throw new Error(`Cannot read Documents snapshot ${path}: ${message}`);
   }
   if (!Array.isArray(value)) throw new Error(`Documents snapshot must be an array: ${path}`);
   return normalizedDocuments(value);

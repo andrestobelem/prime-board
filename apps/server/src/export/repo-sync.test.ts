@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -15,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 import { createRepoSync } from "./repo-sync.ts";
+import { prepareRetiredDocuments } from "./exporter.ts";
 import { archiveDocumentRows } from "./documents-archive.ts";
 import { readEventLog } from "./event-log.ts";
 
@@ -435,6 +437,81 @@ try {
     }
   });
 
+  it("no archiva SQLite parcialmente si la captura replica diverge", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-documents-preflight-"));
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+      const documentsPath = join(isolatedRoot, ".prime-board", "meta", "documents.json");
+      const repo = createRepoSync(isolated.db, isolatedRoot, {
+        documentsArchivePath: archivePath,
+      });
+      expect(repo).not.toBeNull();
+      repo!.sync();
+      isolated.db.exec(`
+        CREATE TABLE documents (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL
+        );
+        INSERT INTO documents (id, title, content)
+        VALUES ('sqlite-document', 'SQLite', 'private');
+      `);
+      const current = [{ id: "replica-document", title: "replica" }];
+      const different = [{ id: "different-document", title: "different" }];
+      writeFileSync(
+        documentsPath,
+        `${JSON.stringify(current)}
+`,
+      );
+      archiveDocumentRows(different, archivePath, "replica");
+      const eventCountBefore = readEventLog({ rootDir: isolatedRoot }).length;
+
+      expect(() => repo!.syncIssue("PB-1")).toThrow(/does not match/);
+      const archive = JSON.parse(readFileSync(archivePath, "utf8")) as {
+        sources: Record<string, unknown>;
+      };
+      expect(archive.sources.sqlite).toBeUndefined();
+      expect(readEventLog({ rootDir: isolatedRoot })).toHaveLength(eventCountBefore);
+      expect(readFileSync(documentsPath, "utf8")).toBe(`${JSON.stringify(current)}
+`);
+    } finally {
+      isolated.db.exec("DROP TABLE IF EXISTS documents");
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("no retira una captura reemplazada entre preflight y complete", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-documents-toctou-"));
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const documentsPath = join(isolatedRoot, ".prime-board", "meta", "documents.json");
+      const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+      const capture = [{ id: "retired", title: "keep me" }];
+      const replacement = [{ id: "replacement", title: "writer owns this" }];
+      mkdirSync(join(isolatedRoot, ".prime-board", "meta"), { recursive: true });
+      writeFileSync(documentsPath, `${JSON.stringify(capture)}\n`);
+      archiveDocumentRows(capture, archivePath, "replica");
+      const reservation = prepareRetiredDocuments(isolated.db, isolatedRoot, archivePath, {
+        beforeRetire: () => {
+          renameSync(documentsPath, `${documentsPath}.original`);
+          writeFileSync(documentsPath, `${JSON.stringify(replacement)}\n`);
+        },
+      });
+
+      expect(() => reservation.retire()).toThrow(/changed before retirement/);
+      expect(readFileSync(documentsPath, "utf8")).toBe(`${JSON.stringify(replacement)}\n`);
+      expect(readFileSync(`${documentsPath}.original`, "utf8")).toBe(
+        `${JSON.stringify(capture)}\n`,
+      );
+      reservation.release();
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("retira una captura consistente solo después de un sync exitoso", async () => {
     const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-success-documents-"));
     const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
@@ -551,6 +628,105 @@ try {
     }
   });
 
+  it("expone un preflight async que no bloquea el event loop mientras espera el lease", async () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-lease-async-"));
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const repo = createRepoSync(isolated.db, isolatedRoot);
+      expect(repo).not.toBeNull();
+      const first = repo!.preflight();
+      expect(first).toBeDefined();
+      const asyncRepo = repo! as { preflightAsync(): Promise<{ abort(): void }> };
+      expect(typeof asyncRepo.preflightAsync).toBe("function");
+      let timerRan = false;
+      const waiting = asyncRepo.preflightAsync();
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          timerRan = true;
+          resolve();
+        }, 0);
+      });
+      expect(timerRan).toBe(true);
+      first!.abort();
+      const second = await waiting;
+      if (!second) throw new Error("expected second lease");
+      second.abort();
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("no modifica el archivo externo cuando el preflight encuentra una divergencia", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-preflight-archive-"));
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const repo = createRepoSync(isolated.db, isolatedRoot, { documentsArchivePath: archivePath });
+      expect(repo).not.toBeNull();
+      repo!.sync();
+      isolated.db.exec(`
+        CREATE TABLE documents (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL);
+        INSERT INTO documents (id, title, content) VALUES ('sqlite-row', 'SQLite', 'keep');
+      `);
+      const snapshotPath = join(isolatedRoot, ".prime-board", "meta", "documents.json");
+      writeFileSync(snapshotPath, "[]\n");
+      archiveDocumentRows(
+        Array.from({ length: 5 }, (_, index) => ({ id: `archive-${index}` })),
+        archivePath,
+        "replica",
+      );
+      const beforeArchive = readFileSync(archivePath, "utf8");
+      expect(() => repo!.preflight()).toThrow(/does not match/);
+      expect(readFileSync(archivePath, "utf8")).toBe(beforeArchive);
+    } finally {
+      isolated.db.exec("DROP TABLE IF EXISTS documents");
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("actualiza Issues y agrega Comments con código 0 cuando Documents es consistente", async () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-consistent-documents-"));
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const previousArchive = process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+    process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE = archivePath;
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const created = await gql(
+        isolated,
+        'mutation { issueCreate(input: { teamKey: "PB", title: "Consistent Documents" }) { success } }',
+      );
+      expect(created.errors).toBeUndefined();
+      const documentsPath = join(isolatedRoot, ".prime-board", "meta", "documents.json");
+      writeFileSync(documentsPath, "[]\n");
+      archiveDocumentRows([], archivePath, "replica");
+
+      const updated = await gql(
+        isolated,
+        'mutation { issueUpdate(id: "PB-1", input: { title: "Updated safely" }) { success issue { title } } }',
+      );
+      expect(updated.errors).toBeUndefined();
+      expect(updated.data?.issueUpdate.success).toBe(true);
+      const commented = await gql(
+        isolated,
+        'mutation { commentCreate(input: { issueId: "PB-1", body: "Comment safely" }) { success } }',
+      );
+      expect(commented.errors).toBeUndefined();
+      expect(commented.data?.commentCreate.success).toBe(true);
+      expect(existsSync(documentsPath)).toBe(false);
+      expect(
+        (isolated.db.query("SELECT title FROM issues WHERE number = 1").get() as { title: string })
+          .title,
+      ).toBe("Updated safely");
+    } finally {
+      if (previousArchive === undefined) delete process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
+      else process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE = previousArchive;
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rechaza una mutación antes de persistir ante una captura vacía divergente", async () => {
     const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-divergent-documents-"));
     const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
@@ -576,7 +752,37 @@ try {
       const before = isolated.db
         .query("SELECT title, updated_at FROM issues WHERE number = 1")
         .get() as { title: string; updated_at: string };
+      const commentsBefore = (
+        isolated.db.query("SELECT count(*) AS count FROM comments").get() as { count: number }
+      ).count;
+      const lastUsedBefore = (
+        isolated.db
+          .query("SELECT last_used_at FROM api_keys ORDER BY created_at, id LIMIT 1")
+          .get() as {
+          last_used_at: string | null;
+        }
+      ).last_used_at;
       const eventCountBefore = readEventLog({ rootDir: isolatedRoot }).length;
+      const commentResult = await gql(
+        isolated,
+        'mutation { commentCreate(input: { issueId: "PB-1", body: "Must not persist" }) { success } }',
+      );
+      expect(commentResult.errors?.[0]?.message).toMatch(/does not match/);
+      expect(commentResult.data).toBeNull();
+      expect(
+        (isolated.db.query("SELECT count(*) AS count FROM comments").get() as { count: number })
+          .count,
+      ).toBe(commentsBefore);
+      expect(readEventLog({ rootDir: isolatedRoot })).toHaveLength(eventCountBefore);
+      expect(
+        (
+          isolated.db
+            .query("SELECT last_used_at FROM api_keys ORDER BY created_at, id LIMIT 1")
+            .get() as {
+            last_used_at: string | null;
+          }
+        ).last_used_at,
+      ).toBe(lastUsedBefore);
       const result = await gql(
         isolated,
         'mutation { issueUpdate(id: "PB-1", input: { title: "Must not persist" }) { success } }',

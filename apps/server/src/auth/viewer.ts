@@ -30,6 +30,13 @@ export interface AuthContext {
   /** Límites de Team del grant efectivo; null significa todos los Teams del Workspace. */
   teamIds: string[] | null;
   expiresAt: string | null;
+  /** Registra el uso después de completar la operación que autenticó. */
+  recordUsage?: () => void | Promise<unknown>;
+}
+
+export interface AuthResolutionOptions {
+  /** Difiere `last_used_at` hasta que el dispatcher termina la operación. */
+  readonly deferUsage?: boolean;
 }
 
 function listScopes(db: Database, keyId: string): ApiKeyScope[] {
@@ -158,6 +165,7 @@ export function resolveAuth(
   db: Database,
   authorization: string | null,
   workspaceSelector: string | null = null,
+  options: AuthResolutionOptions = {},
 ): AuthContext | null {
   if (!authorization) return null;
   const match = authorization.match(/^Bearer\s+(pb_[A-Za-z0-9_-]+)$/);
@@ -189,7 +197,10 @@ export function resolveAuth(
     status: grant.workspaceStatus,
   };
 
-  db.query("UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2").run(now(), key.id);
+  const recordUsage = () => {
+    db.query("UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2").run(now(), key.id);
+  };
+  if (!options.deferUsage) recordUsage();
   return {
     actor,
     keyId: key.id,
@@ -199,6 +210,7 @@ export function resolveAuth(
     scopes: listScopes(db, key.id),
     teamIds: listTeamIds(db, key.id, grant.workspaceId),
     expiresAt: key.expires_at,
+    ...(options.deferUsage ? { recordUsage } : {}),
   };
 }
 

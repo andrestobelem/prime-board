@@ -23,6 +23,8 @@ export const SYNC_EXCLUDED_MUTATIONS: ReadonlySet<string> = new Set([
 export interface TrackedRepoSync extends RepoSync {
   /** Verifica y reserva fuentes retiradas antes del resolver. */
   preflight(): void;
+  /** Variante no bloqueante para el dispatcher HTTP. */
+  preflightAsync(): void | Promise<void>;
   /** ¿Se llamó a sync()/syncIssue() desde que se reseteó el rastreo? */
   wasCalled(): boolean;
   /** Completa la reserva después de que resolver y sync terminaron bien. */
@@ -33,12 +35,12 @@ export interface TrackedRepoSync extends RepoSync {
   reset(): void;
 }
 
-function isRepoSyncLease(value: RepoSyncLease | void): value is RepoSyncLease {
+function isRepoSyncLease(value: unknown): value is RepoSyncLease {
   return Boolean(
     value &&
     typeof value === "object" &&
-    typeof value.complete === "function" &&
-    typeof value.abort === "function",
+    typeof Reflect.get(value, "complete") === "function" &&
+    typeof Reflect.get(value, "abort") === "function",
   );
 }
 
@@ -55,20 +57,39 @@ export function trackedRepoSync(repo: RepoSync): TrackedRepoSync {
     lease = undefined;
     current?.abort();
   };
+  const storeLease = (candidate: unknown): void => {
+    lease = isRepoSyncLease(candidate) ? candidate : undefined;
+  };
+  const preflightAsync = (): void | Promise<void> => {
+    abortLease();
+    const candidate =
+      typeof repo.preflightAsync === "function" ? repo.preflightAsync() : repo.preflight();
+    return settleMaybe(
+      candidate,
+      (resolved) => {
+        storeLease(resolved);
+        return undefined;
+      },
+      (error) => {
+        lease = undefined;
+        throw error;
+      },
+    ) as void | Promise<void>;
+  };
   return {
     root: repo.root,
     preflight() {
       abortLease();
-      const candidate = repo.preflight();
-      lease = isRepoSyncLease(candidate) ? candidate : undefined;
+      storeLease(repo.preflight());
     },
+    preflightAsync,
     sync() {
       called = true;
-      repo.sync(lease);
+      return repo.sync(lease);
     },
     syncIssue(issueId: string) {
       called = true;
-      repo.syncIssue(issueId, lease);
+      return repo.syncIssue(issueId, lease);
     },
     complete() {
       const current = lease;
@@ -96,6 +117,79 @@ export function trackedRepoSync(repo: RepoSync): TrackedRepoSync {
 // necesita conocerla, solo reenviar los argumentos tal cual llegaron.
 type AnyResolver = (...args: any[]) => unknown;
 
+type ThenHandler = (value: unknown) => void;
+type ThenInvoker = (onFulfilled: ThenHandler, onRejected: ThenHandler) => void;
+
+/** Lee `.then` una sola vez y lo invoca con el receptor correcto. */
+function getThenInvoker(value: unknown): ThenInvoker | undefined {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return undefined;
+  }
+  const then = Reflect.get(value, "then");
+  if (typeof then !== "function") return undefined;
+  return (onFulfilled, onRejected) => {
+    Reflect.apply(then, value, [onFulfilled, onRejected]);
+  };
+}
+
+/**
+ * Asimila Promises y thenables sin leer `.then` dos veces. También conserva el
+ * comportamiento síncrono para los resolvers síncronos, pero convierte toda
+ * contención o promesa real en una cadena que GraphQL puede await.
+ */
+function settleMaybe(
+  value: unknown,
+  onFulfilled: (value: unknown) => unknown,
+  onRejected: (error: unknown) => unknown,
+): unknown {
+  let then: ThenInvoker | undefined;
+  try {
+    then = getThenInvoker(value);
+  } catch (error) {
+    return onRejected(error);
+  }
+  if (!then) return onFulfilled(value);
+
+  return new Promise<unknown>((resolve, reject) => {
+    let settled = false;
+    const fulfilled: ThenHandler = (resolved) => {
+      if (settled) return;
+      settled = true;
+      try {
+        resolve(onFulfilled(resolved));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    const rejected: ThenHandler = (error) => {
+      if (settled) return;
+      settled = true;
+      try {
+        resolve(onRejected(error));
+      } catch (failure) {
+        reject(failure);
+      }
+    };
+    try {
+      then(fulfilled, rejected);
+    } catch (error) {
+      rejected(error);
+    }
+  });
+}
+
+interface DispatchContext {
+  readonly repo?: TrackedRepoSync | null;
+  readonly auth?: {
+    readonly recordUsage?: () => unknown;
+  } | null;
+}
+
+function recordUsage(context: DispatchContext | undefined): unknown {
+  const callback = context?.auth?.recordUsage;
+  return typeof callback === "function" ? callback() : undefined;
+}
+
 /**
  * Envuelve cada resolver del Mutation map. El resolver corre dentro de la
  * reserva del Repository Source. Al terminar, dispara un sync() de respaldo
@@ -113,53 +207,113 @@ export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(muta
   const wrapped: Record<string, AnyResolver> = {};
   for (const [name, resolver] of Object.entries(mutations)) {
     wrapped[name] = (...callArgs: unknown[]) => {
-      const context = callArgs[2] as { repo: TrackedRepoSync | null } | undefined;
+      const context = callArgs[2] as DispatchContext | undefined;
       const tracker = context?.repo;
-      if (!tracker || SYNC_EXCLUDED_MUTATIONS.has(name)) {
-        return resolver(...callArgs);
-      }
+      const fail = (error: unknown): never => {
+        if (tracker) {
+          try {
+            tracker.abort();
+          } catch {
+            // Conservamos el fallo de la mutación, no un error secundario de cleanup.
+          }
+        }
+        throw error;
+      };
+      const runResolverAndRecord = (): unknown => {
+        let result: unknown;
+        try {
+          result = resolver(...callArgs);
+        } catch (error) {
+          throw error;
+        }
+        return settleMaybe(
+          result,
+          (value) => {
+            let usage: unknown;
+            try {
+              usage = recordUsage(context);
+            } catch (error) {
+              throw error;
+            }
+            return settleMaybe(
+              usage,
+              () => value,
+              (error) => {
+                throw error;
+              },
+            );
+          },
+          (error) => {
+            throw error;
+          },
+        );
+      };
+      if (!tracker || SYNC_EXCLUDED_MUTATIONS.has(name)) return runResolverAndRecord();
+
       tracker.reset();
+      let preflight: unknown;
       try {
         // La reserva se toma antes de que el resolver pueda escribir SQLite o
-        // emitir Activity/eventos canónicos.
-        tracker.preflight();
-      } catch (error) {
-        tracker.abort();
-        throw error;
-      }
-      const finish = () => {
-        if (!tracker.wasCalled()) tracker.sync();
-        tracker.complete();
-      };
-      const fail = (error: unknown): never => {
-        tracker.abort();
-        throw error;
-      };
-      let result: unknown;
-      try {
-        result = resolver(...callArgs);
+        // emitir Activity/eventos canónicos. La variante async nunca espera con
+        // Atomics.wait en el event loop HTTP.
+        preflight = tracker.preflightAsync();
       } catch (error) {
         return fail(error);
       }
-      if (result && typeof (result as Promise<unknown>)?.then === "function") {
-        return (result as Promise<unknown>).then(
-          (value) => {
+      const finish = (): unknown => {
+        let synced: unknown;
+        try {
+          if (!tracker.wasCalled()) synced = tracker.sync();
+        } catch (error) {
+          return fail(error);
+        }
+        return settleMaybe(
+          synced,
+          () => {
             try {
-              finish();
-              return value;
+              tracker.complete();
             } catch (error) {
               return fail(error);
             }
+            return undefined;
           },
-          (error) => fail(error),
+          fail,
         );
-      }
-      try {
-        finish();
-        return result;
-      } catch (error) {
-        return fail(error);
-      }
+      };
+      const execute = (): unknown => {
+        let result: unknown;
+        try {
+          result = resolver(...callArgs);
+        } catch (error) {
+          return fail(error);
+        }
+        return settleMaybe(
+          result,
+          (value) => {
+            let finished: unknown;
+            try {
+              finished = finish();
+            } catch (error) {
+              return fail(error);
+            }
+            return settleMaybe(
+              finished,
+              () => {
+                let usage: unknown;
+                try {
+                  usage = recordUsage(context);
+                } catch (error) {
+                  return fail(error);
+                }
+                return settleMaybe(usage, () => value, fail);
+              },
+              fail,
+            );
+          },
+          fail,
+        );
+      };
+      return settleMaybe(preflight, execute, fail);
     };
   }
   Object.defineProperty(wrapped, DISPATCHED, { value: true, enumerable: false });

@@ -2,7 +2,7 @@ import type { Persistence } from "../db/persistence.ts";
 import { apiError } from "../graphql/errors.ts";
 import { hashApiKey } from "./keys.ts";
 import type { ApiKeyScope } from "../domain/actors.ts";
-import type { ActorRow, AuthContext } from "./viewer.ts";
+import type { ActorRow, AuthContext, AuthResolutionOptions } from "./viewer.ts";
 import { now } from "../db/util.ts";
 
 interface WorkspaceGrantRow {
@@ -77,6 +77,7 @@ export async function resolvePostgresAuth(
   persistence: Persistence,
   authorization: string | null,
   workspaceSelector: string | null = null,
+  options: AuthResolutionOptions = {},
 ): Promise<AuthContext | null> {
   if (!authorization) return null;
   const match = authorization.match(/^Bearer\s+(pb_[A-Za-z0-9_-]+)$/);
@@ -156,7 +157,9 @@ export async function resolvePostgresAuth(
   }
   const teams = teamRows.filter((row) => row.workspace_id === grant.workspace_id);
   // Actualiza el uso solo después de validar toda la autenticación.
-  await persistence.execute("UPDATE api_keys SET last_used_at = $1 WHERE id = $2", [now(), key.id]);
+  const recordUsage = () =>
+    persistence.execute("UPDATE api_keys SET last_used_at = $1 WHERE id = $2", [now(), key.id]);
+  if (!options.deferUsage) await recordUsage();
   return {
     actor,
     keyId: key.id,
@@ -166,5 +169,6 @@ export async function resolvePostgresAuth(
     scopes: scopes.length ? scopes.map((row) => row.scope) : ["read", "write", "admin"],
     teamIds: teams.length ? teams.map((row) => row.team_id) : null,
     expiresAt: key.expires_at,
+    ...(options.deferUsage ? { recordUsage } : {}),
   };
 }

@@ -1,9 +1,17 @@
 // Tests de AT-156: exportación determinista y sin credenciales.
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exportBoard } from "./exporter.ts";
+import { exportBoard, exportIssue } from "./exporter.ts";
 import { archiveDocumentRows } from "./documents-archive.ts";
 import { createSourceMap, readSourceMap, writeSourceMap } from "./source-map.ts";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
@@ -130,6 +138,56 @@ describe("exportBoard", () => {
     } finally {
       app.db.exec("DROP TABLE IF EXISTS documents");
       rmSync(legacyRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("conserva Documents si falla una escritura antes del retiro", () => {
+    const failureRoot = mkdtempSync(join(tmpdir(), "pb-export-write-failure-"));
+    try {
+      const snapshotPath = join(failureRoot, ".prime-board", "meta", "documents.json");
+      const archivePath = join(failureRoot, "backup", "documents.archive.json");
+      const rows = [{ id: "document-1", title: "Runbook", content: "Keep this content" }];
+      mkdirSync(join(failureRoot, ".prime-board", "meta"), { recursive: true });
+      writeFileSync(snapshotPath, `${JSON.stringify(rows)}\n`);
+      archiveDocumentRows(rows, archivePath, "replica");
+
+      expect(() =>
+        exportBoard(app.db, failureRoot, {
+          documentsArchivePath: archivePath,
+          writeFile: () => {
+            throw new Error("write failed");
+          },
+        }),
+      ).toThrow("write failed");
+      expect(readFileSync(snapshotPath, "utf8")).toBe(`${JSON.stringify(rows)}\n`);
+      expect(readdirSync(join(failureRoot, ".prime-board", "meta"))).not.toContain(
+        expect.stringContaining("documents.json.retiring."),
+      );
+    } finally {
+      rmSync(failureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza exportIssue directo antes de escribir con Documents divergente", () => {
+    const isolatedDir = mkdtempSync(join(tmpdir(), "pb-export-issue-documents-"));
+    try {
+      const issue = app.db.query("SELECT id FROM issues ORDER BY number LIMIT 1").get() as {
+        id: string;
+      };
+      const snapshotPath = join(isolatedDir, ".prime-board", "meta", "documents.json");
+      const archivePath = join(isolatedDir, "backup", "documents.archive.json");
+      const current = [{ id: "current", title: "Current capture" }];
+      mkdirSync(join(isolatedDir, ".prime-board", "meta"), { recursive: true });
+      writeFileSync(snapshotPath, `${JSON.stringify(current)}\n`);
+      archiveDocumentRows([{ id: "stale", title: "Stale archive" }], archivePath, "replica");
+
+      expect(() =>
+        exportIssue(app.db, isolatedDir, issue.id, { documentsArchivePath: archivePath }),
+      ).toThrow(/does not match/);
+      expect(existsSync(join(isolatedDir, ".prime-board", "issues"))).toBe(false);
+      expect(readFileSync(snapshotPath, "utf8")).toBe(`${JSON.stringify(current)}\n`);
+    } finally {
+      rmSync(isolatedDir, { recursive: true, force: true });
     }
   });
 

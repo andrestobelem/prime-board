@@ -141,7 +141,13 @@ const NOOP_COMMITTER: GitCommitter = () => undefined;
 // El lease puede abarcar un resolver GraphQL async. AsyncLocalStorage mantiene
 // reentrantes las llamadas síncronas anidadas (committer y tests existentes) sin
 // permitir que otro request del proceso tome prestado el lease por accidente.
-const canonicalLockContext = new AsyncLocalStorage<ReadonlySet<string>>();
+interface CanonicalLockContextEntry {
+  readonly isActive: () => boolean;
+}
+
+const canonicalLockContext = new AsyncLocalStorage<
+  ReadonlyMap<string, CanonicalLockContextEntry>
+>();
 
 /**
  * Pipeline de una mutación SQLite: append durable, commit Git, projector y
@@ -337,27 +343,31 @@ function commitEventLogSnapshot(rootDir: string, content: string): void {
  * coordinación. Las llamadas anidadas usan AsyncLocalStorage o el lease
  * explícito; otro request del proceso no puede tomarlo prestado.
  */
-export function acquireCanonicalEventLogLease(rootDir: string): CanonicalEventLogLease {
-  if (!existsSync(join(rootDir, ".git"))) {
-    return {
-      rootDir,
-      run: <T>(operation: () => T): T => operation(),
-      release: () => undefined,
-    };
-  }
+function noOpCanonicalEventLogLease(rootDir: string): CanonicalEventLogLease {
+  return {
+    rootDir,
+    run: <T>(operation: () => T): T => operation(),
+    release: () => undefined,
+  };
+}
 
-  const indexPath = resolveGitIndexPath(rootDir);
-  const lockPath = `${indexPath}.prime-board-event-log.lock`;
-  const lockFd = acquireCanonicalEventLogLock(lockPath);
+function createCanonicalEventLogLease(
+  rootDir: string,
+  lockPath: string,
+  lockFd: number,
+): CanonicalEventLogLease {
   let released = false;
+  const contextEntry: CanonicalLockContextEntry = {
+    isActive: () => !released,
+  };
   return {
     rootDir,
     run<T>(operation: () => T): T {
       if (released) throw new Error("Canonical event-log lease is already released");
       const current = canonicalLockContext.getStore();
-      if (current?.has(lockPath)) return operation();
-      const next = new Set(current ?? []);
-      next.add(lockPath);
+      if (current?.get(lockPath)?.isActive()) return operation();
+      const next = new Map(current ?? []);
+      next.set(lockPath, contextEntry);
       return canonicalLockContext.run(next, operation);
     },
     release() {
@@ -367,6 +377,40 @@ export function acquireCanonicalEventLogLease(rootDir: string): CanonicalEventLo
       unlinkIfPresent(lockPath);
     },
   };
+}
+
+/**
+ * Adquiere un lease sin esperar. Los callers síncronos fallan cerrado cuando
+ * otro writer posee el lock; el dispatcher HTTP usa la variante asíncrona.
+ */
+export function acquireCanonicalEventLogLease(rootDir: string): CanonicalEventLogLease {
+  if (!existsSync(join(rootDir, ".git"))) return noOpCanonicalEventLogLease(rootDir);
+
+  const indexPath = resolveGitIndexPath(rootDir);
+  const lockPath = `${indexPath}.prime-board-event-log.lock`;
+  const lockFd = acquireCanonicalEventLogLock(lockPath);
+  return createCanonicalEventLogLease(rootDir, lockPath, lockFd);
+}
+
+/** Espera un lease sin bloquear el event loop del proceso HTTP. */
+export async function acquireCanonicalEventLogLeaseAsync(
+  rootDir: string,
+): Promise<CanonicalEventLogLease> {
+  if (!existsSync(join(rootDir, ".git"))) return noOpCanonicalEventLogLease(rootDir);
+
+  const indexPath = resolveGitIndexPath(rootDir);
+  const lockPath = `${indexPath}.prime-board-event-log.lock`;
+  const deadline = Date.now() + CANONICAL_LOCK_WAIT_MS;
+  while (true) {
+    const lockFd = tryAcquireCanonicalEventLogLock(lockPath);
+    if (lockFd !== undefined) return createCanonicalEventLogLease(rootDir, lockPath, lockFd);
+    if (Date.now() >= deadline) {
+      const owner = readCanonicalLockOwner(lockPath);
+      if (owner === undefined) throw new Error("Cannot lock canonical event log: lock disappeared");
+      throw new Error(`Cannot lock canonical event log: writer ${owner} did not release the lock`);
+    }
+    await new Promise<void>((resolveWait) => setTimeout(resolveWait, CANONICAL_LOCK_POLL_MS));
+  }
 }
 
 /**
@@ -380,8 +424,8 @@ export function withCanonicalEventLogLock<T>(rootDir: string, operation: () => T
   if (!existsSync(join(rootDir, ".git"))) return operation();
   const indexPath = resolveGitIndexPath(rootDir);
   const lockPath = `${indexPath}.prime-board-event-log.lock`;
-  if (canonicalLockContext.getStore()?.has(lockPath)) return operation();
-  const lease = acquireCanonicalEventLogLease(rootDir);
+  if (canonicalLockContext.getStore()?.get(lockPath)?.isActive()) return operation();
+  const lease = acquireCanonicalEventLogLeaseBlocking(rootDir, lockPath);
   try {
     return lease.run(operation);
   } finally {
@@ -395,11 +439,26 @@ const CANONICAL_LOCK_RECOVERY_SUFFIX = ".recovery";
 
 /** Adquiere el lock con una creación atómica que también escribe el PID dueño. */
 function acquireCanonicalEventLogLock(lockPath: string): number {
-  const deadline = Date.now() + CANONICAL_LOCK_WAIT_MS;
+  const lockFd = tryAcquireCanonicalEventLogLock(lockPath);
+  if (lockFd !== undefined) return lockFd;
+  const owner = readCanonicalLockOwner(lockPath);
+  if (owner === process.pid) {
+    throw new Error(
+      "Cannot lock canonical event log: this process already holds the lock; reuse its lease",
+    );
+  }
+  if (owner === undefined) throw new Error("Cannot lock canonical event log: lock disappeared");
+  throw new Error(`Cannot lock canonical event log: writer ${owner} did not release the lock`);
+}
+
+/** Intenta una reserva sin esperar ni bloquear el event loop. */
+function tryAcquireCanonicalEventLogLock(lockPath: string): number | undefined {
   const recoveryPath = `${lockPath}${CANONICAL_LOCK_RECOVERY_SUFFIX}`;
-  while (true) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     if (waitForCanonicalLockRecovery(recoveryPath)) {
-      waitForCanonicalLock();
+      // A stale recovery marker was removed. Retry immediately; a live marker
+      // remains and tells the caller to wait before trying again.
+      if (existsSync(recoveryPath)) return undefined;
       continue;
     }
 
@@ -427,29 +486,43 @@ function acquireCanonicalEventLogLock(lockPath: string): number {
       } finally {
         unlinkIfPresent(temporaryPath);
       }
-      if (created) return openSync(lockPath, constants.O_RDONLY);
+      if (created) {
+        try {
+          return openSync(lockPath, constants.O_RDONLY);
+        } catch (error) {
+          if (!isFileMissingError(error)) throw error;
+        }
+      }
     } finally {
       if (temporaryFd !== undefined) closeSync(temporaryFd);
       unlinkIfPresent(temporaryPath);
     }
 
     const owner = readCanonicalLockOwner(lockPath);
-    if (owner === undefined) {
-      // The owner can release the lock between link(2) and this read.
-      continue;
-    }
+    if (owner === undefined) continue;
+    if (!isProcessAlive(owner) && tryReclaimCanonicalEventLogLock(lockPath, owner)) continue;
+    return undefined;
+  }
+  return undefined;
+}
+
+/** Reserva síncrona para los callers heredados que no pueden hacer await. */
+function acquireCanonicalEventLogLeaseBlocking(
+  rootDir: string,
+  lockPath: string,
+): CanonicalEventLogLease {
+  const deadline = Date.now() + CANONICAL_LOCK_WAIT_MS;
+  while (true) {
+    const lockFd = tryAcquireCanonicalEventLogLock(lockPath);
+    if (lockFd !== undefined) return createCanonicalEventLogLease(rootDir, lockPath, lockFd);
+    const owner = readCanonicalLockOwner(lockPath);
     if (owner === process.pid) {
-      // La reserva síncrona no puede bloquear el event loop mientras otro
-      // resolver async conserva el lease. Fallar cerrado evita un deadlock;
-      // un follow-up debe agregar una cola async de reservas por proceso.
       throw new Error(
         "Cannot lock canonical event log: this process already holds the lock; reuse its lease",
       );
     }
-    if (!isProcessAlive(owner) && tryReclaimCanonicalEventLogLock(lockPath, owner)) {
-      continue;
-    }
     if (Date.now() >= deadline) {
+      if (owner === undefined) throw new Error("Cannot lock canonical event log: lock disappeared");
       throw new Error(`Cannot lock canonical event log: writer ${owner} did not release the lock`);
     }
     waitForCanonicalLock();
@@ -489,16 +562,27 @@ function tryReclaimCanonicalEventLogLock(lockPath: string, expectedOwner: number
 }
 
 function tryCreateCanonicalRecoveryMarker(recoveryPath: string): boolean {
+  const temporaryPath = `${recoveryPath}.creating.${process.pid}.${Date.now()}.${Math.random()
+    .toString(36)
+    .slice(2)}`;
   try {
-    mkdirSync(recoveryPath, 0o700);
-    writeFileSync(join(recoveryPath, "owner"), `pid=${process.pid}\n`, {
+    // Publish the marker only after its owner metadata is complete. A waiter
+    // can therefore never observe a half-written recovery claim.
+    mkdirSync(temporaryPath, 0o700);
+    writeFileSync(join(temporaryPath, "owner"), `pid=${process.pid}\n`, {
       mode: 0o600,
     });
-    return true;
-  } catch (error) {
-    if (isFileExistsError(error)) return false;
-    rmSync(recoveryPath, { recursive: true, force: true });
-    throw error;
+    try {
+      renameSync(temporaryPath, recoveryPath);
+      return true;
+    } catch (error) {
+      const code =
+        error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
+      if (isFileExistsError(error) || code === "ENOTEMPTY") return false;
+      throw error;
+    }
+  } finally {
+    rmSync(temporaryPath, { recursive: true, force: true });
   }
 }
 

@@ -22,6 +22,7 @@ import {
 import { appendActivityEvents } from "./activity-stream.ts";
 import {
   acquireCanonicalEventLogLease,
+  acquireCanonicalEventLogLeaseAsync,
   createGitCommitter,
   IssueEventPipeline,
   type CanonicalEventLogLease,
@@ -31,6 +32,7 @@ import {
 export { appendActivityEvents, activityToDomainEvent } from "./activity-stream.ts";
 export {
   acquireCanonicalEventLogLease,
+  acquireCanonicalEventLogLeaseAsync,
   createGitCommitter,
   IssueEventPipeline,
   type CanonicalEventLog,
@@ -65,6 +67,8 @@ export interface RepoSyncLease {
 export interface RepoSync {
   /** Verifica y reserva Documents sin retirar su captura. */
   preflight(): RepoSyncLease | void;
+  /** Variante no bloqueante para callers HTTP que esperan el lease. */
+  preflightAsync?(): void | Promise<unknown>;
   /**
    * Regenera el repo completo (cambios de metadata, borrados).
    * Los fallos se propagan al caller para que la mutación no informe éxito.
@@ -144,8 +148,7 @@ export function createRepoSync(
     });
   const archivePath = () =>
     options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
-  const reserve = (): RepoSyncLeaseImpl => {
-    const lock = acquireCanonicalEventLogLease(root);
+  const reserveWithLock = (lock: CanonicalEventLogLease): RepoSyncLeaseImpl => {
     try {
       const retiredDocuments = prepareRetiredDocuments(db, root, archivePath());
       return new RepoSyncLeaseImpl(lock, retiredDocuments);
@@ -154,6 +157,9 @@ export function createRepoSync(
       throw error;
     }
   };
+  const reserve = (): RepoSyncLeaseImpl => reserveWithLock(acquireCanonicalEventLogLease(root));
+  const reserveAsync = async (): Promise<RepoSyncLeaseImpl> =>
+    reserveWithLock(await acquireCanonicalEventLogLeaseAsync(root));
   const runSync = (
     lease: RepoSyncLeaseImpl,
     exporter: (documents: RetiredDocumentsReservation) => void,
@@ -187,6 +193,7 @@ export function createRepoSync(
   return {
     root,
     preflight: reserve,
+    preflightAsync: reserveAsync,
     sync(lease?: RepoSyncLease) {
       sync((documents) => exportBoard(db, root, { retiredDocuments: documents }), lease);
     },

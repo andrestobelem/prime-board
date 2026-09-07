@@ -1,6 +1,7 @@
 // Servidor HTTP: /graphql (GraphQL Yoga, GraphiQL en dev), /health y raíz.
 import type { Database } from "bun:sqlite";
 import { join } from "node:path";
+import { getOperationAST, parse } from "graphql";
 import { createSchema, createYoga } from "graphql-yoga";
 import { APP_NAME, APP_VERSION, typeDefs } from "@prime-board/schema";
 import { resolveAuth, resolveLocalAuth } from "./auth/viewer.ts";
@@ -14,6 +15,17 @@ import { WebhookDispatcher, type DispatcherOptions } from "./webhooks/dispatcher
 import { resolveWorkspaceContext } from "./domain/workspace-context.ts";
 import { getPostgresWorkspace } from "./domain/postgres-actors.ts";
 import type { Persistence } from "./db/persistence.ts";
+
+function isMutationOperation(params: { query?: string; operationName?: string }): boolean {
+  if (!params.query) return false;
+  try {
+    return getOperationAST(parse(params.query), params.operationName)?.operation === "mutation";
+  } catch {
+    // GraphQL validation will report malformed operations later. Do not touch
+    // credential usage for a request that has not reached a resolver.
+    return false;
+  }
+}
 
 export interface AppDeps {
   db: Database;
@@ -53,7 +65,7 @@ export function createApp({
     // Un TrackedRepoSync fresco por request (AT-191): dos requests concurrentes
     // no se pisan el rastreo de "¿ya sincronizó?" — delega en el mismo `repo`
     // singleton, así que la escritura en sí sigue siendo una sola por mutation.
-    context: async ({ request }): Promise<Context> => {
+    context: async ({ request, params }): Promise<Context> => {
       const workspaceSelector = request.headers.get("x-workspace-id")?.trim() || null;
       // GraphQL permanece anónimo en local, pero MCP debe autenticar cada bearer
       // incluso cuando apunta a la misma instancia loopback.
@@ -69,8 +81,12 @@ export function createApp({
                 persistence,
                 request.headers.get("authorization"),
                 workspaceSelector,
+                { deferUsage: true },
               )
-            : resolveAuth(db, request.headers.get("authorization"), workspaceSelector);
+            : resolveAuth(db, request.headers.get("authorization"), workspaceSelector, {
+                deferUsage: true,
+              });
+      if (!isMutationOperation(params)) await auth?.recordUsage?.();
       const selectedWorkspaceId = auth?.workspaceId ?? workspaceSelector ?? undefined;
       const workspace = persistence
         ? await getPostgresWorkspace(persistence, selectedWorkspaceId)

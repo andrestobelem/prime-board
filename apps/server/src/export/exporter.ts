@@ -4,8 +4,19 @@
 //  - Determinista: exportar dos veces sin cambios no produce diff.
 //  - Claves naturales, no UUIDs: los ids no sobreviven a un merge entre clones.
 //  - Sin credenciales: hashes de API keys y secrets de webhooks NUNCA salen al repo.
+import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { stringify as toYaml } from "yaml";
 import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
@@ -13,8 +24,10 @@ import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-f
 import { getWorkspace } from "../domain/workspaces.ts";
 import { createReplicaMetadata, getReplicaWorkspaceId } from "./replica-metadata.ts";
 import {
-  archiveDocumentRows,
+  archiveDocumentSources,
+  hasDocumentArchiveSource,
   readDocumentSnapshot,
+  validateDocumentArchivePath,
   verifyDocumentRows,
 } from "./documents-archive.ts";
 import { withCanonicalEventLogLock } from "./issue-event-pipeline.ts";
@@ -24,10 +37,14 @@ import { withCanonicalEventLogLock } from "./issue-event-pipeline.ts";
  * Escribe solo si el contenido cambió: evita reescribir 100+ archivos (y ensuciar
  * sus mtimes) en cada mutación cuando la mayoría no cambió (AT-166).
  */
-function makeWriter(onWrite: () => void) {
+export type ExportFileWriter = (path: string, contents: string) => void;
+
+function makeWriter(onWrite: () => void, writeFile: ExportFileWriter = writeFileSync) {
   return (path: string, contents: string): void => {
     if (existsSync(path) && readFileSync(path, "utf8") === contents) return;
-    Bun.write(path, contents);
+    // exportBoard/exportIssue son APIs síncronas. Una Promise de Bun.write
+    // podría resolver después de retirar Documents o devolver éxito al caller.
+    writeFile(path, contents);
     onWrite();
   };
 }
@@ -455,22 +472,21 @@ function writeIssue(
   return lines.length;
 }
 
-function archiveRetiredSqliteDocuments(db: Database, archivePath?: string): void {
+function readRetiredSqliteDocuments(db: Database): Array<Record<string, unknown>> | null {
   const table = db
     .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'documents' LIMIT 1")
     .get() as { name?: string } | null;
-  if (!table) return;
+  if (!table) return null;
   const rows = db.query("SELECT * FROM documents ORDER BY id").all() as Array<
     Record<string, unknown>
   >;
-  if (!rows.length) return;
+  return rows.length ? rows : null;
+}
+
+function requireDocumentsArchivePath(archivePath: string | undefined, message: string): string {
   const trimmed = archivePath?.trim();
-  if (!trimmed) {
-    throw new Error(
-      "Cannot export SQLite Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
-    );
-  }
-  archiveDocumentRows(rows, trimmed, "sqlite");
+  if (!trimmed) throw new Error(message);
+  return validateDocumentArchivePath(trimmed);
 }
 
 export interface RetiredDocumentsReservation {
@@ -497,9 +513,6 @@ function readSnapshotVersion(path: string): SnapshotVersion {
     throw new Error(`Documents snapshot must be a regular file: ${path}`);
   }
   const bytes = readFileSync(path, "utf8");
-  // Leer metadata y bytes otra vez cierra la ventana de lectura antes de que
-  // el caller archive la fuente; el lease canónico protege a los writers
-  // coordinados durante el resto de la reserva.
   const after = lstatSync(path);
   if (
     !after.isFile() ||
@@ -528,37 +541,116 @@ function snapshotStillMatches(path: string, expected: SnapshotVersion): boolean 
   }
 }
 
+function isFileExistsError(error: unknown): boolean {
+  return error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST";
+}
+
+function preserveRetiringSnapshot(quarantinePath: string, snapshotPath: string): void {
+  let quarantine: SnapshotVersion;
+  try {
+    quarantine = readSnapshotVersion(quarantinePath);
+  } catch {
+    // Conserva la cuarentena si no se puede verificarla. El operador puede
+    // recuperar el archivo sin que el proceso elimine datos desconocidos.
+    return;
+  }
+  // Si otro writer ya instaló la misma captura, la entrada pública conserva
+  // los bytes; solo eliminamos la copia temporal que acabamos de mover.
+  if (snapshotStillMatches(snapshotPath, quarantine)) {
+    unlinkSync(quarantinePath);
+    return;
+  }
+  try {
+    // link(2) no sobrescribe la captura pública. Ante un reemplazo concurrente
+    // se conserva la cuarentena y el caller falla cerrado.
+    linkSync(quarantinePath, snapshotPath);
+    unlinkSync(quarantinePath);
+  } catch (error) {
+    if (!isFileExistsError(error)) throw error;
+  }
+}
+
+function removeSnapshotSafely(path: string, expected: SnapshotVersion): void {
+  if (!snapshotStillMatches(path, expected)) {
+    throw new Error("Documents snapshot changed before retirement");
+  }
+  const quarantinePath = `${path}.retiring.${process.pid}.${randomUUID()}`;
+  try {
+    // rename(2) mueve el inode que verificamos a una ruta privada. Los writers
+    // que ignoren el lease solo pueden crear una nueva entrada pública; nunca
+    // pueden provocar que el unlink posterior borre esa nueva entrada.
+    renameSync(path, quarantinePath);
+  } catch (error) {
+    throw new Error(`Documents snapshot changed before retirement: ${String(error)}`);
+  }
+  try {
+    const retired = readSnapshotVersion(quarantinePath);
+    if (
+      retired.bytes !== expected.bytes ||
+      retired.device !== expected.device ||
+      retired.inode !== expected.inode
+    ) {
+      preserveRetiringSnapshot(quarantinePath, path);
+      throw new Error("Documents snapshot changed before retirement");
+    }
+    unlinkSync(quarantinePath);
+  } catch (error) {
+    if (existsSync(quarantinePath)) preserveRetiringSnapshot(quarantinePath, path);
+    throw error;
+  }
+}
+
 /**
  * Verifica y reserva las fuentes retiradas antes de una mutación.
  *
- * La reserva no elimina `documents.json`. El caller debe conservar su lease
- * durante resolver, append, commit y export, y llamar `retire()` solo después
- * de que todos esos pasos terminaron. `release()` deja la captura disponible.
+ * La reserva solo lee y valida. No crea el archivo externo ni elimina
+ * `documents.json`; ambas operaciones se difieren hasta que resolver, append,
+ * commit y export terminan bien. `release()` conserva todas las capturas.
  */
 export function prepareRetiredDocuments(
   db: Database,
   rootDir: string,
   archivePath?: string,
+  options: { readonly beforeRetire?: () => void } = {},
 ): RetiredDocumentsReservation {
-  archiveRetiredSqliteDocuments(db, archivePath);
+  const sqliteDocuments = readRetiredSqliteDocuments(db);
   const documentsSnapshot = join(rootDir, ".prime-board", "meta", "documents.json");
-  if (!existsSync(documentsSnapshot)) return NO_RETIRED_DOCUMENTS;
-  const trimmedArchivePath = archivePath?.trim();
-  if (!trimmedArchivePath) {
-    throw new Error(
-      "Refusing export: .prime-board/meta/documents.json is retired; provide PRIME_BOARD_DOCUMENTS_ARCHIVE after archiving it externally",
-    );
+  const hasReplicaSnapshot = existsSync(documentsSnapshot);
+  if (!hasReplicaSnapshot && !sqliteDocuments) return NO_RETIRED_DOCUMENTS;
+
+  const configuredArchivePath = requireDocumentsArchivePath(
+    archivePath,
+    hasReplicaSnapshot
+      ? "Refusing export: .prime-board/meta/documents.json is retired; provide PRIME_BOARD_DOCUMENTS_ARCHIVE after archiving it externally"
+      : "Cannot export SQLite Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
+  );
+
+  let expected: SnapshotVersion | undefined;
+  let replicaDocuments: Array<Record<string, unknown>> | undefined;
+  if (hasReplicaSnapshot) {
+    expected = readSnapshotVersion(documentsSnapshot);
+    replicaDocuments = readDocumentSnapshot(documentsSnapshot);
+    if (!snapshotStillMatches(documentsSnapshot, expected)) {
+      throw new Error("Documents snapshot changed during reservation");
+    }
   }
 
-  const expected = readSnapshotVersion(documentsSnapshot);
-  // El archivo exacto que se leyó conserva la distinción de ADR-0020 entre
-  // una captura vacía y un archive con Documents.
-  const documents = readDocumentSnapshot(documentsSnapshot);
-  if (!snapshotStillMatches(documentsSnapshot, expected)) {
-    throw new Error("Documents snapshot changed during reservation");
+  // Validate every source that already exists before the single archive write.
+  // A missing source is added only after all existing sources are verified.
+  if (hasDocumentArchiveSource(configuredArchivePath, "replica")) {
+    verifyDocumentRows(replicaDocuments ?? [], configuredArchivePath, "replica");
   }
-  archiveDocumentRows(documents, trimmedArchivePath, "replica");
-  if (!snapshotStillMatches(documentsSnapshot, expected)) {
+  if (sqliteDocuments && hasDocumentArchiveSource(configuredArchivePath, "sqlite")) {
+    verifyDocumentRows(sqliteDocuments, configuredArchivePath, "sqlite");
+  }
+
+  const sources: Record<string, readonly Record<string, unknown>[]> = {};
+  if (sqliteDocuments) sources.sqlite = sqliteDocuments;
+  if (replicaDocuments) sources.replica = replicaDocuments;
+  // All sources passed validation above. Archive them in one manifest before
+  // the resolver can mutate SQLite; a write failure therefore fails closed.
+  archiveDocumentSources(sources, configuredArchivePath);
+  if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
     throw new Error("Documents snapshot changed during reservation");
   }
 
@@ -568,16 +660,21 @@ export function prepareRetiredDocuments(
     retire() {
       if (released) throw new Error("Documents reservation was released");
       if (retired) return;
-      // El lease del repo protege a los writers coordinados entre esta
-      // comprobación y unlink. Un writer externo todavía puede competir por la
-      // ruta; si el reemplazo es visible, se conserva la fuente y se falla cerrado.
-      // Follow-up: reemplazar este unlink condicional por una primitiva de
-      // filesystem con comparación y borrado atómicos cuando el contrato lo permita.
-      verifyDocumentRows(documents, trimmedArchivePath, "replica");
-      if (!snapshotStillMatches(documentsSnapshot, expected)) {
+      if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
         throw new Error("Documents snapshot changed before retirement");
       }
-      unlinkSync(documentsSnapshot);
+      options.beforeRetire?.();
+      if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
+        throw new Error("Documents snapshot changed before retirement");
+      }
+
+      const sources: Record<string, readonly Record<string, unknown>[]> = {};
+      if (sqliteDocuments) sources.sqlite = sqliteDocuments;
+      if (replicaDocuments) sources.replica = replicaDocuments;
+      for (const [source, rows] of Object.entries(sources)) {
+        verifyDocumentRows(rows, configuredArchivePath, source);
+      }
+      if (expected) removeSnapshotSafely(documentsSnapshot, expected);
       retired = true;
     },
     release() {
@@ -593,6 +690,10 @@ export interface ExportOptions {
   documentsArchivePath?: string;
   /** Reserva tomada por RepoSync; su retiro se difiere hasta completar la mutación. */
   retiredDocuments?: RetiredDocumentsReservation;
+  /** Writer síncrono para pruebas y adaptadores de exportación. */
+  writeFile?: ExportFileWriter;
+  /** Seam determinista ejecutado antes de retirar la captura. */
+  beforeRetire?: () => void;
 }
 
 export interface ExportResult {
@@ -621,7 +722,7 @@ function exportBoardContents(
   let files = 0;
   const baseWrite = makeWriter(() => {
     files += 1;
-  });
+  }, options.writeFile);
   const write = (path: string, contents: string) => {
     written.add(path);
     baseWrite(path, contents);
@@ -1146,6 +1247,7 @@ export function exportBoard(
         db,
         rootDir,
         options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE,
+        { beforeRetire: options.beforeRetire },
       );
     try {
       const result = exportBoardContents(db, rootDir, options);
@@ -1163,7 +1265,10 @@ export function exportIssue(
   db: Database,
   rootDir: string,
   issueId: string,
-  options: Pick<ExportOptions, "documentsArchivePath" | "retiredDocuments"> = {},
+  options: Pick<
+    ExportOptions,
+    "documentsArchivePath" | "retiredDocuments" | "writeFile" | "beforeRetire"
+  > = {},
 ): boolean {
   return withCanonicalEventLogLock(rootDir, () => {
     const reservation =
@@ -1172,6 +1277,7 @@ export function exportIssue(
         db,
         rootDir,
         options.documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE,
+        { beforeRetire: options.beforeRetire },
       );
     try {
       const base = join(rootDir, ".prime-board");
@@ -1191,7 +1297,7 @@ export function exportIssue(
         base,
         issue,
         buildContext(db),
-        makeWriter(() => {}),
+        makeWriter(() => {}, options.writeFile),
       );
       if (!options.retiredDocuments) reservation.retire();
       return true;

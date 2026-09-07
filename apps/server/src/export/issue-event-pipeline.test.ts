@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { EventLogWriter, type DomainEvent } from "./event-log.ts";
 import {
+  acquireCanonicalEventLogLease,
+  acquireCanonicalEventLogLeaseAsync,
   createGitCommitter,
   IssueEventPipeline,
   withCanonicalEventLogLock,
@@ -241,6 +243,29 @@ describe("SQLite issue event pipeline", () => {
       expect(git("show", "HEAD:.prime-board/log/events.jsonl").toString()).toContain(
         '"eventId":"concurrent-b"',
       );
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("no bloquea el event loop mientras otro proceso posee el lock", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "prb-git-async-lock-"));
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", rootDir, ...args], { env: isolatedGitEnvironment() });
+    try {
+      git("init", "-q");
+      const first = acquireCanonicalEventLogLease(rootDir);
+      let timerFired = false;
+      const timer = setTimeout(() => {
+        timerFired = true;
+        first.release();
+      }, 25);
+      const started = Date.now();
+      const second = await acquireCanonicalEventLogLeaseAsync(rootDir);
+      clearTimeout(timer);
+      expect(timerFired).toBe(true);
+      expect(Date.now() - started).toBeLessThan(500);
+      second.release();
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }
