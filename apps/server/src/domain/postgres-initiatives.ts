@@ -7,7 +7,7 @@ import {
   assertPostgresWorkspace,
   canAccessPostgresProject,
   listPostgresProjectTeamIds,
-  lockPostgresProjectScope,
+  lockPostgresProjectRelations,
   lockPostgresTeamIds,
   readPostgresAuthScope,
 } from "./postgres-projects.ts";
@@ -149,13 +149,22 @@ export async function listPostgresInitiativeScopeTeamIds(
 }
 
 /**
- * Bloquea una Initiative, sus relaciones, Projects y Teams antes de autorizar
- * un status update. Las mutaciones de relaciones bloquean primero la raíz.
+ * Bloquea el alcance de una Initiative con el orden global de Planning.
+ *
+ * Primero bloquea la raíz de la Initiative. Después bloquea las raíces de Projects y sus filas
+ * project_teams. Luego bloquea las relaciones de la Initiative y, por último, todos los Teams
+ * directos y derivados en un único conjunto ordenado. El llamador bloquea las filas secundarias,
+ * como initiative_updates, después de este helper. Los IDs adicionales se incluyen antes de
+ * cualquier lock de Team para que un reemplazo de relaciones no adquiera recursos fuera de orden.
  */
-async function lockPostgresInitiativeScope(
+export async function lockPostgresInitiativeScope(
   tx: PersistenceTransaction,
   initiativeId: string,
   workspaceId?: string,
+  options: {
+    additionalProjectIds?: readonly string[];
+    additionalTeamIds?: readonly string[];
+  } = {},
 ): Promise<{ initiative: PostgresInitiativeRow; teamIds: string[] }> {
   await assertPostgresWorkspace(tx, workspaceId);
   const initiative = await tx.one<PostgresInitiativeRow>(
@@ -164,23 +173,39 @@ async function lockPostgresInitiativeScope(
   );
   if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
 
+  // Lee los IDs de relaciones con la raíz de la Initiative bloqueada. Las filas de relación se
+  // bloquean debajo, después de adquirir todas las raíces de Project y las filas project_teams.
+  const currentProjectRows = await tx.many<{ project_id: string }>(
+    "SELECT project_id FROM initiative_projects WHERE initiative_id = $1 ORDER BY project_id",
+    [initiativeId],
+  );
+  const projectIds = [
+    ...new Set([
+      ...currentProjectRows.map((row) => row.project_id),
+      ...(options.additionalProjectIds ?? []),
+    ]),
+  ].sort();
+  const projectTeamIds = await lockPostgresProjectRelations(tx, projectIds);
+
+  await tx.many<{ project_id: string }>(
+    "SELECT project_id FROM initiative_projects WHERE initiative_id = $1 ORDER BY project_id FOR UPDATE",
+    [initiativeId],
+  );
   const directRows = await tx.many<{ team_id: string }>(
     "SELECT team_id FROM initiative_teams WHERE initiative_id = $1 ORDER BY team_id FOR UPDATE",
     [initiativeId],
   );
-  const projectRows = await tx.many<{ project_id: string }>(
-    "SELECT project_id FROM initiative_projects WHERE initiative_id = $1 ORDER BY project_id FOR UPDATE",
-    [initiativeId],
-  );
   const directTeamIds = directRows.map((row) => row.team_id);
-  const projectTeamIds = await lockPostgresProjectScope(
-    tx,
-    projectRows.map((row) => row.project_id),
-  );
-  await lockPostgresTeamIds(tx, directTeamIds);
+  await lockPostgresTeamIds(tx, [
+    ...projectTeamIds,
+    ...directTeamIds,
+    ...(options.additionalTeamIds ?? []),
+  ]);
   return {
     initiative,
-    teamIds: [...new Set([...directTeamIds, ...projectTeamIds])].sort(),
+    teamIds: [
+      ...new Set([...projectTeamIds, ...directTeamIds, ...(options.additionalTeamIds ?? [])]),
+    ].sort(),
   };
 }
 
@@ -423,12 +448,11 @@ export async function updatePostgresInitiative(
     (input.teamIds !== undefined && input.teamIds !== null) ||
     labelIds !== null;
   await persistence.transaction(async (tx) => {
-    // Status transactions lock this root before reading initiative relations.
-    const locked = await tx.one<{ id: string }>(
-      "SELECT id FROM initiatives WHERE id = $1 FOR UPDATE",
-      [id],
-    );
-    if (!locked) throw apiError("NOT_FOUND", "Initiative not found");
+    // Bloquea la raíz, las relaciones y el alcance completo antes de reemplazar relaciones.
+    await lockPostgresInitiativeScope(tx, id, undefined, {
+      additionalProjectIds: projectIds,
+      additionalTeamIds: teamIds,
+    });
     if (sets.length || relationsChanged) {
       if (sets.length) {
         push("updated_at", now());
@@ -530,7 +554,7 @@ export async function deletePostgresInitiativeUpdate(
   return persistence.transaction(async (tx) => {
     await assertPostgresWorkspace(tx, workspaceId);
     const row = await tx.one<PostgresInitiativeUpdateRow>(
-      "SELECT * FROM initiative_updates WHERE id = $1 FOR UPDATE",
+      "SELECT * FROM initiative_updates WHERE id = $1",
       [id],
     );
     if (!row) throw apiError("NOT_FOUND", "Initiative update not found");
@@ -542,6 +566,11 @@ export async function deletePostgresInitiativeUpdate(
       row.initiative_id,
       workspaceId,
     );
+    const lockedRow = await tx.one<PostgresInitiativeUpdateRow>(
+      "SELECT * FROM initiative_updates WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+    if (!lockedRow) throw apiError("NOT_FOUND", "Initiative update not found");
     await assertCanMutatePostgresInitiative(tx, viewer, initiative, workspaceId);
     assertPostgresInitiativeTeamLimit(effectiveAuth, teamIds);
     const result = await tx.execute<PostgresInitiativeUpdateRow>(

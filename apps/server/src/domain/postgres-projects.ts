@@ -251,7 +251,20 @@ export async function listPostgresProjectDependencyRows(
   );
 }
 
-/** Bloquea Teams en un orden estable para serializar cambios de alcance. */
+/**
+ * Orden global de locks de Planning en PostgreSQL.
+ *
+ * 1. Se bloquean las raíces en un orden fijo por recurso (Initiative y luego Project), con IDs
+ *    ascendentes dentro de cada recurso.
+ * 2. Se bloquean las relaciones de Project por Project e identificador ascendente.
+ * 3. Se bloquean las relaciones de Initiative por identificador ascendente.
+ * 4. Se bloquean todos los Teams del alcance una sola vez y por identificador ascendente.
+ * 5. Se bloquean las filas secundarias, como dependencies y updates.
+ *
+ * Las operaciones que reciben un AuthScopeContext bloquean antes la fila raíz de la API key y
+ * sus límites. Ese lock protege el scope capturado y precede a este orden de recursos.
+ * Nunca se debe bloquear una fila secundaria antes de su raíz.
+ */
 export async function lockPostgresTeamIds(
   tx: PersistenceTransaction,
   teamIds: readonly string[],
@@ -265,16 +278,23 @@ export async function lockPostgresTeamIds(
 }
 
 /**
- * Bloquea Projects y sus relaciones con Teams antes de autorizar una mutación.
- * Las mutaciones de Projects bloquean la fila raíz antes de reemplazar esas relaciones.
+ * Bloquea las raíces de Projects y sus relaciones con Teams, pero no bloquea los Teams.
+ *
+ * Este paso permite que un caller que también tiene relaciones de Initiative bloquee todas las
+ * relaciones antes de adquirir cualquier Team. Las mutaciones de Projects bloquean la fila raíz
+ * antes de reemplazar esas relaciones.
  */
-export async function lockPostgresProjectScope(
+export async function lockPostgresProjectRelations(
   tx: PersistenceTransaction,
   projectIds: readonly string[],
 ): Promise<string[]> {
   const ids = [...new Set(projectIds)].sort();
   for (const projectId of ids) {
-    await tx.one<{ id: string }>("SELECT id FROM projects WHERE id = $1 FOR UPDATE", [projectId]);
+    const project = await tx.one<{ id: string }>(
+      "SELECT id FROM projects WHERE id = $1 FOR UPDATE",
+      [projectId],
+    );
+    if (!project) throw apiError("NOT_FOUND", "Project not found");
   }
 
   const teamIds = new Set<string>();
@@ -285,8 +305,23 @@ export async function lockPostgresProjectScope(
     );
     for (const row of rows) teamIds.add(row.team_id);
   }
-  await lockPostgresTeamIds(tx, [...teamIds]);
   return [...teamIds].sort();
+}
+
+/**
+ * Bloquea Projects, sus relaciones con Teams y los Teams del alcance antes de autorizar una
+ * mutación. Los IDs adicionales permiten incluir relaciones nuevas en una mutación de Initiative
+ * sin adquirir locks después de los Teams actuales.
+ */
+export async function lockPostgresProjectScope(
+  tx: PersistenceTransaction,
+  projectIds: readonly string[],
+  additionalTeamIds: readonly string[] = [],
+): Promise<string[]> {
+  const projectTeamIds = await lockPostgresProjectRelations(tx, projectIds);
+  const teamIds = [...new Set([...projectTeamIds, ...additionalTeamIds])].sort();
+  await lockPostgresTeamIds(tx, teamIds);
+  return teamIds;
 }
 
 /**
@@ -416,7 +451,7 @@ export async function createPostgresProjectDependency(
     const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
     await hooks?.afterAuthorization?.();
 
-    // Lock both Projects, their project_teams rows and every referenced Team.
+    // Bloquea ambos Projects, sus filas project_teams y cada Team referenciado.
     const teamIds = await lockPostgresProjectScope(tx, [input.projectId, input.dependsOnProjectId]);
     const source = await tx.one<PostgresProjectRow>("SELECT * FROM projects WHERE id = $1", [
       input.projectId,
@@ -455,16 +490,19 @@ export async function deletePostgresProjectDependency(
   hooks?: PlanningAuthorizationHooks,
 ): Promise<boolean> {
   return persistence.transaction(async (tx) => {
-    const dependency = await getPostgresProjectDependencyInWorkspace(tx, id, workspaceId, true);
+    // Lee la relación sin lock. Las dos raíces de Project deben adquirirse antes de la fila de
+    // dependency para que updatePostgresProject y este delete no formen un ciclo de locks.
+    let dependency = await getPostgresProjectDependencyInWorkspace(tx, id, workspaceId);
     if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
     await hooks?.beforeAuthorization?.();
     const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
     await hooks?.afterAuthorization?.();
-    // The dependency and both project scopes stay locked until DELETE commits.
     const teamIds = await lockPostgresProjectScope(tx, [
       dependency.project_id,
       dependency.depends_on_project_id,
     ]);
+    dependency = await getPostgresProjectDependencyInWorkspace(tx, id, workspaceId, true);
+    if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
     const source = await getPostgresProject(tx, dependency.project_id);
     const target = await getPostgresProject(tx, dependency.depends_on_project_id);
     if (!source || !target) throw apiError("NOT_FOUND", "Project dependency not found");
@@ -607,7 +645,7 @@ export async function updatePostgresProject(
   if (input.targetDate !== undefined) push("target_date", input.targetDate);
   if (input.startDate !== undefined) push("start_date", input.startDate);
   await persistence.transaction(async (tx) => {
-    // Dependency/status transactions lock this root before reading project_teams.
+    // Las transacciones de dependency/status bloquean esta raíz antes de leer project_teams.
     const locked = await tx.one<{ id: string }>(
       "SELECT id FROM projects WHERE id = $1 FOR UPDATE",
       [id],
