@@ -3535,6 +3535,37 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("falla cerrado ante una CTE sombreada en un Trigger INDEXED BY", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      bootstrap(db);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_view_preferences_view ON actors(name);
+        CREATE TRIGGER dependent_cte_trigger AFTER INSERT ON actors
+        BEGIN
+          WITH actors AS (SELECT NEW.id AS id)
+          SELECT id FROM actors INDEXED BY idx_view_preferences_view;
+        END;
+      `);
+
+      expect(() => migrate(db)).toThrow(/CTE/i);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 32").get()).toBeNull();
+      expect(
+        db
+          .query("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = ?1")
+          .get("dependent_cte_trigger"),
+      ).toEqual({ name: "dependent_cte_trigger" });
+
+      db.exec("DROP TRIGGER dependent_cte_trigger");
+      migrate(db);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("protege dependencias INDEXED BY durante el renombre de índices de 0032", () => {
     const db = databaseWithMigrationsThrough(31);
     try {
