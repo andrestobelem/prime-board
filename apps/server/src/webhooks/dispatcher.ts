@@ -126,7 +126,12 @@ function sqliteEventWorkspaceId(
     if (row?.workspace_id) return row.workspace_id;
   }
 
-  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  const issueId =
+    typeof data.issueId === "string"
+      ? data.issueId
+      : event.startsWith("issue.") && typeof data.id === "string"
+        ? data.id
+        : null;
   if (issueId) {
     const row = db.query("SELECT workspace_id FROM issues WHERE id = ?1").get(issueId) as {
       workspace_id: string | null;
@@ -156,6 +161,85 @@ function sqliteEventWorkspaceId(
   return sqliteSingleWorkspaceId(db);
 }
 
+/**
+ * Valida que el Workspace explícito coincida con cada recurso del evento.
+ * Aunque el sink scopeado es un límite interno, un ID de recurso incorrecto
+ * debe fallar cerrado y no convertir una búsqueda vacía de Team en un
+ * broadcast a los Webhooks del Workspace.
+ */
+function sqliteEventMatchesWorkspace(
+  db: Database,
+  event: WebhookEventName,
+  data: Record<string, unknown>,
+  workspaceId: string,
+): boolean {
+  const workspace = db.query("SELECT id FROM workspace WHERE id = ?1").get(workspaceId);
+  if (!workspace) return false;
+
+  const teamId =
+    typeof data.teamId === "string"
+      ? data.teamId
+      : event.startsWith("team.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (teamId) {
+    const team = db.query("SELECT workspace_id FROM teams WHERE id = ?1").get(teamId) as {
+      workspace_id: string | null;
+    } | null;
+    if (!team) {
+      // La fila del Team se elimina antes de despachar team.deleted. El
+      // resolver conserva su Workspace antes de borrarlo; un snapshot de
+      // owners no prueba por sí solo el origen del evento.
+      const deletedTeamWorkspaceId =
+        typeof data._teamWorkspaceId === "string" ? data._teamWorkspaceId : null;
+      if (event !== "team.deleted" || deletedTeamWorkspaceId !== workspaceId) return false;
+    } else if (team.workspace_id !== workspaceId) {
+      return false;
+    }
+  }
+
+  const issueId =
+    typeof data.issueId === "string"
+      ? data.issueId
+      : event.startsWith("issue.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (issueId) {
+    const issue = db
+      .query("SELECT workspace_id, team_id FROM issues WHERE id = ?1")
+      .get(issueId) as {
+      workspace_id: string | null;
+      team_id: string;
+    } | null;
+    if (!issue || issue.workspace_id !== workspaceId) return false;
+    if (teamId && issue.team_id !== teamId) return false;
+  }
+
+  const projectId =
+    typeof data.projectId === "string"
+      ? data.projectId
+      : event.startsWith("project.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (projectId) {
+    const project = db.query("SELECT workspace_id FROM projects WHERE id = ?1").get(projectId) as {
+      workspace_id: string | null;
+    } | null;
+    if (!project || project.workspace_id !== workspaceId) return false;
+    if (teamId) {
+      const relation = db
+        .query("SELECT workspace_id FROM project_teams WHERE project_id = ?1 AND team_id = ?2")
+        .get(projectId, teamId) as { workspace_id: string | null } | null;
+      if (!relation || relation.workspace_id !== workspaceId) return false;
+    }
+  }
+
+  if (event.startsWith("workspace.") && typeof data.id === "string" && data.id !== workspaceId) {
+    return false;
+  }
+  return true;
+}
+
 function sqliteEventTeamIds(
   db: Database,
   event: WebhookEventName,
@@ -178,7 +262,12 @@ function sqliteEventTeamIds(
       .get(teamId, workspaceId);
     return team ? direct : [];
   }
-  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  const issueId =
+    typeof data.issueId === "string"
+      ? data.issueId
+      : event.startsWith("issue.") && typeof data.id === "string"
+        ? data.id
+        : null;
   if (issueId) {
     const row = db
       .query(`SELECT team_id FROM issues WHERE id = ?1 AND ${scope}`)
@@ -201,6 +290,97 @@ function sqliteEventTeamIds(
   return [];
 }
 
+async function postgresSingleWorkspaceId(persistence: Persistence): Promise<string | null> {
+  const rows = await persistence.many<{ id: string }>(
+    "SELECT id FROM workspace ORDER BY created_at, id",
+  );
+  return rows.length === 1 ? rows[0]!.id : null;
+}
+
+/** El esquema PostgreSQL actual es singleton. Rechaza un scope explícito ajeno. */
+async function postgresEventWorkspaceId(
+  persistence: Persistence,
+  data: Record<string, unknown>,
+): Promise<string | null> {
+  const workspaceId = await postgresSingleWorkspaceId(persistence);
+  if (!workspaceId) return null;
+  if (data._workspaceId !== undefined) {
+    return typeof data._workspaceId === "string" && data._workspaceId === workspaceId
+      ? workspaceId
+      : null;
+  }
+  return workspaceId;
+}
+
+/** Valida recursos del evento contra el único Workspace PostgreSQL soportado hoy. */
+async function postgresEventMatchesWorkspace(
+  persistence: Persistence,
+  event: WebhookEventName,
+  data: Record<string, unknown>,
+  workspaceId: string,
+): Promise<boolean> {
+  const workspace = await persistence.one<{ id: string }>(
+    "SELECT id FROM workspace WHERE id = $1",
+    [workspaceId],
+  );
+  if (!workspace) return false;
+
+  const teamId =
+    typeof data.teamId === "string"
+      ? data.teamId
+      : event.startsWith("team.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (teamId) {
+    const team = await persistence.one<{ id: string }>("SELECT id FROM teams WHERE id = $1", [
+      teamId,
+    ]);
+    if (!team) {
+      const deletedTeamWorkspaceId =
+        typeof data._teamWorkspaceId === "string" ? data._teamWorkspaceId : null;
+      if (event !== "team.deleted" || deletedTeamWorkspaceId !== workspaceId) return false;
+    }
+  }
+
+  const issueId =
+    typeof data.issueId === "string"
+      ? data.issueId
+      : event.startsWith("issue.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (issueId) {
+    const issue = await persistence.one<{ id: string; team_id: string }>(
+      "SELECT id, team_id FROM issues WHERE id = $1",
+      [issueId],
+    );
+    if (!issue || (teamId && issue.team_id !== teamId)) return false;
+  }
+
+  const projectId =
+    typeof data.projectId === "string"
+      ? data.projectId
+      : event.startsWith("project.") && typeof data.id === "string"
+        ? data.id
+        : null;
+  if (projectId) {
+    const project = await persistence.one<{ id: string }>("SELECT id FROM projects WHERE id = $1", [
+      projectId,
+    ]);
+    if (!project) return false;
+    if (teamId) {
+      const relation = await persistence.one<{ project_id: string }>(
+        "SELECT project_id FROM project_teams WHERE project_id = $1 AND team_id = $2",
+        [projectId, teamId],
+      );
+      if (!relation) return false;
+    }
+  }
+
+  if (event.startsWith("workspace.") && typeof data.id === "string" && data.id !== workspaceId)
+    return false;
+  return true;
+}
+
 async function postgresEventTeamIds(
   persistence: Persistence,
   event: WebhookEventName,
@@ -213,7 +393,12 @@ async function postgresEventTeamIds(
         ? [data.id]
         : [];
   if (direct.length > 0) return direct;
-  const issueId = typeof data.issueId === "string" ? data.issueId : null;
+  const issueId =
+    typeof data.issueId === "string"
+      ? data.issueId
+      : event.startsWith("issue.") && typeof data.id === "string"
+        ? data.id
+        : null;
   if (issueId) {
     const row = await persistence.one<{ team_id: string }>(
       "SELECT team_id FROM issues WHERE id = $1",
@@ -276,12 +461,21 @@ async function postgresOwnerCanReceive(
   persistence: Persistence,
   ownerId: string | null,
   teamIds: readonly string[],
+  workspaceId: string,
   deletedTeamOwnerIds: readonly string[] = [],
 ): Promise<boolean> {
   if (!ownerId) return false;
+  // Actor status is global compatibility state. Delivery authority is the
+  // active Membership in the effective Workspace.
   const owner = await persistence.one<{ id: string; status: string; workspace_role: string }>(
-    "SELECT id, status, workspace_role FROM actors WHERE id = $1",
-    [ownerId],
+    `SELECT actors.id, actors.status, memberships.role AS workspace_role
+       FROM actors
+       JOIN workspace_memberships AS memberships
+         ON memberships.actor_id = actors.id
+        AND memberships.workspace_id = $2
+        AND memberships.status = 'active'
+      WHERE actors.id = $1`,
+    [ownerId, workspaceId],
   );
   if (!owner || owner.status !== "active") return false;
   for (const teamId of teamIds) {
@@ -368,13 +562,19 @@ export class WebhookDispatcher implements WebhookEventSink {
     data: Record<string, unknown>,
     changes?: Record<string, { from: unknown; to: unknown }>,
   ): Promise<void> {
-    const sqliteWorkspaceId = this.persistence
-      ? null
+    const workspaceId = this.persistence
+      ? await postgresEventWorkspaceId(this.persistence, data)
       : sqliteEventWorkspaceId(this.db, event, data);
-    if (!this.persistence && !sqliteWorkspaceId) return;
+    if (!workspaceId) return;
+    const matchesWorkspace = this.persistence
+      ? await postgresEventMatchesWorkspace(this.persistence, event, data, workspaceId)
+      : sqliteEventMatchesWorkspace(this.db, event, data, workspaceId);
+    if (!matchesWorkspace) return;
 
     const hooks = this.persistence
-      ? await this.persistence.many<WebhookRow>("SELECT * FROM webhooks WHERE enabled = TRUE")
+      ? (
+          await this.persistence.many<WebhookRow>("SELECT * FROM webhooks WHERE enabled = TRUE")
+        ).filter((hook) => hook.workspace_id == null || hook.workspace_id === workspaceId)
       : (this.db
           .query(
             `SELECT * FROM webhooks
@@ -382,10 +582,10 @@ export class WebhookDispatcher implements WebhookEventSink {
                AND (workspace_id = ?1 OR
                     (workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1))`,
           )
-          .all(sqliteWorkspaceId!) as WebhookRow[]);
+          .all(workspaceId) as WebhookRow[]);
     const teamIds = this.persistence
       ? await postgresEventTeamIds(this.persistence, event, data)
-      : sqliteEventTeamIds(this.db, event, data, sqliteWorkspaceId!);
+      : sqliteEventTeamIds(this.db, event, data, workspaceId);
     const deletedTeamOwnerIds =
       event === "team.deleted" && Array.isArray(data._teamOwnerIds)
         ? data._teamOwnerIds.filter((id): id is string => typeof id === "string")
@@ -396,13 +596,14 @@ export class WebhookDispatcher implements WebhookEventSink {
             this.persistence,
             hook.owner_id,
             teamIds,
+            workspaceId,
             deletedTeamOwnerIds,
           )
         : await sqliteOwnerCanReceive(
             this.db,
             hook.owner_id,
             teamIds,
-            sqliteWorkspaceId!,
+            workspaceId,
             deletedTeamOwnerIds,
           );
       if (!ownerCanReceive) return false;
@@ -413,13 +614,14 @@ export class WebhookDispatcher implements WebhookEventSink {
             this.persistence,
             hook.owner_id,
             [hook.team_id],
+            workspaceId,
             deletedTeamOwnerIds,
           )
         : sqliteOwnerCanReceive(
             this.db,
             hook.owner_id,
             [hook.team_id],
-            sqliteWorkspaceId!,
+            workspaceId,
             deletedTeamOwnerIds,
           );
     };
@@ -431,10 +633,10 @@ export class WebhookDispatcher implements WebhookEventSink {
     }
     if (subscribed.length === 0) return;
 
-    const workspaceId =
-      sqliteWorkspaceId ?? (typeof data._workspaceId === "string" ? data._workspaceId : null);
     const publicData = Object.fromEntries(
-      Object.entries(data).filter(([key]) => key !== "_teamOwnerIds" && key !== "_workspaceId"),
+      Object.entries(data).filter(
+        ([key]) => key !== "_teamOwnerIds" && key !== "_teamWorkspaceId" && key !== "_workspaceId",
+      ),
     );
     const body = JSON.stringify({
       event,
