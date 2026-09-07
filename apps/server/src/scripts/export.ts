@@ -29,7 +29,7 @@ function repoRoot(): string {
 }
 
 const config = loadConfig();
-const outDir = values.out ?? repoRoot();
+const outDir = values.out ?? config.repoRoot ?? repoRoot();
 const options = {
   teamKey: values.team ?? null,
   documentsArchivePath: values["documents-archive"] ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE,

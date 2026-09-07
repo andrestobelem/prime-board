@@ -42,11 +42,15 @@ const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
  * Puerta de seguridad de la fuente de rebuild. Una captura histórica no es una
  * entrada vigente del índice: se conserva en el repositorio, pero el operador
  * debe archivarla fuera de él antes de reconstruir una DB sin Documents.
+ * Devuelve la ruta para eliminarla solo después de un rebuild exitoso.
  */
-export function preflightRetiredDocuments(rootDir: string, documentsArchivePath?: string): void {
+export function preflightRetiredDocuments(
+  rootDir: string,
+  documentsArchivePath?: string,
+): string | undefined {
   const snapshotPath = join(rootDir, ".prime-board", "meta", "documents.json");
   assertSafeDocumentSnapshotPath(snapshotPath, rootDir);
-  if (!existsSync(snapshotPath)) return;
+  if (!existsSync(snapshotPath)) return undefined;
   const configured = documentsArchivePath ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
   const trimmed = configured?.trim();
   if (!trimmed) {
@@ -54,10 +58,10 @@ export function preflightRetiredDocuments(rootDir: string, documentsArchivePath?
       "Refusing rebuild: .prime-board/meta/documents.json is retired; provide PRIME_BOARD_DOCUMENTS_ARCHIVE after archiving it externally",
     );
   }
-  // This is an explicit operator opt-in. Remove the source only after the
-  // external bundle has been written and parsed back with its checksum.
+  // Archiva y verifica la fuente ahora, pero elimínala solo después de que el
+  // rebuild termine correctamente. Un fallo posterior debe conservar el snapshot.
   archiveDocumentSnapshot(snapshotPath, trimmed, "replica", rootDir);
-  removeDocumentSnapshot(snapshotPath, rootDir);
+  return snapshotPath;
 }
 
 /**
@@ -216,8 +220,9 @@ export function rebuildFromRepo(
   if (!existsSync(base)) throw new Error(`No .prime-board directory in ${rootDir}`);
 
   // La captura retirada se archiva (o se rechaza) antes de leer metadata,
-  // credenciales o abrir la transacción destructiva.
-  preflightRetiredDocuments(rootDir, options.documentsArchivePath);
+  // credenciales o abrir la transacción destructiva. Se elimina solo después
+  // de que toda la reconstrucción termina correctamente.
+  const retiredDocumentsPath = preflightRetiredDocuments(rootDir, options.documentsArchivePath);
 
   // La metadata del export se valida antes de leer credenciales o abrir la
   // transacción destructiva (PRB-237/403). Los repos antiguos sin este archivo
@@ -1225,5 +1230,6 @@ export function rebuildFromRepo(
     }
   })();
 
+  if (retiredDocumentsPath) removeDocumentSnapshot(retiredDocumentsPath, rootDir);
   return result;
 }

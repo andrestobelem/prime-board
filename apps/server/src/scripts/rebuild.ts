@@ -5,7 +5,7 @@
 import { parseArgs } from "node:util";
 import { loadConfig } from "../config.ts";
 import { openDatabase } from "../db/database.ts";
-import { preflightRetiredDocuments, rebuildFromRepo } from "../export/importer.ts";
+import { rebuildFromRepo } from "../export/importer.ts";
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
@@ -23,12 +23,11 @@ function repoRoot(): string {
 }
 
 const config = loadConfig();
-const sourceRoot = values.from ?? repoRoot();
+const sourceRoot = values.from ?? config.repoRoot ?? repoRoot();
 const documentsArchivePath =
   values["documents-archive"] ?? process.env.PRIME_BOARD_DOCUMENTS_ARCHIVE;
-// Inspect and archive the source before opening the operational DB. This keeps
-// an old documents.json from reaching a destructive rebuild by accident.
-preflightRetiredDocuments(sourceRoot, documentsArchivePath);
+// `rebuildFromRepo` archiva la fuente antes del trabajo destructivo y la
+// elimina solo después de que el rebuild termina correctamente.
 const db = openDatabase(config.dbPath, {
   documentsArchivePath,
   repositoryRoot: config.repoRoot ?? undefined,

@@ -81,7 +81,8 @@ if (values.check) {
   if (!reconciliation.reconciled) process.exit(1);
   process.exit(0);
 }
-const outDir = values.out ?? repoRoot();
+const config = loadConfig();
+const outDir = values.out ?? config.repoRoot ?? repoRoot();
 if (values["merge-local"]) {
   if (!values.out) throw new Error("--merge-local requires --out as a fresh output directory");
   const merged = mergeLinearExportWithRepo(source, values["merge-local"], values.out, {
@@ -109,7 +110,6 @@ if (values["merge-local"]) {
     console.log(`Output: ${values.out}/.prime-board/`);
   }
   if (values.apply) {
-    const config = loadConfig();
     const db = openDatabase(config.dbPath, {
       repositoryRoot: config.repoRoot ?? undefined,
     });
@@ -149,7 +149,6 @@ else {
   if (!values["dry-run"]) console.log(`${result.files} files written to ${outDir}/.prime-board/`);
 }
 if (values.apply) {
-  const config = loadConfig();
   const db = openDatabase(config.dbPath, {
     repositoryRoot: config.repoRoot ?? undefined,
   });

@@ -272,7 +272,7 @@ describe("rebuildFromRepo", () => {
       fresh.exec("PRAGMA foreign_keys = ON;");
       migrate(fresh);
       preflightRetiredDocuments(snapshot, archive);
-      expect(existsSync(documentsPath)).toBe(false);
+      expect(existsSync(documentsPath)).toBe(true);
       const manifest = JSON.parse(readFileSync(archive, "utf8")) as {
         count: number;
         sha256: string;
@@ -283,7 +283,8 @@ describe("rebuildFromRepo", () => {
       expect(manifest.sources.replica?.documents[0]?.content).toBe(
         "must not become an issue description",
       );
-      rebuildFromRepo(fresh, snapshot);
+      rebuildFromRepo(fresh, snapshot, { documentsArchivePath: archive });
+      expect(existsSync(documentsPath)).toBe(false);
       expect(fresh.query("SELECT count(*) AS count FROM issues").get()).toEqual({ count: 2 });
       expect(
         fresh
@@ -294,6 +295,45 @@ describe("rebuildFromRepo", () => {
       fresh.close();
       rmSync(snapshot, { recursive: true, force: true });
       rmSync(archive, { force: true });
+    }
+  });
+
+  it("conserva el snapshot si el rebuild falla después del preflight", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-retired-documents-rebuild-failure-"));
+    const archiveRoot = mkdtempSync(join(tmpdir(), "pb-retired-documents-rebuild-archive-"));
+    const archive = join(archiveRoot, "documents.archive.json");
+    const fresh = new Database(":memory:", { strict: true });
+    const documentsContents = `${JSON.stringify([
+      {
+        title: "Retired runbook",
+        content: "must survive a failed rebuild",
+        creator: "admin",
+        target: null,
+      },
+    ])}\n`;
+    try {
+      exportBoard(app.db, snapshot);
+      const documentsPath = join(snapshot, ".prime-board", "meta", "documents.json");
+      writeFileSync(documentsPath, documentsContents);
+      const projectsPath = join(snapshot, ".prime-board", "meta", "projects.json");
+      const projects = JSON.parse(readFileSync(projectsPath, "utf8"));
+      if (!Array.isArray(projects) || projects.length === 0) {
+        throw new Error("The rebuild fixture needs a project");
+      }
+      writeFileSync(projectsPath, `${JSON.stringify([...projects, projects[0]])}\n`);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+
+      expect(() => rebuildFromRepo(fresh, snapshot, { documentsArchivePath: archive })).toThrow(
+        /Ambiguous project reference/,
+      );
+      expect(existsSync(archive)).toBe(true);
+      expect(existsSync(documentsPath)).toBe(true);
+      expect(readFileSync(documentsPath, "utf8")).toBe(documentsContents);
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+      rmSync(archiveRoot, { recursive: true, force: true });
     }
   });
 
