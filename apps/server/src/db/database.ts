@@ -1765,6 +1765,8 @@ interface WorkspaceConstraintTriggerSnapshot {
   sql: string;
   recreatedSql: string;
   canonical: boolean;
+  replacementName?: string;
+  sourceTriggerOrder?: readonly string[];
 }
 
 interface WorkspaceConstraintIndexSnapshot extends Omit<SavedViewsIndexDefinition, "sql"> {
@@ -2488,12 +2490,11 @@ function viewHasSchemaDependencies(db: Database, view: SchemaObjectRow): boolean
 function sameTriggerEvent(left: TriggerEvent, right: TriggerEvent): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind !== "update" || right.kind !== "update") return true;
+  const leftColumns = new Set(left.columns.map(normalizeSqliteIdentifier));
+  const rightColumns = new Set(right.columns.map(normalizeSqliteIdentifier));
   return (
-    left.columns.length === right.columns.length &&
-    left.columns.every((column, position) => {
-      const expected = right.columns[position];
-      return expected !== undefined && sameSqliteIdentifier(column, expected);
-    })
+    leftColumns.size === rightColumns.size &&
+    [...leftColumns].every((column) => rightColumns.has(column))
   );
 }
 
@@ -2504,9 +2505,39 @@ function sameTriggerBehavior(
   return (
     left.timing === right.timing &&
     sameTriggerEvent(left.event, right.event) &&
-    left.forEachRow === right.forEachRow &&
+    // SQLite usa FOR EACH ROW por defecto. La cláusula explícita equivale a
+    // omitirla.
     sameSqlTokens(comparableSqlTokens(left.when), comparableSqlTokens(right.when)) &&
     sameSqlTokens(comparableSqlTokens(left.body), comparableSqlTokens(right.body))
+  );
+}
+
+function sameTriggerDefinition(
+  actual: TriggerDefinitionRow | null,
+  expectedSql: string,
+  expectedName: string,
+  expectedTable: string,
+): boolean {
+  if (
+    actual === null ||
+    typeof actual.name !== "string" ||
+    typeof actual.tbl_name !== "string" ||
+    typeof actual.sql !== "string" ||
+    !sameSqliteIdentifier(actual.name, expectedName) ||
+    !sameSqliteIdentifier(actual.tbl_name, expectedTable)
+  ) {
+    return false;
+  }
+  const actualDefinition = triggerDefinitionFromSql(actual.sql);
+  const expectedDefinition = triggerDefinitionFromSql(expectedSql);
+  return (
+    actualDefinition !== null &&
+    expectedDefinition !== null &&
+    sameSqliteIdentifier(actualDefinition.name, expectedName) &&
+    sameSqliteIdentifier(actualDefinition.table, expectedTable) &&
+    sameSqliteIdentifier(expectedDefinition.name, expectedName) &&
+    sameSqliteIdentifier(expectedDefinition.table, expectedTable) &&
+    sameTriggerBehavior(actualDefinition, expectedDefinition)
   );
 }
 
@@ -2533,7 +2564,6 @@ function matchesTriggerContract(
     sameSqliteIdentifier(actual.table, contract.table) &&
     actual.timing === contract.timing &&
     sameTriggerEvent(actual.event, contract.event) &&
-    actual.forEachRow === contract.forEachRow &&
     expectedWhen !== null &&
     sameSqlTokens(comparableSqlTokens(actual.when), comparableSqlTokens(expectedWhen)) &&
     expectedBody !== null &&
@@ -3071,7 +3101,7 @@ function migrationObjectNameInUse(db: Database, name: string): boolean {
 }
 
 function triggerNameInUse(db: Database, name: string): boolean {
-  return schemaObjects(db, name).some((object) => object.type === "trigger");
+  return schemaObjectsWithName(db, name).some(({ object }) => object.type === "trigger");
 }
 
 function generatedMigrationIndexName(
@@ -3606,6 +3636,43 @@ function captureMigrationTrigger(
     sql: triggerSql,
     recreatedSql,
     canonical,
+  };
+}
+
+function captureCrossTableCanonicalTrigger(
+  db: Database,
+  definition: TriggerDefinitionRow,
+  options: {
+    migrationLabel: string;
+    plannedNames: Set<string>;
+    sourceTriggerOrder?: readonly string[];
+  },
+): WorkspaceConstraintTriggerSnapshot {
+  const snapshot = captureMigrationTrigger(db, definition, {
+    migrationLabel: options.migrationLabel,
+  });
+  const replacementName = generatedViewsMigrationTriggerName(
+    db,
+    snapshot.name,
+    options.plannedNames,
+  );
+  const recreatedSql = renamedTriggerSql(
+    snapshot.sql,
+    replacementName,
+    snapshot.table,
+    snapshot.name,
+  );
+  if (recreatedSql === null || !executableTriggerDefinition(db, recreatedSql)) {
+    throw new Error(
+      `Cannot apply migration ${options.migrationLabel} safely: custom trigger ${snapshot.name} on ` +
+        `${snapshot.table} cannot be preserved safely`,
+    );
+  }
+  return {
+    ...snapshot,
+    recreatedSql,
+    replacementName,
+    sourceTriggerOrder: options.sourceTriggerOrder,
   };
 }
 
@@ -4411,6 +4478,7 @@ function captureWorkspaceConstraintIndexes(
 function captureWorkspaceConstraintTriggers(
   db: Database,
   migrationVersion: number,
+  plannedNames = new Set<string>(),
 ): WorkspaceConstraintTriggerSnapshot[] {
   const rebuiltTables = new Set(
     WORKSPACE_CONSTRAINTS_REBUILT_TABLES.map((table) => normalizeSqliteIdentifier(table)),
@@ -4422,9 +4490,24 @@ function captureWorkspaceConstraintTriggers(
     .all();
   const migrationLabel = migrationVersion.toString().padStart(4, "0");
   const snapshots: WorkspaceConstraintTriggerSnapshot[] = [];
+  const triggerOrderByTable = new Map<string, string[]>();
+  for (const definition of definitions) {
+    if (typeof definition.name !== "string" || typeof definition.tbl_name !== "string") continue;
+    const key = normalizeSqliteIdentifier(definition.tbl_name);
+    const order = triggerOrderByTable.get(key) ?? [];
+    order.push(definition.name);
+    triggerOrderByTable.set(key, order);
+  }
 
   for (const definition of definitions) {
-    const triggerName = typeof definition.name === "string" ? definition.name : "unknown";
+    // saved_views queda bajo el contrato de PRB-654; este helper solo procesa
+    // tablas non-Views reconstruidas por 0025.
+    if (
+      typeof definition.tbl_name === "string" &&
+      normalizeSqliteIdentifier(definition.tbl_name) === "saved_views"
+    ) {
+      continue;
+    }
     const canonicalDefinition =
       typeof definition.name === "string"
         ? WORKSPACE_CONSTRAINTS_CANONICAL_TRIGGER_DEFINITIONS.get(
@@ -4432,12 +4515,31 @@ function captureWorkspaceConstraintTriggers(
           )
         : undefined;
     if (canonicalDefinition !== undefined) {
-      // 0025 recrea este trigger en el orden canónico de su propio SQL. Solo
-      // se valida la definición existente; no se captura ni se vuelve a crear.
-      captureMigrationTrigger(db, definition, {
-        migrationLabel,
-        canonicalContract: canonicalDefinition,
-      });
+      if (
+        typeof definition.tbl_name === "string" &&
+        sameSqliteIdentifier(definition.tbl_name, canonicalDefinition.table)
+      ) {
+        // 0025 recrea este trigger en el orden canónico de su propio SQL. Solo
+        // se valida la definición existente; no se captura ni se vuelve a crear.
+        captureMigrationTrigger(db, definition, {
+          migrationLabel,
+          canonicalContract: canonicalDefinition,
+        });
+      } else {
+        // El nombre canónico no identifica por sí solo el contrato. Un trigger
+        // con ese nombre sobre otra tabla es custom y debe conservarse con un
+        // nombre legacy antes de que 0025 cree el canónico real.
+        snapshots.push(
+          captureCrossTableCanonicalTrigger(db, definition, {
+            migrationLabel,
+            plannedNames,
+            sourceTriggerOrder:
+              typeof definition.tbl_name === "string"
+                ? triggerOrderByTable.get(normalizeSqliteIdentifier(definition.tbl_name))
+                : undefined,
+          }),
+        );
+      }
       continue;
     }
     if (
@@ -4518,6 +4620,261 @@ function applyMigrationNameCollisions(
   }
 }
 
+function applyWorkspaceConstraintTriggerRenames(
+  db: Database,
+  definitions: readonly WorkspaceConstraintTriggerSnapshot[],
+  indexReplacements: ReadonlyMap<string, string> = new Map(),
+): void {
+  const crossTableDefinitions = definitions.filter(
+    (definition) => definition.replacementName !== undefined,
+  );
+  const tableGroups = new Map<
+    string,
+    { table: string; definitions: WorkspaceConstraintTriggerSnapshot[] }
+  >();
+  for (const definition of crossTableDefinitions) {
+    const key = normalizeSqliteIdentifier(definition.table);
+    const group = tableGroups.get(key);
+    if (group === undefined) {
+      tableGroups.set(key, { table: definition.table, definitions: [definition] });
+    } else {
+      group.definitions.push(definition);
+    }
+  }
+  for (const { table, definitions: tableDefinitions } of tableGroups.values()) {
+    const existing = db
+      .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+        "SELECT name, tbl_name, sql FROM sqlite_master " +
+          "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1) ORDER BY rowid",
+      )
+      .all(table);
+    const crossByName = new Map(
+      tableDefinitions.map((definition) => [
+        normalizeSqliteIdentifier(definition.name),
+        definition,
+      ]),
+    );
+    for (const definition of crossByName.values()) {
+      if (
+        !existing.some(
+          (candidate) =>
+            typeof candidate.name === "string" &&
+            sameSqliteIdentifier(candidate.name, definition.name),
+        )
+      ) {
+        throw new Error(
+          `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
+            `${definition.table} cannot be preserved safely`,
+        );
+      }
+    }
+
+    const recreated = existing.map((definition) => {
+      if (
+        typeof definition.name !== "string" ||
+        typeof definition.tbl_name !== "string" ||
+        typeof definition.sql !== "string"
+      ) {
+        throw new Error(
+          `Cannot apply migration 0025 safely: custom trigger on ${table} ` +
+            "cannot be preserved safely",
+        );
+      }
+      const crossTableDefinition = crossByName.get(normalizeSqliteIdentifier(definition.name));
+      const sql = crossTableDefinition?.recreatedSql ?? definition.sql;
+      const rewrittenSql = rewriteIndexedBySql(sql, indexReplacements);
+      if (rewrittenSql === null || !executableTriggerSchemaDefinition(db, rewrittenSql)) {
+        throw new Error(
+          `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
+            `${table} cannot be preserved safely`,
+        );
+      }
+      return { name: definition.name, sql: rewrittenSql };
+    });
+
+    let failedTriggerName: string | undefined;
+    try {
+      for (const definition of existing) {
+        if (typeof definition.name !== "string") {
+          throw new Error("missing trigger name");
+        }
+        failedTriggerName = definition.name;
+        db.exec(`DROP TRIGGER main.${quoteIdentifier(definition.name)}`);
+      }
+      for (const definition of recreated) {
+        failedTriggerName = definition.name;
+        db.exec(definition.sql);
+      }
+      for (const definition of recreated) {
+        failedTriggerName = definition.name;
+        if (!executableTriggerDefinition(db, definition.sql)) {
+          throw new Error("trigger postvalidation failed");
+        }
+      }
+    } catch {
+      throw new Error(
+        `Cannot apply migration 0025 safely: custom trigger ${failedTriggerName ?? "unknown"} on ` +
+          `${table} cannot be preserved safely`,
+      );
+    }
+  }
+}
+
+function mainTriggerWithName(db: Database, name: string): TriggerDefinitionRow | null {
+  return db
+    .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+      "SELECT name, tbl_name, sql FROM sqlite_master " +
+        "WHERE type = 'trigger' AND name = ?1 COLLATE NOCASE LIMIT 1",
+    )
+    .get(name);
+}
+
+function restoreWorkspaceConstraintTriggerOrder(
+  db: Database,
+  definitions: readonly WorkspaceConstraintTriggerSnapshot[],
+): void {
+  const rebuiltTables = new Set(
+    WORKSPACE_CONSTRAINTS_REBUILT_TABLES.map((table) => normalizeSqliteIdentifier(table)),
+  );
+  const groups = new Map<
+    string,
+    {
+      table: string;
+      order: readonly string[];
+      cross: Map<string, WorkspaceConstraintTriggerSnapshot>;
+    }
+  >();
+  for (const definition of definitions) {
+    if (
+      definition.replacementName === undefined ||
+      definition.sourceTriggerOrder === undefined ||
+      !rebuiltTables.has(normalizeSqliteIdentifier(definition.table))
+    ) {
+      continue;
+    }
+    const key = normalizeSqliteIdentifier(definition.table);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        table: definition.table,
+        order: definition.sourceTriggerOrder,
+        cross: new Map(),
+      });
+    }
+    groups.get(key)?.cross.set(normalizeSqliteIdentifier(definition.name), definition);
+  }
+
+  for (const { table, order, cross } of groups.values()) {
+    const current = db
+      .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+        "SELECT name, tbl_name, sql FROM sqlite_master " +
+          "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1) ORDER BY rowid",
+      )
+      .all(table);
+    const currentByName = new Map(
+      current
+        .filter((definition) => typeof definition.name === "string")
+        .map((definition) => [normalizeSqliteIdentifier(definition.name!), definition]),
+    );
+    const ordered: TriggerDefinitionRow[] = [];
+    const seen = new Set<string>();
+    for (const originalName of order) {
+      const crossDefinition = cross.get(normalizeSqliteIdentifier(originalName));
+      const currentName = crossDefinition?.replacementName ?? originalName;
+      const definition = currentByName.get(normalizeSqliteIdentifier(currentName));
+      if (
+        definition === undefined ||
+        typeof definition.name !== "string" ||
+        typeof definition.tbl_name !== "string" ||
+        typeof definition.sql !== "string"
+      ) {
+        throw new Error(
+          `Cannot apply migration 0025 safely: custom trigger ${originalName} on ` +
+            `${table} cannot be preserved safely`,
+        );
+      }
+      ordered.push(definition);
+      seen.add(normalizeSqliteIdentifier(definition.name));
+    }
+    for (const definition of current) {
+      if (
+        typeof definition.name !== "string" ||
+        typeof definition.tbl_name !== "string" ||
+        typeof definition.sql !== "string"
+      ) {
+        throw new Error(
+          `Cannot apply migration 0025 safely: custom trigger on ${table} ` +
+            "cannot be preserved safely",
+        );
+      }
+      if (!seen.has(normalizeSqliteIdentifier(definition.name))) {
+        ordered.push(definition);
+        seen.add(normalizeSqliteIdentifier(definition.name));
+      }
+    }
+    for (const definition of ordered) {
+      if (!executableTriggerSchemaDefinition(db, definition.sql!)) {
+        throw new Error(
+          `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
+            `${table} cannot be preserved safely`,
+        );
+      }
+    }
+    try {
+      for (const definition of current) {
+        if (typeof definition.name !== "string") throw new Error("missing trigger name");
+        db.exec(`DROP TRIGGER main.${quoteIdentifier(definition.name)}`);
+      }
+      for (const definition of ordered) db.exec(definition.sql!);
+      for (const definition of ordered) {
+        if (!executableTriggerDefinition(db, definition.sql!)) {
+          throw new Error("trigger postvalidation failed");
+        }
+      }
+    } catch {
+      throw new Error(
+        `Cannot apply migration 0025 safely: custom trigger on ${table} ` +
+          "cannot be preserved safely",
+      );
+    }
+  }
+}
+
+function validateWorkspaceConstraintTriggerTables(
+  db: Database,
+  definitions: readonly WorkspaceConstraintTriggerSnapshot[],
+): void {
+  const tables = [
+    ...new Map(
+      definitions
+        .filter((definition) => definition.replacementName !== undefined)
+        .map((definition) => [normalizeSqliteIdentifier(definition.table), definition.table]),
+    ).values(),
+  ];
+  for (const table of tables) {
+    const triggers = db
+      .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+        "SELECT name, tbl_name, sql FROM sqlite_master " +
+          "WHERE type = 'trigger' AND lower(tbl_name) = lower(?1) ORDER BY rowid",
+      )
+      .all(table);
+    for (const trigger of triggers) {
+      if (
+        typeof trigger.name !== "string" ||
+        typeof trigger.tbl_name !== "string" ||
+        typeof trigger.sql !== "string" ||
+        !sameSqliteIdentifier(trigger.tbl_name, table) ||
+        !executableTriggerDefinition(db, trigger.sql)
+      ) {
+        const name = typeof trigger.name === "string" ? trigger.name : "unknown";
+        throw new Error(
+          `Cannot apply migration 0025 safely: custom trigger ${name} on ` +
+            `${table} cannot be preserved safely`,
+        );
+      }
+    }
+  }
+}
+
 function restoreWorkspaceConstraintTriggers(
   db: Database,
   definitions: readonly WorkspaceConstraintTriggerSnapshot[],
@@ -4534,6 +4891,37 @@ function restoreWorkspaceConstraintTriggers(
           `${definition.table} has an invalid INDEXED BY dependency`,
       );
     }
+    if (definition.replacementName !== undefined) {
+      const namedObjects = schemaObjectsWithName(db, definition.replacementName);
+      const temporaryTriggers = namedObjects.filter(
+        ({ object, temporary }) => temporary && object.type === "trigger",
+      );
+      const existing = mainTriggerWithName(db, definition.replacementName);
+      if (
+        temporaryTriggers.length > 0 ||
+        (existing !== null &&
+          !sameTriggerDefinition(
+            existing,
+            recreatedSql,
+            definition.replacementName,
+            definition.table,
+          ))
+      ) {
+        throw new Error(
+          `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
+            `${definition.table} cannot be preserved safely`,
+        );
+      }
+      if (existing !== null) {
+        if (!executableTriggerDefinition(db, recreatedSql)) {
+          throw new Error(
+            `Cannot apply migration 0025 safely: custom trigger ${definition.name} on ` +
+              `${definition.table} cannot be preserved safely`,
+          );
+        }
+        continue;
+      }
+    }
     try {
       db.exec(recreatedSql);
     } catch {
@@ -4549,6 +4937,8 @@ function restoreWorkspaceConstraintTriggers(
       );
     }
   }
+  restoreWorkspaceConstraintTriggerOrder(db, definitions);
+  validateWorkspaceConstraintTriggerTables(db, definitions);
 }
 
 interface RestoreWorkspaceConstraintIndexesOptions {
@@ -6102,6 +6492,26 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
       migration.version === 25 || migration.version === 32 || migration.version === 33
         ? schemaObjectsWithIndexedByDependencies(db, migration.version)
         : [];
+    const plannedTriggerNames = new Set<string>();
+    const workspaceConstraintTriggerSnapshots =
+      migration.version === 25
+        ? captureWorkspaceConstraintTriggers(db, migration.version, plannedTriggerNames)
+        : [];
+    const crossTableTriggerTables = new Set(
+      workspaceConstraintTriggerSnapshots
+        .filter((definition) => definition.replacementName !== undefined)
+        .map((definition) => normalizeSqliteIdentifier(definition.table)),
+    );
+    // Los triggers cross-table se renombran junto con cada trigger MAIN de su
+    // tabla fuente. No pasan por la ruta genérica de recreación de INDEXED BY:
+    // esa ruta volvería a crear el nombre canónico original y perdería el orden.
+    const workspaceIndexedByDependencies = indexedByDependencies.filter(
+      (dependency) =>
+        migration.version !== 25 ||
+        dependency.temporary ||
+        dependency.object.type !== "trigger" ||
+        !crossTableTriggerTables.has(normalizeSqliteIdentifier(dependency.object.tbl_name)),
+    );
     if (migration.version === 25) {
       validateWorkspaceConstraintLegacyIndexDependencies(
         db,
@@ -6145,7 +6555,7 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
         ? indexedByDependencyCollisions(
             db,
             workspaceConstraintNameCollisionPlan(db),
-            indexedByDependencies,
+            workspaceIndexedByDependencies,
             25,
           )
         : [];
@@ -6163,8 +6573,6 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
       migration.version === 25 || migration.version === 33
         ? captureViewsMigrationTriggers(db, "saved_views", migration.version)
         : [];
-    const workspaceConstraintTriggerSnapshots =
-      migration.version === 25 ? captureWorkspaceConstraintTriggers(db, migration.version) : [];
     if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
@@ -6178,6 +6586,13 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
           applyMigrationNameCollisions(db, workspaceNameCollisionPlan);
         }
         if (migration.version === 33) applyMigrationNameCollisions(db, nameCollisionPlan);
+        if (migration.version === 25) {
+          applyWorkspaceConstraintTriggerRenames(
+            db,
+            workspaceConstraintTriggerSnapshots,
+            workspaceIndexReplacements,
+          );
+        }
         db.exec(migration.sql);
         if (migration.version === 32) validateNotificationPreferences(db);
         if (migration.version === 25) {
@@ -6210,7 +6625,7 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
         if (migration.version === 25) {
           applyIndexedByDependencyRewrites(
             db,
-            indexedByDependencies,
+            workspaceIndexedByDependencies,
             workspaceIndexReplacements,
             workspaceNameCollisionPlan,
             25,

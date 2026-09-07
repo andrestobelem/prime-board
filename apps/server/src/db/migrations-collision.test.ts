@@ -2504,6 +2504,40 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("acepta equivalencias SQLite de FOR EACH ROW y UPDATE OF sin orden", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        DROP TRIGGER IF EXISTS issues_fts_update;
+        CREATE TRIGGER issues_fts_update
+        AFTER UPDATE OF "TITLE", "TITLE", "DESCRIPTION" ON issues
+        FOR EACH ROW
+        BEGIN
+          INSERT INTO issues_fts(issues_fts, rowid, title, description)
+          VALUES ('delete', OLD.rowid, OLD.title, coalesce(OLD.description, ''));
+          INSERT INTO issues_fts(rowid, title, description)
+          VALUES (NEW.rowid, NEW.title, coalesce(NEW.description, ''));
+        END;
+      `);
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND name = 'issues_fts_update'",
+          )
+          .get(),
+      ).toEqual({ name: "issues_fts_update", tbl_name: "issues" });
+      expect(db.query("SELECT version FROM _migrations WHERE version = 25").get()).toEqual({
+        version: 25,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("renombra una colisión same-table si un índice equivalente conserva el preflight", () => {
     const db = databaseWithMigrationsThrough(32);
     try {
@@ -6595,6 +6629,1020 @@ describe("colisión de migraciones SQLite", () => {
         db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
       ).toEqual(beforeSchema);
       expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("conserva LIFO entre un cross-table custom y el canónico de teams reconstruido", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        INSERT INTO workspace (id, name, url_key, created_at, updated_at)
+        VALUES ('order-workspace', 'Order Workspace', 'order-workspace', '2026-01-01', '2026-01-01');
+        DROP TRIGGER projects_workspace_scope_insert;
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE rebuilt_target_order_log (value TEXT NOT NULL);
+        CREATE TRIGGER projects_workspace_scope_insert
+        AFTER INSERT ON teams
+        WHEN (SELECT workspace_id FROM teams WHERE id = NEW.id) IS NOT NULL
+        BEGIN
+          INSERT INTO rebuilt_target_order_log(value) VALUES ('custom');
+        END;
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON teams
+        WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+        BEGIN
+          UPDATE teams SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id;
+        END;
+      `);
+      db.query(
+        "INSERT INTO teams (id, name, key, created_at, updated_at) " +
+          "VALUES ('order-before-team', 'Order Before', 'OB', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM rebuilt_target_order_log").all()).toEqual([
+        { value: "custom" },
+      ]);
+      db.exec("DELETE FROM rebuilt_target_order_log");
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'teams' " +
+              "AND lower(name) IN ('projects_workspace_scope_insert_legacy', 'teams_workspace_scope_insert') " +
+              "ORDER BY rowid",
+          )
+          .all(),
+      ).toEqual([
+        { name: "projects_workspace_scope_insert_legacy" },
+        { name: "teams_workspace_scope_insert" },
+      ]);
+      db.query(
+        "INSERT INTO teams (id, name, key, created_at, updated_at) " +
+          "VALUES ('order-after-team', 'Order After', 'OA', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM rebuilt_target_order_log").all()).toEqual([
+        { value: "custom" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("agrupa targets físicos cross-table con casing y quoting mixtos", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        DROP TRIGGER IF EXISTS teams_workspace_scope_insert;
+        DROP TRIGGER IF EXISTS projects_workspace_scope_insert;
+        CREATE TABLE mixed_target_case_log (value TEXT NOT NULL);
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO mixed_target_case_log(value) VALUES ('teams');
+        END;
+        CREATE TRIGGER projects_workspace_scope_insert
+        AFTER INSERT ON "ACTORS"
+        BEGIN
+          INSERT INTO mixed_target_case_log(value) VALUES ('projects');
+        END;
+      `);
+      const before = db
+        .query<{ name: string; tbl_name: string; sql: string }, []>(
+          "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' " +
+            "AND lower(name) IN ('teams_workspace_scope_insert', 'projects_workspace_scope_insert') " +
+            "ORDER BY rowid",
+        )
+        .all();
+
+      migrate(db);
+
+      for (const definition of before) {
+        const after = db
+          .query<{ name: string; tbl_name: string; sql: string }, [string]>(
+            "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+          )
+          .get(`${definition.name}_legacy`);
+        expect(after?.tbl_name).toBe(definition.tbl_name);
+        expect(after?.sql).toBe(
+          definition.sql.replace(
+            new RegExp(`CREATE TRIGGER "?${definition.name}"?`, "i"),
+            `CREATE TRIGGER ${quoteTestIdentifier(`${definition.name}_legacy`)}`,
+          ),
+        );
+      }
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('mixed-target-actor', 'Mixed Target', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM mixed_target_case_log ORDER BY rowid").all()).toEqual([
+        { value: "projects" },
+        { value: "teams" },
+      ]);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) IN ('teams_workspace_scope_insert', 'projects_workspace_scope_insert') " +
+              "ORDER BY lower(name)",
+          )
+          .all(),
+      ).toEqual([
+        { name: "projects_workspace_scope_insert", tbl_name: "projects" },
+        { name: "teams_workspace_scope_insert", tbl_name: "teams" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserva triggers cross-table para las 23 tablas non-Views de 0025", () => {
+    const db = databaseWithMigrationsThrough(24);
+    const canonicalTables = [
+      "teams",
+      "projects",
+      "issues",
+      "labels",
+      "webhooks",
+      "cycles",
+      "reviews",
+      "initiatives",
+      "project_updates",
+      "actor_invitations",
+      "workflow_states",
+      "milestones",
+      "project_teams",
+      "issue_labels",
+      "issue_relations",
+      "comments",
+      "activity",
+      "team_memberships",
+      "api_key_team_limits",
+      "inbox_receipts",
+      "favorites",
+      "initiative_projects",
+      "initiative_teams",
+    ];
+    const triggerNames = canonicalTables.map((table) => `${table}_workspace_scope_insert`);
+    try {
+      db.exec("CREATE TABLE cross_table_matrix_log (value TEXT NOT NULL)");
+      for (const name of triggerNames) {
+        db.exec(`
+          DROP TRIGGER IF EXISTS ${quoteTestIdentifier(name)};
+          CREATE TRIGGER ${quoteTestIdentifier(name)}
+          AFTER INSERT ON actors
+          BEGIN
+            INSERT INTO cross_table_matrix_log(value) VALUES ('${name}:' || NEW.id);
+          END;
+        `);
+      }
+
+      migrate(db);
+
+      for (const [index, table] of canonicalTables.entries()) {
+        const name = triggerNames[index];
+        if (name === undefined) throw new Error(`Missing matrix trigger for ${table}`);
+        expect(
+          db
+            .query(
+              "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' " +
+                "AND lower(name) = lower(?1)",
+            )
+            .get(name),
+        ).toMatchObject({ name, tbl_name: table });
+        expect(
+          db
+            .query(
+              "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' " +
+                "AND lower(name) = lower(?1)",
+            )
+            .get(`${name}_legacy`),
+        ).toMatchObject({
+          name: `${name}_legacy`,
+          tbl_name: "actors",
+          sql: expect.stringContaining(`'${name}:' || NEW.id`),
+        });
+      }
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('matrix-actor', 'Matrix Actor', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(
+        db.query("SELECT value FROM cross_table_matrix_log ORDER BY rowid").all(),
+      ).toHaveLength(canonicalTables.length);
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND " +
+              "lower(name) LIKE '%_workspace_scope_insert_legacy'",
+          )
+          .get(),
+      ).toEqual({ count: canonicalTables.length });
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserva cross-table con cada forma de trigger canónico de 0025", () => {
+    const db = databaseWithMigrationsThrough(24);
+    const cases = [
+      {
+        name: "teams_workspace_scope_insert",
+        event: "AFTER INSERT",
+        when: "NEW.name LIKE 'cross%'",
+        value: "scope-insert",
+        reference: "NEW.id",
+        table: "teams",
+      },
+      {
+        name: "teams_workspace_required_insert",
+        event: "BEFORE INSERT",
+        when: "NEW.name LIKE 'cross%'",
+        value: "required-insert",
+        reference: "NEW.id",
+        table: "teams",
+      },
+      {
+        name: "issues_fts_update",
+        event: "AFTER UPDATE OF name",
+        when: "NEW.name LIKE 'cross%'",
+        value: "fts-update",
+        reference: "NEW.name",
+        table: "issues",
+      },
+      {
+        name: "projects_workspace_required_update",
+        event: "BEFORE UPDATE",
+        when: "NEW.name LIKE 'cross%'",
+        value: "required-update",
+        reference: "NEW.name",
+        table: "projects",
+      },
+      {
+        name: "workflow_states_workspace_required_update",
+        event: "AFTER UPDATE",
+        when: "NEW.name LIKE 'cross%'",
+        value: "plain-update",
+        reference: "NEW.name",
+        table: "workflow_states",
+      },
+      {
+        name: "issues_fts_delete",
+        event: "AFTER DELETE",
+        when: "OLD.name LIKE 'cross%'",
+        value: "fts-delete",
+        reference: "OLD.id",
+        table: "issues",
+      },
+      {
+        name: "workflow_states_workspace_required_insert",
+        event: "BEFORE DELETE",
+        when: "OLD.name LIKE 'cross%'",
+        value: "before-delete",
+        reference: "OLD.id",
+        table: "workflow_states",
+      },
+    ];
+    try {
+      db.exec(`
+        CREATE TABLE cross_table_trigger_log (event TEXT NOT NULL, value TEXT NOT NULL);
+      `);
+      const beforeDefinitions: Array<{ name: string; tbl_name: string; sql: string }> = [];
+      for (const trigger of cases) {
+        db.exec(`
+          DROP TRIGGER IF EXISTS ${quoteTestIdentifier(trigger.name)};
+          CREATE TRIGGER ${quoteTestIdentifier(trigger.name)}
+          ${trigger.event} ON actors
+          WHEN ${trigger.when}
+          BEGIN
+            INSERT INTO cross_table_trigger_log(event, value)
+            VALUES (${quoteTestLiteral(trigger.value)}, ${trigger.reference});
+          END;
+          CREATE TRIGGER ${quoteTestIdentifier(`${trigger.name}_legacy`)}
+          AFTER INSERT ON actors
+          BEGIN
+            SELECT 1;
+          END;
+        `);
+        beforeDefinitions.push(
+          db
+            .query<{ name: string; tbl_name: string; sql: string }, [string]>(
+              "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+            )
+            .get(trigger.name)!,
+        );
+      }
+      db.exec(`
+        CREATE TEMP TABLE cross_table_temp_trigger_log (value TEXT NOT NULL);
+        CREATE TEMP TRIGGER teams_workspace_scope_insert
+        AFTER UPDATE OF name ON actors
+        BEGIN
+          INSERT INTO cross_table_temp_trigger_log(value) VALUES (NEW.name);
+        END;
+      `);
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_temp_master WHERE type = 'trigger' " +
+              "AND lower(name) = 'teams_workspace_scope_insert'",
+          )
+          .all(),
+      ).toEqual([{ name: "teams_workspace_scope_insert", tbl_name: "actors" }]);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master " +
+              "WHERE type = 'trigger' AND lower(name) IN " +
+              "('teams_workspace_scope_insert', 'teams_workspace_required_insert', " +
+              "'issues_fts_update', 'projects_workspace_required_update', " +
+              "'workflow_states_workspace_required_update', 'issues_fts_delete', " +
+              "'workflow_states_workspace_required_insert') " +
+              "ORDER BY lower(name)",
+          )
+          .all(),
+      ).toEqual(
+        cases
+          .map((trigger) => ({ name: trigger.name, tbl_name: trigger.table }))
+          .sort((left, right) => left.name.localeCompare(right.name)),
+      );
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) IN ('projects_workspace_required_update_legacy_2', " +
+              "'teams_workspace_required_insert_legacy_2', 'teams_workspace_scope_insert_legacy_2') " +
+              "AND tbl_name = 'actors' ORDER BY lower(name)",
+          )
+          .all(),
+      ).toEqual([
+        { name: "projects_workspace_required_update_legacy_2", tbl_name: "actors" },
+        { name: "teams_workspace_required_insert_legacy_2", tbl_name: "actors" },
+        { name: "teams_workspace_scope_insert_legacy_2", tbl_name: "actors" },
+      ]);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND name IN ('issues_fts_update_legacy_2', 'issues_fts_delete_legacy_2') " +
+              "ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "issues_fts_delete_legacy_2", tbl_name: "actors" },
+        { name: "issues_fts_update_legacy_2", tbl_name: "actors" },
+      ]);
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND name LIKE '%_legacy' ORDER BY name",
+          )
+          .all(),
+      ).toHaveLength(cases.length);
+
+      for (const [position, before] of beforeDefinitions.entries()) {
+        const trigger = cases[position];
+        if (trigger === undefined)
+          throw new Error(`Missing trigger fixture at position ${position}`);
+        const replacement = `${trigger.name}_legacy_2`;
+        const after = db
+          .query<{ name: string; tbl_name: string; sql: string }, [string]>(
+            "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+          )
+          .get(replacement);
+        expect(after?.tbl_name).toBe("actors");
+        expect(after?.sql).toBe(
+          before.sql.replace(
+            `CREATE TRIGGER ${quoteTestIdentifier(before.name)}`,
+            `CREATE TRIGGER ${quoteTestIdentifier(replacement)}`,
+          ),
+        );
+      }
+
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('cross-actor', 'cross-before', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      db.query("UPDATE actors SET name = 'cross-after' WHERE id = 'cross-actor'").run();
+      db.query("DELETE FROM actors WHERE id = 'cross-actor'").run();
+      expect(db.query("SELECT event FROM cross_table_trigger_log ORDER BY rowid").all()).toEqual([
+        { event: "required-insert" },
+        { event: "scope-insert" },
+        { event: "required-update" },
+        { event: "plain-update" },
+        { event: "fts-update" },
+        { event: "before-delete" },
+        { event: "fts-delete" },
+      ]);
+      expect(db.query("SELECT value FROM cross_table_temp_trigger_log").all()).toEqual([
+        { value: "cross-after" },
+      ]);
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) IN ('teams_workspace_scope_insert', 'teams_workspace_required_insert', " +
+              "'issues_fts_update', 'projects_workspace_required_update', " +
+              "'workflow_states_workspace_required_update', 'issues_fts_delete', " +
+              "'workflow_states_workspace_required_insert')",
+          )
+          .get(),
+      ).toEqual({ count: cases.length });
+      expect(
+        db
+          .query(
+            "SELECT version FROM _migrations WHERE version IN (25, 29, 30, 32, 33) ORDER BY version",
+          )
+          .all(),
+      ).toEqual([
+        { version: 25 },
+        { version: 29 },
+        { version: 30 },
+        { version: 32 },
+        { version: 33 },
+      ]);
+
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) LIKE '%_legacy_2'",
+          )
+          .get(),
+      ).toEqual({ count: cases.length });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reserva nombres TEMP al renombrar un trigger cross-table MAIN", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE temp_trigger_name_log (value TEXT NOT NULL);
+        CREATE TEMP TRIGGER teams_workspace_scope_insert_legacy
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO temp_trigger_name_log(value) VALUES ('temp');
+        END;
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO temp_trigger_name_log(value) VALUES ('main');
+        END;
+      `);
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) IN ('teams_workspace_scope_insert', " +
+              "'teams_workspace_scope_insert_legacy_2') ORDER BY lower(name)",
+          )
+          .all(),
+      ).toEqual([
+        { name: "teams_workspace_scope_insert", tbl_name: "teams" },
+        { name: "teams_workspace_scope_insert_legacy_2", tbl_name: "actors" },
+      ]);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_temp_master WHERE type = 'trigger' " +
+              "AND name = 'teams_workspace_scope_insert_legacy'",
+          )
+          .all(),
+      ).toEqual([{ name: "teams_workspace_scope_insert_legacy", tbl_name: "actors" }]);
+
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('temp-name-before', 'Temp Name Before', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM temp_trigger_name_log ORDER BY rowid").all()).toEqual([
+        { value: "temp" },
+        { value: "main" },
+      ]);
+
+      db.exec("DROP TRIGGER main.teams_workspace_scope_insert_legacy_2");
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('temp-name-after-main-drop', 'Temp Name After Main Drop', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM temp_trigger_name_log ORDER BY rowid").all()).toEqual([
+        { value: "temp" },
+        { value: "main" },
+        { value: "temp" },
+      ]);
+      db.exec("DROP TRIGGER temp.teams_workspace_scope_insert_legacy");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("revierte si otro trigger MAIN de la fuente queda inválido después del DDL", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        ALTER TABLE teams ADD COLUMN legacy_cross_value TEXT;
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE unrelated_actor_trigger_log (value TEXT NOT NULL);
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO unrelated_actor_trigger_log(value) VALUES (NEW.id);
+        END;
+        CREATE TRIGGER custom_actor_bad
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT legacy_cross_value FROM teams LIMIT 1;
+        END;
+      `);
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      let firstError = "";
+      try {
+        migrate(db);
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(
+        /migration 0025.*custom trigger .* on actors.*cannot be preserved safely/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+      db.exec("DROP TRIGGER custom_actor_bad");
+      migrate(db);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) IN ('teams_workspace_scope_insert', " +
+              "'teams_workspace_scope_insert_legacy') ORDER BY lower(name)",
+          )
+          .all(),
+      ).toEqual([
+        { name: "teams_workspace_scope_insert", tbl_name: "teams" },
+        { name: "teams_workspace_scope_insert_legacy", tbl_name: "actors" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("revierte el rename cross-table de 0025 y permite reparar", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        ALTER TABLE teams ADD COLUMN legacy_cross_value TEXT;
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE cross_rollback_log (value TEXT NOT NULL);
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO cross_rollback_log(value) VALUES (NEW.id);
+        END;
+        CREATE TRIGGER custom_teams_rollback_bad
+        AFTER INSERT ON teams
+        BEGIN
+          INSERT INTO cross_rollback_log(value) VALUES (NEW.legacy_cross_value);
+        END;
+      `);
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = (): string => {
+        try {
+          migrate(db);
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+        return "migration unexpectedly succeeded";
+      };
+
+      const firstError = runMigration();
+      expect(firstError).toMatch(
+        /migration 0025.*custom trigger custom_teams_rollback_bad on teams.*cannot be preserved safely/i,
+      );
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND name = 'teams_workspace_scope_insert'",
+          )
+          .get(),
+      ).toEqual({ name: "teams_workspace_scope_insert", tbl_name: "actors" });
+      expect(runMigration()).toBe(firstError);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+
+      db.exec("DROP TRIGGER custom_teams_rollback_bad");
+      migrate(db);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) IN ('teams_workspace_scope_insert', " +
+              "'teams_workspace_scope_insert_legacy') ORDER BY lower(name)",
+          )
+          .all(),
+      ).toEqual([
+        { name: "teams_workspace_scope_insert", tbl_name: "teams" },
+        { name: "teams_workspace_scope_insert_legacy", tbl_name: "actors" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("conserva casing y namespace al elegir el sufijo legacy", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE case_trigger_log (value TEXT NOT NULL);
+        CREATE TRIGGER "TEAMS_WORKSPACE_SCOPE_INSERT"
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO case_trigger_log(value) VALUES (NEW.id);
+        END;
+        CREATE TRIGGER teams_workspace_scope_insert_legacy
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT 1;
+        END;
+      `);
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) IN ('teams_workspace_scope_insert', " +
+              "'teams_workspace_scope_insert_legacy', 'teams_workspace_scope_insert_legacy_2') " +
+              "ORDER BY rowid",
+          )
+          .all(),
+      ).toEqual([
+        { name: "TEAMS_WORKSPACE_SCOPE_INSERT_legacy_2", tbl_name: "actors" },
+        { name: "teams_workspace_scope_insert_legacy", tbl_name: "actors" },
+        { name: "teams_workspace_scope_insert", tbl_name: "teams" },
+      ]);
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) VALUES (?1, ?2, 'human', ?3, ?3)",
+      ).run("case-actor", "Case actor", "2026-01-01");
+      expect(db.query("SELECT value FROM case_trigger_log").all()).toEqual([
+        { value: "case-actor" },
+      ]);
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("revierte y permite reparar un trigger cross-table con INDEXED BY sobre una columna retirada", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        ALTER TABLE teams ADD COLUMN legacy_cross_value TEXT;
+        CREATE INDEX custom_teams_idx ON teams(legacy_cross_value);
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE cross_index_trigger_log (value TEXT NOT NULL);
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO cross_index_trigger_log(value)
+          SELECT NEW.id FROM teams INDEXED BY custom_teams_idx LIMIT 1;
+        END;
+      `);
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      let firstError = "";
+      try {
+        migrate(db);
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(
+        /migration 0025.*custom index custom_teams_idx on teams cannot be restored safely/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND name = 'teams_workspace_scope_insert'",
+          )
+          .get(),
+      ).toEqual({ name: "teams_workspace_scope_insert", tbl_name: "actors" });
+
+      db.exec("DROP INDEX custom_teams_idx; CREATE INDEX custom_teams_idx ON teams(name);");
+      migrate(db);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) IN ('teams_workspace_scope_insert', " +
+              "'teams_workspace_scope_insert_legacy') ORDER BY lower(name)",
+          )
+          .all(),
+      ).toEqual([
+        { name: "teams_workspace_scope_insert", tbl_name: "teams" },
+        { name: "teams_workspace_scope_insert_legacy", tbl_name: "actors" },
+      ]);
+      expect(
+        db
+          .query("SELECT sql FROM sqlite_master WHERE name = 'teams_workspace_scope_insert_legacy'")
+          .get(),
+      ).toEqual({
+        sql: expect.stringContaining("INDEXED BY custom_teams_idx"),
+      });
+
+      db.query(
+        "INSERT INTO teams (id, workspace_id, name, key, created_at, updated_at) " +
+          "VALUES ('indexed-team', NULL, 'Indexed Team', 'IDX', '2026-01-01', '2026-01-01')",
+      ).run();
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('indexed-actor', 'Indexed Actor', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM cross_index_trigger_log").all()).toEqual([
+        { value: "indexed-actor" },
+      ]);
+
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+      expect(
+        db
+          .query(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'index' " +
+              "AND name = 'custom_teams_idx'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("revierte un trigger cross-table con INDEXED BY si desaparece una columna de teams", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        ALTER TABLE teams ADD COLUMN legacy_cross_value TEXT;
+        CREATE INDEX custom_teams_idx ON teams(name);
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE cross_column_trigger_log (value TEXT NOT NULL);
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO cross_column_trigger_log(value)
+          SELECT NEW.id || COALESCE(teams.legacy_cross_value, '')
+          FROM teams INDEXED BY custom_teams_idx LIMIT 1;
+        END;
+      `);
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      let firstError = "";
+      try {
+        migrate(db);
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(
+        /migration 0025.*custom trigger teams_workspace_scope_insert on actors cannot be preserved safely/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND name = 'teams_workspace_scope_insert'",
+          )
+          .get(),
+      ).toEqual({ name: "teams_workspace_scope_insert", tbl_name: "actors" });
+
+      db.exec(`
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO cross_column_trigger_log(value)
+          SELECT NEW.id FROM teams INDEXED BY custom_teams_idx LIMIT 1;
+        END;
+      `);
+      migrate(db);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' " +
+              "AND lower(name) IN ('teams_workspace_scope_insert', " +
+              "'teams_workspace_scope_insert_legacy') ORDER BY lower(name)",
+          )
+          .all(),
+      ).toEqual([
+        { name: "teams_workspace_scope_insert", tbl_name: "teams" },
+        { name: "teams_workspace_scope_insert_legacy", tbl_name: "actors" },
+      ]);
+
+      db.query(
+        "INSERT INTO teams (id, workspace_id, name, key, created_at, updated_at) " +
+          "VALUES ('column-team', NULL, 'Column Team', 'COL', '2026-01-01', '2026-01-01')",
+      ).run();
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('column-actor', 'Column Actor', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM cross_column_trigger_log").all()).toEqual([
+        { value: "column-actor" },
+      ]);
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("conserva el orden LIFO de todos los triggers al renombrar un cross-table", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE trigger_order_log (value TEXT NOT NULL);
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO trigger_order_log(value) VALUES ('cross');
+        END;
+        CREATE TRIGGER custom_actor_order
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO trigger_order_log(value) VALUES ('regular');
+        END;
+      `);
+
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('order-before', 'Order Before', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM trigger_order_log ORDER BY rowid").all()).toEqual([
+        { value: "regular" },
+        { value: "cross" },
+      ]);
+      db.exec("DELETE FROM trigger_order_log");
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'actors' " +
+              "AND lower(name) IN ('teams_workspace_scope_insert_legacy', 'custom_actor_order') " +
+              "ORDER BY rowid",
+          )
+          .all(),
+      ).toEqual([{ name: "teams_workspace_scope_insert_legacy" }, { name: "custom_actor_order" }]);
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('order-after', 'Order After', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM trigger_order_log ORDER BY rowid").all()).toEqual([
+        { value: "regular" },
+        { value: "cross" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reescribe INDEXED BY cuando un índice cross-table ocupa un nombre canónico", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        CREATE INDEX idx_teams_workspace_key ON actors(name);
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE cross_index_rename_log (value TEXT NOT NULL);
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO cross_index_rename_log(value)
+          SELECT NEW.id FROM actors INDEXED BY idx_teams_workspace_key LIMIT 1;
+        END;
+        CREATE TRIGGER custom_actor_index_order
+        AFTER INSERT ON actors
+        BEGIN
+          INSERT INTO cross_index_rename_log(value) VALUES ('regular');
+        END;
+        ALTER TABLE teams ADD COLUMN legacy_cross_value TEXT;
+        CREATE TRIGGER custom_teams_index_bad
+        AFTER INSERT ON teams
+        BEGIN
+          SELECT NEW.legacy_cross_value;
+        END;
+      `);
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('index-before', 'Index Before', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM cross_index_rename_log ORDER BY rowid").all()).toEqual([
+        { value: "regular" },
+        { value: "index-before" },
+      ]);
+      db.exec("DELETE FROM cross_index_rename_log");
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      let firstError = "";
+      try {
+        migrate(db);
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+      expect(firstError).toMatch(
+        /migration 0025.*custom trigger custom_teams_index_bad on teams.*cannot be preserved safely/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      db.exec("DROP TRIGGER custom_teams_index_bad");
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' " +
+              "AND name LIKE 'idx_teams_workspace_key%' ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "idx_teams_workspace_key", tbl_name: "teams" },
+        { name: "idx_teams_workspace_key_legacy", tbl_name: "actors" },
+      ]);
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' " +
+              "AND name = 'teams_workspace_scope_insert_legacy'",
+          )
+          .get(),
+      ).toMatchObject({
+        name: "teams_workspace_scope_insert_legacy",
+        tbl_name: "actors",
+        sql: expect.stringContaining('INDEXED BY "idx_teams_workspace_key_legacy"'),
+      });
+      db.query(
+        "INSERT INTO actors (id, name, type, created_at, updated_at) " +
+          "VALUES ('index-actor', 'Index Actor', 'human', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM cross_index_rename_log ORDER BY rowid").all()).toEqual([
+        { value: "regular" },
+        { value: "index-actor" },
+      ]);
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(markers).not.toEqual(beforeMarkers);
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
     } finally {
       db.close();
     }
