@@ -1367,34 +1367,74 @@ function sqlReferencesIdentifier(sql: string, name: string): boolean {
   );
 }
 
-function viewHasSchemaDependencies(db: Database, view: SchemaObjectRow): boolean {
-  if (view.sql !== null) {
-    const ownTokens = sqliteTokens(view.sql);
-    const selfReferenceCount =
-      ownTokens?.filter(
-        (token) =>
-          (token.kind === "identifier" || token.kind === "quoted_identifier") &&
-          token.value.toLowerCase() === view.name.toLowerCase(),
-      ).length ?? 0;
-    // Una aparición corresponde al nombre de CREATE VIEW. Una segunda puede ser
-    // una referencia recursiva o un nombre de la consulta; ambas son inseguras
-    // si solo se cambia el nombre del objeto.
-    if (selfReferenceCount > 1) return true;
-  }
-  return db
+function schemaObjectsWithDependencies(
+  db: Database,
+): Array<{ object: SchemaObjectRow; temporary: boolean }> {
+  const mainObjects = db
     .query<SchemaObjectRow, SQLQueryBindings[]>(
       "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL",
     )
     .all()
-    .some((object) => {
-      if (object.type === "view" && object.name.toLowerCase() === view.name.toLowerCase()) {
-        return false;
-      }
-      return (
-        object.tbl_name.toLowerCase() === view.name.toLowerCase() ||
-        (object.sql !== null && sqlReferencesIdentifier(object.sql, view.name))
-      );
-    });
+    .map((object) => ({ object, temporary: false }));
+  const temporaryObjects = db
+    .query<SchemaObjectRow, SQLQueryBindings[]>(
+      "SELECT type, name, tbl_name, sql FROM sqlite_temp_master WHERE sql IS NOT NULL",
+    )
+    .all()
+    .map((object) => ({ object, temporary: true }));
+  return [...mainObjects, ...temporaryObjects];
+}
+
+function schemaObjectsWithName(
+  db: Database,
+  name: string,
+): Array<{ object: SchemaObjectRow; temporary: boolean }> {
+  const mainObjects = db
+    .query<SchemaObjectRow, SQLQueryBindings[]>(
+      "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE lower(name) = lower(?1)",
+    )
+    .all(name)
+    .map((object) => ({ object, temporary: false }));
+  const temporaryObjects = db
+    .query<SchemaObjectRow, SQLQueryBindings[]>(
+      "SELECT type, name, tbl_name, sql FROM sqlite_temp_master WHERE lower(name) = lower(?1)",
+    )
+    .all(name)
+    .map((object) => ({ object, temporary: true }));
+  return [...mainObjects, ...temporaryObjects];
+}
+
+function sqlIdentifierOccurrences(sql: string, name: string): number {
+  const tokens = sqliteTokens(sql);
+  return (
+    tokens?.filter(
+      (token) =>
+        (token.kind === "identifier" || token.kind === "quoted_identifier") &&
+        token.value.toLowerCase() === name.toLowerCase(),
+    ).length ?? 0
+  );
+}
+
+function viewHasSchemaDependencies(db: Database, view: SchemaObjectRow): boolean {
+  if (view.sql !== null) {
+    // Una aparición corresponde al nombre de CREATE VIEW. Una segunda puede ser
+    // una referencia recursiva o un nombre de la consulta; ambas son inseguras
+    // si solo se cambia el nombre del objeto.
+    if (sqlIdentifierOccurrences(view.sql, view.name) > 1) return true;
+  }
+  return schemaObjectsWithDependencies(db).some(({ object, temporary }) => {
+    if (object.type === "view" && object.name.toLowerCase() === view.name.toLowerCase()) {
+      if (!temporary) return false;
+      // Una TEMP VIEW puede ocultar intencionadamente un objeto del esquema
+      // principal. Solo es una dependencia si su consulta menciona la View
+      // coincidente después de su propio nombre.
+      return object.sql !== null && sqlIdentifierOccurrences(object.sql, view.name) > 1;
+    }
+    return (
+      object.tbl_name.toLowerCase() === view.name.toLowerCase() ||
+      (object.sql !== null && sqlReferencesIdentifier(object.sql, view.name))
+    );
+  });
 }
 
 function sameTriggerEvent(left: TriggerEvent, right: TriggerEvent): boolean {
@@ -1873,7 +1913,13 @@ function viewsMigrationNameCollisionPlan(
 
   for (const name of reservedIndexNames) {
     const expected = indexByName.get(name.toLowerCase());
-    for (const object of schemaObjects(db, name)) {
+    for (const { object, temporary } of schemaObjectsWithName(db, name)) {
+      if (temporary) {
+        throw new Error(
+          `Cannot apply migration 0033 safely: temporary ${object.type} ${object.name} ` +
+            `blocks the global index/table name ${name}`,
+        );
+      }
       if (object.type === "trigger") continue;
       if (object.type === "view") {
         if (viewHasSchemaDependencies(db, object)) {

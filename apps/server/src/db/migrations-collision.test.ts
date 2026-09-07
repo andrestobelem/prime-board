@@ -2875,6 +2875,124 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("falla cerrado ante una TEMP VIEW dependiente y permite reintentar de forma determinista", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec(`
+        CREATE VIEW view_preferences AS SELECT id, name FROM actors;
+        CREATE TEMP VIEW temp_view_preferences_dependent AS
+          SELECT id, name FROM view_preferences;
+      `);
+      const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeTempSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+        .all();
+      const beforeTempRows = db
+        .query("SELECT id, name FROM temp_view_preferences_dependent ORDER BY id")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      expect(runMigration).toThrow(/view view_preferences.*dependent schema objects/i);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(
+        db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeTempSchema);
+      expect(
+        db.query("SELECT id, name FROM temp_view_preferences_dependent ORDER BY id").all(),
+      ).toEqual(beforeTempRows);
+
+      expect(runMigration).toThrow(/view view_preferences.*dependent schema objects/i);
+      expect(
+        db.query("SELECT id, name FROM temp_view_preferences_dependent ORDER BY id").all(),
+      ).toEqual(beforeTempRows);
+
+      db.exec("DROP VIEW temp_view_preferences_dependent");
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'view' AND lower(name) = lower(?1)",
+          )
+          .get("view_preferences_legacy"),
+      ).toEqual({ name: "view_preferences_legacy", tbl_name: "view_preferences_legacy" });
+      expect(db.query("SELECT id, name FROM view_preferences_legacy ORDER BY id").all()).toEqual(
+        db.query("SELECT id, name FROM actors ORDER BY id").all(),
+      );
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla cerrado ante una TEMP VIEW que ocupa un nombre reservado y permite repararlo", () => {
+    const db = databaseWithMigrationsThrough(32);
+    try {
+      seedLegacyNotificationAndViewData(db);
+      db.exec("CREATE TEMP VIEW view_preferences AS SELECT id, name FROM actors");
+      const beforeRows = db.query("SELECT * FROM saved_views ORDER BY id").all();
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeTempSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+        .all();
+      const beforeTempRows = db.query("SELECT id, name FROM view_preferences ORDER BY id").all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const runMigration = () => migrate(db);
+
+      expect(runMigration).toThrow(/temporary view view_preferences.*global index\/table name/i);
+      expect(db.query("SELECT * FROM saved_views ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(
+        db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeTempSchema);
+      expect(db.query("SELECT id, name FROM view_preferences ORDER BY id").all()).toEqual(
+        beforeTempRows,
+      );
+
+      expect(runMigration).toThrow(/temporary view view_preferences.*global index\/table name/i);
+      expect(db.query("SELECT id, name FROM view_preferences ORDER BY id").all()).toEqual(
+        beforeTempRows,
+      );
+
+      db.exec("DROP VIEW view_preferences");
+      migrate(db);
+
+      expect(db.query("SELECT version FROM _migrations WHERE version = 33").get()).toEqual({
+        version: 33,
+      });
+      expect(
+        db
+          .query("SELECT name FROM sqlite_master WHERE type = 'table' AND lower(name) = lower(?1)")
+          .get("view_preferences"),
+      ).toEqual({ name: "view_preferences" });
+      expect(
+        db.query("SELECT 1 FROM sqlite_temp_master WHERE name = 'view_preferences'").get(),
+      ).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
   it("resuelve una colisión cross-table en una instalación fresh", () => {
     const db = databaseWithMigrationsThrough(31);
     try {
