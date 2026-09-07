@@ -167,6 +167,15 @@ function seedPreWorkspaceConstraintSavedViews(db: Database): void {
       WHERE archived_at IS NULL;
     CREATE VIEW saved_views_custom_by_name AS
       SELECT id, name FROM saved_views INDEXED BY saved_views_custom_name_main;
+    CREATE TABLE saved_views_trigger_audit (saved_view_id TEXT PRIMARY KEY);
+    CREATE TRIGGER saved_views_custom_index_trigger
+    AFTER INSERT ON favorites
+    WHEN NEW.saved_view_id IS NOT NULL
+    BEGIN
+      INSERT OR REPLACE INTO saved_views_trigger_audit(saved_view_id)
+      SELECT id FROM saved_views INDEXED BY saved_views_custom_name_main
+       WHERE id = NEW.saved_view_id;
+    END;
   `);
 }
 
@@ -233,6 +242,22 @@ describe("colisión de migraciones SQLite", () => {
       ]);
       expect(
         db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'saved_views_custom_index_trigger'",
+          )
+          .get(),
+      ).toEqual({ name: "saved_views_custom_index_trigger" });
+      db.query(
+        `INSERT INTO favorites
+           (id, actor_id, project_id, saved_view_id, position, created_at, workspace_id)
+         VALUES ('favorite-0025', 'actor-0025', NULL, 'view-0025', 0,
+                 '2026-01-02T00:00:00.000Z', 'workspace-0025')`,
+      ).run();
+      expect(db.query("SELECT * FROM saved_views_trigger_audit").all()).toEqual([
+        { saved_view_id: "view-0025" },
+      ]);
+      expect(
+        db
           .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
           .all(),
       ).toEqual([
@@ -254,7 +279,7 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
-  it("falla sin escribir si un índice de Views y su VIEW INDEXED BY no son preservables", () => {
+  it("falla sin escribir si índice, VIEW y trigger INDEXED BY no son preservables", () => {
     const db = databaseWithMigrationsThrough(24);
     try {
       seedPreWorkspaceConstraintSavedViewBase(db);
@@ -264,6 +289,15 @@ describe("colisión de migraciones SQLite", () => {
         CREATE INDEX saved_views_legacy_marker ON saved_views(legacy_marker);
         CREATE VIEW saved_views_legacy_marker_view AS
           SELECT id FROM saved_views INDEXED BY saved_views_legacy_marker;
+        CREATE TABLE saved_views_trigger_audit (saved_view_id TEXT PRIMARY KEY);
+        CREATE TRIGGER saved_views_legacy_marker_trigger
+        AFTER INSERT ON favorites
+        WHEN NEW.saved_view_id IS NOT NULL
+        BEGIN
+          INSERT OR REPLACE INTO saved_views_trigger_audit(saved_view_id)
+          SELECT id FROM saved_views INDEXED BY saved_views_legacy_marker
+           WHERE id = NEW.saved_view_id;
+        END;
       `);
       const beforeView = db.query("SELECT * FROM saved_views").all();
       const beforeMarkers = db
@@ -290,6 +324,13 @@ describe("colisión de migraciones SQLite", () => {
           )
           .get(),
       ).toEqual({ name: "saved_views_legacy_marker_view" });
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'saved_views_legacy_marker_trigger'",
+          )
+          .get(),
+      ).toEqual({ name: "saved_views_legacy_marker_trigger" });
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(() => migrate(db)).toThrow(/legacy_marker|preserv|index|VIEW/i);
     } finally {
