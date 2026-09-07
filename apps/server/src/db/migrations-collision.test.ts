@@ -3425,6 +3425,66 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("resuelve nombres keyword y modificadores UPDATE en INDEXED BY", () => {
+    const db = databaseWithMigrationsThrough(31);
+    try {
+      bootstrap(db);
+      db.exec(`
+        CREATE TABLE abort (id TEXT PRIMARY KEY);
+        CREATE TABLE fail (id TEXT PRIMARY KEY);
+        CREATE TABLE ignore (id TEXT PRIMARY KEY);
+        CREATE TABLE replace (id TEXT PRIMARY KEY);
+        CREATE TABLE rollback (id TEXT PRIMARY KEY);
+        INSERT INTO abort (id) VALUES ('abort-row');
+        INSERT INTO fail (id) VALUES ('fail-row');
+        INSERT INTO ignore (id) VALUES ('ignore-row');
+        INSERT INTO replace (id) VALUES ('replace-row');
+        INSERT INTO rollback (id) VALUES ('rollback-row');
+        CREATE INDEX idx_view_preferences_view ON abort(id);
+        CREATE INDEX idx_view_preferences_key ON fail(id);
+        CREATE INDEX idx_view_preferences_actor ON ignore(id);
+        CREATE INDEX idx_view_subscriptions_view ON replace(id);
+        CREATE INDEX idx_view_subscriptions_actor ON rollback(id);
+        CREATE VIEW dependent_abort AS
+          SELECT id FROM abort INDEXED BY idx_view_preferences_view;
+        CREATE VIEW dependent_fail AS
+          SELECT id FROM fail AS source INDEXED BY idx_view_preferences_key;
+        CREATE VIEW dependent_ignore AS
+          SELECT id FROM ignore INDEXED BY idx_view_preferences_actor;
+        CREATE VIEW dependent_replace AS
+          SELECT id FROM replace AS source INDEXED BY idx_view_subscriptions_view;
+        CREATE VIEW dependent_rollback AS
+          SELECT id FROM rollback INDEXED BY idx_view_subscriptions_actor;
+        CREATE TRIGGER dependent_update_keyword AFTER INSERT ON actors
+        BEGIN
+          UPDATE OR ABORT actors SET name = name WHERE id = NEW.id;
+          SELECT id FROM abort INDEXED BY idx_view_preferences_view WHERE id = 'abort-row';
+        END;
+      `);
+
+      migrate(db);
+
+      for (const { view, id } of [
+        { view: "dependent_abort", id: "abort-row" },
+        { view: "dependent_fail", id: "fail-row" },
+        { view: "dependent_ignore", id: "ignore-row" },
+        { view: "dependent_replace", id: "replace-row" },
+        { view: "dependent_rollback", id: "rollback-row" },
+      ]) {
+        expect(db.query(`SELECT id FROM ${view}`).all()).toEqual([{ id }]);
+      }
+      db.query(
+        `INSERT INTO actors (id, name, type, created_at, updated_at)
+         VALUES ('keyword-trigger-actor', 'keyword-trigger', 'human', '2026-01-01', '2026-01-01')`,
+      ).run();
+      expect(db.query("SELECT name FROM actors WHERE id = 'keyword-trigger-actor'").get()).toEqual({
+        name: "keyword-trigger",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("protege dependencias INDEXED BY durante el renombre de índices de 0032", () => {
     const db = databaseWithMigrationsThrough(31);
     try {

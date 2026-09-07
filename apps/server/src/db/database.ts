@@ -986,17 +986,20 @@ const INDEXED_BY_SOURCE_BOUNDARIES = new Set([
   "set",
   "values",
 ]);
-const INDEXED_BY_UPDATE_MODIFIERS = new Set([
-  "or",
-  "rollback",
-  "abort",
-  "replace",
-  "fail",
-  "ignore",
-]);
+const INDEXED_BY_UPDATE_MODIFIERS = new Set(["rollback", "abort", "replace", "fail", "ignore"]);
 
 type IndexedBySourceScope =
   | { phase: "none" }
+  | {
+      phase: "expect_update_table";
+      tableSchema: string | undefined;
+      inheritsSourceContext: boolean;
+    }
+  | {
+      phase: "expect_update_modifier";
+      tableSchema: string | undefined;
+      inheritsSourceContext: boolean;
+    }
   | { phase: "expect_table"; tableSchema: string | undefined; inheritsSourceContext: boolean }
   | {
       phase: "expect_alias";
@@ -1088,12 +1091,16 @@ function indexedByReferences(sql: string): readonly IndexedByReference[] | null 
       scopes[scopeIndex] = { phase: "none" };
       continue;
     }
-    if (
-      isSqlKeyword(token, "from") ||
-      isSqlKeyword(token, "join") ||
-      isSqlKeyword(token, "update")
-    ) {
+    if (isSqlKeyword(token, "from") || isSqlKeyword(token, "join")) {
       scopes[scopeIndex] = expectIndexedByTable(scope);
+      continue;
+    }
+    if (isSqlKeyword(token, "update")) {
+      scopes[scopeIndex] = {
+        phase: "expect_update_table",
+        tableSchema: undefined,
+        inheritsSourceContext: inheritsIndexedBySourceContext(scope),
+      };
       continue;
     }
     if (scope.phase === "none") continue;
@@ -1145,13 +1152,37 @@ function indexedByReferences(sql: string): readonly IndexedByReference[] | null 
       }
       continue;
     }
-    if (scope.phase === "expect_table") {
+    if (scope.phase === "expect_update_table") {
+      if (isSqlKeyword(token, "or")) {
+        scopes[scopeIndex] = {
+          phase: "expect_update_modifier",
+          tableSchema: scope.tableSchema,
+          inheritsSourceContext: scope.inheritsSourceContext,
+        };
+        continue;
+      }
+      if (isSqlNameToken(token)) {
+        scopes[scopeIndex] = {
+          phase: "after_table",
+          tableName: token.value,
+          tableSchema: scope.tableSchema,
+          inheritsSourceContext: scope.inheritsSourceContext,
+        };
+      }
+      continue;
+    }
+    if (scope.phase === "expect_update_modifier") {
       if (
         token.kind === "identifier" &&
         INDEXED_BY_UPDATE_MODIFIERS.has(token.value.toLowerCase())
       ) {
-        continue;
+        scopes[scopeIndex] = expectIndexedByTable(scope);
+      } else {
+        scopes[scopeIndex] = { phase: "none" };
       }
+      continue;
+    }
+    if (scope.phase === "expect_table") {
       if (isSqlNameToken(token)) {
         scopes[scopeIndex] = {
           phase: "after_table",
