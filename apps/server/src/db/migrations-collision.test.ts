@@ -126,7 +126,177 @@ function seedLegacyViewsMigrationMarker(db: Database): void {
   ).run("2026-01-01T00:00:00.000Z");
 }
 
+function seedPreWorkspaceConstraintSavedViewBase(db: Database): void {
+  db.exec(`
+    INSERT INTO workspace (id, name, url_key, created_at, updated_at)
+    VALUES ('workspace-0025', 'Workspace 0025', 'workspace-0025',
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+    INSERT INTO actors
+      (id, name, email, type, avatar_url, created_at, updated_at, workspace_role, status,
+       suspended_at, suspended_by, left_at)
+    VALUES ('actor-0025', 'admin', 'admin@example.test', 'human', NULL,
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'admin', 'active',
+            NULL, NULL, NULL);
+    INSERT INTO teams
+      (id, name, key, description, next_issue_number, created_at, updated_at, default_state_id,
+       archived_at, visibility, access_policy, workspace_id)
+    VALUES ('team-0025', 'Team 0025', 'T25', NULL, 1,
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL, NULL,
+            'public', 'team_members', 'workspace-0025');
+    INSERT INTO workflow_states
+      (id, team_id, name, type, color, position, created_at, updated_at)
+    VALUES ('state-0025', 'team-0025', 'Backlog', 'backlog', '#6B7280', 0,
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+    UPDATE teams SET default_state_id = 'state-0025' WHERE id = 'team-0025';
+    INSERT INTO saved_views
+      (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+       created_at, updated_at, archived_at, columns_json, workspace_id)
+    VALUES ('view-0025', 'View 0025', 'team', 'team-0025', 'actor-0025', '{}', 'CREATED_DESC',
+            'state', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL, '[]',
+            'workspace-0025');
+  `);
+}
+
+function seedPreWorkspaceConstraintSavedViews(db: Database): void {
+  seedPreWorkspaceConstraintSavedViewBase(db);
+  db.exec(`
+    CREATE INDEX saved_views_custom_name_main ON saved_views(name);
+    CREATE UNIQUE INDEX saved_views_custom_owner_name_unique ON saved_views(owner_id, name);
+    CREATE INDEX saved_views_custom_active_name_partial
+      ON saved_views(name)
+      WHERE archived_at IS NULL;
+    CREATE VIEW saved_views_custom_by_name AS
+      SELECT id, name FROM saved_views INDEXED BY saved_views_custom_name_main;
+  `);
+}
+
 describe("colisión de migraciones SQLite", () => {
+  it("preserva índices MAIN, UNIQUE y partial de Views al migrar 0025→0032→0033", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      seedPreWorkspaceConstraintSavedViews(db);
+      const beforeView = db
+        .query(
+          `SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+                  created_at, updated_at, archived_at, columns_json, workspace_id
+             FROM saved_views
+            WHERE id = 'view-0025'`,
+        )
+        .get();
+      expect(beforeView).not.toBeNull();
+      expect(db.query("SELECT id, name FROM saved_views_custom_by_name").all()).toEqual([
+        { id: "view-0025", name: "View 0025" },
+      ]);
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            `SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+                    created_at, updated_at, archived_at, columns_json, workspace_id
+               FROM saved_views
+              WHERE id = 'view-0025'`,
+          )
+          .get(),
+      ).toEqual(beforeView);
+      for (const index of [
+        "saved_views_custom_name_main",
+        "saved_views_custom_owner_name_unique",
+        "saved_views_custom_active_name_partial",
+        "idx_saved_views_workspace_id",
+      ]) {
+        expect(
+          db.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?1").get(index),
+        ).toEqual({ name: index });
+      }
+      expect(
+        db
+          .query(
+            `SELECT "unique" AS unique_value
+               FROM pragma_index_list('saved_views')
+              WHERE name = 'saved_views_custom_owner_name_unique'`,
+          )
+          .get(),
+      ).toEqual({ unique_value: 1 });
+      expect(
+        db
+          .query(
+            "SELECT sql FROM sqlite_master WHERE name = 'saved_views_custom_active_name_partial'",
+          )
+          .get(),
+      ).toEqual({
+        sql: expect.stringMatching(/WHERE\s+archived_at\s+IS\s+NULL/i),
+      });
+      expect(db.query("SELECT id, name FROM saved_views_custom_by_name").all()).toEqual([
+        { id: "view-0025", name: "View 0025" },
+      ]);
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 32 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+
+      const markers = db.query("SELECT version, name FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT version, name FROM _migrations ORDER BY version").all()).toEqual(
+        markers,
+      );
+      expect(db.query("SELECT id, name FROM saved_views_custom_by_name").all()).toEqual([
+        { id: "view-0025", name: "View 0025" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla sin escribir si un índice de Views y su VIEW INDEXED BY no son preservables", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      seedPreWorkspaceConstraintSavedViewBase(db);
+      db.exec(`
+        ALTER TABLE saved_views ADD COLUMN legacy_marker TEXT;
+        UPDATE saved_views SET legacy_marker = 'legacy';
+        CREATE INDEX saved_views_legacy_marker ON saved_views(legacy_marker);
+        CREATE VIEW saved_views_legacy_marker_view AS
+          SELECT id FROM saved_views INDEXED BY saved_views_legacy_marker;
+      `);
+      const beforeView = db.query("SELECT * FROM saved_views").all();
+      const beforeMarkers = db
+        .query("SELECT version, name FROM _migrations ORDER BY version")
+        .all();
+
+      expect(() => migrate(db)).toThrow(/legacy_marker|preserv|index|VIEW/i);
+      expect(db.query("SELECT * FROM saved_views").all()).toEqual(beforeView);
+      expect(db.query("SELECT version, name FROM _migrations ORDER BY version").all()).toEqual(
+        beforeMarkers,
+      );
+      expect(db.query("SELECT version FROM _migrations WHERE version = 25").get()).toBeNull();
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'saved_views_legacy_marker'",
+          )
+          .get(),
+      ).toEqual({ name: "saved_views_legacy_marker" });
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'view' AND name = 'saved_views_legacy_marker_view'",
+          )
+          .get(),
+      ).toEqual({ name: "saved_views_legacy_marker_view" });
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(() => migrate(db)).toThrow(/legacy_marker|preserv|index|VIEW/i);
+    } finally {
+      db.close();
+    }
+  });
+
   it("aplica Notifications y Views con versiones, tablas e índices únicos", () => {
     const db = openDatabase(":memory:");
     try {
