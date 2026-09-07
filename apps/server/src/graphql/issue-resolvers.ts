@@ -87,7 +87,11 @@ import {
   archivePostgresIssue,
   unarchivePostgresIssue,
 } from "../domain/postgres-issues.ts";
-import { getPostgresActor, mapPostgresActor } from "../domain/postgres-actors.ts";
+import {
+  getPostgresActor,
+  getPostgresActorInWorkspace,
+  mapPostgresActor,
+} from "../domain/postgres-actors.ts";
 import { documentResolvers } from "./document-resolvers.ts";
 import { listPostgresIssueLabels, mapPostgresLabel } from "../domain/postgres-labels.ts";
 import {
@@ -621,9 +625,9 @@ export const issueResolvers = {
           !apiKeyTeamsWithinLimit(context.auth, [team.id])
         )
           return [];
-        return (await listPostgresActivity(context.persistence, issue.id)).map((activity) =>
-          mapActivity(activity, context.workspace.workspaceId),
-        );
+        return (
+          await listPostgresActivity(context.persistence, issue.id, context.workspace.workspaceId)
+        ).map((activity) => mapActivity(activity, context.workspace.workspaceId));
       }
       return listActivity(context.db, issue.id, context.workspace.workspaceId).map((activity) =>
         mapActivity(activity, context.workspace.workspaceId),
@@ -695,7 +699,11 @@ export const issueResolvers = {
   Activity: {
     actor: async (activity: { actorId: string }, _args: unknown, context: Context) => {
       if (context.persistence) {
-        const actor = await getPostgresActor(context.persistence, activity.actorId);
+        const actor = await getPostgresActorInWorkspace(
+          context.persistence,
+          activity.actorId,
+          context.workspace.workspaceId,
+        );
         return actor ? mapPostgresActor(actor) : null;
       }
       return mapActor(lookupActor(context, activity.actorId)!);

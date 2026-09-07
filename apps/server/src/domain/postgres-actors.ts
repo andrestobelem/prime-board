@@ -42,6 +42,23 @@ export async function getPostgresActor(
   return persistence.one<ActorRow>("SELECT * FROM actors WHERE id = $1", [id]);
 }
 
+export async function getPostgresActorInWorkspace(
+  persistence: Persistence | PersistenceTransaction,
+  id: string,
+  workspaceId: string,
+): Promise<ActorRow | null> {
+  return persistence.one<ActorRow>(
+    `SELECT actors.*
+       FROM actors
+       JOIN workspace_memberships AS memberships
+         ON memberships.actor_id = actors.id
+        AND memberships.workspace_id = $2
+        AND memberships.status = 'active'
+      WHERE actors.id = $1`,
+    [id, workspaceId],
+  );
+}
+
 export async function listPostgresActors(
   persistence: Persistence,
   type?: string | null,
