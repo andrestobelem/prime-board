@@ -93,12 +93,31 @@ export function mergeLinearExportWithRepo(
 ): LinearMergeResult {
   const localKey = (options.localTeamKey ?? "AT").toUpperCase();
   const rekeyKey = (options.rekeyTeamKey ?? "PRB").toUpperCase();
+  // Plan the source before creating a staging directory. This keeps malformed
+  // Linear identities from reaching filename, source-map, or merge planning.
+  const plannedSource = writeLinearExportToRepo(source, outputRoot, {
+    ...options,
+    dryRun: true,
+  });
+  if (plannedSource.conflicts.length > 0) {
+    return {
+      source: plannedSource,
+      rekeyed: {},
+      matched: [],
+      skipped: [],
+      conflicts: plannedSource.conflicts.map((finding) => ({
+        code: finding.code,
+        message: finding.message,
+        ...(finding.sourceId ? { identifier: finding.sourceId } : {}),
+      })),
+    };
+  }
+  if (options.dryRun)
+    return { source: plannedSource, rekeyed: {}, matched: [], skipped: [], conflicts: [] };
+  if (plannedSource.losses.length && !options.allowLosses)
+    throw new Error(`Linear merge has ${plannedSource.losses.length} unapproved loss(es)`);
   const stageRoot = mkdtempSync(join(tmpdir(), "prime-board-linear-stage-"));
   const sourceResult = writeLinearExportToRepo(source, stageRoot, options);
-  if (sourceResult.conflicts.length)
-    throw new Error(`Linear merge has ${sourceResult.conflicts.length} source conflict(s)`);
-  if (sourceResult.losses.length && !options.allowLosses)
-    throw new Error(`Linear merge has ${sourceResult.losses.length} unapproved loss(es)`);
   const sourceBase = join(stageRoot, ".prime-board");
   const localBase = join(localRoot, ".prime-board");
   const outputBase = join(outputRoot, ".prime-board");

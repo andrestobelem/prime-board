@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { migrate } from "../db/database.ts";
 import { rebuildFromRepo } from "./importer.ts";
@@ -8,10 +8,15 @@ import { mergeLinearExportWithRepo } from "./linear-merge.ts";
 import type { LinearExport } from "./linear-repo-export.ts";
 
 const source: LinearExport = {
-  workspace: { id: "w", name: "W" },
-  actors: [{ id: "a", name: "admin", type: "human" }],
+  workspace: { id: "00000000-0000-4000-8000-000000000201", name: "W" },
+  actors: [{ id: "00000000-0000-4000-8000-000000000202", name: "admin", type: "human" }],
   teams: [
-    { id: "t", key: "AT", name: "Linear", states: [{ id: "s", name: "Todo", type: "unstarted" }] },
+    {
+      id: "00000000-0000-4000-8000-000000000203",
+      key: "AT",
+      name: "Linear",
+      states: [{ id: "00000000-0000-4000-8000-000000000204", name: "Todo", type: "unstarted" }],
+    },
   ],
   labels: [],
   projects: [],
@@ -19,13 +24,13 @@ const source: LinearExport = {
   relations: [],
   issues: [
     {
-      id: "linear-1",
+      id: "00000000-0000-4000-8000-000000000205",
       identifier: "AT-1",
       number: 1,
       title: "Linear",
-      teamId: "t",
-      stateId: "s",
-      creatorId: "a",
+      teamId: "00000000-0000-4000-8000-000000000203",
+      stateId: "00000000-0000-4000-8000-000000000204",
+      creatorId: "00000000-0000-4000-8000-000000000202",
       createdAt: "2026-01-01",
       updatedAt: "2026-01-01",
     },
@@ -131,6 +136,26 @@ function writeLocalRepo(root: string): void {
 }
 
 describe("mergeLinearExportWithRepo", () => {
+  it("devuelve conflictos de identidad sin crear staging ni salida", () => {
+    const local = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-invalid-local-"));
+    const output = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-invalid-out-"));
+    try {
+      const invalid = JSON.parse(JSON.stringify(source));
+      delete invalid.actors[0].id;
+      const result = mergeLinearExportWithRepo(invalid, local, output);
+      expect(result.source.conflicts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "INVALID_SOURCE_ID" })]),
+      );
+      expect(result.conflicts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "INVALID_SOURCE_ID" })]),
+      );
+      expect(existsSync(join(output, ".prime-board"))).toBe(false);
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+      rmSync(output, { recursive: true, force: true });
+    }
+  });
+
   it("conserva Linear en AT y rekeyea el ticket local colisionado a PRB", () => {
     const local = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-local-"));
     const output = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-out-"));

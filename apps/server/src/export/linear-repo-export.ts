@@ -404,31 +404,45 @@ function recordGraphCycles(
 /** Valida que una captura real no haya sustituido UUIDs por identificadores legibles. */
 export function validateLinearExportUuidIds(source: LinearExport): MigrationFinding[] {
   const findings: MigrationFinding[] = [];
-  const check = (id: string | null | undefined, kind: string, owner: string) => {
-    if (id && !UUID_RE.test(id))
-      findings.push({
-        code: "NON_UUID_SOURCE_ID",
-        message: `${kind} ${owner} has non-UUID source id ${id}`,
-        sourceId: id,
-      });
+  const check = (id: unknown, kind: string, owner: unknown, required = true): void => {
+    if (typeof id !== "string" || id.trim() === "") {
+      if (required)
+        add(
+          findings,
+          "INVALID_SOURCE_ID",
+          `${kind} source id is required and must not be empty`,
+          typeof owner === "string" && owner.trim() ? owner : undefined,
+        );
+      return;
+    }
+    if (!UUID_RE.test(id))
+      add(
+        findings,
+        "NON_UUID_SOURCE_ID",
+        `${kind} ${String(owner)} has non-UUID source id ${id}`,
+        id,
+      );
   };
-  check(source.workspace.id, "workspace", source.workspace.name);
+  const checkOptional = (id: unknown, kind: string, owner: unknown): void => {
+    if (id != null) check(id, kind, owner);
+  };
+  check(source.workspace?.id, "workspace", source.workspace?.name);
   for (const actor of source.actors) check(actor.id, "actor", actor.name);
   for (const team of source.teams) {
     check(team.id, "team", team.key);
-    check(team.defaultStateId, "team.defaultStateId", team.key);
-    check(team.autoCloseStateId, "team.autoCloseStateId", team.key);
+    checkOptional(team.defaultStateId, "team.defaultStateId", team.key);
+    checkOptional(team.autoCloseStateId, "team.autoCloseStateId", team.key);
     for (const state of Array.isArray(team.states) ? team.states : [])
       check(state.id, "state", state.name);
   }
   for (const label of source.labels) {
     check(label.id, "label", label.name);
-    check(label.teamId, "label.teamId", label.name);
+    checkOptional(label.teamId, "label.teamId", label.name);
   }
   for (const project of source.projects) {
     check(project.id, "project", project.name);
-    check(project.leadId, "project.leadId", project.name);
-    check(project.initiativeId, "project.initiativeId", project.name);
+    checkOptional(project.leadId, "project.leadId", project.name);
+    checkOptional(project.initiativeId, "project.initiativeId", project.name);
     for (const teamId of Array.isArray(project.teamIds) ? project.teamIds : [])
       check(teamId, "project.teamId", project.name);
     for (const milestone of Array.isArray(project.milestones) ? project.milestones : [])
@@ -439,11 +453,11 @@ export function validateLinearExportUuidIds(source: LinearExport): MigrationFind
     check(issue.teamId, "issue.teamId", issue.identifier);
     check(issue.stateId, "issue.stateId", issue.identifier);
     check(issue.creatorId, "issue.creatorId", issue.identifier);
-    check(issue.assigneeId, "issue.assigneeId", issue.identifier);
-    check(issue.parentId, "issue.parentId", issue.identifier);
-    check(issue.projectId, "issue.projectId", issue.identifier);
-    check(issue.milestoneId, "issue.milestoneId", issue.identifier);
-    check(issue.cycleId, "issue.cycleId", issue.identifier);
+    checkOptional(issue.assigneeId, "issue.assigneeId", issue.identifier);
+    checkOptional(issue.parentId, "issue.parentId", issue.identifier);
+    checkOptional(issue.projectId, "issue.projectId", issue.identifier);
+    checkOptional(issue.milestoneId, "issue.milestoneId", issue.identifier);
+    checkOptional(issue.cycleId, "issue.cycleId", issue.identifier);
     for (const labelId of Array.isArray(issue.labelIds) ? issue.labelIds : [])
       check(labelId, "issue.labelId", issue.identifier);
     for (const history of Array.isArray(issue.stateHistory) ? issue.stateHistory : [])
@@ -453,10 +467,14 @@ export function validateLinearExportUuidIds(source: LinearExport): MigrationFind
     check(comment.id, "comment", comment.id);
     check(comment.issueId, "comment.issueId", comment.id);
     check(comment.authorId, "comment.authorId", comment.id);
-    check(comment.parentId, "comment.parentId", comment.id);
+    checkOptional(comment.parentId, "comment.parentId", comment.id);
   }
   for (const relation of source.relations ?? []) {
-    check(relation.id, "relation", relation.id ?? `${relation.issueId}/${relation.relatedIssueId}`);
+    checkOptional(
+      relation.id,
+      "relation",
+      relation.id ?? `${relation.issueId}/${relation.relatedIssueId}`,
+    );
     check(relation.issueId, "relation.issueId", relation.id ?? "relation");
     check(relation.relatedIssueId, "relation.relatedIssueId", relation.id ?? "relation");
   }
@@ -498,6 +516,25 @@ export function writeLinearExportToRepo(
   const losses: MigrationFinding[] = [];
   const warnings: MigrationFinding[] = [];
   assertLinearExportShape(source);
+  const identityFindings = validateLinearExportUuidIds(source);
+  if (identityFindings.length > 0) {
+    const invalidWorkspaceId =
+      typeof source.workspace?.id === "string" && source.workspace.id.trim()
+        ? source.workspace.id
+        : "invalid-workspace";
+    const result: LinearRepoExportResult = {
+      issues: source.issues.length,
+      comments: Array.isArray(source.comments) ? source.comments.length : 0,
+      events: 0,
+      files: 0,
+      conflicts: identityFindings,
+      losses: [],
+      warnings: [],
+      sourceMap: createSourceMap(invalidWorkspaceId),
+    };
+    if (options.dryRun) return result;
+    throw new Error(`Linear import has ${identityFindings.length} conflict(s)`);
+  }
   const comments = Array.isArray(source.comments) ? source.comments : [];
   const relations = Array.isArray(source.relations) ? source.relations : [];
   if (source.comments != null && !Array.isArray(source.comments))

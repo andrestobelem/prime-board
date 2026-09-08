@@ -5,10 +5,15 @@ import { writeLinearExportToRepo, type LinearExport } from "./linear-repo-export
 import { reconcileLinearExport } from "./linear-reconcile.ts";
 
 const source: LinearExport = {
-  workspace: { id: "w", name: "W" },
+  workspace: { id: "00000000-0000-4000-8000-000000000101", name: "W" },
   actors: [],
   teams: [
-    { id: "t", key: "AT", name: "AT", states: [{ id: "s", name: "Todo", type: "unstarted" }] },
+    {
+      id: "00000000-0000-4000-8000-000000000102",
+      key: "AT",
+      name: "AT",
+      states: [{ id: "00000000-0000-4000-8000-000000000103", name: "Todo", type: "unstarted" }],
+    },
   ],
   labels: [],
   projects: [],
@@ -16,13 +21,13 @@ const source: LinearExport = {
   relations: [],
   issues: [
     {
-      id: "i",
+      id: "00000000-0000-4000-8000-000000000104",
       identifier: "AT-1",
       number: 1,
       title: "Issue",
-      teamId: "t",
-      stateId: "s",
-      creatorId: "missing",
+      teamId: "00000000-0000-4000-8000-000000000102",
+      stateId: "00000000-0000-4000-8000-000000000103",
+      creatorId: "00000000-0000-4000-8000-000000001004",
       createdAt: "2026-01-01",
       updatedAt: "2026-01-01",
     },
@@ -54,8 +59,8 @@ describe("reconcileLinearExport", () => {
       // Se usa un actor válido para que el conversor pueda producir el repo.
       const valid: LinearExport = {
         ...source,
-        actors: [{ id: "a", name: "admin", type: "human" }],
-        issues: [{ ...source.issues[0]!, creatorId: "a" }],
+        actors: [{ id: "00000000-0000-4000-8000-000000000105", name: "admin", type: "human" }],
+        issues: [{ ...source.issues[0]!, creatorId: "00000000-0000-4000-8000-000000000105" }],
       };
       writeLinearExportToRepo(valid, root);
       const report = reconcileLinearExport(valid, root);
