@@ -1872,11 +1872,10 @@ export const resolvers = {
           assertWorkspaceAdmin(viewer);
           if (context.persistence) {
             const actor = mapPostgresActor(
-              await createPostgresActor(
-                context.persistence,
-                args.input,
-                context.workspace.workspaceId,
-              ),
+              await createPostgresActor(context.persistence, {
+                input: args.input,
+                workspaceId: context.workspace.workspaceId,
+              }),
             );
             return { success: true, actor };
           }

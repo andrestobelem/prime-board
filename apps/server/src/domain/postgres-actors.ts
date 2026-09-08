@@ -109,8 +109,13 @@ export async function listPostgresActors(
 
 export async function createPostgresActor(
   persistence: Persistence,
-  input: { name: string; type: string; email?: string | null; avatarUrl?: string | null },
-  workspaceId: string,
+  {
+    input,
+    workspaceId,
+  }: {
+    input: { name: string; type: string; email?: string | null; avatarUrl?: string | null };
+    workspaceId: string;
+  },
 ): Promise<ActorRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Actor name cannot be empty");

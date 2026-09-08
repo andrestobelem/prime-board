@@ -15,9 +15,54 @@ interface GraphqlError {
   extensions?: { code?: string };
 }
 
-interface GraphqlResponse<T> {
-  data?: T;
-  errors?: GraphqlError[];
+type GraphqlResponse<T> =
+  | { kind: "data"; data: T }
+  | { kind: "errors"; errors: GraphqlError[] }
+  | { kind: "partial"; data: T | null; errors: GraphqlError[] };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isGraphqlError(value: unknown): value is GraphqlError {
+  if (!isRecord(value) || typeof value.message !== "string") return false;
+  if (value.extensions === undefined) return true;
+  if (!isRecord(value.extensions)) return false;
+  return value.extensions.code === undefined || typeof value.extensions.code === "string";
+}
+
+function parseGraphqlErrors(value: unknown): GraphqlError[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("GraphQL response errors must be a non-empty array");
+  }
+  const errors: GraphqlError[] = [];
+  for (const error of value) {
+    if (!isGraphqlError(error)) throw new Error("GraphQL response contains an invalid error");
+    errors.push(error);
+  }
+  return errors;
+}
+
+function parseGraphqlResponse<T>(
+  value: unknown,
+  isData: (value: unknown) => value is T,
+): GraphqlResponse<T> {
+  if (!isRecord(value)) throw new Error("GraphQL response must be an object");
+  const hasData = "data" in value;
+  const hasErrors = "errors" in value;
+  if (!hasData && !hasErrors) throw new Error("GraphQL response has no data or errors");
+
+  if (hasErrors) {
+    const errors = parseGraphqlErrors(value.errors);
+    if (!hasData) return { kind: "errors", errors };
+    if (value.data !== null && !isData(value.data)) {
+      throw new Error("GraphQL response data has an unexpected shape");
+    }
+    return { kind: "partial", data: value.data, errors };
+  }
+
+  if (!isData(value.data)) throw new Error("GraphQL response data has an unexpected shape");
+  return { kind: "data", data: value.data };
 }
 
 interface Actor {
@@ -37,31 +82,59 @@ interface ActorsData {
   actors: Actor[];
 }
 
-const integration = process.env.PRIME_BOARD_POSTGRES_URL ? it : it.skip;
+function isActor(value: unknown): value is Actor {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.workspaceId === "string"
+  );
+}
 
-describe("PostgreSQL actorCreate Workspace scope", () => {
+function isActorCreateData(value: unknown): value is ActorCreateData {
+  if (!isRecord(value) || !isRecord(value.actorCreate)) return false;
+  return typeof value.actorCreate.success === "boolean" && isActor(value.actorCreate.actor);
+}
+
+function isActorsData(value: unknown): value is ActorsData {
+  return isRecord(value) && Array.isArray(value.actors) && value.actors.every(isActor);
+}
+
+function requireGraphqlData<T>(response: GraphqlResponse<T>): T {
+  if (response.kind !== "data") {
+    throw new Error("GraphQL response did not return complete data");
+  }
+  return response.data;
+}
+
+const postgresUrl = process.env.PRIME_BOARD_POSTGRES_URL;
+const integration = postgresUrl ? it : it.skip;
+
+describe("Alcance de Workspace de actorCreate en PostgreSQL", () => {
   integration(
-    "creates the Actor only in the effective Workspace and isolates the actors root",
+    "crea el Actor solo en el Workspace efectivo y aísla la raíz de actores",
     async () => {
+      if (!postgresUrl) throw new Error("PRIME_BOARD_POSTGRES_URL is required");
       const harness = await createPostgresHarness({
-        url: process.env.PRIME_BOARD_POSTGRES_URL!,
+        url: postgresUrl,
         schemaPrefix: "prb667_actor_create",
         lockKey: `prb667-actor-create-${randomUUID()}`,
       });
-      const persistence = createPostgresPersistence(harness.sql as unknown as Bun.SQL, {
+      const persistence = createPostgresPersistence(harness.sql, {
         close: false,
       });
       const db = openDatabase(":memory:");
       let stop: (() => void) | undefined;
       try {
         const seeded = await bootstrapPostgres(persistence);
-        if (!seeded.adminApiKey) throw new Error("PostgreSQL bootstrap did not issue an API key");
+        const adminApiKey = seeded.adminApiKey;
+        if (!adminApiKey) throw new Error("PostgreSQL bootstrap did not issue an API key");
         const config = {
           port: 0,
           host: "127.0.0.1",
           authMode: "api-key",
           dbPath: ":memory:",
-          postgresUrl: process.env.PRIME_BOARD_POSTGRES_URL,
+          postgresUrl,
           persistenceBackend: "postgres",
           dev: false,
           webDist: "/tmp/prime-board-no-web",
@@ -73,20 +146,21 @@ describe("PostgreSQL actorCreate Workspace scope", () => {
 
         const request = async <T>(
           query: string,
-          token = seeded.adminApiKey!,
-          workspaceSelector?: string,
+          isData: (value: unknown) => value is T,
+          options: { token?: string; workspaceSelector?: string } = {},
         ): Promise<GraphqlResponse<T>> => {
           const headers: Record<string, string> = {
             "content-type": "application/json",
-            authorization: `Bearer ${token}`,
+            authorization: `Bearer ${options.token ?? adminApiKey}`,
           };
-          if (workspaceSelector) headers["x-workspace-id"] = workspaceSelector;
+          if (options.workspaceSelector) headers["x-workspace-id"] = options.workspaceSelector;
           const response = await fetch(`http://127.0.0.1:${app.server.port}/graphql`, {
             method: "POST",
             headers,
             body: JSON.stringify({ query }),
           });
-          return (await response.json()) as GraphqlResponse<T>;
+          const body: unknown = await response.json();
+          return parseGraphqlResponse(body, isData);
         };
 
         const workspaceA = await persistence.one<{ id: string }>(
@@ -122,20 +196,20 @@ describe("PostgreSQL actorCreate Workspace scope", () => {
           [adminKey.id, workspaceBId, timestamp],
         );
 
-        const created = await request<ActorCreateData>(
+        const createdResponse = await request<ActorCreateData>(
           `mutation {
              actorCreate(input: { name: "PRB-667 scoped actor", type: AGENT }) {
                success
                actor { id name workspaceId }
              }
            }`,
-          seeded.adminApiKey!,
-          workspaceBId,
+          isActorCreateData,
+          { workspaceSelector: workspaceBId },
         );
-        expect(created.errors).toBeUndefined();
-        expect(created.data?.actorCreate.success).toBe(true);
-        const actor = created.data?.actorCreate.actor;
-        if (!actor) throw new Error("PostgreSQL actorCreate did not return an Actor");
+        expect(createdResponse.kind).toBe("data");
+        const created = requireGraphqlData(createdResponse);
+        expect(created.actorCreate.success).toBe(true);
+        const actor = created.actorCreate.actor;
         expect(actor).toMatchObject({ name: "PRB-667 scoped actor", workspaceId: workspaceBId });
 
         const memberships = await persistence.many<{
@@ -153,21 +227,23 @@ describe("PostgreSQL actorCreate Workspace scope", () => {
           { workspace_id: workspaceBId, role: "member", status: "active" },
         ]);
 
-        const actorsA = await request<ActorsData>(
+        const actorsAResponse = await request<ActorsData>(
           "{ actors { id name workspaceId } }",
-          seeded.adminApiKey!,
-          workspaceA.id,
+          isActorsData,
+          { workspaceSelector: workspaceA.id },
         );
-        expect(actorsA.errors).toBeUndefined();
-        expect(actorsA.data?.actors.map((item) => item.id)).not.toContain(actor.id);
+        expect(actorsAResponse.kind).toBe("data");
+        const actorsA = requireGraphqlData(actorsAResponse);
+        expect(actorsA.actors.map((item) => item.id)).not.toContain(actor.id);
 
-        const actorsB = await request<ActorsData>(
+        const actorsBResponse = await request<ActorsData>(
           "{ actors { id name workspaceId } }",
-          seeded.adminApiKey!,
-          workspaceBId,
+          isActorsData,
+          { workspaceSelector: workspaceBId },
         );
-        expect(actorsB.errors).toBeUndefined();
-        expect(actorsB.data?.actors).toContainEqual(actor);
+        expect(actorsBResponse.kind).toBe("data");
+        const actorsB = requireGraphqlData(actorsBResponse);
+        expect(actorsB.actors).toContainEqual(actor);
       } finally {
         stop?.();
         db.close();
