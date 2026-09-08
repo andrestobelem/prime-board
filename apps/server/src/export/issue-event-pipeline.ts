@@ -324,6 +324,21 @@ function commitEventLogSnapshot(rootDir: string, content: string): GitCommitRoll
   let published = false;
   let commit: string | undefined;
   let parent: string | undefined;
+  let undone = false;
+  const rollback = (force = false): void => {
+    if ((!force && (undone || !published)) || !commit) return;
+    const indexPath = resolveGitIndexPath(rootDir);
+    withRealGitIndexLock(rootDir, indexPath, () => {
+      if (readGitHead(rootDir) !== commit) {
+        throw new Error("Cannot compensate canonical event commit after HEAD changed");
+      }
+      // The expected old ref makes compensation fail closed instead of
+      // moving another writer's commit backwards.
+      runGit(rootDir, ["update-ref", "HEAD", parent ?? "", commit!]);
+      if (refreshIndex) restoreRealEventLogIndex(rootDir, indexPath, originalIndexEntry);
+    });
+    undone = true;
+  };
   try {
     assertEventLogSnapshotUnchanged(rootDir, content);
     parent = readGitHead(rootDir);
@@ -346,40 +361,38 @@ function commitEventLogSnapshot(rootDir: string, content: string): GitCommitRoll
     // concurrente se conserva o falla antes de mover HEAD; no se reemplaza
     // entre la comparación y la actualización.
     const indexPath = resolveGitIndexPath(rootDir);
-    withRealGitIndexLock(rootDir, indexPath, () => {
-      refreshIndex = readEventLogIndexEntry(rootDir) === originalIndexEntry;
-      // The expected old ref makes a concurrent commit fail closed instead of
-      // creating a child commit that could drop its event-log changes.
-      runGit(rootDir, [
-        "update-ref",
-        "-m",
-        "chore(events): append canonical issue events",
-        "HEAD",
-        commit!,
-        parent ?? "",
-      ]);
-      if (refreshIndex) updateRealEventLogIndex(rootDir, indexPath, blob);
-    });
+    try {
+      withRealGitIndexLock(rootDir, indexPath, () => {
+        refreshIndex = readEventLogIndexEntry(rootDir) === originalIndexEntry;
+        // The expected old ref makes a concurrent commit fail closed instead of
+        // creating a child commit that could drop its event-log changes.
+        runGit(rootDir, [
+          "update-ref",
+          "-m",
+          "chore(events): append canonical issue events",
+          "HEAD",
+          commit!,
+          parent ?? "",
+        ]);
+        if (refreshIndex) updateRealEventLogIndex(rootDir, indexPath, blob);
+      });
+    } catch (error) {
+      // update-ref can succeed while the index refresh fails. Compensate that
+      // partial publication before returning the original failure.
+      try {
+        rollback(true);
+      } catch {
+        // The original error remains authoritative; the expected-old-ref guard
+        // prevents us from moving a concurrent HEAD backwards.
+      }
+      throw error;
+    }
     published = true;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
 
-  let undone = false;
-  return () => {
-    if (undone || !published || !commit) return;
-    const indexPath = resolveGitIndexPath(rootDir);
-    withRealGitIndexLock(rootDir, indexPath, () => {
-      if (readGitHead(rootDir) !== commit) {
-        throw new Error("Cannot compensate canonical event commit after HEAD changed");
-      }
-      // The expected old ref makes compensation fail closed instead of
-      // moving another writer's commit backwards.
-      runGit(rootDir, ["update-ref", "HEAD", parent ?? "", commit!]);
-      if (refreshIndex) restoreRealEventLogIndex(rootDir, indexPath, originalIndexEntry);
-    });
-    undone = true;
-  };
+  return () => rollback();
 }
 
 /**
