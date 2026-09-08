@@ -237,6 +237,8 @@ try {
       });
       expect(repo).not.toBeNull();
       expect(() => repo!.sync()).toThrow("git unavailable");
+      expect(readEventLog({ rootDir: failingRoot })).toHaveLength(0);
+      expect(readdirSync(join(failingRoot, ".prime-board", "issues"))).toHaveLength(0);
     } finally {
       rmSync(failingRoot, { recursive: true, force: true });
     }
