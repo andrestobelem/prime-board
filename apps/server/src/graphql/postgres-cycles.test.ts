@@ -13,6 +13,7 @@ const integration = process.env.PRIME_BOARD_POSTGRES_URL ? it : it.skip;
 type CycleSnapshot = {
   id: string;
   name: string;
+  number: number;
   state: string;
   cadenceSource: string;
   archivedAt: string | null;
@@ -78,7 +79,7 @@ async function createTeam(key: string, cycleUpcomingCount: number) {
       teamCreate(input: {
         name: $key, key: $key, cyclesEnabled: true, cycleUpcomingCount: $count
       }) {
-        team { id cyclesEnabled cycleUpcomingCount cycles { id state cadenceSource archivedAt } }
+        team { id cyclesEnabled cycleUpcomingCount cycles { id number state cadenceSource archivedAt } }
       }
     }`,
     { key, count: cycleUpcomingCount },
@@ -100,7 +101,7 @@ async function createManualCycle(teamId: string, name: string): Promise<CycleSna
       cycleCreate(input: {
         teamId: $teamId, name: $name,
         startsAt: "2045-01-01T00:00:00.000Z", endsAt: "2045-01-14T23:59:59.000Z"
-      }) { cycle { id name state cadenceSource archivedAt } }
+      }) { cycle { id name number state cadenceSource archivedAt } }
     }`,
     { teamId, name },
   );
@@ -112,7 +113,7 @@ async function createCadenceCycle(teamId: string, name: string): Promise<CycleSn
   const result = await request(
     `mutation($teamId: ID!, $name: String!) {
       cycleCreateFromCadence(input: { teamId: $teamId, name: $name }) {
-        cycle { id name state cadenceSource archivedAt }
+        cycle { id name number state cadenceSource archivedAt }
       }
     }`,
     { teamId, name },
@@ -131,7 +132,7 @@ async function createCycle(
       cycleCreate(input: {
         teamId: $teamId, name: $name, state: $state,
         startsAt: "2035-01-01T00:00:00.000Z", endsAt: "2035-01-14T23:59:59.000Z"
-      }) { cycle { id name state cadenceSource archivedAt } }
+      }) { cycle { id name number state cadenceSource archivedAt } }
     }`,
     { teamId, name, state },
   );
@@ -143,7 +144,7 @@ async function listCycles(teamId: string, includeArchived = false): Promise<Cycl
   const result = await request(
     `query($teamId: ID!, $includeArchived: Boolean!) {
       cycles(teamId: $teamId, includeArchived: $includeArchived) {
-        id name state cadenceSource archivedAt
+        id name number state cadenceSource archivedAt
       }
     }`,
     { teamId, includeArchived },
@@ -153,6 +154,32 @@ async function listCycles(teamId: string, includeArchived = false): Promise<Cycl
 }
 
 describe("PostgreSQL cycles disabled", () => {
+  integration("preserves a newly created cadence cycle in a full horizon", async () => {
+    const team = await createTeam("G625H", 2);
+    expect(team.cycles).toHaveLength(2);
+
+    const created = await createCadenceCycle(team.id, "New cadence cycle");
+    expect(created).toMatchObject({
+      id: expect.any(String),
+      number: 3,
+      name: "New cadence cycle",
+      state: "UPCOMING",
+      cadenceSource: "CADENCE",
+      archivedAt: null,
+    });
+
+    const visible = await listCycles(team.id);
+    expect(visible).toHaveLength(2);
+    expect(visible).toContainEqual({
+      id: created.id,
+      name: "New cadence cycle",
+      number: 3,
+      state: "UPCOMING",
+      cadenceSource: "CADENCE",
+      archivedAt: null,
+    });
+  });
+
   integration("allows cadence cycle creation through PostgreSQL dispatch", async () => {
     const team = await createTeam("G627P", 2);
     const cycle = await createCadenceCycle(team.id, "Cadence dispatch");
