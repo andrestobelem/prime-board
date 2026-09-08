@@ -9437,4 +9437,63 @@ describe("colisión de migraciones SQLite", () => {
       db.close();
     }
   });
+
+  it("rechaza una tabla ordinaria que ocupa el nombre de comments_fts antes de crear markers", () => {
+    const db = databaseWithMigrationsThrough(28);
+    try {
+      db.exec("CREATE TABLE comments_fts(body TEXT, comments_fts TEXT)");
+      const beforeMain = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(/comments_fts.*virtual|FTS5/i);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeMain);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza una colisión FTS aunque todavía falte el marker inmediatamente anterior", () => {
+    const db = databaseWithMigrationsThrough(27);
+    try {
+      db.exec("CREATE TABLE comments_fts(body TEXT, comments_fts TEXT)");
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(/comments_fts.*virtual|FTS5/i);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza triggers FTS incompatibles aunque IF NOT EXISTS los omita", () => {
+    const db = databaseWithMigrationsThrough(28);
+    try {
+      db.exec(`
+        CREATE VIRTUAL TABLE comments_fts USING fts5(
+          body, content = 'comments', content_rowid = 'rowid'
+        );
+        CREATE TRIGGER comments_fts_insert AFTER UPDATE ON comments
+        BEGIN
+          SELECT 1;
+        END;
+      `);
+      const beforeMain = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(/comments_fts_insert.*incompatible|FTS5/i);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeMain);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+    } finally {
+      db.close();
+    }
+  });
 });

@@ -4847,6 +4847,132 @@ function migrationPreflightApplyAlter(
   }
 }
 
+interface ParsedVirtualTableDefinition {
+  name: string;
+  schema: string | null;
+  module: string;
+  options: readonly SqlToken[];
+}
+
+function virtualTableDefinitionFromSql(definition: string): ParsedVirtualTableDefinition | null {
+  const parsed = sqliteTokens(definition);
+  const tokens = parsed === null ? null : singleSqlStatement(parsed);
+  if (tokens === null || !isSqlKeyword(tokens[0], "create")) return null;
+
+  let position = 1;
+  if (isSqlKeyword(tokens[position], "temp") || isSqlKeyword(tokens[position], "temporary")) {
+    return null;
+  }
+  if (!isSqlKeyword(tokens[position], "virtual") || !isSqlKeyword(tokens[position + 1], "table")) {
+    return null;
+  }
+  position += 2;
+  if (isSqlKeyword(tokens[position], "if")) {
+    if (
+      !isSqlKeyword(tokens[position + 1], "not") ||
+      !isSqlKeyword(tokens[position + 2], "exists")
+    ) {
+      return null;
+    }
+    position += 3;
+  }
+
+  const firstName = tokens[position];
+  if (!isSqlNameToken(firstName)) return null;
+  position += 1;
+  let name = firstName.value;
+  let schema: string | null = null;
+  if (tokens[position]?.value === ".") {
+    const secondName = tokens[position + 1];
+    if (!isSqlNameToken(secondName)) return null;
+    schema = name;
+    name = secondName.value;
+    position += 2;
+  }
+  if (!isSqlKeyword(tokens[position], "using")) return null;
+  const module = tokens[position + 1];
+  if (!isSqlNameToken(module)) return null;
+  position += 2;
+  const options = tokens.slice(position);
+  return options.length > 0 ? { name, schema, module: module.value, options } : null;
+}
+
+function commentsFtsMigrationSchemaProblems(db: Database, applied: ReadonlySet<number>): string[] {
+  const problems: string[] = [];
+  const existing = schemaObjectsWithName(db, "comments_fts").find(({ temporary }) => !temporary);
+  if (existing !== undefined) {
+    const tableList = db
+      .query<{ type: string; ncol: number }, SQLQueryBindings[]>(
+        "SELECT type, ncol FROM pragma_table_list WHERE schema = 'main' AND name = ?1 COLLATE NOCASE",
+      )
+      .get(existing.object.name);
+    const expectedStatement = migrationPreflightStatements(migration0029)?.find((statement) => {
+      const tokens = sqliteTokens(statement);
+      return (
+        tokens !== null && isSqlKeyword(tokens[0], "create") && isSqlKeyword(tokens[1], "virtual")
+      );
+    });
+    const actualDefinition =
+      typeof existing.object.sql === "string"
+        ? virtualTableDefinitionFromSql(existing.object.sql)
+        : null;
+    const expectedDefinition =
+      expectedStatement === undefined ? null : virtualTableDefinitionFromSql(expectedStatement);
+    if (
+      existing.object.type !== "table" ||
+      tableList?.type !== "virtual" ||
+      tableList.ncol !== 3 ||
+      actualDefinition === null ||
+      expectedDefinition === null ||
+      !sameSqliteIdentifier(actualDefinition.name, expectedDefinition.name) ||
+      actualDefinition.schema !== expectedDefinition.schema ||
+      !sameSqliteIdentifier(actualDefinition.module, expectedDefinition.module) ||
+      !sameSqlTokens(
+        comparableSqlTokens(actualDefinition.options),
+        comparableSqlTokens(expectedDefinition.options),
+      )
+    ) {
+      problems.push("comments_fts is not the canonical FTS5 virtual table");
+    }
+  }
+
+  // Una base nueva crea `comments` antes de la migración 0029. Si el marker 0028
+  // ya existe, una tabla fuente ausente o alterada impide conservar el contrato
+  // de contenido y triggers FTS5.
+  if (applied.has(28)) {
+    if (!hasTable(db, "comments")) {
+      problems.push("comments_fts source table comments is missing");
+    } else if (!hasColumn(db, "comments", "body")) {
+      problems.push("comments_fts source table comments.body is missing");
+    }
+  }
+
+  const expectedTriggers =
+    migrationPreflightStatements(migration0029)?.flatMap((statement) => {
+      const definition = triggerDefinitionFromSql(statement);
+      return definition === null ? [] : [{ sql: statement, definition }];
+    }) ?? [];
+  for (const expected of expectedTriggers) {
+    const actual = db
+      .query<TriggerDefinitionRow, SQLQueryBindings[]>(
+        "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1 COLLATE NOCASE",
+      )
+      .get(expected.definition.name);
+    if (
+      actual !== null &&
+      !sameTriggerDefinition(
+        actual,
+        expected.sql,
+        expected.definition.name,
+        expected.definition.table,
+      )
+    ) {
+      problems.push(`comments_fts trigger ${expected.definition.name} is incompatible`);
+    }
+  }
+  return problems;
+}
+
 function validatePendingMigrationGuardsBeforeMarker(
   db: Database,
   applied: ReadonlySet<number>,
@@ -4860,7 +4986,7 @@ function validatePendingMigrationGuardsBeforeMarker(
       migration.version,
       applied,
     );
-    if (!priorMigrationsApplied) continue;
+    if (!priorMigrationsApplied && migration.version !== 29) continue;
     switch (migration.version) {
       case 24:
         if (
@@ -4883,6 +5009,15 @@ function validatePendingMigrationGuardsBeforeMarker(
       case 30:
         verifyDocumentsBeforeRetirement(db, options);
         break;
+      case 29: {
+        const problems = commentsFtsMigrationSchemaProblems(db, applied);
+        if (problems.length > 0) {
+          throw new Error(
+            `Cannot apply migration 0029 (comments_fts): incompatible schema (${problems.join("; ")})`,
+          );
+        }
+        break;
+      }
       case 32: {
         const named = schemaObjectsWithName(db, "notification_preferences");
         // El guard de reconciliación de markers gestiona la tabla o vista legacy ajena.
