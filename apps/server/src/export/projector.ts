@@ -12,6 +12,8 @@ export interface ProjectorCheckpoint {
 export interface ProjectorCheckpointStore {
   load(stream: string): Promise<ProjectorCheckpoint | undefined>;
   save(checkpoint: ProjectorCheckpoint): Promise<void>;
+  /** Optional hook to keep a custom checkpoint write in the projection transaction. */
+  saveInTransaction?(tx: PersistenceTransaction, checkpoint: ProjectorCheckpoint): Promise<void>;
 }
 
 /** Short aliases for callers that use generic async names. */
@@ -251,7 +253,14 @@ export class PostgresCheckpointStore implements ProjectorCheckpointStore {
   }
 
   async save(checkpoint: ProjectorCheckpoint): Promise<void> {
-    await this.persistence.transaction((tx) => saveProjectorCheckpoint(tx, checkpoint));
+    await this.persistence.transaction((tx) => this.saveInTransaction(tx, checkpoint));
+  }
+
+  async saveInTransaction(
+    tx: PersistenceTransaction,
+    checkpoint: ProjectorCheckpoint,
+  ): Promise<void> {
+    await saveProjectorCheckpoint(tx, checkpoint);
   }
 
   /** Compatibility names for generic key/value checkpoint adapters. */
@@ -469,10 +478,15 @@ export async function replayPostgresEvents(
     }
     const nextCheckpoint = checkpointFor(options.stream, current);
     try {
+      const saveInTransaction = store.saveInTransaction;
       await options.persistence.transaction(async (tx) => {
         await applyEvent(tx, current, { checkpoint: lastCheckpoint });
-        await saveProjectorCheckpoint(tx, nextCheckpoint);
+        if (saveInTransaction) await saveInTransaction.call(store, tx, nextCheckpoint);
       });
+      // A generic custom store cannot join the Persistence transaction. Save it
+      // only after the domain transaction commits; a failed save leaves the
+      // previous checkpoint so the idempotent event can be retried.
+      if (!saveInTransaction) await store.save(nextCheckpoint);
     } catch (error) {
       return failed(applied, skipped, lastCheckpoint, error, events.length - index);
     }

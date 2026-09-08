@@ -15,6 +15,12 @@ import {
   PostgresRepoSync,
 } from "./postgres-repo-sync.ts";
 import { applyCanonicalEvent } from "./postgres-projector.ts";
+import {
+  PostgresCheckpointStore,
+  replayPostgresEvents,
+  type ProjectorCheckpoint,
+  type ProjectorCheckpointStore,
+} from "./projector.ts";
 
 const actor = { id: "actor-1", name: "Agent", type: "agent" };
 const base = (overrides: Partial<DomainEvent> = {}): DomainEvent => ({
@@ -607,6 +613,62 @@ describe("PostgresRepoSync", () => {
     await sync.sync();
     expect(order).toEqual(["git", "project"]);
     expect(sync.getStatus().result).toMatchObject({ status: "completed", applied: 1, lag: 0 });
+  });
+
+  it("persists a custom checkpoint store instead of writing the SQL checkpoint table", async () => {
+    const root = mkdtempSync(join(tmpdir(), "postgres-replay-custom-checkpoint-"));
+    const writer = new EventLogWriter({ rootDir: root });
+    writer.append(base());
+    const fake = transactionLog();
+    const saved: ProjectorCheckpoint[] = [];
+    const checkpointStore: ProjectorCheckpointStore = {
+      load: async () => undefined,
+      save: async (checkpoint) => {
+        saved.push(checkpoint);
+      },
+    };
+
+    const result = await replayPostgresEvents(async () => undefined, {
+      rootDir: root,
+      stream: "canonical",
+      persistence: fake.persistence,
+      checkpointStore,
+    });
+
+    expect(result).toMatchObject({ status: "completed", applied: 1, lag: 0 });
+    expect(saved).toEqual([
+      {
+        stream: "canonical",
+        eventId: "event-1",
+        occurredAt: "2025-01-01T00:00:00.000Z",
+      },
+    ]);
+    expect(fake.calls.some((call) => call.includes("projector_checkpoints"))).toBe(false);
+  });
+
+  it("keeps the PostgreSQL checkpoint write inside the projection transaction", async () => {
+    const root = mkdtempSync(join(tmpdir(), "postgres-replay-pg-checkpoint-"));
+    const writer = new EventLogWriter({ rootDir: root });
+    writer.append(base());
+    const fake = transactionLog();
+    const checkpointStore = new PostgresCheckpointStore(fake.persistence);
+
+    const result = await replayPostgresEvents(async () => undefined, {
+      rootDir: root,
+      stream: "canonical",
+      persistence: fake.persistence,
+      checkpointStore,
+    });
+
+    expect(result).toMatchObject({ status: "completed", applied: 1, lag: 0 });
+    const transactionStart = fake.calls.indexOf("transaction:start");
+    const checkpointWrite = fake.calls.findIndex((call) =>
+      call.includes("INSERT INTO projector_checkpoints"),
+    );
+    const transactionCommit = fake.calls.indexOf("transaction:commit");
+    expect(transactionStart).toBeGreaterThanOrEqual(0);
+    expect(checkpointWrite).toBeGreaterThan(transactionStart);
+    expect(transactionCommit).toBeGreaterThan(checkpointWrite);
   });
 
   it("loads the durable checkpoint and does not replay a committed event twice", async () => {
