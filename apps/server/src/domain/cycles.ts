@@ -280,6 +280,25 @@ export function findAutoAddCycle(
   return active;
 }
 
+function retireCadenceCyclesBeforeActive(
+  db: Database,
+  teamId: string,
+  activeNumber: number,
+  workspaceId?: string,
+): void {
+  const query = workspaceId
+    ? `UPDATE cycles SET archived_at = ?1, updated_at = ?1
+       WHERE team_id = ?2 AND number < ?3 AND state = 'upcoming'
+         AND cadence_source = 'cadence' AND archived_at IS NULL
+         AND ${workspaceClause("workspace_id", "?4")}`
+    : `UPDATE cycles SET archived_at = ?1, updated_at = ?1
+       WHERE team_id = ?2 AND number < ?3 AND state = 'upcoming'
+         AND cadence_source = 'cadence' AND archived_at IS NULL`;
+  db.query(query).run(
+    ...(workspaceId ? [now(), teamId, activeNumber, workspaceId] : [now(), teamId, activeNumber]),
+  );
+}
+
 export function createCycle(
   db: Database,
   input: {
@@ -375,6 +394,12 @@ export function createCycle(
       timestamp,
       workspaceId ?? null,
     );
+    if (state === "active") {
+      // A direct ACTIVE Cycle is appended after the existing horizon. Retire
+      // stale generated rows before replenishing it so advance follows the
+      // new Cycle instead of an older sequence number.
+      retireCadenceCyclesBeforeActive(db, input.teamId, number, workspaceId);
+    }
     if (
       databaseBoolean(team.cycles_enabled) &&
       (requestedCadence || state !== "upcoming") &&
