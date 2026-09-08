@@ -125,7 +125,7 @@ Diferencias verificadas:
 
 ### 2. Issue, filtros y orden
 
-Prime Board cubre title, description, state, priority, assignee, creator, project, milestone, cycle, parent, labels, full-text, archived y frontier (`unblocked`).
+Prime Board cubre title, description, state, priority, assignee, creator, project, milestone, cycle, parent, labels, full-text, archived, frontier (`unblocked`) y las fechas operativas `dueDate`, `startedAt`, `completedAt` y `canceledAt`, incluidos sus filtros.
 
 Linear también expone filtros por:
 
@@ -134,15 +134,14 @@ Linear también expone filtros por:
 - SLA, activity/comments, sugerencias, clientes y métricas de lead/cycle time.
 - existencia y dirección de relaciones.
 
-Prime Board tiene cuatro órdenes (`CREATED_ASC`, `CREATED_DESC`, `UPDATED_ASC`, `UPDATED_DESC`). Linear ofrece `IssueSortInput` para prioridad, estimate, título, labels, SLA, estado, cycle, milestone, assignee, project, team y orden manual, entre otros.
+Prime Board tiene cuatro órdenes de creación/actualización y seis pares de órdenes para fechas operativas (`DUE_DATE_*`, `STARTED_AT_*`, `COMPLETED_AT_*` y `CANCELED_AT_*`). Los valores nulos usan `NULLS FIRST` en ascendente y `NULLS LAST` en descendente. Linear ofrece `IssueSortInput` para prioridad, estimate, título, labels, SLA, estado, cycle, milestone, assignee, project, team y orden manual, entre otros.
 
 ### 3. Campos e inputs de Issue
 
 Faltan en el tipo local `Issue` o en sus inputs:
 
 - `number` separado del `identifier`.
-- `estimate`, `dueDate` y timestamps `startedAt`, `completedAt`, `canceledAt`.
-- `subscribers`, `delegate`, `attachments`, `history`, `reactions`, `releases` e `inverseRelations`.
+- `estimate`, `subscribers`, `delegate`, `attachments`, `history`, `reactions`, `releases` e `inverseRelations`.
 - `IssueUpdateInput.teamId` para mover el issue entre teams.
 - Mutaciones específicas para subscribe/unsubscribe, unarchive/delete y operaciones batch.
 
@@ -152,7 +151,7 @@ Linear publica `ProjectStatus` como objeto y campos para icon/color, prioridad, 
 
 Prime Board publica un enum `ProjectState`, lead, target date, teams, milestones, issues y updates. No publica miembros, labels, dependencias ni attachments. Los artefactos externos de Linear se conservan como enlaces cuando el export los entrega.
 
-Además, Linear usa `TimelessDate` para fechas sin hora (`targetDate`, `dueDate`). Prime Board usa `DateTime` para `targetDate` de Project, Milestone e Initiative. Los clientes observan esta diferencia semántica.
+Además, Linear usa `TimelessDate` para fechas sin hora (`targetDate`, `dueDate`). Prime Board usa `DateTime`: `dueDate` acepta también una fecha sin hora (interpretada a medianoche UTC), y los timestamps de ciclo registran las transiciones de estado según su semántica documentada. Los clientes observan esta diferencia semántica.
 
 ### 5. Team, User y WorkflowState
 
