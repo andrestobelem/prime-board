@@ -159,7 +159,7 @@ export const projectResolvers = {
           );
           if (
             team &&
-            (await canDiscoverPostgresTeam(context.persistence, viewer, team)) &&
+            (await canDiscoverPostgresTeam(context.persistence, viewer, team, context.workspace)) &&
             apiKeyTeamsWithinLimit(context.auth, [teamId])
           ) {
             teams.push(mapPostgresTeam(team));
@@ -367,7 +367,10 @@ export const projectResolvers = {
             { id: args.team },
             context.workspace,
           );
-          if (!team || !(await canDiscoverPostgresTeam(context.persistence, viewer, team)))
+          if (
+            !team ||
+            !(await canDiscoverPostgresTeam(context.persistence, viewer, team, context.workspace))
+          )
             return [];
           if (team.archived_at && !args.includeArchived) return [];
         }
@@ -447,7 +450,9 @@ export const projectResolvers = {
       if (context.persistence) {
         const teamIds =
           args.input.teamIds == null
-            ? (await listPostgresTeams(context.persistence)).map((team) => team.id)
+            ? (await listPostgresTeams(context.persistence, false, context.workspace)).map(
+                (team) => team.id,
+              )
             : args.input.teamIds;
         for (const teamId of teamIds) {
           const team = await getPostgresTeam(
@@ -459,7 +464,7 @@ export const projectResolvers = {
         }
         await assertPostgresProjectKeyLimit(context, teamIds);
         const project = mapPostgresProject(
-          await createPostgresProject(context.persistence, viewer, args.input),
+          await createPostgresProject(context.persistence, viewer, args.input, context.workspace),
         );
         context.events.emit("project.created", viewer, project);
         return { success: true, project };
@@ -491,7 +496,12 @@ export const projectResolvers = {
             ),
           );
         }
-        const orphaned = await deletePostgresMilestone(context.persistence, viewer, args.id);
+        const orphaned = await deletePostgresMilestone(
+          context.persistence,
+          viewer,
+          args.id,
+          context.workspace,
+        );
         return { success: true, orphanedIssues: orphaned };
       }
       const milestone = getMilestone(context.db, args.id, context.workspace.workspaceId);
@@ -525,13 +535,14 @@ export const projectResolvers = {
           context.persistence,
           viewer,
           args.id,
+          context.workspace,
         );
         await assertPostgresProjectKeyLimit(
           context,
           await listPostgresProjectTeamIds(context.persistence, args.id, context.workspace),
         );
         const archived = mapPostgresProject(
-          await archivePostgresProject(context.persistence, args.id, true),
+          await archivePostgresProject(context.persistence, args.id, true, context.workspace),
         );
         context.events.emit("project.updated", viewer, archived, {
           archivedAt: { from: projectBefore.archived_at, to: archived.archivedAt },
@@ -555,13 +566,14 @@ export const projectResolvers = {
           context.persistence,
           viewer,
           args.id,
+          context.workspace,
         );
         await assertPostgresProjectKeyLimit(
           context,
           await listPostgresProjectTeamIds(context.persistence, args.id, context.workspace),
         );
         const restored = mapPostgresProject(
-          await archivePostgresProject(context.persistence, args.id, false),
+          await archivePostgresProject(context.persistence, args.id, false, context.workspace),
         );
         context.events.emit("project.updated", viewer, restored, {
           archivedAt: { from: projectBefore.archived_at, to: restored.archivedAt },
@@ -596,7 +608,7 @@ export const projectResolvers = {
           await listPostgresProjectTeamIds(context.persistence, project.id, context.workspace),
         );
         const created = mapPostgresMilestone(
-          await createPostgresMilestone(context.persistence, viewer, args.input),
+          await createPostgresMilestone(context.persistence, viewer, args.input, context.workspace),
         );
         return { success: true, milestone: created };
       }
@@ -630,7 +642,13 @@ export const projectResolvers = {
           );
         }
         const updated = mapPostgresMilestone(
-          await updatePostgresMilestone(context.persistence, viewer, args.id, args.input),
+          await updatePostgresMilestone(
+            context.persistence,
+            viewer,
+            args.id,
+            args.input,
+            context.workspace,
+          ),
         );
         return { success: true, milestone: updated };
       }
@@ -659,7 +677,13 @@ export const projectResolvers = {
           args.input.teamIds === undefined ? currentTeams : (args.input.teamIds ?? []);
         await assertPostgresProjectKeyLimit(context, targetTeams);
         const project = mapPostgresProject(
-          await updatePostgresProject(context.persistence, viewer, args.id, args.input),
+          await updatePostgresProject(
+            context.persistence,
+            viewer,
+            args.id,
+            args.input,
+            context.workspace,
+          ),
         );
         context.events.emit("project.updated", viewer, project);
         return { success: true, project };

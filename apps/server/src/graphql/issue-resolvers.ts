@@ -138,7 +138,11 @@ export async function canQueryPostgresIssueFilter(
 ): Promise<boolean> {
   const projectIds = postgresProjectIdsInIssueFilter(filter);
   for (const projectId of projectIds) {
-    const teamIds = await listPostgresProjectTeamIds(context.persistence!, projectId);
+    const teamIds = await listPostgresProjectTeamIds(
+      context.persistence!,
+      projectId,
+      context.workspace,
+    );
     if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) return false;
   }
   for (const milestoneId of postgresMilestoneIdsInIssueFilter(filter)) {
@@ -148,7 +152,11 @@ export async function canQueryPostgresIssueFilter(
       context.workspace,
     );
     if (!milestone) return false;
-    const teamIds = await listPostgresProjectTeamIds(context.persistence!, milestone.project_id);
+    const teamIds = await listPostgresProjectTeamIds(
+      context.persistence!,
+      milestone.project_id,
+      context.workspace,
+    );
     if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) return false;
   }
   return true;
@@ -359,7 +367,11 @@ export const issueResolvers = {
     },
     state: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
-        const state = await getPostgresWorkflowState(context.persistence, issue._row.state_id);
+        const state = await getPostgresWorkflowState(
+          context.persistence,
+          issue._row.state_id,
+          context.workspace,
+        );
         return state && state.team_id === issue._row.team_id
           ? mapPostgresWorkflowState(state)
           : null;
@@ -488,7 +500,12 @@ export const issueResolvers = {
           );
           if (
             labelTeam &&
-            (await canDiscoverPostgresTeam(context.persistence, viewer, labelTeam)) &&
+            (await canDiscoverPostgresTeam(
+              context.persistence,
+              viewer,
+              labelTeam,
+              context.workspace,
+            )) &&
             apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, label.team_id])
           ) {
             visible.push(label);
@@ -508,10 +525,19 @@ export const issueResolvers = {
     project: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.project_id) return null;
       if (context.persistence) {
-        const project = await getPostgresProject(context.persistence, issue._row.project_id);
+        const project = await getPostgresProject(
+          context.persistence,
+          issue._row.project_id,
+          context.workspace,
+        );
         if (
           !project ||
-          !(await canAccessPostgresProject(context.persistence, requireViewer(context), project.id))
+          !(await canAccessPostgresProject(
+            context.persistence,
+            requireViewer(context),
+            project.id,
+            context.workspace,
+          ))
         ) {
           return null;
         }
@@ -545,7 +571,11 @@ export const issueResolvers = {
           context.workspace,
         );
         if (!milestone) return null;
-        const project = await getPostgresProject(context.persistence, milestone.project_id);
+        const project = await getPostgresProject(
+          context.persistence,
+          milestone.project_id,
+          context.workspace,
+        );
         const teamIds = project
           ? await listPostgresProjectTeamIds(context.persistence, project.id, context.workspace)
           : [];
@@ -554,6 +584,7 @@ export const issueResolvers = {
             context.persistence,
             requireViewer(context),
             project.id,
+            context.workspace,
           )) &&
           apiKeyTeamsWithinLimit(context.auth, teamIds)
           ? mapPostgresMilestone(milestone)
@@ -870,6 +901,7 @@ export const issueResolvers = {
           orderBy: args.orderBy,
           teamIds,
           subscriberId: viewer.id,
+          context: context.workspace,
         });
         return {
           nodes: page.rows.map(mapIssue),
@@ -907,16 +939,27 @@ export const issueResolvers = {
           throw apiError("NOT_FOUND", "Team resource not found");
         }
         if (args.input.projectId) {
-          await assertCanManagePostgresProject(context.persistence, viewer, args.input.projectId);
+          await assertCanManagePostgresProject(
+            context.persistence,
+            viewer,
+            args.input.projectId,
+            context.workspace,
+          );
           const projectTeamIds = await listPostgresProjectTeamIds(
             context.persistence,
             args.input.projectId,
+            context.workspace,
           );
           if (!apiKeyTeamsWithinLimit(context.auth, projectTeamIds)) {
             throw apiError("NOT_FOUND", "Project resource not found");
           }
         }
-        const row = await createPostgresIssue(context.persistence, viewer, args.input);
+        const row = await createPostgresIssue(
+          context.persistence,
+          viewer,
+          args.input,
+          context.workspace,
+        );
         context.events.emit("issue.created", viewer, issueEventData(row));
         return { success: true, issue: mapIssue(row) };
       }
@@ -957,15 +1000,26 @@ export const issueResolvers = {
         const effectiveProjectId =
           args.input.projectId !== undefined ? args.input.projectId : existing?.project_id;
         if (args.input.projectId) {
-          await assertCanManagePostgresProject(context.persistence, viewer, args.input.projectId);
+          await assertCanManagePostgresProject(
+            context.persistence,
+            viewer,
+            args.input.projectId,
+            context.workspace,
+          );
         }
         if (args.input.milestoneId && effectiveProjectId) {
-          await assertCanManagePostgresProject(context.persistence, viewer, effectiveProjectId);
+          await assertCanManagePostgresProject(
+            context.persistence,
+            viewer,
+            effectiveProjectId,
+            context.workspace,
+          );
         }
         if (effectiveProjectId) {
           const projectTeamIds = await listPostgresProjectTeamIds(
             context.persistence,
             effectiveProjectId,
+            context.workspace,
           );
           if (!apiKeyTeamsWithinLimit(context.auth, projectTeamIds)) {
             throw apiError("NOT_FOUND", "Project resource not found");
@@ -976,6 +1030,7 @@ export const issueResolvers = {
           viewer,
           args.id,
           args.input,
+          context.workspace,
         );
         if (changes.length > 0) {
           const changeMap = Object.fromEntries(
@@ -1124,7 +1179,12 @@ export const issueResolvers = {
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
-        const result = await archivePostgresIssue(context.persistence, viewer, args.id);
+        const result = await archivePostgresIssue(
+          context.persistence,
+          viewer,
+          args.id,
+          context.workspace,
+        );
         if (result.changed)
           context.events.emit("issue.archived", viewer, issueEventData(result.row));
         return { success: true, issue: mapIssue(result.row) };
@@ -1146,7 +1206,12 @@ export const issueResolvers = {
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
-        const result = await unarchivePostgresIssue(context.persistence, viewer, args.id);
+        const result = await unarchivePostgresIssue(
+          context.persistence,
+          viewer,
+          args.id,
+          context.workspace,
+        );
         if (result.changed)
           context.events.emit("issue.unarchived", viewer, issueEventData(result.row));
         return { success: true, issue: mapIssue(result.row) };
@@ -1173,6 +1238,7 @@ export const issueResolvers = {
         const relatedIssue = await getPostgresIssueByRef(
           context.persistence,
           args.input.relatedIssueId,
+          context.workspace,
         );
         if (!relatedIssue) {
           throw apiError("NOT_FOUND", `Issue not found: ${args.input.relatedIssueId}`);
@@ -1180,9 +1246,19 @@ export const issueResolvers = {
         if (!apiKeyTeamsWithinLimit(context.auth, [issue.team_id, relatedIssue.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
-        await assertPostgresIssueWrite(context.persistence, viewer, issue.id);
-        await assertPostgresIssueWrite(context.persistence, viewer, relatedIssue.id);
-        const created = await createPostgresRelation(context.persistence, viewer.id, args.input);
+        await assertPostgresIssueWrite(context.persistence, viewer, issue.id, context.workspace);
+        await assertPostgresIssueWrite(
+          context.persistence,
+          viewer,
+          relatedIssue.id,
+          context.workspace,
+        );
+        const created = await createPostgresRelation(
+          context.persistence,
+          viewer.id,
+          args.input,
+          context.workspace,
+        );
         const inverse: Record<PostgresRelationType, PostgresRelationType> = {
           blocks: "blocked_by",
           blocked_by: "blocks",
@@ -1261,9 +1337,14 @@ export const issueResolvers = {
         if (!apiKeyTeamsWithinLimit(context.auth, [source.team_id, target.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
-        await assertPostgresIssueWrite(context.persistence, viewer, source.id);
-        await assertPostgresIssueWrite(context.persistence, viewer, target.id);
-        const removed = await deletePostgresRelation(context.persistence, viewer.id, args.id);
+        await assertPostgresIssueWrite(context.persistence, viewer, source.id, context.workspace);
+        await assertPostgresIssueWrite(context.persistence, viewer, target.id, context.workspace);
+        const removed = await deletePostgresRelation(
+          context.persistence,
+          viewer.id,
+          args.id,
+          context.workspace,
+        );
         const inverse: Record<PostgresStoredRelationType, PostgresRelationType> = {
           blocks: "blocked_by",
           related: "related",

@@ -21,16 +21,14 @@ describe("alcance PostgreSQL por Workspace", () => {
 
   it("exige ambos extremos de una Relation en el mismo Workspace", () => {
     const sql = issueRelationWorkspaceScope("issue_relations", "$3");
-    expect(sql).toContain("scope_issue.id = issue_relations.issue_id");
-    expect(sql).toContain("scope_issue.id = issue_relations.related_id");
-    expect(sql.match(/workspace_id = \$3/g)).toHaveLength(2);
+    expect(sql).toBe("issue_relations.workspace_id = $3");
   });
 
   it("hereda el alcance para Issues, Projects, Milestones y Labels", () => {
     expect(issueIdWorkspaceScope("issues.parent_id", "$2")).toContain("FROM issues AS scope_issue");
-    expect(projectWorkspaceScope("projects", "$2")).toContain("FROM project_teams");
-    expect(milestoneWorkspaceScope("milestones", "$2")).toContain("FROM projects");
-    expect(labelWorkspaceScope("labels", "$2")).toContain("labels.team_id IS NULL");
+    expect(projectWorkspaceScope("projects", "$2")).toBe("projects.workspace_id = $2");
+    expect(milestoneWorkspaceScope("milestones", "$2")).toBe("milestones.workspace_id = $2");
+    expect(labelWorkspaceScope("labels", "$2")).toBe("labels.workspace_id = $2");
     expect(actorWorkspaceScope("actors", "$2")).toContain("FROM workspace_memberships");
   });
 
