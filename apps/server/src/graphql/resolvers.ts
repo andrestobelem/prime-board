@@ -3180,7 +3180,19 @@ export const resolvers = {
               viewer,
               args.input,
             );
-            if (args.input.layout != null) {
+            if (
+              args.input.layout != null ||
+              args.input.orderBy != null ||
+              args.input.groupBy != null ||
+              args.input.columns !== undefined
+            ) {
+              const currentPreferences = await getEffectivePostgresViewPreferences(
+                context.persistence,
+                context.workspace.workspaceId,
+                viewer.id,
+                updatedView.id,
+                "issue",
+              );
               await updatePostgresViewPreferences(
                 context.persistence,
                 context.workspace.workspaceId,
@@ -3189,7 +3201,7 @@ export const resolvers = {
                   viewId: updatedView.id,
                   viewType: "issue",
                   scope: "actor",
-                  layout: args.input.layout,
+                  layout: args.input.layout ?? currentPreferences.layout,
                   orderBy: updatedView.order_by,
                   groupBy: updatedView.group_by,
                   columns: JSON.parse(updatedView.columns_json || "[]") as string[],
@@ -3211,12 +3223,24 @@ export const resolvers = {
             args.input,
             context.workspace.workspaceId,
           );
-          if (args.input.layout != null) {
+          if (
+            args.input.layout != null ||
+            args.input.orderBy != null ||
+            args.input.groupBy != null ||
+            args.input.columns !== undefined
+          ) {
+            const currentPreferences = getEffectiveViewPreferences(
+              context.db,
+              context.workspace.workspaceId,
+              viewer.id,
+              updatedView.id,
+              "issue",
+            );
             updateViewPreferences(context.db, context.workspace.workspaceId, viewer.id, {
               viewId: updatedView.id,
               viewType: "issue",
               scope: "actor",
-              layout: args.input.layout,
+              layout: args.input.layout ?? currentPreferences.layout,
               orderBy: updatedView.order_by,
               groupBy: updatedView.group_by,
               columns: JSON.parse(updatedView.columns_json || "[]") as string[],

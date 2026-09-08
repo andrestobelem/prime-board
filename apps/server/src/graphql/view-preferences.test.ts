@@ -91,6 +91,44 @@ describe("view preferences and subscriptions", () => {
     expect(fetched.data!.savedViewSubscriptions).toEqual(fetched.data!.savedView.subscriptions);
   });
 
+  it("persists display changes made through a saved view update", async () => {
+    const created = await gql(
+      app,
+      `mutation {
+        savedViewCreate(input: {
+          name: "Display update view"
+          scope: WORKSPACE
+          layout: BOARD
+          orderBy: UPDATED_ASC
+          groupBy: "priority"
+          columns: ["title"]
+        }) { savedView { id } }
+      }`,
+    );
+    expect(created.errors).toBeUndefined();
+    const viewId = created.data!.savedViewCreate.savedView.id;
+
+    const updated = await gql(
+      app,
+      `mutation($id: ID!) {
+        savedViewUpdate(
+          id: $id
+          input: { orderBy: CREATED_ASC, groupBy: "assignee", columns: ["project"] }
+        ) {
+          savedView { preferences { layout orderBy groupBy columns } }
+        }
+      }`,
+      { id: viewId },
+    );
+    expect(updated.errors).toBeUndefined();
+    expect(updated.data!.savedViewUpdate.savedView.preferences).toMatchObject({
+      layout: "BOARD",
+      orderBy: "CREATED_ASC",
+      groupBy: "assignee",
+      columns: ["project"],
+    });
+  });
+
   it("requires workspace admin for workspace defaults", async () => {
     const view = await gql(
       app,
