@@ -79,6 +79,7 @@ function writeLocalRepo(root: string): void {
         defaultState: "Todo",
         states: [{ name: "Todo", type: "unstarted", color: "#aaa", position: 0 }],
         labels: [],
+        members: [{ actor: "claude", role: "owner" }],
       },
     ]),
   );

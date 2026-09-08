@@ -102,6 +102,43 @@ afterAll(() => {
 });
 
 describe("rebuildFromRepo", () => {
+  it("rechaza un snapshot sin memberships en vez de promover todos los actores", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-missing-members-rebuild-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      rebuildFromRepo(fresh, snapshot);
+      const before = fresh
+        .query(
+          `SELECT
+             (SELECT count(*) FROM actors) AS actors,
+             (SELECT count(*) FROM teams) AS teams,
+             (SELECT count(*) FROM team_memberships) AS memberships`,
+        )
+        .get();
+      const teamsPath = join(snapshot, ".prime-board", "meta", "teams.json");
+      const teams = JSON.parse(readFileSync(teamsPath, "utf8")) as Array<Record<string, unknown>>;
+      delete teams[0]!.members;
+      writeFileSync(teamsPath, JSON.stringify(teams));
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/missing memberships/);
+      expect(
+        fresh
+          .query(
+            `SELECT
+               (SELECT count(*) FROM actors) AS actors,
+               (SELECT count(*) FROM teams) AS teams,
+               (SELECT count(*) FROM team_memberships) AS memberships`,
+          )
+          .get(),
+      ).toEqual(before);
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
   it("reconstruye una DB vacía desde el repo con round-trip idéntico", () => {
     exportBoard(app.db, dir);
     const original = snapshotFiles(dir);
