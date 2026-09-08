@@ -276,18 +276,18 @@ export async function updatePostgresCycle(
   await assertPostgresCycleAccess(persistence, viewer, existing.team_id);
 
   return persistence.transaction(async (tx) => {
-    // Lock the cycle and Team before deriving validation, dates, and planner
-    // effects. This prevents a concurrent update from being applied to stale
-    // state and keeps the mutation atomic with horizon maintenance.
+    // Team is the serialization lock for cycle mutations. Acquire it before
+    // any cycle lock so concurrent updates cannot deadlock while reflowing the
+    // whole horizon.
+    const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
+      existing.team_id,
+    ]);
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
     const current = await tx.one<PostgresCycleRow>(
       "SELECT * FROM cycles WHERE id = $1 FOR UPDATE",
       [id],
     );
     if (!current) throw apiError("NOT_FOUND", "Cycle not found");
-    const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
-      current.team_id,
-    ]);
-    if (!team) throw apiError("NOT_FOUND", "Team not found");
 
     if (
       input.cadenceSource != null &&
@@ -412,6 +412,10 @@ export async function ensureUpcomingPostgresCadenceCyclesInTransaction(
   tx: PersistenceTransaction,
   team: TeamRow,
 ): Promise<readonly PostgresCycleRow[]> {
+  const locked = await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [
+    team.id,
+  ]);
+  if (!locked) throw apiError("NOT_FOUND", "Team not found");
   assertCyclesEnabled(team);
   const all = [
     ...(await tx.many<PostgresCycleRow>(
@@ -600,15 +604,16 @@ export async function advancePostgresCycle(
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
   await assertPostgresCycleAccess(persistence, viewer, existing.team_id);
   const result = await persistence.transaction(async (tx) => {
+    // Keep the Team-first lock order used by cycle updates and horizon reflow.
+    const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
+      existing.team_id,
+    ]);
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
     const current = await tx.one<PostgresCycleRow>(
       "SELECT * FROM cycles WHERE id = $1 FOR UPDATE",
       [id],
     );
     if (!current) throw apiError("NOT_FOUND", "Cycle not found");
-    const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
-      current.team_id,
-    ]);
-    if (!team) throw apiError("NOT_FOUND", "Team not found");
     assertCyclesEnabled(team);
     const active = await tx.one<PostgresCycleRow>(
       `SELECT * FROM cycles
@@ -713,11 +718,17 @@ export async function deletePostgresCycle(
   const team = await getPostgresTeam(persistence, { id: existing.team_id });
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   const reference = `${team.key}/${existing.number}`;
-  const cadenceBeforeDelete = await persistence.one<{ count: number }>(
-    "SELECT count(*)::int AS count FROM cycles WHERE team_id = $1 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL",
-    [existing.team_id],
-  );
   await persistence.transaction(async (tx) => {
+    // Team serializes deletion with updates and cadence reflow. It must be
+    // locked before deleting the cycle row to keep the global lock order.
+    const locked = await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [
+      existing.team_id,
+    ]);
+    if (!locked) throw apiError("NOT_FOUND", "Team not found");
+    const cadenceBeforeDelete = await tx.one<{ count: number }>(
+      "SELECT count(*)::int AS count FROM cycles WHERE team_id = $1 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL",
+      [existing.team_id],
+    );
     await preserveCycleActivityReferences(tx, id, reference);
     const timestamp = now();
     const issues = await tx.many<{ id: string }>(
@@ -731,10 +742,6 @@ export async function deletePostgresCycle(
     }
 
     await tx.execute("DELETE FROM cycles WHERE id = $1", [id]);
-    const locked = await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [
-      existing.team_id,
-    ]);
-    if (!locked) throw apiError("NOT_FOUND", "Team not found");
     const currentTeam = await getPostgresTeam(tx, { id: existing.team_id });
     if (
       (existing.cadence_source === "cadence" || Number(cadenceBeforeDelete?.count ?? 0) > 0) &&

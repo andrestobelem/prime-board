@@ -65,7 +65,7 @@ function cycle(
 function transactionFor(cycles: PostgresCycleRow[], team = planningTeam()): PersistenceTransaction {
   return {
     async one<Row extends object>(sql: string, params?: SqlParameters): Promise<Row | null> {
-      if (sql.includes("SELECT * FROM teams WHERE id = $1")) {
+      if (sql.includes("FROM teams WHERE id = $1")) {
         return team as unknown as Row;
       }
       if (sql.includes("SELECT COALESCE(MAX(number)")) {
