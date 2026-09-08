@@ -582,20 +582,39 @@ export async function deletePostgresInitiativeUpdate(
   });
 }
 
+async function lockPostgresInitiativeSecondaryRows(
+  tx: PersistenceTransaction,
+  initiativeId: string,
+): Promise<void> {
+  // Las filas secundarias se bloquean después de las raíces, las relaciones y los Teams. El
+  // borrado de la raíz las elimina por CASCADE, pero adquirir estos locks de forma explícita
+  // mantiene el orden con status-update delete.
+  await tx.many<{ label_id: string }>(
+    "SELECT label_id FROM initiative_labels WHERE initiative_id = $1 ORDER BY label_id FOR UPDATE",
+    [initiativeId],
+  );
+  await tx.many<{ id: string }>(
+    "SELECT id FROM initiative_updates WHERE initiative_id = $1 ORDER BY id FOR UPDATE",
+    [initiativeId],
+  );
+}
+
 export async function deletePostgresInitiative(
   persistence: Persistence,
   viewer: ActorRow,
   id: string,
 ): Promise<boolean> {
-  const existing = await getPostgresInitiative(persistence, id);
-  if (!existing) throw apiError("NOT_FOUND", "Initiative not found");
-  await assertCanMutatePostgresInitiative(persistence, viewer, existing);
-  await persistence.transaction(async (tx) => {
+  return persistence.transaction(async (tx) => {
+    // La raíz y todo el alcance se bloquean antes de borrar cualquier relación. La autorización
+    // se evalúa con la raíz bloqueada para conservar ACL y evitar una escritura parcial.
+    const { initiative } = await lockPostgresInitiativeScope(tx, id);
+    await assertCanMutatePostgresInitiative(tx, viewer, initiative);
+    await lockPostgresInitiativeSecondaryRows(tx, id);
     await tx.execute("DELETE FROM initiative_projects WHERE initiative_id = $1", [id]);
     await tx.execute("DELETE FROM initiative_teams WHERE initiative_id = $1", [id]);
     await tx.execute("DELETE FROM initiatives WHERE id = $1", [id]);
+    return true;
   });
-  return true;
 }
 
 export async function postgresInitiativeProgress(
