@@ -424,12 +424,19 @@ export async function updatePostgresCycle(
     if (datesChanged && current.state !== "upcoming") {
       throw apiError("VALIDATION_FAILED", "Only future cycle dates can be adjusted");
     }
+    let startsTimestamp: number;
+    let endsTimestamp: number;
     if (datesChanged) {
       const referenceTimestamp = Date.now();
-      parseFutureDateTime(startsAt, "Cycle startsAt", referenceTimestamp);
-      parseFutureDateTime(endsAt, "Cycle endsAt", referenceTimestamp);
+      startsTimestamp = parseFutureDateTime(startsAt, "Cycle startsAt", referenceTimestamp);
+      endsTimestamp = parseFutureDateTime(endsAt, "Cycle endsAt", referenceTimestamp);
+    } else {
+      startsTimestamp = parseDateTime(startsAt, "Cycle startsAt");
+      endsTimestamp = parseDateTime(endsAt, "Cycle endsAt");
     }
-    validateDates(startsAt, endsAt);
+    if (startsTimestamp > endsTimestamp) {
+      throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
+    }
     const nextState = input.state != null ? resolveState(input.state) : current.state;
     if (nextState === "active" && current.state !== "active") {
       const other = await tx.one<{ id: string }>(

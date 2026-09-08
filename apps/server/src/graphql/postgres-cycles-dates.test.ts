@@ -29,7 +29,7 @@ function dateFromNow(days: number): string {
 }
 
 describe("PostgreSQL cycles", () => {
-  integration("rechaza fechas pasadas y conserva el ciclo y el horizonte", async () => {
+  integration("rechaza fechas pasadas y conserva un ciclo UPCOMING", async () => {
     const harness = await createPostgresHarness({
       url: process.env.PRIME_BOARD_POSTGRES_URL!,
       schemaPrefix: "prb625_cycles",
@@ -83,23 +83,24 @@ describe("PostgreSQL cycles", () => {
         `mutation {
           teamCreate(input: {
             name: "PRB-625 date guard", key: "G625",
-            cyclesEnabled: true, cycleUpcomingCount: 2
+            cyclesEnabled: true, cycleUpcomingCount: 0
           }) { team { id } }
         }`,
       );
       expect(teamResult.errors).toBeUndefined();
       const teamId = teamResult.data!.teamCreate.team.id;
 
-      const created = await request<{ cycleCreateFromCadence: { cycle: Cycle } }>(
+      const created = await request<{ cycleCreate: { cycle: Cycle } }>(
         `mutation($teamId: ID!) {
-          cycleCreateFromCadence(input: { teamId: $teamId, name: "Cadence cycle" }) {
-            cycle { id name startsAt endsAt state cadenceSource archivedAt }
-          }
+          cycleCreate(input: {
+            teamId: $teamId, name: "Future manual cycle",
+            startsAt: "2040-01-01T00:00:00.000Z", endsAt: "2040-01-14T23:59:59.000Z"
+          }) { cycle { id name startsAt endsAt state cadenceSource archivedAt } }
         }`,
         { teamId },
       );
       expect(created.errors).toBeUndefined();
-      const cycle = created.data!.cycleCreateFromCadence.cycle;
+      const cycle = created.data!.cycleCreate.cycle;
       const before = await request<{
         cycle: Cycle;
         cycles: Array<Pick<Cycle, "id">>;
@@ -112,15 +113,21 @@ describe("PostgreSQL cycles", () => {
       );
       expect(before.errors).toBeUndefined();
 
-      const rejected = await request<unknown>(
-        `mutation($id: ID!, $startsAt: DateTime!, $endsAt: DateTime!) {
-          cycleUpdate(id: $id, input: {
-            name: "Rejected date update", startsAt: $startsAt, endsAt: $endsAt
-          }) { success }
+      const rejectedStart = await request<unknown>(
+        `mutation($id: ID!, $startsAt: DateTime!) {
+          cycleUpdate(id: $id, input: { startsAt: $startsAt }) { success }
         }`,
-        { id: cycle.id, startsAt: dateFromNow(-2), endsAt: dateFromNow(-1) },
+        { id: cycle.id, startsAt: dateFromNow(-2) },
       );
-      expect(rejected.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+      expect(rejectedStart.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+      const rejectedEnd = await request<unknown>(
+        `mutation($id: ID!, $endsAt: DateTime!) {
+          cycleUpdate(id: $id, input: { endsAt: $endsAt }) { success }
+        }`,
+        { id: cycle.id, endsAt: dateFromNow(-1) },
+      );
+      expect(rejectedEnd.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
 
       const after = await request<{
         cycle: Cycle;
