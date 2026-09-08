@@ -153,6 +153,17 @@ async function listCycles(teamId: string, includeArchived = false): Promise<Cycl
 }
 
 describe("PostgreSQL cycles disabled", () => {
+  integration("allows cadence cycle creation through PostgreSQL dispatch", async () => {
+    const team = await createTeam("G627P", 2);
+    const cycle = await createCadenceCycle(team.id, "Cadence dispatch");
+
+    expect(cycle).toMatchObject({
+      state: "UPCOMING",
+      cadenceSource: "CADENCE",
+      archivedAt: null,
+    });
+  });
+
   integration("archives all future sources and does not restore retired cycles", async () => {
     const manualTeam = await createTeam("M627P", 0);
     const cadenceTeam = await createTeam("C627P", 2);

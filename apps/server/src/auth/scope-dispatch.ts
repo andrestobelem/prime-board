@@ -75,6 +75,7 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:milestoneUpdate",
   "mutation:milestoneDelete",
   "mutation:cycleCreate",
+  "mutation:cycleCreateFromCadence",
   "mutation:cycleUpdate",
   "mutation:cycleDelete",
   "mutation:cycleCarryOver",
