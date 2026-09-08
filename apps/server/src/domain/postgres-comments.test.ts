@@ -10,6 +10,10 @@ import {
   mapPostgresComment,
   type PostgresCommentRow,
 } from "./postgres-comments.ts";
+import type { WorkspaceContext } from "./workspace-context.ts";
+
+const workspaceA: WorkspaceContext = { workspaceId: "workspace-a" };
+const workspaceB: WorkspaceContext = { workspaceId: "workspace-b" };
 
 const row: PostgresCommentRow = {
   id: "comment-a",
@@ -55,7 +59,7 @@ describe("PostgreSQL comments", () => {
 
   it("binds the effective Workspace to the Issue, Comment, and author Membership", async () => {
     const { persistence, calls } = fakePersistence([row]);
-    const comments = await listPostgresComments(persistence, "issue-a", "workspace-a");
+    const comments = await listPostgresComments(persistence, "issue-a", workspaceA);
 
     expect(comments).toEqual([row]);
     expect(calls).toHaveLength(1);
@@ -67,7 +71,7 @@ describe("PostgreSQL comments", () => {
 
   it("does not use a global Actor lookup for nested comments", async () => {
     const { persistence, calls } = fakePersistence([]);
-    await listPostgresComments(persistence, "issue-a", "workspace-b");
+    await listPostgresComments(persistence, "issue-a", workspaceB);
 
     expect(calls[0]?.sql).toContain("JOIN workspace_memberships AS memberships");
     expect(calls[0]?.sql).not.toContain("SELECT actors.*");

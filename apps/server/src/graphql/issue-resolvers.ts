@@ -565,9 +565,17 @@ export const issueResolvers = {
     comments: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
         const workspaceId = context.workspace.workspaceId;
-        const scopedIssue = await getPostgresIssue(context.persistence, issue.id, workspaceId);
+        const scopedIssue = await getPostgresIssue(
+          context.persistence,
+          issue.id,
+          context.workspace,
+        );
         if (!scopedIssue) return [];
-        const team = await getPostgresTeam(context.persistence, { id: scopedIssue.team_id });
+        const team = await getPostgresTeam(
+          context.persistence,
+          { id: scopedIssue.team_id },
+          context.workspace,
+        );
         if (
           !team ||
           !(await canDiscoverPostgresTeam(context.persistence, requireViewer(context), team)) ||
@@ -575,9 +583,9 @@ export const issueResolvers = {
         ) {
           return [];
         }
-        return (await listPostgresComments(context.persistence, scopedIssue.id, workspaceId)).map(
-          mapPostgresComment,
-        );
+        return (
+          await listPostgresComments(context.persistence, scopedIssue.id, context.workspace)
+        ).map(mapPostgresComment);
       }
       return listComments(context.db, issue.id, context.workspace.workspaceId).map(mapComment);
     },
@@ -715,9 +723,17 @@ export const issueResolvers = {
       if (context.persistence) {
         const workspaceId = context.workspace.workspaceId;
         if (comment._workspaceId && comment._workspaceId !== workspaceId) return null;
-        const issue = await getPostgresIssue(context.persistence, comment.issueId, workspaceId);
+        const issue = await getPostgresIssue(
+          context.persistence,
+          comment.issueId,
+          context.workspace,
+        );
         if (!issue) return null;
-        const team = await getPostgresTeam(context.persistence, { id: issue.team_id });
+        const team = await getPostgresTeam(
+          context.persistence,
+          { id: issue.team_id },
+          context.workspace,
+        );
         if (
           !team ||
           !(await canDiscoverPostgresTeam(context.persistence, requireViewer(context), team)) ||

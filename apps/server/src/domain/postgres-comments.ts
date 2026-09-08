@@ -1,4 +1,5 @@
 import type { Persistence, PersistenceTransaction } from "../db/persistence.ts";
+import type { WorkspaceContext } from "./workspace-context.ts";
 import type { CommentRow } from "./comments.ts";
 
 /** A PostgreSQL comment row scoped to the Workspace that owns its Issue. */
@@ -37,8 +38,9 @@ export function mapPostgresComment(row: PostgresCommentRow): PostgresCommentView
 export async function listPostgresComments(
   persistence: Persistence | PersistenceTransaction,
   issueId: string,
-  workspaceId: string,
+  context: WorkspaceContext,
 ): Promise<readonly PostgresCommentRow[]> {
+  const workspaceId = context.workspaceId;
   return persistence.many<PostgresCommentRow>(
     `SELECT comments.*
        FROM comments
