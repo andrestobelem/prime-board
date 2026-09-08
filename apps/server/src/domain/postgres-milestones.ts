@@ -9,6 +9,12 @@ import {
   listPostgresProjectTeamIds,
 } from "./postgres-projects.ts";
 import type { ActorRow } from "../auth/viewer.ts";
+import type { PostgresWorkspaceContext } from "./postgres-workspace-scope.ts";
+import {
+  milestoneWorkspaceScope,
+  projectWorkspaceScope,
+  scopedWorkspacePredicate,
+} from "./postgres-workspace-scope.ts";
 
 export interface PostgresMilestoneRow {
   id: string;
@@ -36,17 +42,35 @@ export function mapPostgresMilestone(row: PostgresMilestoneRow) {
 export async function getPostgresMilestone(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresMilestoneRow | null> {
-  return persistence.one<PostgresMilestoneRow>("SELECT * FROM milestones WHERE id = $1", [id]);
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => milestoneWorkspaceScope("milestones", workspaceParam),
+    "$2",
+  );
+  return persistence.one<PostgresMilestoneRow>(
+    `SELECT milestones.* FROM milestones WHERE milestones.id = $1 AND ${scope}`,
+    [id, ...(context ? [context.workspaceId] : [])],
+  );
 }
 
 export async function listPostgresMilestones(
   persistence: Persistence | PersistenceTransaction,
   projectId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<readonly PostgresMilestoneRow[]> {
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => projectWorkspaceScope("projects", workspaceParam),
+    "$2",
+  );
   return persistence.many<PostgresMilestoneRow>(
-    "SELECT * FROM milestones WHERE project_id = $1 ORDER BY position, created_at, id",
-    [projectId],
+    `SELECT milestones.* FROM milestones
+       JOIN projects ON projects.id = milestones.project_id
+      WHERE milestones.project_id = $1 AND ${scope}
+      ORDER BY milestones.position, milestones.created_at, milestones.id`,
+    [projectId, ...(context ? [context.workspaceId] : [])],
   );
 }
 
@@ -85,6 +109,7 @@ export async function createPostgresMilestone(
     targetDate?: string | null;
     position?: number | null;
   },
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresMilestoneRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Milestone name cannot be empty");
@@ -123,7 +148,7 @@ export async function createPostgresMilestone(
     }
     throw error;
   }
-  const row = await getPostgresMilestone(persistence, id);
+  const row = await getPostgresMilestone(persistence, id, context);
   if (!row) throw new Error("PostgreSQL milestone insert returned no row");
   return row;
 }
@@ -138,8 +163,9 @@ export async function updatePostgresMilestone(
     targetDate?: string | null;
     position?: number | null;
   },
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresMilestoneRow> {
-  const milestone = await getPostgresMilestone(persistence, id);
+  const milestone = await getPostgresMilestone(persistence, id, context);
   if (!milestone) throw apiError("NOT_FOUND", "Milestone not found");
   await assertPostgresMilestoneAccess(persistence, viewer, milestone.project_id);
   validatePosition(input.position);
@@ -174,7 +200,7 @@ export async function updatePostgresMilestone(
       throw error;
     }
   }
-  return (await getPostgresMilestone(persistence, id))!;
+  return (await getPostgresMilestone(persistence, id, context))!;
 }
 
 async function preserveMilestoneActivityReferences(
@@ -226,11 +252,12 @@ export async function deletePostgresMilestone(
   persistence: Persistence,
   viewer: ActorRow,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<number> {
-  const milestone = await getPostgresMilestone(persistence, id);
+  const milestone = await getPostgresMilestone(persistence, id, context);
   if (!milestone) throw apiError("NOT_FOUND", "Milestone not found");
   await assertPostgresMilestoneAccess(persistence, viewer, milestone.project_id);
-  const project = await getPostgresProject(persistence, milestone.project_id);
+  const project = await getPostgresProject(persistence, milestone.project_id, context);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
   const reference = `${project.name}/${milestone.name}`;
   let affected = 0;
@@ -263,8 +290,9 @@ export async function assertPostgresMilestoneMatchesProject(
   persistence: Persistence | PersistenceTransaction,
   milestoneId: string,
   projectId: string | null,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
-  const milestone = await getPostgresMilestone(persistence, milestoneId);
+  const milestone = await getPostgresMilestone(persistence, milestoneId, context);
   if (!milestone) throw apiError("NOT_FOUND", "Milestone not found");
   if (!projectId) {
     throw apiError("VALIDATION_FAILED", "Issue must belong to a project to have a milestone");
@@ -278,8 +306,9 @@ export async function canAccessPostgresMilestone(
   persistence: Persistence,
   viewer: ActorRow,
   milestoneId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
-  const milestone = await getPostgresMilestone(persistence, milestoneId);
+  const milestone = await getPostgresMilestone(persistence, milestoneId, context);
   return Boolean(
     milestone && (await canAccessPostgresProject(persistence, viewer, milestone.project_id)),
   );

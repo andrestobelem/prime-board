@@ -4,6 +4,12 @@ import { newId, now } from "../db/util.ts";
 import { getPostgresTeam, isPostgresTeamOwner } from "./postgres-teams.ts";
 import type { IssueRow } from "./issues.ts";
 import type { ActorRow } from "../auth/viewer.ts";
+import type { PostgresWorkspaceContext } from "./postgres-workspace-scope.ts";
+import {
+  issueWorkspaceScope,
+  labelWorkspaceScope,
+  scopedWorkspacePredicate,
+} from "./postgres-workspace-scope.ts";
 
 export interface PostgresLabelRow {
   id: string;
@@ -20,35 +26,59 @@ export function mapPostgresLabel(row: PostgresLabelRow) {
 export async function getPostgresLabel(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow | null> {
-  return persistence.one<PostgresLabelRow>("SELECT * FROM labels WHERE id = $1", [id]);
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => labelWorkspaceScope("labels", workspaceParam),
+    "$2",
+  );
+  return persistence.one<PostgresLabelRow>(
+    `SELECT labels.* FROM labels WHERE labels.id = $1 AND ${scope}`,
+    [id, ...(context ? [context.workspaceId] : [])],
+  );
 }
 
 export async function listPostgresLabels(
   persistence: Persistence | PersistenceTransaction,
   teamId?: string | null,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow[]> {
-  if (teamId) {
-    return [
-      ...(await persistence.many<PostgresLabelRow>(
-        "SELECT * FROM labels WHERE team_id IS NULL OR team_id = $1 ORDER BY name, id",
-        [teamId],
-      )),
-    ];
-  }
-  return [...(await persistence.many<PostgresLabelRow>("SELECT * FROM labels ORDER BY name, id"))];
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => labelWorkspaceScope("labels", workspaceParam),
+    teamId ? "$2" : "$1",
+  );
+  const teamClause = teamId ? "AND (labels.team_id IS NULL OR labels.team_id = $1)" : "";
+  return [
+    ...(await persistence.many<PostgresLabelRow>(
+      `SELECT labels.* FROM labels WHERE ${scope} ${teamClause} ORDER BY labels.name, labels.id`,
+      [teamId ? teamId : null, ...(context ? [context.workspaceId] : [])].filter(
+        (value): value is string => value !== null,
+      ),
+    )),
+  ];
 }
 
 export async function listPostgresIssueLabels(
   persistence: Persistence | PersistenceTransaction,
   issueId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow[]> {
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) =>
+      `(${issueWorkspaceScope("issues", workspaceParam)} AND ${labelWorkspaceScope("labels", workspaceParam)})`,
+    "$2",
+  );
   return [
     ...(await persistence.many<PostgresLabelRow>(
       `SELECT labels.* FROM labels
        JOIN issue_labels ON issue_labels.label_id = labels.id
-       WHERE issue_labels.issue_id = $1 ORDER BY labels.name, labels.id`,
-      [issueId],
+       JOIN issues ON issues.id = issue_labels.issue_id
+       WHERE issue_labels.issue_id = $1 AND ${scope}
+       ORDER BY labels.name, labels.id`,
+      [issueId, ...(context ? [context.workspaceId] : [])],
     )),
   ];
 }
@@ -57,6 +87,7 @@ async function assertLabelManageAccess(
   persistence: Persistence | PersistenceTransaction,
   viewer: ActorRow,
   teamId: string | null,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   if (!teamId) {
     if (viewer.workspace_role !== "admin") {
@@ -64,12 +95,12 @@ async function assertLabelManageAccess(
     }
     return;
   }
-  const team = await getPostgresTeam(persistence, { id: teamId });
+  const team = await getPostgresTeam(persistence, { id: teamId }, context);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
   if (
     viewer.workspace_role !== "admin" &&
-    !(await isPostgresTeamOwner(persistence, teamId, viewer.id))
+    !(await isPostgresTeamOwner(persistence, teamId, viewer.id, context))
   ) {
     throw apiError("UNAUTHORIZED", "Team owner permission is required");
   }
@@ -79,10 +110,11 @@ export async function createPostgresLabel(
   persistence: Persistence,
   viewer: ActorRow,
   input: { name: string; color?: string | null; teamId?: string | null },
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
-  await assertLabelManageAccess(persistence, viewer, input.teamId ?? null);
+  await assertLabelManageAccess(persistence, viewer, input.teamId ?? null, context);
   const duplicate = await persistence.one(
     input.teamId
       ? "SELECT id FROM labels WHERE team_id = $1 AND name = $2"
@@ -95,7 +127,7 @@ export async function createPostgresLabel(
     "INSERT INTO labels (id, name, color, team_id, created_at) VALUES ($1, $2, $3, $4, $5)",
     [id, name, input.color ?? "#95a2b3", input.teamId ?? null, now()],
   );
-  return (await getPostgresLabel(persistence, id))!;
+  return (await getPostgresLabel(persistence, id, context))!;
 }
 
 export async function updatePostgresLabel(
@@ -103,10 +135,11 @@ export async function updatePostgresLabel(
   viewer: ActorRow,
   id: string,
   input: { name?: string | null; color?: string | null },
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow> {
-  const label = await getPostgresLabel(persistence, id);
+  const label = await getPostgresLabel(persistence, id, context);
   if (!label) throw apiError("NOT_FOUND", "Label not found");
-  await assertLabelManageAccess(persistence, viewer, label.team_id);
+  await assertLabelManageAccess(persistence, viewer, label.team_id, context);
   const params: SqlValue[] = [];
   const sets: string[] = [];
   if (input.name != null) {
@@ -134,18 +167,19 @@ export async function updatePostgresLabel(
       params,
     );
   }
-  return (await getPostgresLabel(persistence, id))!;
+  return (await getPostgresLabel(persistence, id, context))!;
 }
 
 export async function deletePostgresLabel(
   persistence: Persistence,
   viewer: ActorRow,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<number> {
   return persistence.transaction(async (tx) => {
-    const label = await getPostgresLabel(tx, id);
+    const label = await getPostgresLabel(tx, id, context);
     if (!label) throw apiError("NOT_FOUND", "Label not found");
-    await assertLabelManageAccess(tx, viewer, label.team_id);
+    await assertLabelManageAccess(tx, viewer, label.team_id, context);
     const issues = await tx.many<{ issue_id: string }>(
       "SELECT issue_id FROM issue_labels WHERE label_id = $1",
       [id],
@@ -178,8 +212,9 @@ async function applicableLabel(
   persistence: Persistence | PersistenceTransaction,
   issue: IssueRow,
   labelId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow> {
-  const label = await getPostgresLabel(persistence, labelId);
+  const label = await getPostgresLabel(persistence, labelId, context);
   if (!label) throw apiError("NOT_FOUND", `Label not found: ${labelId}`);
   if (label.team_id !== null && label.team_id !== issue.team_id) {
     throw apiError("VALIDATION_FAILED", `Label ${label.name} belongs to another team`);
@@ -196,8 +231,9 @@ export async function applyPostgresLabelOps(
     addLabelIds?: string[] | null;
     removeLabelIds?: string[] | null;
   },
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
-  const currentRows = await listPostgresIssueLabels(persistence, issue.id);
+  const currentRows = await listPostgresIssueLabels(persistence, issue.id, context);
   const current = new Set(currentRows.map((label) => label.id));
   const target = new Set(current);
   if (ops.labelIds != null) (target.clear(), ops.labelIds.forEach((id) => target.add(id)));
@@ -208,7 +244,7 @@ export async function applyPostgresLabelOps(
   if (!toAdd.length && !toRemove.length) return false;
   const timestamp = now();
   for (const labelId of toAdd) {
-    const label = await applicableLabel(persistence, issue, labelId);
+    const label = await applicableLabel(persistence, issue, labelId, context);
     await persistence.execute("INSERT INTO issue_labels (issue_id, label_id) VALUES ($1, $2)", [
       issue.id,
       labelId,
@@ -220,7 +256,7 @@ export async function applyPostgresLabelOps(
     );
   }
   for (const labelId of toRemove) {
-    const label = await getPostgresLabel(persistence, labelId);
+    const label = await getPostgresLabel(persistence, labelId, context);
     await persistence.execute("DELETE FROM issue_labels WHERE issue_id = $1 AND label_id = $2", [
       issue.id,
       labelId,
