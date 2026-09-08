@@ -148,6 +148,12 @@ describe("PostgreSQL Issue.comments Workspace isolation", () => {
         [teamId, workspaceId, `PRB-680 ${teamKey}`, teamKey, timestamp],
       );
       await persistence.execute(
+        `INSERT INTO team_memberships
+         (id, workspace_id, team_id, actor_id, role, created_at)
+         VALUES ($1, $2, $3, $4, 'owner', $5)`,
+        [newId(), workspaceId, teamId, actorId, timestamp],
+      );
+      await persistence.execute(
         `INSERT INTO workflow_states
          (id, workspace_id, team_id, name, type, color, position, created_at, updated_at)
          VALUES ($1, $2, $3, 'Todo', 'unstarted', '#888888', 0, $4, $4)`,
