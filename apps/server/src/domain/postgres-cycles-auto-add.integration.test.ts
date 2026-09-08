@@ -7,7 +7,9 @@ import { createPostgresIssue, getPostgresIssue } from "./postgres-issues.ts";
 import {
   advancePostgresCycle,
   createPostgresCycle,
+  deletePostgresCycle,
   listPostgresCycles,
+  updatePostgresCycle,
 } from "./postgres-cycles.ts";
 import { createPostgresTeam, listPostgresTeamStates } from "./postgres-teams.ts";
 
@@ -29,6 +31,63 @@ describe("PostgreSQL cycle auto-add", () => {
         "SELECT * FROM actors WHERE name = 'admin' LIMIT 1",
       );
       if (!viewer) throw new Error("PostgreSQL fixture has no admin actor");
+
+      const horizonTeam = await createPostgresTeam(
+        persistence,
+        {
+          name: "PRB-623 PostgreSQL horizon",
+          key: "P623HZ",
+          cyclesEnabled: true,
+          cycleUpcomingCount: 2,
+        },
+        viewer.id,
+      );
+      const horizon = await listPostgresCycles(persistence, horizonTeam.id);
+      expect(horizon).toHaveLength(2);
+      expect(horizon.every((cycle) => cycle.cadence_source === "cadence")).toBe(true);
+      const horizonManual = await createPostgresCycle(persistence, viewer, {
+        teamId: horizonTeam.id,
+        name: "Manual stays",
+        startsAt: "2035-01-01",
+        endsAt: "2035-01-14",
+      });
+      await deletePostgresCycle(persistence, viewer, horizon[0]!.id);
+      const replenished = await listPostgresCycles(persistence, horizonTeam.id);
+      expect(replenished).toHaveLength(2);
+      expect(replenished).toContainEqual(
+        expect.objectContaining({
+          id: horizonManual.id,
+          starts_at: horizonManual.starts_at,
+          ends_at: horizonManual.ends_at,
+          cadence_source: "manual",
+        }),
+      );
+
+      const orderTeam = await createPostgresTeam(
+        persistence,
+        {
+          name: "PRB-623 PostgreSQL order",
+          key: "P623OR",
+          cyclesEnabled: true,
+          cycleDurationWeeks: 1,
+          cycleUpcomingCount: 3,
+        },
+        viewer.id,
+      );
+      const orderCycles = await listPostgresCycles(persistence, orderTeam.id);
+      const orderSecond = orderCycles.find((cycle) => cycle.number === 2);
+      if (!orderSecond) throw new Error("PostgreSQL fixture has no second cycle");
+      await updatePostgresCycle(persistence, viewer, orderSecond.id, {
+        startsAt: "2030-01-01T00:00:00.000Z",
+        endsAt: "2030-01-14T23:59:59.000Z",
+      });
+      const reordered = await listPostgresCycles(persistence, orderTeam.id);
+      expect(reordered.map((cycle) => cycle.number)).toEqual([1, 2, 3]);
+      expect(
+        [...reordered]
+          .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at))
+          .map((cycle) => cycle.number),
+      ).toEqual([1, 2, 3]);
 
       const directTeam = await createPostgresTeam(
         persistence,
@@ -75,6 +134,7 @@ describe("PostgreSQL cycle auto-add", () => {
           key: "P623AA",
           cyclesEnabled: true,
           cycleUpcomingCount: 0,
+          cycleCooldownDays: 2,
           cycleAutoAddEnabled: true,
         },
         viewer.id,
@@ -87,13 +147,22 @@ describe("PostgreSQL cycle auto-add", () => {
         teamId: advanceTeam.id,
         name: "Source ACTIVE",
         state: "active",
-        startsAt: "2026-09-01",
-        endsAt: "2026-09-14",
+        startsAt: "2026-08-25",
+        endsAt: "2026-09-07",
       });
       const advanceIssue = await createPostgresIssue(persistence, viewer, {
         teamId: advanceTeam.id,
         title: "Advance auto-add",
         stateId: advanceStarted.id,
+      });
+      const advanceCompleted = (await listPostgresTeamStates(persistence, advanceTeam.id)).find(
+        (state) => state.type === "completed",
+      );
+      if (!advanceCompleted) throw new Error("PostgreSQL fixture has no completed state");
+      const completedIssue = await createPostgresIssue(persistence, viewer, {
+        teamId: advanceTeam.id,
+        title: "Completed during cooldown",
+        stateId: advanceCompleted.id,
       });
       const target = await createPostgresCycle(persistence, viewer, {
         teamId: advanceTeam.id,
@@ -103,8 +172,9 @@ describe("PostgreSQL cycle auto-add", () => {
       });
       const advanced = await advancePostgresCycle(persistence, viewer, source.id);
       expect(advanced.cycle).toMatchObject({ id: target.id, state: "active" });
-      expect(advanced.movedIssues).toBe(1);
+      expect(advanced.movedIssues).toBe(2);
       expect((await getPostgresIssue(persistence, advanceIssue.id))?.cycle_id).toBe(target.id);
+      expect((await getPostgresIssue(persistence, completedIssue.id))?.cycle_id).toBe(source.id);
 
       const disabledTeam = await createPostgresTeam(
         persistence,
