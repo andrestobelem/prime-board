@@ -224,6 +224,12 @@ describe("PostgreSQL WorkspaceContext GraphQL matrix", () => {
         assignee: { id: admin.id },
       });
       expect(nestedB.data!.issue.branchName).toContain(issueBIdentifier.toLowerCase());
+      expect(nestedB.data!.issue.activity).toEqual(
+        expect.arrayContaining([expect.objectContaining({ actor: { id: admin.id } })]),
+      );
+      for (const activity of nestedB.data!.issue.activity as Array<{ payload: unknown }>) {
+        expect(activity.payload).toEqual(expect.any(Object));
+      }
 
       const rootsA = await request(
         `query($issue: ID!, $project: ID!, $key: String!) {
