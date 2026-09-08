@@ -568,7 +568,7 @@ export const issueResolvers = {
         const scopedIssue = await getPostgresIssue(
           context.persistence,
           issue.id,
-          context.workspace,
+          context.workspace.workspaceId,
         );
         if (!scopedIssue) return [];
         const team = await getPostgresTeam(
@@ -726,7 +726,7 @@ export const issueResolvers = {
         const issue = await getPostgresIssue(
           context.persistence,
           comment.issueId,
-          context.workspace,
+          context.workspace.workspaceId,
         );
         if (!issue) return null;
         const team = await getPostgresTeam(
