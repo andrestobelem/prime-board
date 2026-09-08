@@ -21,7 +21,7 @@ function tempDbPath(): string {
 }
 
 /** Crea una DB mínima con Documents y migraciones 1–29 ya registradas. */
-function preRetirementDatabase(): Database {
+function preRetirementDatabase(documentsMigration: string = migration0027): Database {
   const db = new Database(":memory:", { strict: true });
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(`
@@ -203,6 +203,30 @@ describe("openDatabase", () => {
     expect(after.n).toBe(initial.n);
     expect(after.n).toBeGreaterThanOrEqual(2);
     db.close();
+  });
+
+  it("detecta Documents quoted en mayúsculas antes de retirar filas", () => {
+    const db = preRetirementDatabase(migration0027.replaceAll(/\bdocuments\b/g, '"DOCUMENTS"'));
+    const archiveDir = mkdtempSync(join(tmpdir(), "pb-documents-uppercase-archive-"));
+    tempDirs.push(archiveDir);
+    const archivePath = join(archiveDir, "documents.archive.json");
+    try {
+      expect(() => migrate(db)).toThrow(/archive-documents|Documents/);
+      expect(db.query('SELECT count(*) AS count FROM "DOCUMENTS"').get()).toEqual({ count: 1 });
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 29 });
+
+      const rows = db.query('SELECT * FROM "DOCUMENTS" ORDER BY id').all() as Array<
+        Record<string, unknown>
+      >;
+      archiveDocumentRows(rows, archivePath, "sqlite");
+      migrate(db, { documentsArchivePath: archivePath });
+      expect(
+        db.query("SELECT name FROM sqlite_master WHERE name = 'DOCUMENTS' COLLATE NOCASE").get(),
+      ).toBeNull();
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 32 });
+    } finally {
+      db.close();
+    }
   });
 
   it("rechaza retirar Documents sin un archivo externo coincidente", () => {

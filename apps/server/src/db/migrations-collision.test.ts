@@ -8736,8 +8736,10 @@ describe("colisión de migraciones SQLite", () => {
       attached.exec(`
         PRAGMA foreign_keys = ON;
         ATTACH ':memory:' AS aux;
-        CREATE TABLE aux.external_rows (id TEXT PRIMARY KEY);
-        CREATE TEMP VIEW temp_attached_rows AS SELECT id FROM aux.external_rows;
+        CREATE TABLE aux.documents (id TEXT PRIMARY KEY);
+        INSERT INTO aux.documents (id) VALUES ('attached-document');
+        CREATE TEMP VIEW temp_attached_rows AS SELECT id FROM aux.documents;
+        CREATE VIEW aux.local_attached_rows AS SELECT id FROM documents;
       `);
 
       expect(() => migrate(attached)).not.toThrow();
@@ -8745,8 +8747,27 @@ describe("colisión de migraciones SQLite", () => {
         count: 32,
       });
       expect(attached.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      expect(attached.query("SELECT id FROM aux.local_attached_rows").all()).toEqual([
+        { id: "attached-document" },
+      ]);
     } finally {
       attached.close();
+    }
+
+    const ambiguous = new Database(":memory:", { strict: true });
+    try {
+      ambiguous.exec(
+        "PRAGMA foreign_keys = ON; ATTACH ':memory:' AS aux; " +
+          "CREATE VIEW aux.future_dependency AS SELECT id FROM documents",
+      );
+      expect(() => migrate(ambiguous)).toThrow(/attached .*ambiguous.*documents/i);
+      expect(
+        ambiguous
+          .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_migrations'")
+          .get(),
+      ).toBeNull();
+    } finally {
+      ambiguous.close();
     }
 
     const unknown = new Database(":memory:", { strict: true });

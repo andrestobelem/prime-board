@@ -252,10 +252,14 @@ function documentArchivePath(options: DatabaseOptions): string | undefined {
 
 function activeDocuments(db: Database): Array<Record<string, unknown>> | null {
   const table = db
-    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'documents' LIMIT 1")
-    .get() as { name?: string } | null;
+    .query<{ name: string }, SQLQueryBindings[]>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE NOCASE LIMIT 1",
+    )
+    .get("documents");
   if (!table) return null;
-  return db.query("SELECT * FROM documents ORDER BY id").all() as Array<Record<string, unknown>>;
+  return db
+    .query(`SELECT * FROM ${quoteIdentifier(table.name)} ORDER BY id`)
+    .all() as Array<Record<string, unknown>>;
 }
 
 /**
@@ -4175,6 +4179,27 @@ function migrationPreflightValidateReference(
     return;
   }
   const normalized = normalizeSqliteIdentifier(reference.name);
+  if (migrationPreflightNamespaceIsAttached(object.namespace, attachedSchemas)) {
+    // Unqualified names inside an attached schema resolve there before MAIN. Do
+    // not reinterpret a local dependency as a pending MAIN object. If the local
+    // object is absent, the fallback resolution is ambiguous and must fail closed.
+    if (reference.schema === null) {
+      const localTarget = state.some(
+        (entry) =>
+          sameSqliteIdentifier(entry.namespace, object.namespace) &&
+          sameSqliteIdentifier(entry.object.name, reference.name) &&
+          (reference.kind === "index"
+            ? entry.object.type === "index"
+            : entry.object.type === "table" || entry.object.type === "view"),
+      );
+      if (localTarget) return;
+      if (!affectedNames.has(normalized)) return;
+      throw new Error(
+        `Cannot run migrations safely: attached ${object.object.type} ${object.object.name} ` +
+          `has an ambiguous unqualified dependency ${reference.name}`,
+      );
+    }
+  }
   if (!object.temporary) {
     if (deferredMainAffectedNames.has(normalized)) return;
     if (!affectedNames.has(normalized)) return;
