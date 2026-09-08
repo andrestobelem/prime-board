@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { migratePostgres } from "./migrator.ts";
+import { migratePostgres, type PostgresMigration } from "./migrator.ts";
 
 export interface PostgresHarnessOptions {
   readonly url: string;
   readonly schemaPrefix?: string;
   readonly lockKey?: string;
+  readonly migrations?: readonly PostgresMigration[];
 }
 
 export interface PostgresHarness {
@@ -38,7 +39,11 @@ export async function createPostgresHarness(
     connection = await pool.reserve();
     await connection`CREATE SCHEMA ${connection(schema)}`;
     await connection`SET search_path TO ${connection(schema)}, public`;
-    await migratePostgres(connection, undefined, options.lockKey ?? "prime-board-test-schema");
+    await migratePostgres(
+      connection,
+      options.migrations,
+      options.lockKey ?? "prime-board-test-schema",
+    );
     return {
       schema,
       sql: connection,
