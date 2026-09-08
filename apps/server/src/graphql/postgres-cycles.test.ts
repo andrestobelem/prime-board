@@ -154,6 +154,38 @@ async function listCycles(teamId: string, includeArchived = false): Promise<Cycl
 }
 
 describe("PostgreSQL cycles disabled", () => {
+  integration("archives a new CADENCE cycle when MANUAL fills the horizon", async () => {
+    const team = await createTeam("G625M", 2);
+    const manualOne = await createManualCycle(team.id, "Manual one");
+    const manualTwo = await createManualCycle(team.id, "Manual two");
+    const before = await listCycles(team.id);
+    expect(before).toHaveLength(4);
+    expect(before).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: manualOne.id, cadenceSource: "MANUAL", archivedAt: null }),
+        expect.objectContaining({ id: manualTwo.id, cadenceSource: "MANUAL", archivedAt: null }),
+      ]),
+    );
+
+    const generated = await createCadenceCycle(team.id, "Archived cadence");
+    expect(generated).toMatchObject({
+      id: expect.any(String),
+      state: "UPCOMING",
+      cadenceSource: "CADENCE",
+      archivedAt: expect.any(String),
+    });
+
+    const after = await listCycles(team.id);
+    expect(after).toHaveLength(2);
+    expect(after).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: manualOne.id, cadenceSource: "MANUAL", archivedAt: null }),
+        expect.objectContaining({ id: manualTwo.id, cadenceSource: "MANUAL", archivedAt: null }),
+      ]),
+    );
+    expect(after.map((cycle) => cycle.cadenceSource)).toEqual(["MANUAL", "MANUAL"]);
+  });
+
   integration("preserves a newly created cadence cycle in a full horizon", async () => {
     const team = await createTeam("G625H", 2);
     expect(team.cycles).toHaveLength(2);
