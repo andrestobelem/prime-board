@@ -89,6 +89,31 @@ describe("PostgreSQL cycle auto-add", () => {
           .map((cycle) => cycle.number),
       ).toEqual([1, 2, 3]);
 
+      const defaultTeam = await createPostgresTeam(
+        persistence,
+        {
+          name: "PRB-623 default horizon active",
+          key: "P623DH",
+          cyclesEnabled: true,
+          cycleAutoAddEnabled: true,
+        },
+        viewer.id,
+      );
+      const defaultActive = await createPostgresCycle(persistence, viewer, {
+        teamId: defaultTeam.id,
+        name: "Direct ACTIVE with horizon",
+        state: "active",
+        startsAt: "2026-09-01",
+        endsAt: "2026-09-14",
+      });
+      const defaultCycles = await listPostgresCycles(persistence, defaultTeam.id);
+      expect(defaultCycles.filter((cycle) => cycle.state === "upcoming")).toHaveLength(3);
+      expect(
+        defaultCycles.filter((cycle) => cycle.state === "upcoming").map((cycle) => cycle.number),
+      ).toEqual([defaultActive.number + 1, defaultActive.number + 2, defaultActive.number + 3]);
+      const advancedDefault = await advancePostgresCycle(persistence, viewer, defaultActive.id);
+      expect(advancedDefault.cycle.number).toBe(defaultActive.number + 1);
+
       const directTeam = await createPostgresTeam(
         persistence,
         {
