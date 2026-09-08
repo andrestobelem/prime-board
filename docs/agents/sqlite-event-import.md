@@ -23,9 +23,10 @@ el tamaño de cada append. Si el proceso se interrumpe, se puede repetir: el
 ## Conversión
 
 - Las filas de `activity` conservan su ID, tipo, actor, fecha y payload. Cuando la
-  fila aporta `issue_id`, el evento agrega `payload.issue_id` como referencia estable.
-  `aggregateKey` conserva el identifier para lectores legacy; un cambio de Team o
-  número no cambia la identidad cuando ambos eventos tienen el `issue_id` estable.
+  fila aporta `issue_id`, el evento usa ese ID inmutable como `aggregateKey` y conserva
+  también `payload.issue_id` y `payload.issue_identifier`. El identificador legible
+  puede cambiar si se renombra el Team o se renumera la Issue, sin cambiar el agregado.
+  Los callers legacy que no aportan `issue_id` conservan su `aggregateKey` anterior.
 - Las demás entidades compartidas se representan como `snapshot_imported`. El
   payload contiene la fila completa y `sourceTable`/`sourceId`, por lo que un
   projector futuro puede reconstruirla sin consultar SQLite.

@@ -108,11 +108,15 @@ describe("canonical Activity stream bridge", () => {
       expect(JSON.parse(lines[0]!)).toMatchObject({
         eventId: "activity-1",
         aggregate: "issue",
-        aggregateKey: "PB-7",
+        aggregateKey: "issue-1",
         type: "created",
         actor: "actor-1",
         occurredAt: "2025-01-01T00:00:00.000Z",
-        payload: { title: "Shared issue", issue_id: "issue-1" },
+        payload: {
+          title: "Shared issue",
+          issue_id: "issue-1",
+          issue_identifier: "PB-7",
+        },
       });
     } finally {
       db.close();
@@ -258,6 +262,8 @@ describe("canonical Activity stream bridge", () => {
       occurred_at: "2025-01-01T00:00:00.000Z",
     });
     if (!before || !after) throw new Error("expected stable Activity events");
+    expect(before.aggregateKey).toBe("issue-1");
+    expect(after.aggregateKey).toBe("issue-1");
     expect(areActivityEventsEquivalent(before, after)).toBe(true);
   });
 

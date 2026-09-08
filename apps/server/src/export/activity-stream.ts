@@ -123,6 +123,21 @@ function withStableIssueReference(
   return { ...payload, issue_id: issueId };
 }
 
+function withIssueIdentifierReference(
+  payload: Record<string, unknown>,
+  issueIdentifier: string,
+  issueId: string | undefined,
+): Record<string, unknown> | undefined {
+  // Solo los eventos con ID estable necesitan conservar el identificador de
+  // presentación en el payload. Los callers legacy sin issue_id mantienen su
+  // forma anterior.
+  if (issueId === undefined) return payload;
+  if (hasOwn(payload, "issue_identifier")) {
+    return typeof payload.issue_identifier === "string" ? payload : undefined;
+  }
+  return { ...payload, issue_identifier: issueIdentifier };
+}
+
 function withoutStableIssueReference(event: DomainEvent): DomainEvent {
   const payload: Record<string, JsonValue> = {};
   for (const [key, value] of Object.entries(event.payload)) {
@@ -132,17 +147,20 @@ function withoutStableIssueReference(event: DomainEvent): DomainEvent {
 }
 
 function withoutMutableIssueIdentifier(event: DomainEvent): DomainEvent {
-  return { ...event, aggregateKey: "activity-identifier", payload: event.payload };
+  const payload: Record<string, JsonValue> = {};
+  for (const [key, value] of Object.entries(event.payload)) {
+    if (key !== "issue_identifier") payload[key] = value;
+  }
+  return { ...event, aggregateKey: "activity-identifier", payload };
 }
 
 /**
  * Compara eventos Activity y acepta el formato anterior a la referencia estable.
  *
- * Los eventos nuevos llevan `payload.issue_id`; un evento anterior puede no
- * llevarlo. Solo se ignora ese campo ausente; el resto del sobre y payload debe
- * coincidir. Cuando ambos registros llevan el ID estable, se ignora el
- * identificador de presentación para que un Team renombrado o un Issue
- * renumerado no cree un segundo evento Activity.
+ * Los eventos nuevos llevan `payload.issue_id` y usan ese ID como `aggregateKey`;
+ * un evento anterior puede no llevarlo. Solo se ignoran esas referencias
+ * ausentes, además del identificador de presentación, para que un Team
+ * renombrado o una Issue renumerada no cree un segundo evento Activity.
  */
 export function areActivityEventsEquivalent(left: DomainEvent, right: DomainEvent): boolean {
   if (areDomainEventsEquivalent(left, right)) return true;
@@ -161,8 +179,8 @@ export function areActivityEventsEquivalent(left: DomainEvent, right: DomainEven
   const stableIssueId = leftHasIssueId ? leftIssueId : rightIssueId;
   if (typeof stableIssueId !== "string") return false;
   return areDomainEventsEquivalent(
-    withoutStableIssueReference(left),
-    withoutStableIssueReference(right),
+    withoutMutableIssueIdentifier(withoutStableIssueReference(left)),
+    withoutMutableIssueIdentifier(withoutStableIssueReference(right)),
   );
 }
 
@@ -197,7 +215,10 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
   }
   if (!isPlainObject(payload)) return undefined;
   const stablePayload = withStableIssueReference(payload, issueId);
-  if (!stablePayload) return undefined;
+  const canonicalPayload = stablePayload
+    ? withIssueIdentifierReference(stablePayload, row.issue_identifier, issueId)
+    : undefined;
+  if (!canonicalPayload) return undefined;
   try {
     const event: Record<string, unknown> = {
       schemaVersion: CURRENT_EVENT_SCHEMA_VERSION,
@@ -205,13 +226,14 @@ export function activityToDomainEvent(row: ActivityEventRow): DomainEvent | unde
       // display name as the canonical event author.
       eventId: row.id,
       aggregate: "issue",
-      // Conserva el identificador para callers legacy. `payload.issue_id` es la
-      // referencia durable que usan los nuevos projectors.
-      aggregateKey: row.issue_identifier,
+      // Usa el ID inmutable cuando está disponible. El identificador legible
+      // puede cambiar si el Team se renombra o la Issue se renumera; queda en
+      // payload.issue_identifier para lectores legacy y auditoría histórica.
+      aggregateKey: issueId ?? row.issue_identifier,
       type: row.type,
       actor: actorId ?? row.actor,
       occurredAt: row.occurred_at,
-      payload: stablePayload,
+      payload: canonicalPayload,
     };
     if (typeof row.workspace_id === "string") event.workspaceId = row.workspace_id;
     return validateDomainEvent(event);

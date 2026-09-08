@@ -200,7 +200,7 @@ try {
     await gql(app, `mutation($id: ID!) { issueUnarchive(id: $id) { success } }`, { id: targetId });
 
     const events = readEventLog({ rootDir: repoDir }).filter(
-      (current) => current.aggregateKey === "PB-2",
+      (current) => current.aggregateKey === targetId,
     );
     expect(events.map((current) => current.type)).toEqual([
       "created",

@@ -300,7 +300,7 @@ describe("complete SQLite history import", () => {
       const events = readEventLog(root);
       expect(events).toHaveLength(6);
       expect(events.find((event) => event.eventId === "legacy-ac1")).toMatchObject({
-        aggregateKey: "LEG-1",
+        aggregateKey: "legacy-i1",
         workspaceId: "legacy-w1",
         payload: { issue_id: "legacy-i1" },
       });

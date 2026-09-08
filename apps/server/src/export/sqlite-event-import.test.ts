@@ -494,7 +494,7 @@ describe("SQLite history import", () => {
       expect(readEventLog(root)).toHaveLength(1);
       expect(readEventLog(root)[0]).toMatchObject({
         eventId: "mixed-scope",
-        aggregateKey: "TWO-1",
+        aggregateKey: "i1",
         workspaceId: "w1",
       });
     } finally {
@@ -570,7 +570,7 @@ describe("SQLite history import", () => {
           expect(applied).toMatchObject({ emitted: 1, orphaned: 0, ambiguous: 0 });
           expect(readEventLog(root)[0]).toMatchObject({
             eventId: "mixed-scope",
-            aggregateKey: "TWO-1",
+            aggregateKey: "i1",
             workspaceId: "w1",
           });
         } else {
