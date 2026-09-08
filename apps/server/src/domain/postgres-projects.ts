@@ -1,6 +1,5 @@
 import type { Persistence, PersistenceTransaction, SqlValue } from "../db/persistence.ts";
 import { apiError } from "../graphql/errors.ts";
-import { parseDateTime } from "./datetime.ts";
 import { getPostgresActor } from "./postgres-actors.ts";
 import {
   assertPostgresTeamActive,
@@ -10,7 +9,7 @@ import {
   listPostgresTeams,
 } from "./postgres-teams.ts";
 import { newId, now } from "../db/util.ts";
-import { PROJECT_STATES } from "./projects.ts";
+import { PROJECT_STATES, validateProjectDateRange } from "./projects.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 
 export interface PostgresProjectRow {
@@ -137,15 +136,7 @@ function validateProjectFields(input: {
   ) {
     throw apiError("VALIDATION_FAILED", `Invalid project state: ${input.state}`);
   }
-  if (input.targetDate !== undefined && input.targetDate !== null) {
-    parseDateTime(input.targetDate, "targetDate");
-  }
-  if (input.startDate !== undefined && input.startDate !== null) {
-    parseDateTime(input.startDate, "startDate");
-  }
-  if (input.startDate != null && input.targetDate != null && input.startDate > input.targetDate) {
-    throw apiError("VALIDATION_FAILED", "Project startDate cannot be after targetDate");
-  }
+  validateProjectDateRange(input.startDate, input.targetDate);
 }
 
 async function validateProjectTeams(
@@ -344,7 +335,11 @@ export async function updatePostgresProject(
   input: PostgresProjectUpdateInput,
 ): Promise<PostgresProjectRow> {
   const existing = await assertCanManagePostgresProject(persistence, viewer, id);
-  validateProjectFields(input);
+  validateProjectFields({
+    ...input,
+    targetDate: input.targetDate === undefined ? existing.target_date : input.targetDate,
+    startDate: input.startDate === undefined ? existing.start_date : input.startDate,
+  });
   await validateLead(persistence, input.leadId);
   const memberIds =
     input.memberIds === undefined

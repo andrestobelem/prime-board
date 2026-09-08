@@ -18,6 +18,17 @@ export const PROJECT_STATES = [
   "canceled",
 ] as const;
 
+export function validateProjectDateRange(
+  startDate: string | null | undefined,
+  targetDate: string | null | undefined,
+): void {
+  const startInstant = startDate == null ? null : parseDateTime(startDate, "startDate");
+  const targetInstant = targetDate == null ? null : parseDateTime(targetDate, "targetDate");
+  if (startInstant !== null && targetInstant !== null && startInstant > targetInstant) {
+    throw apiError("VALIDATION_FAILED", "Project startDate cannot be after targetDate");
+  }
+}
+
 export interface ProjectRow {
   id: string;
   workspace_id: string | null;
@@ -191,11 +202,7 @@ function validate(
     startDate?: string | null;
   },
 ): void {
-  if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
-  if (input.startDate != null) parseDateTime(input.startDate, "startDate");
-  if (input.startDate != null && input.targetDate != null && input.startDate > input.targetDate) {
-    throw apiError("VALIDATION_FAILED", "Project startDate cannot be after targetDate");
-  }
+  validateProjectDateRange(input.startDate, input.targetDate);
   if (input.state != null && !PROJECT_STATES.includes(input.state as never)) {
     throw apiError("VALIDATION_FAILED", `Invalid project state: ${input.state}`);
   }
@@ -267,7 +274,11 @@ export function updateProject(
 ): ProjectRow {
   const project = getProject(db, id, workspaceId);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
-  validate(db, input);
+  validate(db, {
+    ...input,
+    targetDate: input.targetDate === undefined ? project.target_date : input.targetDate,
+    startDate: input.startDate === undefined ? project.start_date : input.startDate,
+  });
   if (input.teamIds) setProjectTeams(db, id, input.teamIds, workspaceId);
   if (input.memberIds !== undefined) setProjectMembers(db, id, input.memberIds ?? [], workspaceId);
   if (input.dependencyIds !== undefined)
