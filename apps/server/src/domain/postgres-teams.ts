@@ -324,7 +324,7 @@ export async function updatePostgresTeam(
       [timestamp, team.id],
     );
     await persistence.execute(
-      "UPDATE cycles SET archived_at = $1, updated_at = $1 WHERE team_id = $2 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL",
+      "UPDATE cycles SET archived_at = $1, updated_at = $1 WHERE team_id = $2 AND state = 'upcoming' AND archived_at IS NULL",
       [timestamp, team.id],
     );
   }
