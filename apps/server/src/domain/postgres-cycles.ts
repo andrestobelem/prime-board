@@ -752,7 +752,12 @@ export async function autoAddPostgresActiveIssues(
   cycle: PostgresCycleRow,
   referenceAt = Date.now(),
 ): Promise<number> {
-  const activeCount = await autoAddPostgresIssuesToCycle(tx, actorId, cycle, [
+  // During cooldown, Started issues belong to the next upcoming Cycle.
+  // Use the same resolver as issue-level auto-add instead of always using the
+  // Cycle that triggered this operation.
+  const activeTarget =
+    (await findPostgresAutoAddCycle(tx, cycle.team_id, "started", referenceAt)) ?? cycle;
+  const activeCount = await autoAddPostgresIssuesToCycle(tx, actorId, activeTarget, [
     "unstarted",
     "started",
   ]);

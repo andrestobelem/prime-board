@@ -719,10 +719,15 @@ export function autoAddActiveIssues(
   workspaceId?: string,
   referenceAt = Date.now(),
 ): number {
+  // During cooldown, Started issues belong to the next upcoming Cycle.
+  // Use the same resolver as issue-level auto-add instead of always using the
+  // Cycle that triggered this operation.
+  const activeTarget =
+    findAutoAddCycle(db, cycle.team_id, "started", workspaceId, referenceAt) ?? cycle;
   const activeCount = autoAddIssuesToCycle(
     db,
     actorId,
-    cycle,
+    activeTarget,
     ["unstarted", "started"],
     workspaceId,
   );

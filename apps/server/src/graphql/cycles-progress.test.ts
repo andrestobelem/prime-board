@@ -131,6 +131,119 @@ describe("cycle progress and carry-over", () => {
     expect(inC2.data!.issues.nodes).toEqual([{ title: "Open" }]);
   });
 
+  it("aplica auto-add al avanzar un ciclo ACTIVE", async () => {
+    const team = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "Auto-add advance", key: "AUA", cyclesEnabled: true,
+          cycleUpcomingCount: 0, cycleCooldownDays: 2, cycleAutoAddEnabled: true
+        }) { team { id states { id type } } }
+      }`,
+    );
+    expect(team.errors).toBeUndefined();
+    const createdTeam = team.data!.teamCreate.team;
+    const startedState = createdTeam.states.find(
+      (state: { type: string }) => state.type === "STARTED",
+    );
+    const completedState = createdTeam.states.find(
+      (state: { type: string }) => state.type === "COMPLETED",
+    );
+    const first = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Active source", state: ACTIVE,
+          startsAt: "2026-08-25", endsAt: "2026-09-07"
+        }) { cycle { id number } }
+      }`,
+      { teamId: createdTeam.id },
+    );
+    expect(first.errors).toBeUndefined();
+    const source = first.data!.cycleCreate.cycle;
+    const issue = await gql(
+      app,
+      `mutation($stateId: ID!) {
+        issueCreate(input: { teamKey: "AUA", title: "Auto-add on advance", stateId: $stateId }) {
+          issue { id }
+        }
+      }`,
+      { stateId: startedState.id },
+    );
+    const completedIssue = await gql(
+      app,
+      `mutation($stateId: ID!) {
+        issueCreate(input: { teamKey: "AUA", title: "Completed during cooldown", stateId: $stateId }) {
+          issue { id }
+        }
+      }`,
+      { stateId: completedState.id },
+    );
+    const second = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Upcoming target",
+          startsAt: "2026-09-15", endsAt: "2026-09-28"
+        }) { cycle { id number state } }
+      }`,
+      { teamId: createdTeam.id },
+    );
+    expect(second.errors).toBeUndefined();
+    const target = second.data!.cycleCreate.cycle;
+
+    const advanced = await gql(
+      app,
+      `mutation($id: ID!) {
+        cycleAdvance(id: $id) {
+          success
+          movedIssues
+          cycle { id state }
+          nextCycle { id }
+        }
+      }`,
+      { id: source.id },
+    );
+    expect(advanced.errors).toBeUndefined();
+    expect(advanced.data!.cycleAdvance).toMatchObject({
+      success: true,
+      movedIssues: 2,
+      cycle: { id: target.id, state: "ACTIVE" },
+    });
+
+    const assigned = await gql(
+      app,
+      `query($id: ID!) {
+        issue(id: $id) {
+          cycle { id number }
+          activity { type payload }
+        }
+      }`,
+      { id: issue.data!.issueCreate.issue.id },
+    );
+    expect(assigned.errors).toBeUndefined();
+    expect(assigned.data!.issue.cycle).toEqual({ id: target.id, number: target.number });
+    expect(assigned.data!.issue.activity).toContainEqual({
+      type: "cycle_changed",
+      payload: { from: null, to: `AUA/${target.number}`, reason: "cycle_auto_add" },
+    });
+
+    const completedAssigned = await gql(
+      app,
+      `query($id: ID!) { issue(id: $id) { cycle { id number } activity { type payload } } }`,
+      { id: completedIssue.data!.issueCreate.issue.id },
+    );
+    expect(completedAssigned.errors).toBeUndefined();
+    expect(completedAssigned.data!.issue.cycle).toEqual({
+      id: source.id,
+      number: source.number,
+    });
+    expect(completedAssigned.data!.issue.activity).toContainEqual({
+      type: "cycle_changed",
+      payload: { from: null, to: `AUA/${source.number}`, reason: "cycle_auto_add" },
+    });
+  });
+
   it("registra el actor y la desasignación al borrar un cycle", async () => {
     const team = await gql(app, `{ team(key: "PB") { id } }`);
     const cycle = await gql(

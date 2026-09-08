@@ -233,6 +233,109 @@ describe("cycles", () => {
     });
   });
 
+  it("aplica auto-add al crear un ciclo ACTIVE y respeta la configuración", async () => {
+    const enabledTeam = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "Auto-add direct", key: "AUT", cyclesEnabled: true,
+          cycleUpcomingCount: 0, cycleAutoAddEnabled: true
+        }) { team { id states { id type } } }
+      }`,
+    );
+    expect(enabledTeam.errors).toBeUndefined();
+    const enabled = enabledTeam.data!.teamCreate.team;
+    const startedState = enabled.states.find((state: { type: string }) => state.type === "STARTED");
+    expect(startedState).toBeDefined();
+    const issue = await gql(
+      app,
+      `mutation($stateId: ID!) {
+        issueCreate(input: { teamKey: "AUT", title: "Auto-add direct issue", stateId: $stateId }) {
+          issue { id cycle { id } }
+        }
+      }`,
+      { stateId: startedState.id },
+    );
+    expect(issue.errors).toBeUndefined();
+    expect(issue.data!.issueCreate.issue.cycle).toBeNull();
+
+    const cycle = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Active direct", state: ACTIVE,
+          startsAt: "2026-09-01", endsAt: "2026-09-14"
+        }) { cycle { id number state } }
+      }`,
+      { teamId: enabled.id },
+    );
+    expect(cycle.errors).toBeUndefined();
+    expect(cycle.data!.cycleCreate.cycle.state).toBe("ACTIVE");
+
+    const assigned = await gql(
+      app,
+      `query($id: ID!) {
+        issue(id: $id) {
+          cycle { id number }
+          activity { type payload }
+        }
+      }`,
+      { id: issue.data!.issueCreate.issue.id },
+    );
+    expect(assigned.errors).toBeUndefined();
+    expect(assigned.data!.issue.cycle).toEqual({
+      id: cycle.data!.cycleCreate.cycle.id,
+      number: cycle.data!.cycleCreate.cycle.number,
+    });
+    expect(assigned.data!.issue.activity).toContainEqual({
+      type: "cycle_changed",
+      payload: {
+        from: null,
+        to: `AUT/${cycle.data!.cycleCreate.cycle.number}`,
+        reason: "cycle_auto_add",
+      },
+    });
+
+    const disabledTeam = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "Auto-add off", key: "AUO", cyclesEnabled: true,
+          cycleUpcomingCount: 0, cycleAutoAddEnabled: false
+        }) { team { id states { id type } } }
+      }`,
+    );
+    expect(disabledTeam.errors).toBeUndefined();
+    const disabled = disabledTeam.data!.teamCreate.team;
+    const disabledStarted = disabled.states.find(
+      (state: { type: string }) => state.type === "STARTED",
+    );
+    const disabledIssue = await gql(
+      app,
+      `mutation($stateId: ID!) {
+        issueCreate(input: { teamKey: "AUO", title: "Auto-add disabled", stateId: $stateId }) {
+          issue { id }
+        }
+      }`,
+      { stateId: disabledStarted.id },
+    );
+    const disabledCycle = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Active without auto-add", state: ACTIVE,
+          startsAt: "2026-10-01", endsAt: "2026-10-14"
+        }) { cycle { id } }
+      }`,
+      { teamId: disabled.id },
+    );
+    expect(disabledCycle.errors).toBeUndefined();
+    const disabledAfter = await gql(app, `query($id: ID!) { issue(id: $id) { cycle { id } } }`, {
+      id: disabledIssue.data!.issueCreate.issue.id,
+    });
+    expect(disabledAfter.data!.issue.cycle).toBeNull();
+  });
+
   it("serializa la creación concurrente de ciclos activos y conserva count=0", async () => {
     const activeTeam = await gql(
       app,
