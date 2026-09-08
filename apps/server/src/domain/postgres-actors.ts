@@ -110,6 +110,7 @@ export async function listPostgresActors(
 export async function createPostgresActor(
   persistence: Persistence,
   input: { name: string; type: string; email?: string | null; avatarUrl?: string | null },
+  workspaceId: string,
 ): Promise<ActorRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Actor name cannot be empty");
@@ -123,20 +124,37 @@ export async function createPostgresActor(
   const id = newId();
   const timestamp = now();
   try {
-    const row = await persistence.one<ActorRow>(
-      `INSERT INTO actors (id, name, email, type, avatar_url, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $6)
-       RETURNING *`,
-      [
-        id,
-        name,
-        input.email?.trim() || null,
-        input.type,
-        normalizeAvatarUrl(input.avatarUrl, null),
-        timestamp,
-      ],
-    );
-    if (!row) throw new Error("PostgreSQL actor insert returned no row");
+    const row = await persistence.transaction(async (tx) => {
+      const inserted = await tx.one<ActorRow>(
+        `INSERT INTO actors (id, name, email, type, avatar_url, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6)
+         RETURNING *`,
+        [
+          id,
+          name,
+          input.email?.trim() || null,
+          input.type,
+          normalizeAvatarUrl(input.avatarUrl, null),
+          timestamp,
+        ],
+      );
+      if (!inserted) throw new Error("PostgreSQL actor insert returned no row");
+
+      // 0007 siembra todos los Workspaces existentes mediante un trigger. Mantiene
+      // el Actor nuevo limitado al Workspace efectivo y evita conservar esas Memberships.
+      await tx.execute(
+        "DELETE FROM workspace_memberships WHERE actor_id = $1 AND workspace_id <> $2",
+        [id, workspaceId],
+      );
+      await tx.execute(
+        `INSERT INTO workspace_memberships
+         (id, workspace_id, actor_id, role, status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6)
+         ON CONFLICT (workspace_id, actor_id) DO NOTHING`,
+        [newId(), workspaceId, id, inserted.workspace_role, inserted.status, timestamp],
+      );
+      return inserted;
+    });
     return row;
   } catch (error) {
     if (isUniqueViolation(error)) throw apiError("VALIDATION_FAILED", "Actor name already exists");
