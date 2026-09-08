@@ -8575,4 +8575,195 @@ describe("colisión de migraciones SQLite", () => {
       db.close();
     }
   });
+
+  it("falla sin crear markers ante un blocker TEMP de la cadena completa", () => {
+    const db = new Database(":memory:", { strict: true });
+    try {
+      db.exec("PRAGMA foreign_keys = ON; CREATE TEMP TABLE _prb25_teams (id TEXT)");
+      const beforeMain = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeTemp = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+        .all();
+      const beforeDatabases = db.query("PRAGMA database_list").all();
+      const beforeSchemaVersion = db.query("PRAGMA schema_version").get();
+
+      expect(() => migrate(db)).toThrow(/temporary table _prb25_teams/i);
+      expect(
+        db
+          .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_migrations'")
+          .get(),
+      ).toBeNull();
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeMain);
+      expect(
+        db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all(),
+      ).toEqual(beforeTemp);
+      expect(db.query("PRAGMA database_list").all()).toEqual(beforeDatabases);
+      expect(db.query("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falla sin markers ante dependencias MAIN fresh de tablas e índices futuros", () => {
+    const cases = [
+      {
+        sql: "CREATE VIEW main_documents_dependency AS SELECT id FROM documents",
+        pattern: /main view main_documents_dependency .*documents/i,
+      },
+      {
+        sql: `
+          CREATE TABLE main_index_anchor (id INTEGER);
+          CREATE VIEW main_index_dependency AS
+            SELECT id FROM main_index_anchor INDEXED BY idx_documents_workspace_updated;
+        `,
+        pattern: /main view main_index_dependency .*idx_documents_workspace_updated/i,
+      },
+      {
+        sql: `
+          CREATE TABLE main_trigger_anchor (id INTEGER);
+          CREATE TRIGGER main_documents_dependency
+          AFTER INSERT ON main_trigger_anchor
+          BEGIN
+            SELECT count(*) FROM documents;
+          END;
+        `,
+        pattern: /main trigger main_documents_dependency .*documents/i,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const db = new Database(":memory:", { strict: true });
+      try {
+        db.exec(`PRAGMA foreign_keys = ON; ${testCase.sql}`);
+        const beforeMain = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all();
+        const beforeTemp = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all();
+        const beforeDatabases = db.query("PRAGMA database_list").all();
+        const beforeSchemaVersion = db.query("PRAGMA schema_version").get();
+
+        expect(() => migrate(db)).toThrow(testCase.pattern);
+        expect(
+          db.query("SELECT name FROM sqlite_master WHERE name = '_migrations'").get(),
+        ).toBeNull();
+        expect(
+          db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+        ).toEqual(beforeMain);
+        expect(
+          db
+            .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+            .all(),
+        ).toEqual(beforeTemp);
+        expect(db.query("PRAGMA database_list").all()).toEqual(beforeDatabases);
+        expect(db.query("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
+        expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("falla sin cambiar markers ante dependencias MAIN legacy de tablas e índices futuros", () => {
+    const cases = [
+      {
+        sql: "CREATE VIEW legacy_staging_dependency AS SELECT id FROM _prb25_teams",
+        pattern: /_prb25_teams/i,
+      },
+      {
+        sql: `
+          CREATE VIEW legacy_index_dependency AS
+            SELECT id FROM teams INDEXED BY idx_documents_workspace_updated;
+        `,
+        pattern: /main view legacy_index_dependency .*idx_documents_workspace_updated/i,
+      },
+      {
+        sql: `
+          CREATE TRIGGER legacy_staging_dependency
+          AFTER INSERT ON teams
+          BEGIN
+            SELECT count(*) FROM _prb25_teams;
+          END;
+        `,
+        pattern: /_prb25_teams/i,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const db = databaseWithMigrationsThrough(24);
+      try {
+        db.exec(testCase.sql);
+        const beforeMain = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const beforeTemp = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all();
+        const beforeDatabases = db.query("PRAGMA database_list").all();
+        const beforeSchemaVersion = db.query("PRAGMA schema_version").get();
+
+        expect(() => migrate(db)).toThrow(testCase.pattern);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(
+          db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+        ).toEqual(beforeMain);
+        expect(
+          db
+            .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+            .all(),
+        ).toEqual(beforeTemp);
+        expect(db.query("PRAGMA database_list").all()).toEqual(beforeDatabases);
+        expect(db.query("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
+        expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("acepta referencias TEMP a un schema attached conocido y rechaza uno desconocido", () => {
+    const attached = new Database(":memory:", { strict: true });
+    try {
+      attached.exec(`
+        PRAGMA foreign_keys = ON;
+        ATTACH ':memory:' AS aux;
+        CREATE TABLE aux.external_rows (id TEXT PRIMARY KEY);
+        CREATE TEMP VIEW temp_attached_rows AS SELECT id FROM aux.external_rows;
+      `);
+
+      expect(() => migrate(attached)).not.toThrow();
+      expect(attached.query("SELECT count(*) AS count FROM main._migrations").get()).toEqual({
+        count: 32,
+      });
+      expect(attached.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      attached.close();
+    }
+
+    const unknown = new Database(":memory:", { strict: true });
+    try {
+      unknown.exec(
+        "PRAGMA foreign_keys = ON; CREATE TEMP VIEW temp_unknown AS SELECT id FROM ghost.external_rows",
+      );
+      expect(() => migrate(unknown)).toThrow(/unsupported schema ghost/i);
+      expect(
+        unknown
+          .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_migrations'")
+          .get(),
+      ).toBeNull();
+      expect(unknown.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      unknown.close();
+    }
+  });
+
 });
