@@ -9313,7 +9313,7 @@ describe("colisión de migraciones SQLite", () => {
         view: "temp_staging_reference",
         reference: "_prb25_teams",
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const db = databaseWithMigrationsThrough(24);
@@ -9350,7 +9350,7 @@ describe("colisión de migraciones SQLite", () => {
   });
 
   it("rechaza refs TEMP a columnas retiradas de teams y projects antes del DDL", () => {
-    for (const table of ["teams", "projects"] as const) {
+    for (const table of ["teams", "projects"]) {
       const db = databaseWithMigrationsThrough(24);
       const view = `temp_${table}_removed_column`;
       try {
