@@ -112,6 +112,10 @@ function expectedIssue(
     createdAt: issue.createdAt,
     updatedAt: issue.updatedAt,
     archivedAt: issue.archivedAt ?? null,
+    dueDate: issue.dueDate ?? null,
+    startedAt: issue.startedAt ?? null,
+    completedAt: issue.completedAt ?? null,
+    canceledAt: issue.canceledAt ?? null,
   };
   const links = [...(issue.attachments ?? []), ...(issue.documents ?? [])].map(
     (link) => `- [${link.title ?? link.filename ?? link.url}](${link.url})`,

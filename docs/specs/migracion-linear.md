@@ -31,7 +31,7 @@ El export debe incluir Workspace, Teams, Actors, Workflow States, Labels, Projec
 
 ### Issue
 
-Una Issue contiene al menos `id`, `identifier`, `teamId`, `number`, `title`, `description`, `stateId`, `priority`, `assigneeId`, `creatorId`, `parentId`, `projectId`, `milestoneId`, `labelIds`, `createdAt`, `updatedAt` y `archivedAt`. El plan distingue los campos ausentes de los valores explícitamente nulos.
+Una Issue contiene al menos `id`, `identifier`, `teamId`, `number`, `title`, `description`, `stateId`, `priority`, `assigneeId`, `creatorId`, `parentId`, `projectId`, `milestoneId`, `labelIds`, `dueDate`, `startedAt`, `completedAt`, `canceledAt`, `createdAt`, `updatedAt` y `archivedAt`. Las fechas sin hora se interpretan a medianoche UTC. El plan distingue los campos ausentes de los valores explícitamente nulos.
 
 ### Comment y Activity
 
@@ -64,7 +64,7 @@ Dos ejecuciones sobre el mismo export y el mismo estado producen el mismo plan. 
 
 ## Fuera de representación del importador
 
-El importador debe distinguir Documents, adjuntos, Threads, Cycles, due dates, estimaciones,
+El importador debe distinguir Documents, adjuntos, Threads, Cycles, estimaciones,
 Project Updates, Initiatives, suscripciones y metadata de Projects. Esta lista describe las
 pérdidas del camino Linear → prime-board; no afirma que esas entidades estén ausentes del modelo
 local. Projects e Initiatives, incluidos Project Updates e Initiative Status Updates, tienen un
@@ -82,7 +82,7 @@ La migración no inventa campos en el modelo de prime-board. Esta es la polític
 | Adjuntos                                     | Conserva URL, nombre y metadata como enlaces en una sección de la descripción; no copia bytes automáticamente.                                                                                                                                 | `warning` por conversión.                               |
 | Documents                                    | No crea Documents locales ni convierte su contenido en descripciones de Issues. Si un artefacto externo de Linear solo tiene URL y título, lo conserva como enlace en la sección `Linear artifacts`.                                           | `warning` por artefacto externo o pérdida de contenido. |
 | Threads y Comments inline                    | Importa cuerpo, autor y fecha como Comment plano; guarda el anclaje textual en el reporte.                                                                                                                                                     | `loss` si existe anclaje.                               |
-| Cycles, estimaciones y due dates             | No los agrega en silencio al esquema; los lista en el reporte y bloquea `apply` hasta una decisión explícita.                                                                                                                                  | `loss`.                                                 |
+| Estimaciones                                 | No las agrega en silencio al esquema; las lista en el reporte y bloquea `apply` hasta una decisión explícita.                                                                                                                                  | `loss`.                                                 |
 | Project Updates, Initiatives y suscripciones | El importador actual los conserva como referencia en el reporte y marca la parte no mapeada como pérdida; no los reconstruye desde el export de Linear. El modelo local sí tiene estas entidades y su export/rebuild usa un contrato distinto. | `loss`.                                                 |
 | Estado `duplicate`                           | Crea el mismo nombre con State Type `canceled` y deja un warning.                                                                                                                                                                              | `warning`.                                              |
 

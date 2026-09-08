@@ -1,3 +1,5 @@
+import { parseDateTime } from "./datetime.ts";
+
 // Motor de filtros componibles de issues (spec §4): comparadores + and/or
 // anidables, búsqueda full-text (FTS5) y orden con cursor estable.
 
@@ -16,6 +18,16 @@ export interface IntComparator {
   in?: number[] | null;
   gte?: number | null;
   lte?: number | null;
+}
+
+export interface DateTimeComparator {
+  eq?: string | null;
+  neq?: string | null;
+  in?: string[] | null;
+  nin?: string[] | null;
+  gte?: string | null;
+  lte?: string | null;
+  null?: boolean | null;
 }
 
 export interface StateTypeComparator {
@@ -41,6 +53,10 @@ export interface IssueFilter {
   cycle?: IDComparator | null;
   parent?: IDComparator | null;
   priority?: IntComparator | null;
+  dueDate?: DateTimeComparator | null;
+  startedAt?: DateTimeComparator | null;
+  completedAt?: DateTimeComparator | null;
+  canceledAt?: DateTimeComparator | null;
   labels?: LabelComparator | null;
   /** Full-text sobre título y descripción (FTS5). */
   search?: string | null;
@@ -90,6 +106,35 @@ function intClauses(column: string, comparator: IntComparator, params: ParamSink
   }
   if (comparator.gte != null) clauses.push(`${column} >= ${params.add(comparator.gte)}`);
   if (comparator.lte != null) clauses.push(`${column} <= ${params.add(comparator.lte)}`);
+  return clauses;
+}
+
+function dateTimeClauses(
+  column: string,
+  comparator: DateTimeComparator,
+  params: ParamSink,
+): string[] {
+  const validate = (value: string): string => {
+    parseDateTime(value, column);
+    return value;
+  };
+  const clauses: string[] = [];
+  if (comparator.eq != null) clauses.push(`${column} = ${params.add(validate(comparator.eq))}`);
+  if (comparator.neq != null) clauses.push(`${column} != ${params.add(validate(comparator.neq))}`);
+  if (comparator.in?.length) {
+    clauses.push(
+      `${column} IN (${comparator.in.map((value) => params.add(validate(value))).join(", ")})`,
+    );
+  }
+  if (comparator.nin?.length) {
+    clauses.push(
+      `${column} NOT IN (${comparator.nin.map((value) => params.add(validate(value))).join(", ")})`,
+    );
+  }
+  if (comparator.gte != null) clauses.push(`${column} >= ${params.add(validate(comparator.gte))}`);
+  if (comparator.lte != null) clauses.push(`${column} <= ${params.add(validate(comparator.lte))}`);
+  if (comparator.null === true) clauses.push(`${column} IS NULL`);
+  if (comparator.null === false) clauses.push(`${column} IS NOT NULL`);
   return clauses;
 }
 
@@ -148,6 +193,13 @@ export function buildIssueFilter(
   if (filter.cycle) clauses.push(...idClauses("issues.cycle_id", filter.cycle, params));
   if (filter.parent) clauses.push(...idClauses("issues.parent_id", filter.parent, params));
   if (filter.priority) clauses.push(...intClauses("issues.priority", filter.priority, params));
+  if (filter.dueDate) clauses.push(...dateTimeClauses("issues.due_date", filter.dueDate, params));
+  if (filter.startedAt)
+    clauses.push(...dateTimeClauses("issues.started_at", filter.startedAt, params));
+  if (filter.completedAt)
+    clauses.push(...dateTimeClauses("issues.completed_at", filter.completedAt, params));
+  if (filter.canceledAt)
+    clauses.push(...dateTimeClauses("issues.canceled_at", filter.canceledAt, params));
 
   if (filter.stateType?.eq) {
     clauses.push(
@@ -240,22 +292,62 @@ export function buildIssueFilter(
 
 // ---- orden y cursores ----
 
-export type IssueOrder = "CREATED_ASC" | "CREATED_DESC" | "UPDATED_ASC" | "UPDATED_DESC";
+export type IssueOrder =
+  | "CREATED_ASC"
+  | "CREATED_DESC"
+  | "UPDATED_ASC"
+  | "UPDATED_DESC"
+  | "DUE_DATE_ASC"
+  | "DUE_DATE_DESC"
+  | "STARTED_AT_ASC"
+  | "STARTED_AT_DESC"
+  | "COMPLETED_AT_ASC"
+  | "COMPLETED_AT_DESC"
+  | "CANCELED_AT_ASC"
+  | "CANCELED_AT_DESC";
 
 export const ORDER_COLUMNS: Record<IssueOrder, { column: string; direction: "ASC" | "DESC" }> = {
   CREATED_ASC: { column: "issues.created_at", direction: "ASC" },
   CREATED_DESC: { column: "issues.created_at", direction: "DESC" },
   UPDATED_ASC: { column: "issues.updated_at", direction: "ASC" },
   UPDATED_DESC: { column: "issues.updated_at", direction: "DESC" },
+  DUE_DATE_ASC: { column: "issues.due_date", direction: "ASC" },
+  DUE_DATE_DESC: { column: "issues.due_date", direction: "DESC" },
+  STARTED_AT_ASC: { column: "issues.started_at", direction: "ASC" },
+  STARTED_AT_DESC: { column: "issues.started_at", direction: "DESC" },
+  COMPLETED_AT_ASC: { column: "issues.completed_at", direction: "ASC" },
+  COMPLETED_AT_DESC: { column: "issues.completed_at", direction: "DESC" },
+  CANCELED_AT_ASC: { column: "issues.canceled_at", direction: "ASC" },
+  CANCELED_AT_DESC: { column: "issues.canceled_at", direction: "DESC" },
 };
 
+/** Cursor predicate matching SQL's ASC NULLS FIRST / DESC NULLS LAST ordering. */
+export function issueCursorClause(
+  column: string,
+  direction: "ASC" | "DESC",
+  orderValue: string | null,
+  id: string,
+  params: ParamSink,
+): string {
+  const idParameter = params.add(id);
+  if (orderValue === null) {
+    return direction === "ASC"
+      ? `(${column} IS NOT NULL OR (${column} IS NULL AND issues.id > ${idParameter}))`
+      : "1 = 0";
+  }
+  const valueParameter = params.add(orderValue);
+  return direction === "ASC"
+    ? `(${column} > ${valueParameter} OR (${column} = ${valueParameter} AND issues.id > ${idParameter}))`
+    : `(${column} IS NULL OR ${column} < ${valueParameter} OR (${column} = ${valueParameter} AND issues.id < ${idParameter}))`;
+}
+
 export interface IssueCursor {
-  orderValue: string;
+  orderValue: string | null;
   id: string;
   orderBy: IssueOrder;
 }
 
-export function encodeCursor(orderValue: string, id: string, orderBy: IssueOrder): string {
+export function encodeCursor(orderValue: string | null, id: string, orderBy: IssueOrder): string {
   return Buffer.from(JSON.stringify([orderValue, id, orderBy])).toString("base64url");
 }
 
@@ -268,15 +360,15 @@ export function decodeCursor(cursor: string): IssueCursor | null {
     if (
       Array.isArray(parsed) &&
       parsed.length === 3 &&
-      typeof parsed[0] === "string" &&
+      (parsed[0] === null || typeof parsed[0] === "string") &&
       typeof parsed[1] === "string" &&
       typeof parsed[2] === "string" &&
-      parsed[0].length > 0 &&
+      (parsed[0] === null || parsed[0].length > 0) &&
       parsed[1].length > 0 &&
       parsed[2] in ORDER_COLUMNS
     ) {
       return {
-        orderValue: parsed[0],
+        orderValue: parsed[0] === null ? null : parsed[0],
         id: parsed[1],
         orderBy: parsed[2] as IssueOrder,
       };

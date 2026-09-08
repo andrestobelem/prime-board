@@ -142,6 +142,7 @@ describe("activity", () => {
       "created",
       "commented",
       "state_changed",
+      "started_at_changed",
       "assigned",
     ]);
     expect(activity[0].actor.name).toBe("admin");
@@ -149,7 +150,8 @@ describe("activity", () => {
     // AT-190: el payload de Activity llega con nombres reales, no ids —
     // tanto para states (state_changed) como para actors (assigned).
     expect(activity[2].payload.to).toBe(startedState.name);
-    expect(activity[3].payload.to).toBe("admin");
+    expect(activity[3].payload.to).toEqual(expect.any(String));
+    expect(activity[4].payload.to).toBe("admin");
     expect(result.data!.issue.comments.length).toBe(1);
   });
 });

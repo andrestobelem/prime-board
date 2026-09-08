@@ -117,6 +117,9 @@ describe("writeLinearExportToRepo", () => {
       expect(readFileSync(join(root, ".prime-board", "issues", "AT-1.md"), "utf8")).toContain(
         "assignee: agent",
       );
+      expect(readFileSync(join(root, ".prime-board", "issues", "AT-2.md"), "utf8")).toContain(
+        "completedAt: 2026-01-03T00:00:00.000Z",
+      );
       expect(readFileSync(join(root, ".prime-board", "log", "AT-2.jsonl"), "utf8")).toContain(
         '"type":"state_changed"',
       );
@@ -152,7 +155,7 @@ describe("writeLinearExportToRepo", () => {
     }
   });
 
-  it("explicita pérdidas y convierte artefactos a enlaces", () => {
+  it("convierte artefactos a enlaces y conserva dueDate", () => {
     const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-loss-"));
     const withUnsupported: LinearExport = {
       ...source,
@@ -170,18 +173,15 @@ describe("writeLinearExportToRepo", () => {
     };
     try {
       const dry = writeLinearExportToRepo(withUnsupported, root, { dryRun: true });
-      expect(dry.losses).toEqual(
-        expect.arrayContaining([expect.objectContaining({ code: "UNREPRESENTED_DUE_DATE" })]),
-      );
+      expect(dry.losses).toEqual([]);
       expect(dry.warnings).toEqual(
         expect.arrayContaining([expect.objectContaining({ code: "LINKED_ISSUE_ARTIFACTS" })]),
       );
-      expect(() => writeLinearExportToRepo(withUnsupported, root)).toThrow(/unapproved loss/);
-      const applied = writeLinearExportToRepo(withUnsupported, root, { allowLosses: true });
-      expect(applied.losses.length).toBeGreaterThan(0);
-      expect(readFileSync(join(root, ".prime-board", "issues", "AT-1.md"), "utf8")).toContain(
-        "https://example.test/a",
-      );
+      const applied = writeLinearExportToRepo(withUnsupported, root);
+      expect(applied.losses).toEqual([]);
+      const exported = readFileSync(join(root, ".prime-board", "issues", "AT-1.md"), "utf8");
+      expect(exported).toContain("dueDate: 2026-02-01");
+      expect(exported).toContain("https://example.test/a");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

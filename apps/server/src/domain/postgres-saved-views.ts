@@ -25,7 +25,20 @@ export interface PostgresSavedViewRow {
   archived_at: string | null;
 }
 
-const ORDER_BY_VALUES = new Set(["CREATED_ASC", "CREATED_DESC", "UPDATED_ASC", "UPDATED_DESC"]);
+const ORDER_BY_VALUES = new Set([
+  "CREATED_ASC",
+  "CREATED_DESC",
+  "UPDATED_ASC",
+  "UPDATED_DESC",
+  "DUE_DATE_ASC",
+  "DUE_DATE_DESC",
+  "STARTED_AT_ASC",
+  "STARTED_AT_DESC",
+  "COMPLETED_AT_ASC",
+  "COMPLETED_AT_DESC",
+  "CANCELED_AT_ASC",
+  "CANCELED_AT_DESC",
+]);
 const GROUP_BY_VALUES = new Set(["state", "milestone", "assignee", "priority"]);
 
 function parseFilter(filter: unknown): string {

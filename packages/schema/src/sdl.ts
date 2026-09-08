@@ -259,6 +259,22 @@ export const typeDefs = /* GraphQL */ `
     project: Project
     milestone: Milestone
     cycle: Cycle
+    """
+    Optional planning deadline. Date-only values are interpreted at midnight UTC.
+    """
+    dueDate: DateTime
+    """
+    First transition into a started Workflow State. Preserved across reopens.
+    """
+    startedAt: DateTime
+    """
+    Latest transition into a completed Workflow State. Cleared when the Issue leaves it.
+    """
+    completedAt: DateTime
+    """
+    Latest transition into a canceled Workflow State. Cleared when the Issue leaves it.
+    """
+    canceledAt: DateTime
     sortOrder: Float!
     comments: [Comment!]!
     """
@@ -752,6 +768,22 @@ export const typeDefs = /* GraphQL */ `
     lte: Int
   }
 
+  """
+  Comparator for Issue planning and lifecycle timestamps.
+  """
+  input DateTimeComparator {
+    eq: DateTime
+    neq: DateTime
+    in: [DateTime!]
+    nin: [DateTime!]
+    gte: DateTime
+    lte: DateTime
+    """
+    true: the field is NULL; false: the field is not NULL.
+    """
+    null: Boolean
+  }
+
   input StateTypeComparator {
     eq: StateType
     in: [StateType!]
@@ -763,7 +795,7 @@ export const typeDefs = /* GraphQL */ `
   }
 
   """
-  Composable filter: fields combine with AND; and/or nest sub-filters.
+  Composable filter: fields combine with AND; and/or nest sub-filters. Date fields support eq, neq, in, nin, gte, lte, and null.
   """
   input IssueFilter {
     team: IDComparator
@@ -776,6 +808,10 @@ export const typeDefs = /* GraphQL */ `
     cycle: IDComparator
     parent: IDComparator
     priority: IntComparator
+    dueDate: DateTimeComparator
+    startedAt: DateTimeComparator
+    completedAt: DateTimeComparator
+    canceledAt: DateTimeComparator
     labels: LabelComparator
     """
     Full-text search over the title and description.
@@ -794,11 +830,22 @@ export const typeDefs = /* GraphQL */ `
     or: [IssueFilter!]
   }
 
+  """
+  Supported Issue ordering fields. NULL lifecycle dates use database null ordering.
+  """
   enum IssueOrder {
     CREATED_ASC
     CREATED_DESC
     UPDATED_ASC
     UPDATED_DESC
+    DUE_DATE_ASC
+    DUE_DATE_DESC
+    STARTED_AT_ASC
+    STARTED_AT_DESC
+    COMPLETED_AT_ASC
+    COMPLETED_AT_DESC
+    CANCELED_AT_ASC
+    CANCELED_AT_DESC
   }
 
   input IssueCreateInput {
@@ -816,6 +863,10 @@ export const typeDefs = /* GraphQL */ `
     parentId: ID
     projectId: ID
     milestoneId: ID
+    """
+    Optional planning deadline. Date-only values are interpreted at midnight UTC.
+    """
+    dueDate: DateTime
     """
     Labels to apply at creation (avoids an extra issueUpdate).
     """
@@ -840,6 +891,10 @@ export const typeDefs = /* GraphQL */ `
     projectId: ID
     milestoneId: ID
     cycleId: ID
+    """
+    Optional planning deadline. Set null to clear it.
+    """
+    dueDate: DateTime
     sortOrder: Float
     """
     Replaces the complete set of labels.

@@ -22,7 +22,7 @@ const ISSUE_FIELDS = `id identifier title description priority
   labels { id name } project { id name } milestone { id name } cycle { id number name }
   parent { identifier }
   subscribers { id name type }
-  url branchName createdAt updatedAt archivedAt`;
+  url branchName createdAt updatedAt archivedAt dueDate startedAt completedAt canceledAt`;
 
 function json(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -739,6 +739,22 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         project: z.string().optional().describe("Project ID or name"),
         milestone: z.string().optional().describe("Milestone ID or name"),
         cycle: z.string().optional().describe("Cycle ID, number or name"),
+        dueDate: z
+          .union([z.string(), z.null()])
+          .optional()
+          .describe("ISO-8601 planning deadline; null matches issues without one"),
+        startedAt: z
+          .union([z.string(), z.null()])
+          .optional()
+          .describe("First started timestamp; null matches issues without one"),
+        completedAt: z
+          .union([z.string(), z.null()])
+          .optional()
+          .describe("Latest completed timestamp; null matches issues without one"),
+        canceledAt: z
+          .union([z.string(), z.null()])
+          .optional()
+          .describe("Latest canceled timestamp; null matches issues without one"),
         parent: z.string().optional().describe("Parent issue ID or identifier"),
         labels: z
           .array(z.string())
@@ -762,7 +778,22 @@ export function createServer(config: McpConfig | McpSession): McpServer {
           .describe("Filter issues followed (or not followed) by the authenticated actor"),
         limit: z.number().int().min(1).max(250).optional(),
         after: z.string().optional().describe("Cursor from pageInfo.endCursor"),
-        orderBy: z.enum(["CREATED_ASC", "CREATED_DESC", "UPDATED_ASC", "UPDATED_DESC"]).optional(),
+        orderBy: z
+          .enum([
+            "CREATED_ASC",
+            "CREATED_DESC",
+            "UPDATED_ASC",
+            "UPDATED_DESC",
+            "DUE_DATE_ASC",
+            "DUE_DATE_DESC",
+            "STARTED_AT_ASC",
+            "STARTED_AT_DESC",
+            "COMPLETED_AT_ASC",
+            "COMPLETED_AT_DESC",
+            "CANCELED_AT_ASC",
+            "CANCELED_AT_DESC",
+          ])
+          .optional(),
       },
     },
     async (args) => {
@@ -782,6 +813,15 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       if (args.milestone)
         filter.milestone = { eq: await resolveMilestone(sessionConfig, args.milestone) };
       if (args.cycle) filter.cycle = { eq: await resolveCycle(sessionConfig, args.cycle, teamId) };
+      for (const [argument, field] of [
+        ["dueDate", "dueDate"],
+        ["startedAt", "startedAt"],
+        ["completedAt", "completedAt"],
+        ["canceledAt", "canceledAt"],
+      ] as const) {
+        const value = args[argument];
+        if (value !== undefined) filter[field] = value === null ? { null: true } : { eq: value };
+      }
       if (args.parent) filter.parent = { eq: await resolveIssueId(sessionConfig, args.parent) };
       if (args.labels?.length) {
         const hasLabelName = args.labels.some((label) => !UUID_RE.test(label));
@@ -879,6 +919,10 @@ export function createServer(config: McpConfig | McpSession): McpServer {
           .union([z.string(), z.null()])
           .optional()
           .describe("Milestone ID or name; null explicitly clears the milestone"),
+        dueDate: z
+          .union([z.string(), z.null()])
+          .optional()
+          .describe("ISO-8601 planning deadline; null explicitly clears it"),
         labels: z.array(z.string()).optional().describe("Label names to set"),
       },
     },
@@ -895,6 +939,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         input.projectId =
           args.project === null ? null : await resolveProject(sessionConfig, args.project);
       }
+      if (args.dueDate !== undefined) input.dueDate = args.dueDate;
       // Milestones are resolved after the issue/project context is known.
       if (args.cycle !== undefined || args.sortOrder !== undefined) {
         if (!args.id)

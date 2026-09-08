@@ -21,9 +21,29 @@ describe("Workspace export/rebuild", () => {
   it("conserva nombre, urlKey, teams e issues", async () => {
     const created = await gql(
       app,
-      `mutation { issueCreate(input: { teamKey: "PB", title: "Workspace roundtrip" }) { issue { identifier } } }`,
+      `mutation { issueCreate(input: { teamKey: "PB", title: "Workspace roundtrip", dueDate: "2026-06-15" }) { issue { id identifier dueDate } } }`,
     );
     expect(created.errors).toBeUndefined();
+    expect(created.data!.issueCreate.issue.dueDate).toBe("2026-06-15");
+    const states = (await gql(app, `{ team(key: "PB") { states { id type } } }`)).data!.team.states;
+    const started = await gql(
+      app,
+      `mutation($id: ID!, $stateId: ID!) { issueUpdate(id: $id, input: { stateId: $stateId }) { issue { startedAt } } }`,
+      {
+        id: created.data!.issueCreate.issue.id,
+        stateId: states.find((s: any) => s.type === "STARTED").id,
+      },
+    );
+    const completed = await gql(
+      app,
+      `mutation($id: ID!, $stateId: ID!) { issueUpdate(id: $id, input: { stateId: $stateId }) { issue { completedAt } } }`,
+      {
+        id: created.data!.issueCreate.issue.id,
+        stateId: states.find((s: any) => s.type === "COMPLETED").id,
+      },
+    );
+    expect(started.errors).toBeUndefined();
+    expect(completed.errors).toBeUndefined();
     const renamed = await gql(
       app,
       `mutation { workspaceUpdate(input: { name: "Exported Workspace" }) { success } }`,
@@ -54,10 +74,15 @@ describe("Workspace export/rebuild", () => {
     expect(
       fresh
         .query(
-          "SELECT teams.key || '-' || issues.number AS identifier FROM issues JOIN teams ON teams.id = issues.team_id",
+          "SELECT teams.key || '-' || issues.number AS identifier, issues.due_date, issues.started_at, issues.completed_at FROM issues JOIN teams ON teams.id = issues.team_id",
         )
         .get(),
-    ).toEqual({ identifier: created.data!.issueCreate.issue.identifier });
+    ).toEqual({
+      identifier: created.data!.issueCreate.issue.identifier,
+      due_date: "2026-06-15",
+      started_at: started.data!.issueUpdate.issue.startedAt,
+      completed_at: completed.data!.issueUpdate.issue.completedAt,
+    });
     fresh.close();
   });
 });

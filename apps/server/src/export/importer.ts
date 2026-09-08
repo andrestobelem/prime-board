@@ -740,6 +740,20 @@ export function rebuildFromRepo(
       .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 
     for (const issue of snapshots) {
+      for (const field of [
+        "dueDate",
+        "startedAt",
+        "completedAt",
+        "canceledAt",
+        "createdAt",
+        "updatedAt",
+        "archivedAt",
+      ]) {
+        const value = issue[field];
+        if (value != null && (typeof value !== "string" || Number.isNaN(Date.parse(value)))) {
+          throw new Error(`Issue ${issue.id} has an invalid ${field}; expected an ISO-8601 date`);
+        }
+      }
       const [teamKey, numberText] = String(issue.id).split("-");
       const teamId = teamIds.get(teamKey!);
       if (!teamId) throw new Error(`Issue ${issue.id} references unknown team ${teamKey}`);
@@ -754,8 +768,10 @@ export function rebuildFromRepo(
       issueIds.set(issue.id, id);
       db.query(
         `INSERT INTO issues (id, team_id, number, title, description, state_id, priority, assignee_id,
-           parent_id, project_id, milestone_id, cycle_id, creator_id, sort_order, created_at, updated_at, archived_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)`,
+           parent_id, project_id, milestone_id, cycle_id, creator_id, sort_order,
+           due_date, started_at, completed_at, canceled_at, created_at, updated_at, archived_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13,
+           ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
       ).run(
         id,
         teamId,
@@ -776,6 +792,10 @@ export function rebuildFromRepo(
         cycleId,
         actorIds.get(issue.creator) ?? [...actorIds.values()][0]!,
         typeof issue.sortOrder === "number" ? issue.sortOrder : 0,
+        issue.dueDate ?? null,
+        issue.startedAt ?? null,
+        issue.completedAt ?? null,
+        issue.canceledAt ?? null,
         issue.createdAt,
         issue.updatedAt ?? issue.createdAt,
         issue.archivedAt ?? null,

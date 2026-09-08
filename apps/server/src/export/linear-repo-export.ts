@@ -89,6 +89,9 @@ export interface LinearIssue {
   attachments?: LinearLink[];
   documents?: LinearLink[];
   dueDate?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  canceledAt?: string | null;
   estimate?: number | null;
   cycleId?: string | null;
 }
@@ -481,6 +484,11 @@ export function writeLinearExportToRepo(
     issueIdentifierById.set(issue.id, identifier);
     ensureDate(issue.createdAt, "createdAt", conflicts, issue.id);
     ensureDate(issue.updatedAt, "updatedAt", conflicts, issue.id);
+    if (issue.dueDate != null) ensureDate(issue.dueDate, "dueDate", conflicts, issue.id);
+    if (issue.startedAt != null) ensureDate(issue.startedAt, "startedAt", conflicts, issue.id);
+    if (issue.completedAt != null)
+      ensureDate(issue.completedAt, "completedAt", conflicts, issue.id);
+    if (issue.canceledAt != null) ensureDate(issue.canceledAt, "canceledAt", conflicts, issue.id);
     if (
       issue.priority != null &&
       (!Number.isInteger(issue.priority) || issue.priority < 0 || issue.priority > 4)
@@ -531,13 +539,6 @@ export function writeLinearExportToRepo(
     for (const labelId of issue.labelIds ?? [])
       if (!labelById.has(labelId))
         add(conflicts, "UNKNOWN_ISSUE_LABEL", `Issue refers to unknown label ${labelId}`, issue.id);
-    if (issue.dueDate != null)
-      add(
-        losses,
-        "UNREPRESENTED_DUE_DATE",
-        "Due date is not part of the prime-board issue model",
-        issue.id,
-      );
     if (issue.estimate != null)
       add(
         losses,
@@ -814,6 +815,22 @@ export function writeLinearExportToRepo(
       .filter(Boolean)
       .map((label) => label!.name)
       .sort();
+    const lifecycleHistory = issue.stateHistory ?? [];
+    const historyDates = (type: string): string[] =>
+      lifecycleHistory
+        .filter((entry) => stateTypeById.get(entry.stateId) === type)
+        .map((entry) => entry.startedAt);
+    const currentType = stateTypeById.get(issue.stateId);
+    const startedAt =
+      issue.startedAt ??
+      historyDates("started")[0] ??
+      (currentType === "started" ? issue.createdAt : null);
+    const completedAt =
+      issue.completedAt ??
+      (currentType === "completed" ? (historyDates("completed").at(-1) ?? issue.createdAt) : null);
+    const canceledAt =
+      issue.canceledAt ??
+      (currentType === "canceled" ? (historyDates("canceled").at(-1) ?? issue.createdAt) : null);
     const frontMatter = {
       id: identifier,
       title: issue.title,
@@ -840,6 +857,10 @@ export function writeLinearExportToRepo(
       createdAt: issue.createdAt,
       updatedAt: issue.updatedAt,
       archivedAt: issue.archivedAt ?? null,
+      dueDate: issue.dueDate ?? null,
+      startedAt,
+      completedAt,
+      canceledAt,
     };
     const artifactLinks = [...(issue.attachments ?? []), ...(issue.documents ?? [])].map(
       (link) => `- [${link.title ?? link.filename ?? link.url}](${link.url})`,

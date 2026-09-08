@@ -74,7 +74,7 @@ El server ejecuta migraciones SQL versionadas al arrancar.
 | `actors`          | `id, name, email?, type ('human'\|'agent'), avatarUrl?`                                                                                  | Humanos y agentes en la misma tabla; `type` es informativo y visible en UI/API.                                                                                                                                                     |
 | `api_keys`        | `id, actorId, name, hash, lastUsedAt`                                                                                                    | La key en claro se muestra una sola vez. Formato `pb_<random>`.                                                                                                                                                                     |
 | `workflow_states` | `id, teamId, name, type, color, position`                                                                                                | `type ∈ {triage, backlog, unstarted, started, completed, canceled}`. Default operational states: Backlog, In Progress, Ready for Review, Done, Canceled. Triage adds Needs Triage, Needs Info, Ready for Agent and Ready for Human. |
-| `issues`          | `id, teamId, number, title, description, stateId, priority (0-4), assigneeId?, parentId?, projectId?, creatorId, sortOrder, archivedAt?` | Identificador legible = `team.key + '-' + number`, inmutable. `priority`: 0 none, 1 urgent, 2 high, 3 medium, 4 low (como Linear).                                                                                                  |
+| `issues`          | `id, teamId, number, title, description, stateId, priority (0-4), assigneeId?, parentId?, projectId?, creatorId, sortOrder, dueDate?, startedAt?, completedAt?, canceledAt?, archivedAt?` | `dueDate` acepta ISO-8601 y fecha sin hora (medianoche UTC). `startedAt` conserva la primera transición a `started`; `completedAt` y `canceledAt` conservan la última transición mientras la Issue permanece en ese tipo de estado. Identificador legible = `team.key + '-' + number`, inmutable. `priority`: 0 none, 1 urgent, 2 high, 3 medium, 4 low (como Linear).                                                                                                  |
 | `labels`          | `id, name, color, teamId?`                                                                                                               | `teamId NULL` = label de workspace.                                                                                                                                                                                                 |
 | `issue_labels`    | `issueId, labelId`                                                                                                                       | N:M.                                                                                                                                                                                                                                |
 | `projects`        | `id, name, description, state, leadId?, targetDate?, archivedAt?`                                                                        | `state ∈ {backlog, planned, started, paused, completed, canceled}`.                                                                                                                                                                 |
@@ -122,6 +122,10 @@ type Issue {
   createdAt: DateTime!
   updatedAt: DateTime!
   archivedAt: DateTime
+  dueDate: DateTime
+  startedAt: DateTime
+  completedAt: DateTime
+  canceledAt: DateTime
 }
 
 type Actor { id: ID! name: String! type: ActorType! email: String }
@@ -138,11 +142,14 @@ type Project {
 }
 type Comment { id: ID! body: String! actor: Actor! issue: Issue! createdAt: DateTime! editedAt: DateTime }
 type Activity { id: ID! type: String! actor: Actor! payload: JSON! createdAt: DateTime! }
+enum IssueOrder { CREATED_ASC CREATED_DESC UPDATED_ASC UPDATED_DESC DUE_DATE_ASC DUE_DATE_DESC STARTED_AT_ASC STARTED_AT_DESC COMPLETED_AT_ASC COMPLETED_AT_DESC CANCELED_AT_ASC CANCELED_AT_DESC }
 
 input IssueFilter {
   team: IDComparator; state: IDComparator; stateType: StateTypeComparator
   assignee: IDComparator; creator: IDComparator; priority: IntComparator
   labels: IDArrayComparator; project: IDComparator; parent: IDComparator
+  dueDate: DateTimeComparator; startedAt: DateTimeComparator
+  completedAt: DateTimeComparator; canceledAt: DateTimeComparator
   search: String                       # full-text (FTS5)
   and: [IssueFilter!]; or: [IssueFilter!]
 }
@@ -162,7 +169,7 @@ type Query {
 
 type Mutation {
   issueCreate(input: IssueCreateInput!): IssuePayload!
-  issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!   # estado, prioridad, assignee, labels, parent, project, título, descripción
+  issueUpdate(id: ID!, input: IssueUpdateInput!): IssuePayload!   # incluye dueDate; los timestamps de ciclo de vida se derivan del estado
   issueArchive(id: ID!): IssuePayload!
   issueUnarchive(id: ID!): IssuePayload!
   commentCreate(input: CommentCreateInput!): CommentPayload!

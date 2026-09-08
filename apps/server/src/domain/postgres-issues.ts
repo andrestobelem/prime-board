@@ -11,6 +11,7 @@ import {
   buildIssueFilter,
   decodeCursor,
   encodeCursor,
+  issueCursorClause,
   ORDER_COLUMNS,
   ParamSink,
   type IssueFilter,
@@ -26,6 +27,7 @@ import { newId, now } from "../db/util.ts";
 import { applyPostgresLabelOps } from "./postgres-labels.ts";
 import { assertPostgresMilestoneMatchesProject } from "./postgres-milestones.ts";
 import { validatePostgresCycleForTeam } from "./postgres-cycles.ts";
+import { parseDateTime } from "./datetime.ts";
 
 const SELECT_ISSUE =
   "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id";
@@ -73,8 +75,13 @@ function postgresSearchClause(search: string, params: ParamSink): string {
 
 const POSTGRES_FILTER_OPTIONS = { searchClause: postgresSearchClause };
 
-function orderValue(row: IssueRow, orderBy: IssueOrder): string {
-  return orderBy === "UPDATED_ASC" || orderBy === "UPDATED_DESC" ? row.updated_at : row.created_at;
+function orderValue(row: IssueRow, orderBy: IssueOrder): string | null {
+  if (orderBy === "CREATED_ASC" || orderBy === "CREATED_DESC") return row.created_at;
+  if (orderBy === "UPDATED_ASC" || orderBy === "UPDATED_DESC") return row.updated_at;
+  if (orderBy === "DUE_DATE_ASC" || orderBy === "DUE_DATE_DESC") return row.due_date;
+  if (orderBy === "STARTED_AT_ASC" || orderBy === "STARTED_AT_DESC") return row.started_at;
+  if (orderBy === "COMPLETED_AT_ASC" || orderBy === "COMPLETED_AT_DESC") return row.completed_at;
+  return row.canceled_at;
 }
 
 function addTeamScope(params: ParamSink, teamIds: readonly string[]): string {
@@ -215,16 +222,15 @@ export async function listPostgresIssues(
     if (!cursorRow || orderValue(cursorRow, orderBy) !== decoded.orderValue) {
       throw apiError("VALIDATION_FAILED", "Invalid issue cursor");
     }
-    const comparator = order.direction === "DESC" ? "<" : ">";
     clauses.push(
-      `(${order.column}, issues.id) ${comparator} (${params.add(decoded.orderValue)}, ${params.add(decoded.id)})`,
+      issueCursorClause(order.column, order.direction, decoded.orderValue, decoded.id, params),
     );
   }
 
   const rows = await persistence.many<IssueRow>(
     `${SELECT_ISSUE}
      WHERE ${clauses.join(" AND ")}
-     ORDER BY ${order.column} ${order.direction}, issues.id ${order.direction}
+     ORDER BY ${order.column} ${order.direction} ${order.direction === "ASC" ? "NULLS FIRST" : "NULLS LAST"}, issues.id ${order.direction}
      LIMIT ${options.first + 1}`.replace(/\?(\d+)/g, (_match, number: string) => `$${number}`),
     valuesOf(params),
   );
@@ -386,7 +392,11 @@ export async function createPostgresIssue(
       const creator = await getPostgresActor(tx, input.creatorId);
       if (!creator) throw apiError("NOT_FOUND", "Creator actor not found");
     }
+    if (input.dueDate != null) parseDateTime(input.dueDate, "dueDate");
     const createdAt = input.createdAt ?? now();
+    const startedAt = state.type === "started" ? createdAt : null;
+    const completedAt = state.type === "completed" ? createdAt : null;
+    const canceledAt = state.type === "canceled" ? createdAt : null;
     const issueId = newId();
     let number: number;
     if (input.number != null) {
@@ -427,8 +437,10 @@ export async function createPostgresIssue(
     await tx.execute(
       `INSERT INTO issues
        (id, team_id, number, title, description, state_id, priority, assignee_id, parent_id,
-        project_id, milestone_id, cycle_id, creator_id, sort_order, created_at, updated_at, archived_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 0, $14, $14, NULL)`,
+        project_id, milestone_id, cycle_id, creator_id, sort_order, due_date, started_at,
+        completed_at, canceled_at, created_at, updated_at, archived_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 0,
+        $14, $15, $16, $17, $18, $18, NULL)`,
       [
         issueId,
         team.id,
@@ -443,6 +455,10 @@ export async function createPostgresIssue(
         input.milestoneId ?? null,
         null,
         input.creatorId ?? viewer.id,
+        input.dueDate ?? null,
+        startedAt,
+        completedAt,
+        canceledAt,
         createdAt,
       ],
     );
@@ -472,6 +488,10 @@ export async function createPostgresIssue(
         parentId: input.parentId ?? null,
         projectId: input.projectId ?? null,
         milestoneId: input.milestoneId ?? null,
+        dueDate: input.dueDate ?? null,
+        startedAt,
+        completedAt,
+        canceledAt,
       },
       createdAt,
     );
@@ -491,6 +511,7 @@ export async function updatePostgresIssue(
     const issue = await getPostgresIssueByRef(tx, ref);
     if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
     const team = await requirePostgresIssueWrite(tx, viewer, issue.team_id);
+    if (input.dueDate != null) parseDateTime(input.dueDate, "dueDate");
     const changes: Array<{ field: string; from: unknown; to: unknown }> = [];
     const sets: string[] = [];
     const params: SqlValue[] = [];
@@ -528,6 +549,42 @@ export async function updatePostgresIssue(
         type: "state_changed",
         payload: { from: issue.state_id, to: input.stateId },
       });
+      const transitionAt = now();
+      if (state.type === "started" && issue.started_at === null) {
+        push("started_at", transitionAt);
+        changes.push({ field: "startedAt", from: null, to: transitionAt });
+        activity.push({ type: "started_at_changed", payload: { from: null, to: transitionAt } });
+      }
+      if (state.type === "completed") {
+        push("completed_at", transitionAt);
+        changes.push({ field: "completedAt", from: issue.completed_at, to: transitionAt });
+        activity.push({
+          type: "completed_at_changed",
+          payload: { from: issue.completed_at, to: transitionAt },
+        });
+      } else if (issue.completed_at !== null) {
+        push("completed_at", null);
+        changes.push({ field: "completedAt", from: issue.completed_at, to: null });
+        activity.push({
+          type: "completed_at_changed",
+          payload: { from: issue.completed_at, to: null },
+        });
+      }
+      if (state.type === "canceled") {
+        push("canceled_at", transitionAt);
+        changes.push({ field: "canceledAt", from: issue.canceled_at, to: transitionAt });
+        activity.push({
+          type: "canceled_at_changed",
+          payload: { from: issue.canceled_at, to: transitionAt },
+        });
+      } else if (issue.canceled_at !== null) {
+        push("canceled_at", null);
+        changes.push({ field: "canceledAt", from: issue.canceled_at, to: null });
+        activity.push({
+          type: "canceled_at_changed",
+          payload: { from: issue.canceled_at, to: null },
+        });
+      }
     }
     if (input.priority !== undefined && input.priority !== issue.priority) {
       const priority = input.priority ?? 0;
@@ -581,6 +638,14 @@ export async function updatePostgresIssue(
       activity.push({
         type: "milestone_changed",
         payload: { from: issue.milestone_id, to: input.milestoneId },
+      });
+    }
+    if (input.dueDate !== undefined && input.dueDate !== issue.due_date) {
+      push("due_date", input.dueDate);
+      changes.push({ field: "dueDate", from: issue.due_date, to: input.dueDate });
+      activity.push({
+        type: "due_date_changed",
+        payload: { from: issue.due_date, to: input.dueDate },
       });
     }
     if (input.cycleId !== undefined && input.cycleId !== issue.cycle_id) {

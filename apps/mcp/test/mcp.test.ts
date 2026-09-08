@@ -475,6 +475,7 @@ describe("mcp tools", () => {
     expect(issue.activity.map((a: any) => a.type)).toEqual([
       "created",
       "state_changed",
+      "started_at_changed",
       "parent_changed",
       "parent_changed",
       "commented",

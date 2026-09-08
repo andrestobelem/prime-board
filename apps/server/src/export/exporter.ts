@@ -392,6 +392,10 @@ function writeIssue(
     project: issue.project_id ? (lookups.projects.get(issue.project_id) ?? null) : null,
     milestone: issue.milestone_id ? (lookups.milestones.get(issue.milestone_id) ?? null) : null,
     cycle: cycleRef?.ref ?? null,
+    dueDate: issue.due_date ?? null,
+    startedAt: issue.started_at ?? null,
+    completedAt: issue.completed_at ?? null,
+    canceledAt: issue.canceled_at ?? null,
     sortOrder: issue.sort_order ?? 0,
     labels: db
       .query(

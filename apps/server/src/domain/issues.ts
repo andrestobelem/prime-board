@@ -7,6 +7,7 @@ import {
   buildIssueFilter,
   decodeCursor,
   encodeCursor,
+  issueCursorClause,
   ORDER_COLUMNS,
   ParamSink,
   type IssueFilter,
@@ -17,7 +18,7 @@ import { assertMilestoneMatchesProject } from "./milestones.ts";
 import { projectIncludesTeam } from "./projects.ts";
 import { validateCycleForTeam } from "./cycles.ts";
 import { parseDateTime } from "./datetime.ts";
-import { getDefaultState, getTeam } from "./teams.ts";
+import { getDefaultState, getTeam, getWorkflowState } from "./teams.ts";
 
 export interface IssueRow {
   id: string;
@@ -32,6 +33,10 @@ export interface IssueRow {
   project_id: string | null;
   milestone_id: string | null;
   cycle_id: string | null;
+  due_date: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  canceled_at: string | null;
   creator_id: string;
   sort_order: number;
   created_at: string;
@@ -69,6 +74,10 @@ export function mapIssue(row: IssueRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
+    dueDate: row.due_date,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    canceledAt: row.canceled_at,
     _row: row,
   };
 }
@@ -204,6 +213,8 @@ export interface IssueCreateInput {
   assigneeId?: string | null;
   parentId?: string | null;
   projectId?: string | null;
+  /** Fecha límite de planificación; acepta ISO-8601, incluida la fecha sin hora. */
+  dueDate?: string | null;
   /** Labels a aplicar en la creación (evita un issueUpdate extra en imports). */
   labelIds?: string[] | null;
   milestoneId?: string | null;
@@ -259,6 +270,7 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
     assertMilestoneMatchesProject(db, input.milestoneId, input.projectId ?? null, workspaceId);
   }
   if (input.createdAt != null) parseDateTime(input.createdAt, "createdAt");
+  if (input.dueDate != null) parseDateTime(input.dueDate, "dueDate");
   if (input.creatorId != null) {
     const creator = workspaceId
       ? db
@@ -297,6 +309,11 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
 
     // Estado default explícito del team (AT-180); posición más baja como fallback.
     const stateId = input.stateId ?? getDefaultState(db, team).id;
+    const timestamp = createdAt ?? now();
+    const stateType = getWorkflowState(db, stateId, workspaceId)?.type;
+    const startedAt = stateType === "started" ? timestamp : null;
+    const completedAt = stateType === "completed" ? timestamp : null;
+    const canceledAt = stateType === "canceled" ? timestamp : null;
 
     if (input.parentId) {
       validateParent(
@@ -307,13 +324,13 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
       );
     }
 
-    const timestamp = createdAt ?? now();
     db.query(
       `INSERT INTO issues
         (id, team_id, number, title, description, state_id, priority,
          assignee_id, parent_id, project_id, milestone_id, creator_id, sort_order,
+         due_date, started_at, completed_at, canceled_at,
          created_at, updated_at, workspace_id)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15)`,
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?18, ?19)`,
     ).run(
       id,
       team.id,
@@ -328,6 +345,10 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
       input.milestoneId ?? null,
       creatorId,
       0,
+      input.dueDate ?? null,
+      startedAt,
+      completedAt,
+      canceledAt,
       timestamp,
       workspaceId ?? null,
     );
@@ -349,6 +370,10 @@ export function createIssue(db: Database, actorId: string, input: IssueCreateInp
         parentId: input.parentId ?? null,
         projectId: input.projectId ?? null,
         milestoneId: input.milestoneId ?? null,
+        dueDate: input.dueDate ?? null,
+        startedAt,
+        completedAt,
+        canceledAt,
       },
       createdAt ?? undefined,
       workspaceId,
@@ -376,6 +401,8 @@ export interface IssueUpdateInput extends LabelOps {
   projectId?: string | null;
   milestoneId?: string | null;
   cycleId?: string | null;
+  /** Fecha límite de planificación; null la limpia. */
+  dueDate?: string | null;
   sortOrder?: number | null;
 }
 
@@ -402,6 +429,15 @@ export function updateIssue(
     payload: Record<string, unknown> = {},
     createdAt?: string,
   ) => recordActivity(db, issue.id, actorId, type, payload, createdAt, effectiveWorkspaceId);
+
+  if (input.dueDate != null) parseDateTime(input.dueDate, "dueDate");
+  const stateTransition =
+    input.stateId != null && input.stateId !== issue.state_id
+      ? {
+          from: getWorkflowState(db, issue.state_id, effectiveWorkspaceId)?.type,
+          to: getWorkflowState(db, input.stateId, effectiveWorkspaceId)?.type,
+        }
+      : null;
 
   const push = (column: string, value: unknown) => {
     sets.push(`${column} = ?${params.length + 1}`);
@@ -433,6 +469,38 @@ export function updateIssue(
         from: issue.state_id,
         to: input.stateId,
       });
+      const transitionAt = now();
+      if (stateTransition?.to === "started" && issue.started_at === null) {
+        push("started_at", transitionAt);
+        changes.push({ field: "startedAt", from: null, to: transitionAt });
+        addActivity("started_at_changed", { from: null, to: transitionAt }, transitionAt);
+      }
+      if (stateTransition?.to === "completed") {
+        push("completed_at", transitionAt);
+        changes.push({ field: "completedAt", from: issue.completed_at, to: transitionAt });
+        addActivity(
+          "completed_at_changed",
+          { from: issue.completed_at, to: transitionAt },
+          transitionAt,
+        );
+      } else if (issue.completed_at !== null) {
+        push("completed_at", null);
+        changes.push({ field: "completedAt", from: issue.completed_at, to: null });
+        addActivity("completed_at_changed", { from: issue.completed_at, to: null }, transitionAt);
+      }
+      if (stateTransition?.to === "canceled") {
+        push("canceled_at", transitionAt);
+        changes.push({ field: "canceledAt", from: issue.canceled_at, to: transitionAt });
+        addActivity(
+          "canceled_at_changed",
+          { from: issue.canceled_at, to: transitionAt },
+          transitionAt,
+        );
+      } else if (issue.canceled_at !== null) {
+        push("canceled_at", null);
+        changes.push({ field: "canceledAt", from: issue.canceled_at, to: null });
+        addActivity("canceled_at_changed", { from: issue.canceled_at, to: null }, transitionAt);
+      }
     }
     if (input.priority != null && input.priority !== issue.priority) {
       validatePriority(input.priority);
@@ -503,6 +571,11 @@ export function updateIssue(
         from: issue.milestone_id,
         to: input.milestoneId,
       });
+    }
+    if (input.dueDate !== undefined && input.dueDate !== issue.due_date) {
+      push("due_date", input.dueDate);
+      changes.push({ field: "dueDate", from: issue.due_date, to: input.dueDate });
+      addActivity("due_date_changed", { from: issue.due_date, to: input.dueDate });
     }
     if (input.cycleId !== undefined && input.cycleId !== issue.cycle_id) {
       if (input.cycleId !== null)
@@ -655,8 +728,14 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
   const order = ORDER_COLUMNS[orderBy];
   if (!order) throw apiError("VALIDATION_FAILED", "Invalid issue order");
 
-  const orderValue = (row: IssueRow): string =>
-    order.column === "issues.updated_at" ? row.updated_at : row.created_at;
+  const orderValue = (row: IssueRow): string | null => {
+    if (orderBy === "CREATED_ASC" || orderBy === "CREATED_DESC") return row.created_at;
+    if (orderBy === "UPDATED_ASC" || orderBy === "UPDATED_DESC") return row.updated_at;
+    if (orderBy === "DUE_DATE_ASC" || orderBy === "DUE_DATE_DESC") return row.due_date;
+    if (orderBy === "STARTED_AT_ASC" || orderBy === "STARTED_AT_DESC") return row.started_at;
+    if (orderBy === "COMPLETED_AT_ASC" || orderBy === "COMPLETED_AT_DESC") return row.completed_at;
+    return row.canceled_at;
+  };
   const params = new ParamSink();
   const filter = options.filter ?? {};
   const clauses = [
@@ -718,16 +797,15 @@ export function listIssues(db: Database, options: ListIssuesOptions): IssuePage 
       throw apiError("VALIDATION_FAILED", "Invalid issue cursor");
     }
 
-    const comparator = order.direction === "DESC" ? "<" : ">";
     clauses.push(
-      `(${order.column}, issues.id) ${comparator} (${params.add(decoded.orderValue)}, ${params.add(decoded.id)})`,
+      issueCursorClause(order.column, order.direction, decoded.orderValue, decoded.id, params),
     );
   }
 
   const rows = db
     .query(
       `${SELECT_ISSUE} WHERE ${clauses.join(" AND ")}
-       ORDER BY ${order.column} ${order.direction}, issues.id ${order.direction}
+       ORDER BY ${order.column} ${order.direction} ${order.direction === "ASC" ? "NULLS FIRST" : "NULLS LAST"}, issues.id ${order.direction}
        LIMIT ${options.first + 1}`,
     )
     .all(...(params.values as never[])) as IssueRow[];

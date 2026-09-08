@@ -27,19 +27,19 @@ const ISSUE_FIELDS = `identifier title description priority
   milestone { id name }
   cycle { id number name }
   parent { identifier }
-  url branchName createdAt updatedAt archivedAt`;
+  url branchName createdAt updatedAt archivedAt dueDate startedAt completedAt canceledAt`;
 
 const USAGE = `Usage:
   pb issue list [--team KEY] [--state NAME|TYPE] [--assignee me|ID] [--creator ID|NAME] [--subscribed] [--priority NAME] [--project ID|NAME] [--milestone ID|NAME] [--cycle ID|NAME]
-                [--parent REF] [--label NAME ...] [--filter JSON] [--search TEXT] [--unblocked]
+                [--parent REF] [--due-date DATE|none] [--filter JSON] [--search TEXT] [--unblocked]
                 [--include-archived] [--first N] [--after CURSOR]
-                [--order-by CREATED_ASC|CREATED_DESC|UPDATED_ASC|UPDATED_DESC] [--json]
+                [--order-by CREATED_ASC|CREATED_DESC|UPDATED_ASC|UPDATED_DESC|DUE_DATE_ASC|DUE_DATE_DESC|STARTED_AT_ASC|STARTED_AT_DESC|COMPLETED_AT_ASC|COMPLETED_AT_DESC|CANCELED_AT_ASC|CANCELED_AT_DESC] [--json]
   pb issue view <REF> [--json]
   pb issue create --team KEY --title TEXT [--description TEXT|-] [--priority NAME]
-                  [--assignee me|ID] [--parent REF] [--project ID] [--label NAME ...] [--json]
+                  [--assignee me|ID] [--parent REF] [--project ID] [--due-date DATE] [--label NAME ...] [--json]
   pb issue update <REF> [--title TEXT] [--description TEXT|-|none] [--state NAME|TYPE]
                   [--priority NAME] [--assignee me|ID|none] [--parent REF|none]
-                  [--project ID|none] [--milestone ID|none] [--cycle ID|NAME|none]
+                  [--project ID|none] [--milestone ID|none] [--cycle ID|NAME|none] [--due-date DATE|none]
                   [--sort-order NUMBER] [--add-label NAME ...] [--remove-label NAME ...] [--json]
   pb issue archive <REF> [--json]
   pb issue unarchive <REF> [--json]
@@ -81,6 +81,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
         project: { type: "string" },
         milestone: { type: "string" },
         cycle: { type: "string" },
+        "due-date": { type: "string" },
         parent: { type: "string" },
         label: { type: "string", multiple: true },
         filter: { type: "string" },
@@ -128,6 +129,8 @@ export async function issueCommand(argv: string[]): Promise<void> {
     if (values.milestone)
       filter.milestone = { eq: await resolveMilestone(config, values.milestone, projectId) };
     if (values.cycle) filter.cycle = { eq: await resolveCycle(config, values.cycle, teamId) };
+    if (values["due-date"])
+      filter.dueDate = values["due-date"] === "none" ? { null: true } : { eq: values["due-date"] };
     if (values.parent) filter.parent = { eq: (await resolveIssue(config, values.parent)).id };
     if (values.label?.length) {
       if (!teamId && values.label.some((name) => !/^[0-9a-f-]{36}$/i.test(name))) {
@@ -146,7 +149,20 @@ export async function issueCommand(argv: string[]): Promise<void> {
       throw new UsageError("--first must be an integer between 1 and 250");
     }
     const orderBy = values["order-by"]?.toUpperCase();
-    const validOrders = ["CREATED_ASC", "CREATED_DESC", "UPDATED_ASC", "UPDATED_DESC"];
+    const validOrders = [
+      "CREATED_ASC",
+      "CREATED_DESC",
+      "UPDATED_ASC",
+      "UPDATED_DESC",
+      "DUE_DATE_ASC",
+      "DUE_DATE_DESC",
+      "STARTED_AT_ASC",
+      "STARTED_AT_DESC",
+      "COMPLETED_AT_ASC",
+      "COMPLETED_AT_DESC",
+      "CANCELED_AT_ASC",
+      "CANCELED_AT_DESC",
+    ];
     if (orderBy && !validOrders.includes(orderBy)) {
       throw new UsageError(`Invalid --order-by: ${values["order-by"]}`);
     }
@@ -223,6 +239,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
         assignee: { type: "string" },
         parent: { type: "string" },
         project: { type: "string" },
+        "due-date": { type: "string" },
         label: { type: "string", multiple: true },
         number: { type: "string" },
         json: { type: "boolean" },
@@ -237,6 +254,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
     if (values.assignee) input.assigneeId = await resolveAssignee(config, values.assignee);
     if (values.parent) input.parentId = (await resolveIssue(config, values.parent)).id;
     if (values.project) input.projectId = values.project;
+    if (values["due-date"]) input.dueDate = values["due-date"];
     if (values.label?.length) {
       input.labelIds = await resolveLabels(config, team.id, values.label);
     }
@@ -270,6 +288,7 @@ export async function issueCommand(argv: string[]): Promise<void> {
         project: { type: "string" },
         milestone: { type: "string" },
         cycle: { type: "string" },
+        "due-date": { type: "string" },
         "sort-order": { type: "string" },
         "add-label": { type: "string", multiple: true },
         "remove-label": { type: "string", multiple: true },
@@ -316,6 +335,9 @@ export async function issueCommand(argv: string[]): Promise<void> {
     if (values.cycle) {
       input.cycleId =
         values.cycle === "none" ? null : await resolveCycle(config, values.cycle, issue.team.id);
+    }
+    if (values["due-date"]) {
+      input.dueDate = values["due-date"] === "none" ? null : values["due-date"];
     }
     if (values["sort-order"] !== undefined) {
       const sortOrder = Number(values["sort-order"]);

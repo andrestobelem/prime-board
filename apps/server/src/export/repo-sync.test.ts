@@ -151,7 +151,13 @@ try {
     );
 
     const types = logFor("PB-1").map((line) => JSON.parse(line).type);
-    expect(types).toEqual(["created", "state_changed", "priority_changed", "commented"]);
+    expect(types).toEqual([
+      "created",
+      "state_changed",
+      "started_at_changed",
+      "priority_changed",
+      "commented",
+    ]);
 
     const snapshot = readFileSync(join(repoDir, ".prime-board", "issues", "PB-1.md"), "utf8");
     expect(snapshot).toContain("state: In Progress");
@@ -205,6 +211,7 @@ try {
     expect(events.map((current) => current.type)).toEqual([
       "created",
       "state_changed",
+      "started_at_changed",
       "commented",
       "subscribed",
       "unsubscribed",
