@@ -35,6 +35,7 @@ import {
   createGitCommitter,
   IssueEventPipeline,
   type CanonicalEventLogLease,
+  type GitCommitRollback,
   type IssueEventPipelineOptions,
 } from "./issue-event-pipeline.ts";
 
@@ -178,8 +179,10 @@ export interface RepoSync {
 class RepoSyncLeaseImpl implements RepoSyncLease {
   private ready = false;
   private completed = false;
+  private transactionCommitted = false;
   private released = false;
-  private commitEventLog: (() => void) | undefined;
+  private commitEventLog: (() => GitCommitRollback | undefined) | undefined;
+  private rollbackGit: GitCommitRollback | undefined;
   private restoreEventLog: (() => void) | undefined;
   private captureAfterRetire: (() => void) | undefined;
 
@@ -194,7 +197,7 @@ class RepoSyncLeaseImpl implements RepoSyncLease {
     this.captureAfterRetire = captureAfterRetire;
   }
 
-  markReady(commitEventLog: () => void): void {
+  markReady(commitEventLog: () => GitCommitRollback | undefined): void {
     if (this.released) throw new Error("Repo sync lease is already released");
     this.commitEventLog = commitEventLog;
     this.ready = true;
@@ -212,7 +215,7 @@ class RepoSyncLeaseImpl implements RepoSyncLease {
       this.lock.run(() => {
         this.retiredDocuments.retire();
         this.captureAfterRetire?.();
-        this.commitEventLog!();
+        this.rollbackGit = this.commitEventLog!();
       });
       this.completed = true;
     } catch (error) {
@@ -227,6 +230,7 @@ class RepoSyncLeaseImpl implements RepoSyncLease {
       this.abort();
       return;
     }
+    this.transactionCommitted = true;
     this.released = true;
     this.lock.release();
   }
@@ -234,9 +238,15 @@ class RepoSyncLeaseImpl implements RepoSyncLease {
   abort(): void {
     if (this.released) return;
     try {
-      if (!this.completed) {
-        // The caller still owns the lock, so restoring the append cannot race
-        // another RepoSync writer in this process or worktree.
+      if (!this.transactionCommitted) {
+        // The caller still owns the lock, so compensation cannot race another
+        // RepoSync writer in this process or worktree.
+        try {
+          this.lock.run(() => this.rollbackGit?.());
+        } catch {
+          // Preserve the original mutation error. A later sync can recover the
+          // Git commit if compensation cannot move HEAD safely.
+        }
         try {
           this.lock.run(() => this.restoreEventLog?.());
         } catch {

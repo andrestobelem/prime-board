@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestApp, gql, type TestApp } from "../test-helpers.ts";
 import { createRepoSync } from "./repo-sync.ts";
+import { createGitCommitter, IssueEventPipeline } from "./issue-event-pipeline.ts";
 import { prepareRetiredDocuments } from "./exporter.ts";
 import { archiveDocumentRows } from "./documents-archive.ts";
 import { readEventLog } from "./event-log.ts";
@@ -269,6 +270,55 @@ try {
     } finally {
       failing.stop();
       rmSync(failingRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("compensa Git si falla COMMIT SQLite después de publicar el sync", async () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-sqlite-commit-rollback-"));
+    execFileSync("git", ["-C", isolatedRoot, "init", "-q"]);
+    execFileSync("git", ["-C", isolatedRoot, "config", "user.email", "test@example.test"]);
+    execFileSync("git", ["-C", isolatedRoot, "config", "user.name", "PRB test"]);
+    execFileSync("git", ["-C", isolatedRoot, "commit", "--allow-empty", "-qm", "baseline"]);
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const first = await gql(
+        isolated,
+        'mutation { issueCreate(input: { teamKey: "PB", title: "before commit failure" }) { success } }',
+      );
+      expect(first.errors).toBeUndefined();
+      const beforeHead = execFileSync("git", ["-C", isolatedRoot, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      const beforeEvents = readEventLog({ rootDir: isolatedRoot });
+      const originalExec = isolated.db.exec.bind(isolated.db);
+      let failCommit = true;
+      isolated.db.exec = ((sql: string) => {
+        if (failCommit && sql.trim() === "COMMIT") {
+          failCommit = false;
+          throw new Error("SQLite commit unavailable");
+        }
+        return originalExec(sql);
+      }) as typeof isolated.db.exec;
+
+      const result = await gql(
+        isolated,
+        'mutation { issueCreate(input: { teamKey: "PB", title: "must not persist" }) { success } }',
+      );
+      expect(result.errors?.[0]?.message).toContain("SQLite commit unavailable");
+      expect(
+        (isolated.db.query("SELECT count(*) AS count FROM issues").get() as { count: number })
+          .count,
+      ).toBe(1);
+      expect(readEventLog({ rootDir: isolatedRoot })).toEqual(beforeEvents);
+      expect(
+        execFileSync("git", ["-C", isolatedRoot, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim(),
+      ).toBe(beforeHead);
+      expect(existsSync(join(isolatedRoot, ".prime-board", "issues", "PB-2.md"))).toBe(false);
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
     }
   });
 
@@ -656,6 +706,66 @@ try {
       expect(() => repo!.preflight()).toThrow(/already holds the lock/);
       lease!.abort();
       expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("compensa un commit Git si la transacción falla después de complete", async () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-2pc-rollback-"));
+    execFileSync("git", ["-C", isolatedRoot, "init", "-q"]);
+    execFileSync("git", ["-C", isolatedRoot, "config", "user.email", "test@example.test"]);
+    execFileSync("git", ["-C", isolatedRoot, "config", "user.name", "PRB test"]);
+    execFileSync("git", ["-C", isolatedRoot, "commit", "--allow-empty", "-qm", "baseline"]);
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      const created = await gql(
+        isolated,
+        'mutation { issueCreate(input: { teamKey: "PB", title: "2PC rollback" }) { success } }',
+      );
+      expect(created.errors).toBeUndefined();
+      const pipeline = new IssueEventPipeline({
+        rootDir: isolatedRoot,
+        commitGit: createGitCommitter(isolatedRoot),
+      });
+      pipeline.append([
+        {
+          schemaVersion: 1,
+          eventId: "2pc-test-event",
+          aggregate: "issue",
+          aggregateKey: "PB-1",
+          type: "updated",
+          actor: "admin",
+          occurredAt: new Date().toISOString(),
+          payload: {},
+        },
+      ]);
+      const eventsBefore = readEventLog({ rootDir: isolatedRoot });
+      const repo = createRepoSync(isolated.db, isolatedRoot, { eventPipeline: pipeline });
+      if (!repo) throw new Error("expected repository sync");
+      const before = execFileSync("git", ["-C", isolatedRoot, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      const lease = repo.preflight();
+      if (!lease) throw new Error("expected repository lease");
+      repo.sync(lease);
+      lease.complete();
+      expect(
+        execFileSync("git", ["-C", isolatedRoot, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim(),
+      ).not.toBe(before);
+      expect(readEventLog({ rootDir: isolatedRoot }).length).toBeGreaterThan(0);
+
+      // Simulate SQLite COMMIT failure: abort after complete, before release.
+      lease.abort();
+      expect(
+        execFileSync("git", ["-C", isolatedRoot, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim(),
+      ).toBe(before);
+      expect(readEventLog({ rootDir: isolatedRoot })).toEqual(eventsBefore);
     } finally {
       isolated.stop();
       rmSync(isolatedRoot, { recursive: true, force: true });

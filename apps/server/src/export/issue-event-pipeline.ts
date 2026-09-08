@@ -55,8 +55,11 @@ export interface GitCommitInput {
   readonly lock?: CanonicalEventLogLease;
 }
 
+/** Compensates a published event commit while its canonical lease is held. */
+export type GitCommitRollback = () => void;
+
 /** Seam para hacer durable el append antes de proyectarlo. */
-export type GitCommitter = (input: GitCommitInput) => void;
+export type GitCommitter = (input: GitCommitInput) => unknown;
 
 /** Proyección SQLite de esta slice. No conoce el driver de la base. */
 export interface IssueEventProjector {
@@ -233,15 +236,17 @@ export class IssueEventPipeline {
   commit(
     eventIds: readonly string[] = [...this.pendingEventIds],
     lock?: CanonicalEventLogLease,
-  ): void {
+  ): GitCommitRollback | undefined {
     this.recordPendingEventIds(eventIds);
     const pending = [...this.pendingEventIds];
-    if (pending.length === 0) return;
-    this.commitGit({ rootDir: this.rootDir, eventIds: pending, lock });
+    if (pending.length === 0) return undefined;
+    const committed = this.commitGit({ rootDir: this.rootDir, eventIds: pending, lock });
+    const rollback = typeof committed === "function" ? (committed as GitCommitRollback) : undefined;
     const present = new Set(this.eventLog.read().map((event) => event.eventId));
     for (const eventId of pending) {
       if (present.has(eventId)) this.pendingEventIds.delete(eventId);
     }
+    return rollback;
   }
 
   /**
@@ -297,11 +302,11 @@ export function createGitCommitter(rootDir: string): GitCommitter {
     const commit = () => {
       assertEventLogIndexIsClean(rootDir);
       const delta = validateEventLogDelta(rootDir, eventIds);
-      if (delta.eventIds.size === 0) return;
-      commitEventLogSnapshot(rootDir, delta.content);
+      if (delta.eventIds.size === 0) return undefined;
+      return commitEventLogSnapshot(rootDir, delta.content);
     };
-    if (lock) lock.run(commit);
-    else withCanonicalEventLogLock(rootDir, commit);
+    if (lock) return lock.run(commit);
+    return withCanonicalEventLogLock(rootDir, commit);
   };
 }
 
@@ -310,14 +315,18 @@ export function createGitCommitter(rootDir: string): GitCommitter {
  * real y el working tree quedan intactos, así un append concurrente no entra
  * en este commit mediante `git add`.
  */
-function commitEventLogSnapshot(rootDir: string, content: string): void {
+function commitEventLogSnapshot(rootDir: string, content: string): GitCommitRollback {
   const originalIndexEntry = readEventLogIndexEntry(rootDir);
   const tempDir = mkdtempSync(join(tmpdir(), "prime-board-event-index-"));
   const tempIndex = join(tempDir, "index");
   const env = { GIT_INDEX_FILE: tempIndex };
+  let refreshIndex = false;
+  let published = false;
+  let commit: string | undefined;
+  let parent: string | undefined;
   try {
     assertEventLogSnapshotUnchanged(rootDir, content);
-    const parent = readGitHead(rootDir);
+    parent = readGitHead(rootDir);
     runGit(rootDir, ["read-tree", parent ?? "--empty"], env);
     const blob = hashEventLog(rootDir, content);
     runGit(
@@ -331,14 +340,14 @@ function commitEventLogSnapshot(rootDir: string, content: string): void {
       throw new Error("Git HEAD changed during canonical event commit");
     }
     const tree = runGitOutput(rootDir, ["write-tree"], env).trim();
-    const commit = createGitCommit(rootDir, tree, parent);
+    commit = createGitCommit(rootDir, tree, parent);
     // Mantiene el lock del índice Git durante la comparación final, la
     // actualización de la referencia y la sincronización. Un `git add`
     // concurrente se conserva o falla antes de mover HEAD; no se reemplaza
     // entre la comparación y la actualización.
     const indexPath = resolveGitIndexPath(rootDir);
     withRealGitIndexLock(rootDir, indexPath, () => {
-      const refreshIndex = readEventLogIndexEntry(rootDir) === originalIndexEntry;
+      refreshIndex = readEventLogIndexEntry(rootDir) === originalIndexEntry;
       // The expected old ref makes a concurrent commit fail closed instead of
       // creating a child commit that could drop its event-log changes.
       runGit(rootDir, [
@@ -346,14 +355,31 @@ function commitEventLogSnapshot(rootDir: string, content: string): void {
         "-m",
         "chore(events): append canonical issue events",
         "HEAD",
-        commit,
+        commit!,
         parent ?? "",
       ]);
       if (refreshIndex) updateRealEventLogIndex(rootDir, indexPath, blob);
     });
+    published = true;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+
+  let undone = false;
+  return () => {
+    if (undone || !published || !commit) return;
+    const indexPath = resolveGitIndexPath(rootDir);
+    withRealGitIndexLock(rootDir, indexPath, () => {
+      if (readGitHead(rootDir) !== commit) {
+        throw new Error("Cannot compensate canonical event commit after HEAD changed");
+      }
+      // The expected old ref makes compensation fail closed instead of
+      // moving another writer's commit backwards.
+      runGit(rootDir, ["update-ref", "HEAD", parent ?? "", commit!]);
+      if (refreshIndex) restoreRealEventLogIndex(rootDir, indexPath, originalIndexEntry);
+    });
+    undone = true;
+  };
 }
 
 /**
@@ -755,6 +781,38 @@ function updateRealEventLogIndex(rootDir: string, indexPath: string, blob: strin
       ["update-index", "--add", "--cacheinfo", `100644,${blob},${EVENT_LOG_RELATIVE_PATH}`],
       env,
     );
+    renameSync(tempIndex, indexPath);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function restoreRealEventLogIndex(
+  rootDir: string,
+  indexPath: string,
+  originalEntry: string | undefined,
+): void {
+  const tempDir = mkdtempSync(join(tmpdir(), "prime-board-restore-index-"));
+  const tempIndex = join(tempDir, "index");
+  try {
+    const env = { GIT_INDEX_FILE: tempIndex };
+    if (existsSync(indexPath)) {
+      copyFileSync(indexPath, tempIndex);
+    } else {
+      const parent = readGitHead(rootDir);
+      runGit(rootDir, ["read-tree", parent ?? "--empty"], env);
+    }
+    if (originalEntry) {
+      const [mode, object] = originalEntry.trim().split(/\s+/u);
+      if (!mode || !object) throw new Error("Invalid original event-log index entry");
+      runGit(
+        rootDir,
+        ["update-index", "--add", "--cacheinfo", `${mode},${object},${EVENT_LOG_RELATIVE_PATH}`],
+        env,
+      );
+    } else {
+      runGit(rootDir, ["update-index", "--force-remove", "--", EVENT_LOG_RELATIVE_PATH], env);
+    }
     renameSync(tempIndex, indexPath);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
