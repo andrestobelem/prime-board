@@ -246,7 +246,11 @@ describe("cycles", () => {
     expect(enabledTeam.errors).toBeUndefined();
     const enabled = enabledTeam.data!.teamCreate.team;
     const startedState = enabled.states.find((state: { type: string }) => state.type === "STARTED");
+    const completedState = enabled.states.find(
+      (state: { type: string }) => state.type === "COMPLETED",
+    );
     expect(startedState).toBeDefined();
+    expect(completedState).toBeDefined();
     const issue = await gql(
       app,
       `mutation($stateId: ID!) {
@@ -256,8 +260,19 @@ describe("cycles", () => {
       }`,
       { stateId: startedState.id },
     );
+    const completedIssue = await gql(
+      app,
+      `mutation($stateId: ID!) {
+        issueCreate(input: {
+          teamKey: "AUT", title: "Completed direct issue", stateId: $stateId
+        }) { issue { id cycle { id } } }
+      }`,
+      { stateId: completedState.id },
+    );
     expect(issue.errors).toBeUndefined();
+    expect(completedIssue.errors).toBeUndefined();
     expect(issue.data!.issueCreate.issue.cycle).toBeNull();
+    expect(completedIssue.data!.issueCreate.issue.cycle).toBeNull();
 
     const cycle = await gql(
       app,
@@ -311,6 +326,30 @@ describe("cycles", () => {
       },
     });
 
+    const completedAssigned = await gql(
+      app,
+      `query($id: ID!) {
+        issue(id: $id) {
+          cycle { id number }
+          activity { type payload }
+        }
+      }`,
+      { id: completedIssue.data!.issueCreate.issue.id },
+    );
+    expect(completedAssigned.errors).toBeUndefined();
+    expect(completedAssigned.data!.issue.cycle).toEqual({
+      id: cycle.data!.cycleCreate.cycle.id,
+      number: cycle.data!.cycleCreate.cycle.number,
+    });
+    expect(completedAssigned.data!.issue.activity).toContainEqual({
+      type: "cycle_changed",
+      payload: {
+        from: null,
+        to: `AUT/${cycle.data!.cycleCreate.cycle.number}`,
+        reason: "cycle_auto_add",
+      },
+    });
+
     const disabledTeam = await gql(
       app,
       `mutation {
@@ -325,6 +364,11 @@ describe("cycles", () => {
     const disabledStarted = disabled.states.find(
       (state: { type: string }) => state.type === "STARTED",
     );
+    const disabledCompleted = disabled.states.find(
+      (state: { type: string }) => state.type === "COMPLETED",
+    );
+    expect(disabledStarted).toBeDefined();
+    expect(disabledCompleted).toBeDefined();
     const disabledIssue = await gql(
       app,
       `mutation($stateId: ID!) {
@@ -333,6 +377,15 @@ describe("cycles", () => {
         }
       }`,
       { stateId: disabledStarted.id },
+    );
+    const disabledCompletedIssue = await gql(
+      app,
+      `mutation($stateId: ID!) {
+        issueCreate(input: {
+          teamKey: "AUO", title: "Completed auto-add disabled", stateId: $stateId
+        }) { issue { id } }
+      }`,
+      { stateId: disabledCompleted.id },
     );
     const disabledCycle = await gql(
       app,
@@ -345,10 +398,22 @@ describe("cycles", () => {
       { teamId: disabled.id },
     );
     expect(disabledCycle.errors).toBeUndefined();
-    const disabledAfter = await gql(app, `query($id: ID!) { issue(id: $id) { cycle { id } } }`, {
-      id: disabledIssue.data!.issueCreate.issue.id,
-    });
-    expect(disabledAfter.data!.issue.cycle).toBeNull();
+    const disabledAfter = await gql(
+      app,
+      `query($startedId: ID!, $completedId: ID!) {
+        started: issue(id: $startedId) { cycle { id } activity { type } }
+        completed: issue(id: $completedId) { cycle { id } activity { type } }
+      }`,
+      {
+        startedId: disabledIssue.data!.issueCreate.issue.id,
+        completedId: disabledCompletedIssue.data!.issueCreate.issue.id,
+      },
+    );
+    expect(disabledAfter.errors).toBeUndefined();
+    expect(disabledAfter.data!.started.cycle).toBeNull();
+    expect(disabledAfter.data!.completed.cycle).toBeNull();
+    expect(disabledAfter.data!.started.activity).not.toContainEqual({ type: "cycle_changed" });
+    expect(disabledAfter.data!.completed.activity).not.toContainEqual({ type: "cycle_changed" });
   });
 
   it("repone el horizonte tras borrar un ciclo generado y conserva los manuales", async () => {
