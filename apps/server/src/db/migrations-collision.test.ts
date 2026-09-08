@@ -33,7 +33,6 @@ function databaseWithMigrationsThrough(
   return db;
 }
 
-
 function injectForeignKeysRestoreFailure(
   db: Database,
   message: string,
@@ -2760,13 +2759,12 @@ describe("colisión de migraciones SQLite", () => {
   it("compara la collation efectiva de restricciones compuestas, quoted y rowid", () => {
     const explicitBinary = databaseWithMigrationsThrough(24, (version, sql) =>
       version === 1
-        ? sql.replace(
-            "  name TEXT NOT NULL,\n  type TEXT NOT NULL CHECK",
-            "  name TEXT COLLATE NOCASE NOT NULL,\n  type TEXT NOT NULL CHECK",
-          ).replace(
-            "  UNIQUE (team_id, name)\n);",
-            "  UNIQUE (team_id, name COLLATE BINARY)\n);",
-          )
+        ? sql
+            .replace(
+              "  name TEXT NOT NULL,\n  type TEXT NOT NULL CHECK",
+              "  name TEXT COLLATE NOCASE NOT NULL,\n  type TEXT NOT NULL CHECK",
+            )
+            .replace("  UNIQUE (team_id, name)\n);", "  UNIQUE (team_id, name COLLATE BINARY)\n);")
         : sql,
     );
     try {
@@ -2779,7 +2777,7 @@ describe("colisión de migraciones SQLite", () => {
       version === 1
         ? sql.replace(
             "  name TEXT NOT NULL,\n  type TEXT NOT NULL CHECK",
-            "  \"name\" TEXT COLLATE NOCASE NOT NULL,\n  type TEXT NOT NULL CHECK",
+            '  "name" TEXT COLLATE NOCASE NOT NULL,\n  type TEXT NOT NULL CHECK',
           )
         : sql,
     );
@@ -2793,13 +2791,15 @@ describe("colisión de migraciones SQLite", () => {
 
     const keyword = databaseWithMigrationsThrough(24, (version, sql) =>
       version === 1
-        ? sql.replace(
-            "  name TEXT NOT NULL,\n  type TEXT NOT NULL CHECK",
-            "  name TEXT NOT NULL,\n  \"case\" TEXT COLLATE NOCASE,\n  type TEXT NOT NULL CHECK",
-          ).replace(
-            "  UNIQUE (team_id, name)\n);",
-            "  UNIQUE (team_id, name),\n  UNIQUE (team_id, \"case\")\n);",
-          )
+        ? sql
+            .replace(
+              "  name TEXT NOT NULL,\n  type TEXT NOT NULL CHECK",
+              '  name TEXT NOT NULL,\n  "case" TEXT COLLATE NOCASE,\n  type TEXT NOT NULL CHECK',
+            )
+            .replace(
+              "  UNIQUE (team_id, name)\n);",
+              '  UNIQUE (team_id, name),\n  UNIQUE (team_id, "case")\n);',
+            )
         : sql,
     );
     try {
@@ -2826,10 +2826,7 @@ describe("colisión de migraciones SQLite", () => {
 
     const withoutRowid = databaseWithMigrationsThrough(24, (version, sql) =>
       version === 1
-        ? sql.replace(
-            "  UNIQUE (team_id, name)\n);",
-            "  UNIQUE (team_id, name)\n) WITHOUT ROWID;",
-          )
+        ? sql.replace("  UNIQUE (team_id, name)\n);", "  UNIQUE (team_id, name)\n) WITHOUT ROWID;")
         : sql,
     );
     try {
@@ -2879,10 +2876,7 @@ describe("colisión de migraciones SQLite", () => {
         name: "desc",
         transform: (version: number, sql: string) => {
           if (version !== 1) return sql;
-          return sql.replace(
-            "  UNIQUE (team_id, name)\n);",
-            "  UNIQUE (team_id DESC, name)\n);",
-          );
+          return sql.replace("  UNIQUE (team_id, name)\n);", "  UNIQUE (team_id DESC, name)\n);");
         },
       },
     ];
@@ -2906,13 +2900,9 @@ describe("colisión de migraciones SQLite", () => {
         expect(error).toMatch(/migration 0025.*workflow_states.*constraint contract/i);
         expect(db.query("SELECT * FROM workflow_states ORDER BY id").all()).toEqual(beforeRows);
         expect(
-          db
-            .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
-            .all(),
+          db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
         ).toEqual(beforeSchema);
-        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
-          beforeMarkers,
-        );
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
         expect(db.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
       } finally {
         db.close();
@@ -8928,7 +8918,7 @@ describe("colisión de migraciones SQLite", () => {
         `,
         pattern: /main trigger main_documents_dependency .*documents/i,
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const db = new Database(":memory:", { strict: true });
@@ -8987,7 +8977,7 @@ describe("colisión de migraciones SQLite", () => {
         `,
         pattern: /_prb25_teams/i,
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const db = databaseWithMigrationsThrough(24);
@@ -9101,7 +9091,6 @@ describe("colisión de migraciones SQLite", () => {
       unknown.close();
     }
   });
-
 
   it("conserva el PRAGMA foreign_keys inicial en una instalación fresh", () => {
     for (const initialValue of [0, 1]) {

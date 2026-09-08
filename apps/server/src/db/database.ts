@@ -257,9 +257,9 @@ function activeDocuments(db: Database): Array<Record<string, unknown>> | null {
     )
     .get("documents");
   if (!table) return null;
-  return db
-    .query(`SELECT * FROM ${quoteIdentifier(table.name)} ORDER BY id`)
-    .all() as Array<Record<string, unknown>>;
+  return db.query(`SELECT * FROM ${quoteIdentifier(table.name)} ORDER BY id`).all() as Array<
+    Record<string, unknown>
+  >;
 }
 
 /**
@@ -933,7 +933,8 @@ function validateWorkspaceConstraintAutoindexCollations(
       }
       const contract = { table: normalizedTable, index, terms };
       const ordinal = workspaceConstraintAutoindexOrdinal(table, index);
-      const identityOrdinal = ordinal === null ? null : ordinal + (integerPrimaryKeyMissing ? 1 : 0);
+      const identityOrdinal =
+        ordinal === null ? null : ordinal + (integerPrimaryKeyMissing ? 1 : 0);
       if (identityOrdinal === null || sourceByOrdinal.has(identityOrdinal)) {
         throw new Error(
           `Cannot apply migration ${migrationLabel} safely: autoindex ${index.name} on ${table} ` +
@@ -971,7 +972,8 @@ function validateWorkspaceConstraintAutoindexCollations(
 
     for (const source of sourceContracts) {
       const ordinal = workspaceConstraintAutoindexOrdinal(table, source.index);
-      const identityOrdinal = ordinal === null ? null : ordinal + (integerPrimaryKeyMissing ? 1 : 0);
+      const identityOrdinal =
+        ordinal === null ? null : ordinal + (integerPrimaryKeyMissing ? 1 : 0);
       const legacy = identityOrdinal === null ? undefined : legacyByOrdinal.get(identityOrdinal);
       if (legacy === undefined) {
         const columns = source.terms.map((term) => term.name ?? "<expression>").join(", ");
@@ -981,7 +983,10 @@ function validateWorkspaceConstraintAutoindexCollations(
         );
       }
       const expected = targetByLegacyOrdinal.get(identityOrdinal ?? -1) ?? legacy;
-      if (workspaceConstraintAutoindexContractKey(source) !== workspaceConstraintAutoindexContractKey(expected)) {
+      if (
+        workspaceConstraintAutoindexContractKey(source) !==
+        workspaceConstraintAutoindexContractKey(expected)
+      ) {
         const columns = source.terms.map((term) => term.name ?? "<expression>").join(", ");
         throw new Error(
           `Cannot apply migration ${migrationLabel} safely: autoindex ${source.index.name} on ${table} ` +
@@ -1001,7 +1006,6 @@ function validateWorkspaceConstraintAutoindexCollations(
     }
   }
 }
-
 
 function indexHasColumns(
   index: IndexListRow,
@@ -3582,8 +3586,6 @@ function validateWorkspaceConstraintsMigrationNames(db: Database): void {
       );
     }
   }
-
-
 }
 
 function validateMigrationChainBeforeMarker(db: Database): void {
@@ -5180,7 +5182,6 @@ function workspaceConstraintLegacyAutoindexContracts(): Map<
 
 const WORKSPACE_CONSTRAINTS_LEGACY_AUTOINDEX_CONTRACTS =
   workspaceConstraintLegacyAutoindexContracts();
-
 
 function renamedIndexSql(
   definition: string,
