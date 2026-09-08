@@ -333,6 +333,22 @@ describe("colisión de migraciones SQLite", () => {
       ).toEqual({ name: "saved_views_legacy_marker_trigger" });
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(() => migrate(db)).toThrow(/legacy_marker|preserv|index|VIEW/i);
+
+      db.exec(`
+        DROP VIEW saved_views_legacy_marker_view;
+        DROP TRIGGER saved_views_legacy_marker_trigger;
+        DROP INDEX saved_views_legacy_marker;
+      `);
+      migrate(db);
+      expect(
+        db.query("SELECT version, name FROM _migrations WHERE version >= 25").all(),
+      ).toContainEqual({ version: 25, name: "workspace_constraints" });
+      expect(
+        db
+          .query("SELECT 1 FROM pragma_table_info('saved_views') WHERE name = 'legacy_marker'")
+          .get(),
+      ).toBeNull();
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();
     }
