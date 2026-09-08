@@ -9012,6 +9012,73 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("falla cerrado ante un contrato FTS5 incompatible antes del primer DDL pendiente", () => {
+    const cases = [
+      {
+        sql: "CREATE TABLE comments_fts (body TEXT, comments_fts TEXT)",
+        pattern: /migration 0029.*comments_fts.*incompatible.*FTS5 schema/i,
+      },
+      {
+        sql: "CREATE TABLE comments_fts (body TEXT)",
+        pattern: /migration 0029.*comments_fts.*incompatible.*FTS5 schema/i,
+      },
+      {
+        sql: `
+          CREATE TRIGGER comments_fts_insert AFTER INSERT ON issues
+          BEGIN SELECT 1; END;
+        `,
+        pattern: /migration 0029.*canonical trigger comments_fts_insert.*incompatible/i,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const db = databaseWithMigrationsThrough(28);
+      try {
+        db.exec(testCase.sql);
+        const beforeMain = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all();
+        const beforeTemp = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const beforeDatabaseList = db.query("PRAGMA database_list").all();
+        const beforeSchemaVersion = db.query("PRAGMA schema_version").get();
+        const beforeForeignKeys = db.query("PRAGMA foreign_keys").get();
+
+        expect(() => migrate(db)).toThrow(testCase.pattern);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(
+          db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+        ).toEqual(beforeMain);
+        expect(
+          db
+            .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+            .all(),
+        ).toEqual(beforeTemp);
+        expect(db.query("PRAGMA database_list").all()).toEqual(beforeDatabaseList);
+        expect(db.query("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
+        expect(db.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+        expect(db.query("SELECT version FROM _migrations WHERE version >= 29").all()).toEqual([]);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("acepta una tabla virtual FTS5 y triggers canónicos ya creados sin marker", () => {
+    const db = databaseWithMigrationsThrough(28);
+    try {
+      db.exec(readFileSync(join(import.meta.dir, "migrations", "0029_comments_fts.sql"), "utf8"));
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.query("SELECT version, name FROM _migrations WHERE version = 29").all()).toEqual([
+        { version: 29, name: "comments_fts" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("reanuda desde marker 0028 y deja que 0033 valide el rebuild pendiente", () => {
     const db = databaseWithMigrationsThrough(28);
     try {

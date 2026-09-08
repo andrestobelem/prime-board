@@ -2307,6 +2307,133 @@ function migrationTriggerDefinitions(sql: string): Map<string, ParsedTriggerDefi
   return definitions;
 }
 
+interface ParsedVirtualTableDefinition {
+  name: string;
+  schema: string | null;
+  module: string;
+  arguments: readonly SqlToken[][];
+}
+
+/**
+ * Extrae la forma declarativa de una tabla virtual sin ejecutar su DDL. SQLite
+ * registra las tablas virtuales como `type = 'table'`, por lo que el módulo y
+ * sus argumentos forman parte del contrato que el catálogo no expone aparte.
+ */
+function virtualTableDefinitionFromSql(definition: string): ParsedVirtualTableDefinition | null {
+  const parsed = sqliteTokens(definition);
+  if (parsed === null) return null;
+  const tokens = singleSqlStatement(parsed);
+  if (tokens === null) return null;
+
+  let position = 0;
+  if (!isSqlKeyword(tokens[position], "create")) return null;
+  position += 1;
+  if (!isSqlKeyword(tokens[position], "virtual")) return null;
+  position += 1;
+  if (!isSqlKeyword(tokens[position], "table")) return null;
+  position += 1;
+  const ifNotExists = migrationPreflightSkipIfNotExists(tokens, position);
+  position = ifNotExists.next;
+  const qualified = migrationPreflightQualifiedName(tokens, position);
+  if (qualified === null) return null;
+  position = qualified.next;
+  if (!isSqlKeyword(tokens[position], "using")) return null;
+  position += 1;
+  const moduleToken = tokens[position];
+  if (!isSqlNameToken(moduleToken)) return null;
+  position += 1;
+  if (tokens[position]?.value !== "(") return null;
+
+  const opening = position;
+  let depth = 0;
+  let closing = -1;
+  for (; position < tokens.length; position += 1) {
+    const token = tokens[position];
+    if (token?.value === "(") {
+      depth += 1;
+    } else if (token?.value === ")") {
+      depth -= 1;
+      if (depth < 0) return null;
+      if (depth === 0) {
+        closing = position;
+        break;
+      }
+    }
+  }
+  if (closing < 0 || closing !== tokens.length - 1) return null;
+
+  const argumentsList: SqlToken[][] = [];
+  let argumentStart = opening + 1;
+  depth = 0;
+  for (let cursor = opening + 1; cursor < closing; cursor += 1) {
+    const token = tokens[cursor];
+    if (token?.value === "(") {
+      depth += 1;
+    } else if (token?.value === ")") {
+      depth -= 1;
+      if (depth < 0) return null;
+    } else if (token?.value === "," && depth === 0) {
+      const argument = tokens.slice(argumentStart, cursor);
+      if (argument.length === 0) return null;
+      argumentsList.push(argument);
+      argumentStart = cursor + 1;
+    }
+  }
+  const lastArgument = tokens.slice(argumentStart, closing);
+  if (lastArgument.length === 0) return null;
+  argumentsList.push(lastArgument);
+
+  return {
+    name: qualified.name,
+    schema: qualified.schema,
+    module: moduleToken.value,
+    arguments: argumentsList,
+  };
+}
+
+function virtualTableOptionValue(token: SqlToken | undefined): string | null {
+  if (token === undefined) return null;
+  if (token.kind === "identifier" || token.kind === "quoted_identifier") return token.value;
+  if (token.kind !== "string" || token.value.length < 2) return null;
+  return token.value.slice(1, -1).replaceAll("''", "'");
+}
+
+interface Fts5TableContract {
+  columns: readonly string[];
+  options: ReadonlyMap<string, string>;
+}
+
+function fts5TableContract(definition: ParsedVirtualTableDefinition): Fts5TableContract | null {
+  if (!sameSqliteIdentifier(definition.module, "fts5")) return null;
+  const columns: string[] = [];
+  const options = new Map<string, string>();
+  for (const argument of definition.arguments) {
+    if (argument.length === 1 && isSqlNameToken(argument[0])) {
+      columns.push(argument[0].value);
+      continue;
+    }
+    if (argument.length !== 3 || !isSqlNameToken(argument[0]) || argument[1]?.value !== "=") {
+      return null;
+    }
+    const key = normalizeSqliteIdentifier(argument[0].value);
+    const value = virtualTableOptionValue(argument[2]);
+    if (value === null || options.has(key)) return null;
+    options.set(key, value);
+  }
+  return { columns, options };
+}
+
+const COMMENTS_FTS_VIRTUAL_TABLE_CONTRACT = (() => {
+  const statement = migrationPreflightStatements(migration0029)?.find((candidate) => {
+    const parsed = virtualTableDefinitionFromSql(candidate);
+    return parsed !== null && sameSqliteIdentifier(parsed.name, "comments_fts");
+  });
+  if (statement === undefined) return null;
+  const parsed = virtualTableDefinitionFromSql(statement);
+  return parsed === null ? null : fts5TableContract(parsed);
+})();
+const COMMENTS_FTS_TRIGGER_CONTRACTS = migrationTriggerDefinitions(migration0029);
+
 const WORKSPACE_CONSTRAINTS_CANONICAL_TRIGGER_DEFINITIONS = new Map(
   [...migrationTriggerDefinitions(migration0025)].filter(([, definition]) =>
     WORKSPACE_CONSTRAINTS_REBUILT_TABLES.some(
@@ -4847,6 +4974,75 @@ function migrationPreflightApplyAlter(
   }
 }
 
+function commentsFtsMigrationSchemaMatches(db: Database, table: SchemaObjectRow): boolean {
+  if (table.sql === null || COMMENTS_FTS_VIRTUAL_TABLE_CONTRACT === null) return false;
+  const actualDefinition = virtualTableDefinitionFromSql(table.sql);
+  if (
+    actualDefinition === null ||
+    !sameSqliteIdentifier(actualDefinition.name, "comments_fts") ||
+    (actualDefinition.schema !== null && !sameSqliteIdentifier(actualDefinition.schema, "main"))
+  ) {
+    return false;
+  }
+
+  const actualContract = fts5TableContract(actualDefinition);
+  if (actualContract === null) return false;
+  const expectedContract = COMMENTS_FTS_VIRTUAL_TABLE_CONTRACT;
+  const actualColumns = tableInfo(db, table.name).map((column) => column.name);
+  if (
+    actualColumns.length !== expectedContract.columns.length ||
+    !actualColumns.every((column, position) => {
+      const expected = expectedContract.columns[position];
+      return expected !== undefined && sameSqliteIdentifier(column, expected);
+    })
+  ) {
+    return false;
+  }
+  if (actualContract.options.size !== expectedContract.options.size) return false;
+  return (
+    [...expectedContract.options].every(([key, expectedValue]) => {
+      const actualValue = actualContract.options.get(key);
+      return actualValue !== undefined && sameSqliteIdentifier(actualValue, expectedValue);
+    }) &&
+    actualContract.columns.length === expectedContract.columns.length &&
+    actualContract.columns.every((column, position) => {
+      const expected = expectedContract.columns[position];
+      return expected !== undefined && sameSqliteIdentifier(column, expected);
+    })
+  );
+}
+
+function validateCommentsFtsMigrationPreflight(db: Database): void {
+  const mainObjects = schemaObjectsWithName(db, "comments_fts").filter(
+    ({ temporary }) => !temporary,
+  );
+  const mainTable = mainObjects.find(({ object }) => object.type === "table");
+  if (mainTable !== undefined && !commentsFtsMigrationSchemaMatches(db, mainTable.object)) {
+    throw new Error(
+      "Cannot apply migration 0029 safely: main table comments_fts has an incompatible FTS5 schema",
+    );
+  }
+
+  for (const [name, expected] of COMMENTS_FTS_TRIGGER_CONTRACTS) {
+    const mainTrigger = schemaObjectsWithName(db, name).find(
+      ({ object, temporary }) => !temporary && object.type === "trigger",
+    );
+    if (mainTrigger === undefined) continue;
+    const actual =
+      mainTrigger.object.sql === null ? null : triggerDefinitionFromSql(mainTrigger.object.sql);
+    if (
+      actual === null ||
+      !sameSqliteIdentifier(actual.name, expected.name) ||
+      !sameSqliteIdentifier(actual.table, expected.table) ||
+      !sameTriggerBehavior(actual, expected)
+    ) {
+      throw new Error(
+        `Cannot apply migration 0029 safely: canonical trigger ${name} is incompatible`,
+      );
+    }
+  }
+}
+
 function validatePendingMigrationGuardsBeforeMarker(
   db: Database,
   applied: ReadonlySet<number>,
@@ -4856,6 +5052,10 @@ function validatePendingMigrationGuardsBeforeMarker(
   // "before" sobre toda la cadena pendiente antes de crear la tabla de markers.
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue;
+    // 0029 se valida aunque haya markers parciales anteriores. Sus objetos MAIN no
+    // se reconstruyen en las migraciones previas y `IF NOT EXISTS` puede ocultar un
+    // schema ordinario o parcial hasta el INSERT de rebuild.
+    if (migration.version === 29) validateCommentsFtsMigrationPreflight(db);
     const priorMigrationsApplied = migrationPreflightPriorMigrationsReady(
       migration.version,
       applied,
