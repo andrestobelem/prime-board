@@ -253,6 +253,31 @@ describe("validación del plan Linear", () => {
     }
   });
 
+  it("rechaza nombres de Actor que solo difieren en mayúsculas", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-actor-case-"));
+    try {
+      const invalid: LinearExport = {
+        ...source,
+        actors: [
+          ...source.actors,
+          {
+            id: "00000000-0000-4000-8000-00000000000e",
+            name: "andrés",
+            type: "human",
+          },
+        ],
+      };
+      const result = writeLinearExportToRepo(invalid, root, { dryRun: true });
+      expect(result.conflicts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "AMBIGUOUS_ACTOR_NAME" })]),
+      );
+      expect(result.files).toBe(0);
+      expect(existsSync(join(root, ".prime-board"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rechaza Teams sin Workflow States antes de escribir", () => {
     const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-empty-states-"));
     try {

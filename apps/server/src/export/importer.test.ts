@@ -102,6 +102,30 @@ afterAll(() => {
 });
 
 describe("rebuildFromRepo", () => {
+  it("rechaza nombres de Actor que colisionan sin distinguir mayúsculas", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-actor-case-rebuild-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      const actorsPath = join(snapshot, ".prime-board", "meta", "actors.json");
+      const actors = JSON.parse(readFileSync(actorsPath, "utf8")) as Array<Record<string, unknown>>;
+      const actor = actors[0]!;
+      actors.push({
+        ...actor,
+        id: `${String(actor.id)}-case-duplicate`,
+        name: String(actor.name).toUpperCase(),
+      });
+      writeFileSync(actorsPath, JSON.stringify(actors));
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/Ambiguous actor reference/);
+      expect(fresh.query("SELECT count(*) AS count FROM actors").get()).toEqual({ count: 0 });
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
   it("rechaza un snapshot sin memberships en vez de promover todos los actores", () => {
     const snapshot = mkdtempSync(join(tmpdir(), "pb-missing-members-rebuild-"));
     const fresh = new Database(":memory:", { strict: true });

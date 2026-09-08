@@ -644,9 +644,10 @@ export function writeLinearExportToRepo(
         `Actor type ${String(actor.type)} is not supported`,
         actor.id,
       );
-    if (names.has(actor.name) && names.get(actor.name) !== actor.id)
+    const normalizedName = actor.name.toLowerCase();
+    if (names.has(normalizedName) && names.get(normalizedName) !== actor.id)
       add(conflicts, "AMBIGUOUS_ACTOR_NAME", `Actor name ${actor.name} is not unique`, actor.id);
-    names.set(actor.name, actor.id);
+    names.set(normalizedName, actor.id);
     actorNameById.set(actor.id, actor.name);
   }
 
