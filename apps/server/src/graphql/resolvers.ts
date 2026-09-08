@@ -2507,7 +2507,12 @@ export const resolvers = {
             if (args.input.teamId && !apiKeyTeamsWithinLimit(context.auth, [args.input.teamId])) {
               throw apiError("NOT_FOUND", "Team resource not found");
             }
-            const label = await createPostgresLabel(context.persistence, viewer, args.input);
+            const label = await createPostgresLabel(
+              context.persistence,
+              viewer,
+              args.input,
+              context.workspace,
+            );
             return { success: true, label: mapPostgresLabel(label) };
           }
           if (args.input.teamId != null) {
@@ -2539,7 +2544,12 @@ export const resolvers = {
             }
             if (
               !isWorkspaceAdmin(viewer) &&
-              !(await isPostgresTeamOwner(context.persistence, existing.team_id, viewer.id))
+              !(await isPostgresTeamOwner(
+                context.persistence,
+                existing.team_id,
+                viewer.id,
+                context.workspace,
+              ))
             ) {
               throw apiError("UNAUTHORIZED", "Team owner permission is required");
             }
@@ -2551,7 +2561,12 @@ export const resolvers = {
             return {
               success: true,
               workflowState: mapPostgresWorkflowState(
-                await updatePostgresWorkflowState(context.persistence, args.id, args.input),
+                await updatePostgresWorkflowState(
+                  context.persistence,
+                  args.id,
+                  args.input,
+                  context.workspace,
+                ),
               ),
             };
           }
@@ -2580,7 +2595,12 @@ export const resolvers = {
             }
             if (
               !isWorkspaceAdmin(viewer) &&
-              !(await isPostgresTeamOwner(context.persistence, existing.team_id, viewer.id))
+              !(await isPostgresTeamOwner(
+                context.persistence,
+                existing.team_id,
+                viewer.id,
+                context.workspace,
+              ))
             ) {
               throw apiError("UNAUTHORIZED", "Team owner permission is required");
             }
@@ -2594,6 +2614,7 @@ export const resolvers = {
               viewer.id,
               args.id,
               args.moveToStateId,
+              context.workspace,
             );
             return { success: true, movedIssues };
           }
@@ -2635,6 +2656,7 @@ export const resolvers = {
               viewer,
               args.id,
               args.input,
+              context.workspace,
             );
             return { success: true, label: mapPostgresLabel(label) };
           }
@@ -2659,7 +2681,12 @@ export const resolvers = {
             if (existing?.team_id && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
               throw apiError("NOT_FOUND", "Label resource not found");
             }
-            const affected = await deletePostgresLabel(context.persistence, viewer, args.id);
+            const affected = await deletePostgresLabel(
+              context.persistence,
+              viewer,
+              args.id,
+              context.workspace,
+            );
             return { success: true, affectedIssues: affected };
           }
           const existing = getLabel(context.db, args.id, context.workspace.workspaceId);
@@ -2718,10 +2745,11 @@ export const resolvers = {
             return {
               success: true,
               workflowState: mapPostgresWorkflowState(
-                await createPostgresWorkflowState(context.persistence, {
-                  ...args.input,
-                  teamId: team.id,
-                }),
+                await createPostgresWorkflowState(
+                  context.persistence,
+                  { ...args.input, teamId: team.id },
+                  context.workspace,
+                ),
               ),
             };
           }
