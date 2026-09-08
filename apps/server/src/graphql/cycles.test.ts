@@ -239,7 +239,7 @@ describe("cycles", () => {
       `mutation {
         teamCreate(input: {
           name: "Auto-add direct", key: "AUT", cyclesEnabled: true,
-          cycleUpcomingCount: 0, cycleAutoAddEnabled: true
+          cycleUpcomingCount: 3, cycleAutoAddEnabled: true
         }) { team { id states { id type } } }
       }`,
     );
@@ -271,6 +271,21 @@ describe("cycles", () => {
     );
     expect(cycle.errors).toBeUndefined();
     expect(cycle.data!.cycleCreate.cycle.state).toBe("ACTIVE");
+    const horizon = await gql(
+      app,
+      `query($teamId: ID!) { cycles(teamId: $teamId) { number state cadenceSource } }`,
+      { teamId: enabled.id },
+    );
+    expect(horizon.errors).toBeUndefined();
+    expect(horizon.data!.cycles).toHaveLength(4);
+    expect(
+      horizon.data!.cycles.filter((item: { state: string }) => item.state === "UPCOMING"),
+    ).toHaveLength(3);
+    expect(
+      horizon
+        .data!.cycles.filter((item: { state: string }) => item.state === "UPCOMING")
+        .every((item: { cadenceSource: string }) => item.cadenceSource === "CADENCE"),
+    ).toBe(true);
 
     const assigned = await gql(
       app,

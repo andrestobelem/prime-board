@@ -239,6 +239,19 @@ async function nextPostgresCycleNumber(
   return highest + 1;
 }
 
+async function retirePostgresCadenceCyclesBeforeActive(
+  tx: PersistenceTransaction,
+  teamId: string,
+  activeNumber: number,
+): Promise<void> {
+  await tx.execute(
+    `UPDATE cycles SET archived_at = $1, updated_at = $1
+     WHERE team_id = $2 AND number < $3 AND state = 'upcoming'
+       AND cadence_source = 'cadence' AND archived_at IS NULL`,
+    [now(), teamId, activeNumber],
+  );
+}
+
 export async function createPostgresCycle(
   persistence: Persistence,
   viewer: ActorRow,
@@ -310,22 +323,19 @@ export async function createPostgresCycle(
       );
       if (active) throw apiError("VALIDATION_FAILED", "A team can have only one active cycle");
     }
+    const number = await nextPostgresCycleNumber(tx, input.teamId);
     await tx.execute(
       `INSERT INTO cycles
        (id, team_id, number, name, starts_at, ends_at, state, cadence_source, created_at, updated_at, archived_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, NULL)`,
-      [
-        id,
-        input.teamId,
-        await nextPostgresCycleNumber(tx, input.teamId),
-        name,
-        startsAt,
-        endsAt,
-        state,
-        cadenceSource,
-        timestamp,
-      ],
+      [id, input.teamId, number, name, startsAt, endsAt, state, cadenceSource, timestamp],
     );
+    if (state === "active") {
+      // A direct ACTIVE Cycle is appended after the existing horizon. Retire
+      // stale generated rows before replenishing it so advance follows the
+      // new Cycle instead of an older sequence number.
+      await retirePostgresCadenceCyclesBeforeActive(tx, input.teamId, number);
+    }
     if (
       (lockedTeam.cycles_enabled === true || lockedTeam.cycles_enabled === 1) &&
       (requestedCadence || state !== "upcoming") &&
