@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import {
+  chmodSync,
   closeSync,
   constants,
   existsSync,
@@ -493,16 +494,104 @@ function requireDocumentsArchivePath(archivePath: string | undefined, message: s
   return validateDocumentArchivePath(trimmed);
 }
 
+interface DocumentArchiveSnapshot {
+  readonly existed: boolean;
+  readonly bytes: Buffer;
+  readonly mode: number;
+}
+
+function missingFileSnapshot(): DocumentArchiveSnapshot {
+  return { existed: false, bytes: Buffer.alloc(0), mode: 0o600 };
+}
+
+function captureDocumentArchiveSnapshot(path: string): DocumentArchiveSnapshot {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error("Document archive must be a regular file");
+    }
+    return {
+      existed: true,
+      bytes: readFileSync(path),
+      mode: stat.mode & 0o777,
+    };
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    if (code === "ENOENT") return missingFileSnapshot();
+    throw error;
+  }
+}
+
+function sameDocumentArchiveSnapshot(
+  left: DocumentArchiveSnapshot,
+  right: DocumentArchiveSnapshot,
+): boolean {
+  return left.existed === right.existed && (!left.existed || left.bytes.equals(right.bytes));
+}
+
+/**
+ * Restores an archive only when the path still contains this mutation's bytes.
+ * A hard-link claim avoids replacing a new operator-owned archive during undo.
+ */
+function restoreDocumentArchiveSnapshot(
+  path: string,
+  before: DocumentArchiveSnapshot,
+  after: DocumentArchiveSnapshot,
+): void {
+  const current = captureDocumentArchiveSnapshot(path);
+  if (!sameDocumentArchiveSnapshot(current, after)) return;
+  const quarantinePath = `${path}.rollback.${process.pid}.${randomUUID()}`;
+  try {
+    renameSync(path, quarantinePath);
+  } catch {
+    return;
+  }
+  try {
+    const claimed = captureDocumentArchiveSnapshot(quarantinePath);
+    if (!sameDocumentArchiveSnapshot(claimed, after)) {
+      // The claimed inode changed. Preserve it unless an external writer has
+      // already installed a replacement at the public path.
+      if (!existsSync(path)) {
+        try {
+          linkSync(quarantinePath, path);
+        } catch (error) {
+          if (!isFileExistsError(error)) throw error;
+        }
+      }
+      return;
+    }
+    if (before.existed) {
+      const temporaryPath = `${path}.rollback.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        writeFileSync(temporaryPath, before.bytes, { mode: before.mode });
+        chmodSync(temporaryPath, before.mode);
+        try {
+          linkSync(temporaryPath, path);
+        } catch (error) {
+          if (!isFileExistsError(error)) throw error;
+        }
+      } finally {
+        if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+      }
+    }
+  } finally {
+    if (existsSync(quarantinePath)) unlinkSync(quarantinePath);
+  }
+}
+
 export interface RetiredDocumentsReservation {
   /** Retira la captura después de que la operación protegida terminó bien. */
   retire(): void;
   /** Conserva la captura cuando la mutación falla o se cancela. */
   release(): void;
+  /** Compensa el archivo externo si una transacción posterior falla. */
+  rollback?(): void;
 }
 
 const NO_RETIRED_DOCUMENTS: RetiredDocumentsReservation = {
   retire: () => undefined,
   release: () => undefined,
+  rollback: () => undefined,
 };
 
 interface SnapshotVersion {
@@ -654,6 +743,7 @@ export function prepareRetiredDocuments(
       ? "Refusing export: .prime-board/meta/documents.json is retired; provide PRIME_BOARD_DOCUMENTS_ARCHIVE after archiving it externally"
       : "Cannot export SQLite Documents with data: provide PRIME_BOARD_DOCUMENTS_ARCHIVE after running archive-documents",
   );
+  const archiveBefore = captureDocumentArchiveSnapshot(configuredArchivePath);
 
   let expected: SnapshotVersion | undefined;
   let replicaDocuments: Array<Record<string, unknown>> | undefined;
@@ -673,6 +763,14 @@ export function prepareRetiredDocuments(
   if (sqliteDocuments && hasDocumentArchiveSource(configuredArchivePath, "sqlite")) {
     verifyDocumentRows(sqliteDocuments, configuredArchivePath, "sqlite");
   }
+  if (
+    !sameDocumentArchiveSnapshot(
+      captureDocumentArchiveSnapshot(configuredArchivePath),
+      archiveBefore,
+    )
+  ) {
+    throw new Error("Document archive changed during reservation");
+  }
 
   const sources: Record<string, readonly Record<string, unknown>[]> = {};
   if (sqliteDocuments) sources.sqlite = sqliteDocuments;
@@ -681,10 +779,19 @@ export function prepareRetiredDocuments(
   // resolver and export have succeeded while the reservation is still held.
   let released = false;
   let retired = false;
+  let archiveAfter: DocumentArchiveSnapshot | undefined;
   return {
     retire() {
       if (released) throw new Error("Documents reservation was released");
       if (retired) return;
+      if (
+        !sameDocumentArchiveSnapshot(
+          captureDocumentArchiveSnapshot(configuredArchivePath),
+          archiveBefore,
+        )
+      ) {
+        throw new Error("Document archive changed before retirement");
+      }
       if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
         throw new Error("Documents snapshot changed before retirement");
       }
@@ -709,7 +816,21 @@ export function prepareRetiredDocuments(
       if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
         throw new Error("Documents snapshot changed before retirement");
       }
-      archiveDocumentSources(sources, configuredArchivePath);
+      try {
+        archiveDocumentSources(sources, configuredArchivePath);
+        archiveAfter = captureDocumentArchiveSnapshot(configuredArchivePath);
+      } catch (error) {
+        // Capture a completed external write even when the next validation
+        // fails, so a transaction abort can undo it without touching a newer
+        // operator replacement.
+        try {
+          const current = captureDocumentArchiveSnapshot(configuredArchivePath);
+          if (!sameDocumentArchiveSnapshot(current, archiveBefore)) archiveAfter = current;
+        } catch {
+          // Preserve the original archive error.
+        }
+        throw error;
+      }
       if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
         throw new Error("Documents snapshot changed before retirement");
       }
@@ -718,6 +839,11 @@ export function prepareRetiredDocuments(
     },
     release() {
       released = true;
+    },
+    rollback() {
+      if (!archiveAfter) return;
+      restoreDocumentArchiveSnapshot(configuredArchivePath, archiveBefore, archiveAfter);
+      archiveAfter = undefined;
     },
   };
 }

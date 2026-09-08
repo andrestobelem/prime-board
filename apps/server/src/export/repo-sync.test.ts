@@ -279,13 +279,21 @@ try {
     execFileSync("git", ["-C", isolatedRoot, "config", "user.email", "test@example.test"]);
     execFileSync("git", ["-C", isolatedRoot, "config", "user.name", "PRB test"]);
     execFileSync("git", ["-C", isolatedRoot, "commit", "--allow-empty", "-qm", "baseline"]);
-    const isolated = createTestApp(isolatedRoot);
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const isolated = createTestApp(isolatedRoot, "api-key", {}, undefined, {
+      documentsArchivePath: archivePath,
+    });
     try {
       const first = await gql(
         isolated,
         'mutation { issueCreate(input: { teamKey: "PB", title: "before commit failure" }) { success } }',
       );
       expect(first.errors).toBeUndefined();
+      isolated.db.exec(`
+        CREATE TABLE documents (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL);
+        INSERT INTO documents (id, title, content) VALUES ('sqlite-row', 'SQLite', 'new archive');
+      `);
+      expect(existsSync(archivePath)).toBe(false);
       const beforeHead = execFileSync("git", ["-C", isolatedRoot, "rev-parse", "HEAD"], {
         encoding: "utf8",
       }).trim();
@@ -316,7 +324,9 @@ try {
         }).trim(),
       ).toBe(beforeHead);
       expect(existsSync(join(isolatedRoot, ".prime-board", "issues", "PB-2.md"))).toBe(false);
+      expect(existsSync(archivePath)).toBe(false);
     } finally {
+      isolated.db.exec("DROP TABLE IF EXISTS documents");
       isolated.stop();
       rmSync(isolatedRoot, { recursive: true, force: true });
     }
@@ -851,6 +861,37 @@ try {
       committedLease.complete();
       expect(existsSync(archivePath)).toBe(true);
       committedLease.release?.();
+    } finally {
+      isolated.db.exec("DROP TABLE IF EXISTS documents");
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("revierte un archive previo y conserva un reemplazo externo durante el undo", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-archive-undo-"));
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      isolated.db.exec(`
+        CREATE TABLE documents (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL);
+        INSERT INTO documents (id, title, content) VALUES ('sqlite-row', 'SQLite', 'keep');
+      `);
+      archiveDocumentRows([], archivePath, "replica");
+      const previousArchive = readFileSync(archivePath, "utf8");
+      const reservation = prepareRetiredDocuments(isolated.db, isolatedRoot, archivePath);
+      reservation.retire();
+      expect(readFileSync(archivePath, "utf8")).not.toBe(previousArchive);
+      reservation.rollback?.();
+      expect(readFileSync(archivePath, "utf8")).toBe(previousArchive);
+
+      const second = prepareRetiredDocuments(isolated.db, isolatedRoot, archivePath);
+      second.retire();
+      archiveDocumentRows([{ id: "replacement" }], archivePath, "replacement");
+      const replacementArchive = readFileSync(archivePath, "utf8");
+      second.rollback?.();
+      expect(readFileSync(archivePath, "utf8")).toBe(replacementArchive);
+      second.release();
     } finally {
       isolated.db.exec("DROP TABLE IF EXISTS documents");
       isolated.stop();

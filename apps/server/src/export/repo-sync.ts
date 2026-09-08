@@ -253,6 +253,12 @@ class RepoSyncLeaseImpl implements RepoSyncLease {
           // Preserve the original mutation error. A later sync can recover the
           // append if an injected event log does not support restoration.
         }
+        try {
+          this.retiredDocuments.rollback?.();
+        } catch {
+          // Preserve the original mutation error. The archive remains safe if
+          // a concurrent replacement wins the compare-and-restore check.
+        }
       }
       this.retiredDocuments.release();
     } finally {
