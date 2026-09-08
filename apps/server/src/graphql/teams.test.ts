@@ -5,6 +5,25 @@ import { createTestApp, gql } from "../test-helpers.ts";
 const app = createTestApp();
 afterAll(() => app.stop());
 
+function localDate(iso: string, timezone: string): number {
+  const values: Record<string, number> = {};
+  for (const part of new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    calendar: "iso8601",
+    numberingSystem: "latn",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(new Date(iso))) {
+    if (part.type !== "literal") values[part.type] = Number(part.value);
+  }
+  const { year, month, day } = values;
+  if (year === undefined || month === undefined || day === undefined) {
+    throw new Error("Cycle response has no complete local date");
+  }
+  return Date.UTC(year, month - 1, day);
+}
+
 describe("teams", () => {
   it("crea un team y siembra el workflow default", async () => {
     const result = await gql(
@@ -126,6 +145,20 @@ describe("teams", () => {
     expect(localParts.find((part) => part.type === "weekday")?.value).toBe("Wednesday");
     expect(localParts.find((part) => part.type === "hour")?.value).toBe("00");
     expect(localParts.find((part) => part.type === "minute")?.value).toBe("00");
+    const endParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "long",
+      hourCycle: "h23",
+    }).formatToParts(new Date(cycles.data!.cycles[0].endsAt));
+    expect(endParts.find((part) => part.type === "weekday")?.value).toBe("Tuesday");
+    expect(
+      localDate(cycles.data!.cycles[0].endsAt, "America/New_York") -
+        localDate(cycles.data!.cycles[0].startsAt, "America/New_York"),
+    ).toBe(6 * 24 * 60 * 60 * 1000);
+    expect(
+      localDate(cycles.data!.cycles[1].startsAt, "America/New_York") -
+        localDate(cycles.data!.cycles[0].startsAt, "America/New_York"),
+    ).toBe(14 * 24 * 60 * 60 * 1000);
 
     const disabled = await gql(
       app,
@@ -152,6 +185,15 @@ describe("teams", () => {
       teamId: zero.data!.teamCreate.team.id,
     });
     expect(zeroCycles.data!.cycles).toEqual([]);
+
+    const overLimit = await gql(
+      app,
+      `mutation { teamCreate(input: {
+        name: "Too many cycles", key: "TMC", cyclesEnabled: true, cycleUpcomingCount: 16
+      }) { success } }`,
+    );
+    expect(overLimit.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+    expect(app.db.query("SELECT id FROM teams WHERE key = 'TMC'").get()).toBeNull();
   });
   it("revierte Team y workflow si falla la creación del horizonte", async () => {
     const isolated = createTestApp();
