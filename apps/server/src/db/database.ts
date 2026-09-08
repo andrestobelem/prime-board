@@ -388,16 +388,24 @@ interface MigrationMarkerRow {
   applied_at: string;
 }
 
-interface IndexDefinitionRow {
-  name: string;
-  sql: string;
-}
-
 interface SavedViewsIndexRow {
   name: string;
   unique_value: number;
   partial: number;
-  sql: string;
+  origin: string;
+  sql: string | null;
+}
+
+interface SavedViewsIndexTerm {
+  seqno: number;
+  name: string | null;
+  desc: number;
+  coll: string;
+  key: number;
+}
+
+interface SavedViewsIndexDefinition extends SavedViewsIndexRow {
+  terms: SavedViewsIndexTerm[];
 }
 
 interface SavedViewsTriggerDefinition {
@@ -534,19 +542,33 @@ function hasViewPreferencesKeyIndex(db: Database): boolean {
 function savedViewsIndexRows(db: Database): SavedViewsIndexRow[] {
   return db
     .query<SavedViewsIndexRow, SQLQueryBindings[]>(
-      `SELECT indexes.name, indexes."unique" AS unique_value, indexes.partial, sqlite_master.sql
+      `SELECT indexes.name, indexes."unique" AS unique_value, indexes.partial, indexes.origin,
+              sqlite_master.sql
        FROM pragma_index_list('saved_views') AS indexes
        JOIN sqlite_master
          ON sqlite_master.type = 'index'
         AND sqlite_master.name = indexes.name
-       WHERE sqlite_master.sql IS NOT NULL
        ORDER BY indexes.name`,
     )
     .all();
 }
 
-function savedViewsIndexDefinitions(db: Database): IndexDefinitionRow[] {
-  return savedViewsIndexRows(db).map(({ name, sql }) => ({ name, sql }));
+function savedViewsIndexTerms(db: Database, name: string): SavedViewsIndexTerm[] {
+  return db
+    .query<SavedViewsIndexTerm, SQLQueryBindings[]>(
+      `SELECT seqno, name, "desc", coll, key
+         FROM pragma_index_xinfo(?1)
+        WHERE key = 1
+        ORDER BY seqno`,
+    )
+    .all(name);
+}
+
+function savedViewsIndexDefinitions(db: Database): SavedViewsIndexDefinition[] {
+  return savedViewsIndexRows(db).map((definition) => ({
+    ...definition,
+    terms: savedViewsIndexTerms(db, definition.name),
+  }));
 }
 
 function quoteSqlIdentifier(value: string): string {
@@ -639,6 +661,7 @@ function savedViewsCanonicalIndexMatches(
   definition: SavedViewsIndexRow,
   expected: (typeof SAVED_VIEWS_WORKSPACE_INDEXES)[number],
 ): boolean {
+  if (definition.sql === null) return false;
   const columns = definition.sql.replace(/\s+/g, " ").trim().toLowerCase();
   const expectedSql = `create ${expected.unique ? "unique " : ""}index ${expected.name} on saved_views(${expected.columns.join(", ")})`;
   return (
@@ -650,7 +673,7 @@ function savedViewsCanonicalIndexMatches(
 
 function validateSavedViewsIndexesBeforeWorkspaceMigration(
   db: Database,
-  definitions: readonly IndexDefinitionRow[],
+  definitions: readonly SavedViewsIndexDefinition[],
 ): void {
   const rows = savedViewsIndexRows(db);
   const rowsByName = new Map(rows.map((row) => [row.name.toLowerCase(), row]));
@@ -683,7 +706,16 @@ function validateSavedViewsIndexesBeforeWorkspaceMigration(
     const indexedColumns = savedViewsIndexColumns(db, definition.name);
     if (
       indexedColumns.some((column) => column !== null && !targetColumns.has(column)) ||
-      !savedViewsIndexCanCompileAgainstColumns(db, definition.sql, SAVED_VIEWS_MIGRATION_COLUMNS)
+      (definition.sql !== null &&
+        !savedViewsIndexCanCompileAgainstColumns(
+          db,
+          definition.sql,
+          SAVED_VIEWS_MIGRATION_COLUMNS,
+        )) ||
+      (definition.sql === null &&
+        (definition.unique_value !== 1 ||
+          definition.terms.length === 0 ||
+          definition.terms.some((term) => term.name === null)))
     ) {
       throw new Error(
         `Cannot apply migration 0025 safely: saved_views index ${definition.name} cannot be preserved against the legacy schema`,
@@ -692,9 +724,76 @@ function validateSavedViewsIndexesBeforeWorkspaceMigration(
   }
 }
 
-function restoreSavedViewsIndexes(db: Database, definitions: IndexDefinitionRow[]): void {
+function savedViewsIndexTermsMatch(
+  left: readonly SavedViewsIndexTerm[],
+  right: readonly SavedViewsIndexTerm[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (term, position) =>
+        term.name === right[position]?.name &&
+        term.desc === right[position]?.desc &&
+        term.coll.toLowerCase() === right[position]?.coll.toLowerCase(),
+    )
+  );
+}
+
+function generatedSavedViewsUniqueIndexName(
+  db: Database,
+  definition: SavedViewsIndexDefinition,
+): string {
+  const suffix = definition.terms
+    .map((term) => term.name?.replace(/[^A-Za-z0-9_]+/g, "_").toLowerCase() ?? "expression")
+    .join("_");
+  const base = `prb620_saved_views_unique_${suffix || "index"}`;
+  let candidate = base;
+  let counter = 2;
+  while (hasSchemaObject(db, candidate)) {
+    candidate = `${base}_${counter}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
+function restoreSavedViewsIndexes(
+  db: Database,
+  definitions: readonly SavedViewsIndexDefinition[],
+): void {
   for (const definition of definitions) {
-    if (!hasNamedIndex(db, "saved_views", definition.name)) db.exec(definition.sql);
+    if (definition.sql !== null) {
+      if (!hasNamedIndex(db, "saved_views", definition.name)) db.exec(definition.sql);
+      continue;
+    }
+
+    // SQLite no expone SQL para las restricciones UNIQUE de una tabla. Si la
+    // tabla target ya conserva el mismo contrato, no se duplica. De lo
+    // contrario se materializa como índice UNIQUE explícito para conservar la
+    // restricción y sus términos durante el rebuild.
+    if (
+      definition.unique_value !== 1 ||
+      definition.terms.length === 0 ||
+      definition.terms.some((term) => term.name === null)
+    ) {
+      throw new Error(`Cannot restore saved_views index ${definition.name} safely`);
+    }
+    const equivalent = savedViewsIndexRows(db).find(
+      (candidate) =>
+        candidate.unique_value === definition.unique_value &&
+        savedViewsIndexTermsMatch(savedViewsIndexTerms(db, candidate.name), definition.terms),
+    );
+    if (equivalent !== undefined) continue;
+
+    const terms = definition.terms
+      .map(
+        (term) =>
+          `${quoteSqlIdentifier(term.name ?? "")} COLLATE ${quoteSqlIdentifier(term.coll)}${term.desc === 1 ? " DESC" : ""}`,
+      )
+      .join(", ");
+    db.exec(
+      `CREATE UNIQUE INDEX ${quoteSqlIdentifier(generatedSavedViewsUniqueIndexName(db, definition))} ` +
+        `ON saved_views(${terms})`,
+    );
   }
 }
 

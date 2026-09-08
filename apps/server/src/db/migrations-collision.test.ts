@@ -157,6 +157,44 @@ function seedPreWorkspaceConstraintSavedViewBase(db: Database): void {
   `);
 }
 
+function addSavedViewsLegacyUniqueConstraint(db: Database): void {
+  db.exec(`
+    CREATE TABLE _legacy_saved_views_with_unique (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('personal', 'team', 'workspace')),
+      team_id TEXT,
+      owner_id TEXT NOT NULL REFERENCES actors(id),
+      filter_json TEXT NOT NULL DEFAULT '{}',
+      order_by TEXT NOT NULL DEFAULT 'CREATED_DESC',
+      group_by TEXT NOT NULL DEFAULT 'state',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      workspace_id TEXT REFERENCES workspace(id) ON DELETE CASCADE,
+      UNIQUE (workspace_id, name),
+      CHECK ((scope = 'team' AND team_id IS NOT NULL) OR (scope != 'team' AND team_id IS NULL)),
+      FOREIGN KEY (team_id) REFERENCES teams(id)
+    );
+    INSERT INTO _legacy_saved_views_with_unique
+      SELECT id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+             created_at, updated_at, archived_at, columns_json, workspace_id
+        FROM saved_views;
+    DROP TABLE saved_views;
+    ALTER TABLE _legacy_saved_views_with_unique RENAME TO saved_views;
+    CREATE INDEX idx_saved_views_workspace ON saved_views(workspace_id);
+    CREATE INDEX idx_saved_views_scope ON saved_views(scope, team_id);
+    CREATE INDEX idx_saved_views_owner ON saved_views(owner_id);
+    CREATE TRIGGER saved_views_workspace_scope_insert
+    AFTER INSERT ON saved_views
+    WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+    BEGIN
+      UPDATE saved_views SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id;
+    END;
+  `);
+}
+
 function seedPreWorkspaceConstraintSavedViews(db: Database): void {
   seedPreWorkspaceConstraintSavedViewBase(db);
   db.exec(`
@@ -180,6 +218,50 @@ function seedPreWorkspaceConstraintSavedViews(db: Database): void {
 }
 
 describe("colisión de migraciones SQLite", () => {
+  it("conserva una UNIQUE de tabla de saved_views representada por sqlite_autoindex", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      seedPreWorkspaceConstraintSavedViewBase(db);
+      addSavedViewsLegacyUniqueConstraint(db);
+
+      const legacyUniqueName = db
+        .query("SELECT name FROM pragma_index_list('saved_views') WHERE origin = 'u' LIMIT 1")
+        .values()[0]?.[0];
+      expect(legacyUniqueName).toMatch(/^sqlite_autoindex_saved_views_/);
+
+      migrate(db);
+
+      const restoredUniqueName = db
+        .query(
+          `SELECT name FROM pragma_index_list('saved_views')
+            WHERE origin = 'c' AND "unique" = 1 AND name LIKE 'prb620_saved_views_unique_%'`,
+        )
+        .values()[0]?.[0];
+      expect(restoredUniqueName).toBe("prb620_saved_views_unique_workspace_id_name");
+      expect(
+        db.query(`SELECT name FROM pragma_index_info(?1) ORDER BY seqno`).all(restoredUniqueName),
+      ).toEqual([{ name: "workspace_id" }, { name: "name" }]);
+      expect(() =>
+        db
+          .query(
+            `INSERT INTO saved_views
+              (id, name, scope, team_id, owner_id, filter_json, order_by, group_by,
+               created_at, updated_at, archived_at, columns_json, workspace_id)
+             VALUES ('view-0025-duplicate', 'View 0025', 'team', 'team-0025', 'actor-0025',
+                     '{}', 'CREATED_DESC', 'state', '2026-01-02T00:00:00.000Z',
+                     '2026-01-02T00:00:00.000Z', NULL, '[]', 'workspace-0025')`,
+          )
+          .run(),
+      ).toThrow(/unique constraint/i);
+
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+    } finally {
+      db.close();
+    }
+  });
+
   it("preserva índices MAIN, UNIQUE y partial de Views al migrar 0025→0032→0033", () => {
     const db = databaseWithMigrationsThrough(24);
     try {
