@@ -96,9 +96,13 @@ function projectTeamsAllowed(context: Context, projectId: string): boolean {
 
 async function postgresProjectTeamsAllowed(context: Context, projectId: string): Promise<boolean> {
   const viewer = requireViewer(context);
-  const teamIds = await listPostgresProjectTeamIds(context.persistence!, projectId);
+  const teamIds = await listPostgresProjectTeamIds(
+    context.persistence!,
+    projectId,
+    context.workspace,
+  );
   return (
-    (await canAccessPostgresProject(context.persistence!, viewer, projectId)) &&
+    (await canAccessPostgresProject(context.persistence!, viewer, projectId, context.workspace)) &&
     apiKeyTeamsWithinLimit(context.auth, teamIds)
   );
 }
@@ -117,7 +121,11 @@ export const projectResolvers = {
     lead: async (project: MappedProject, _args: unknown, context: Context) => {
       if (!project.leadId) return null;
       if (context.persistence) {
-        const actor = await getPostgresActor(context.persistence, project.leadId);
+        const actor = await getPostgresActor(
+          context.persistence,
+          project.leadId,
+          context.workspace.workspaceId,
+        );
         return actor ? mapPostgresActor(actor) : null;
       }
       return mapActor(lookupActor(context, project.leadId)!);
@@ -125,7 +133,7 @@ export const projectResolvers = {
     milestones: async (project: MappedProject, _args: unknown, context: Context) => {
       if (context.persistence) {
         return (await postgresProjectTeamsAllowed(context, project.id))
-          ? (await listPostgresMilestones(context.persistence, project.id)).map(
+          ? (await listPostgresMilestones(context.persistence, project.id, context.workspace)).map(
               mapPostgresMilestone,
             )
           : [];
@@ -137,13 +145,21 @@ export const projectResolvers = {
     teams: async (project: MappedProject, _args: unknown, context: Context) => {
       if (context.persistence) {
         const viewer = requireViewer(context);
-        const teamIds = await listPostgresProjectTeamIds(context.persistence, project.id);
+        const teamIds = await listPostgresProjectTeamIds(
+          context.persistence,
+          project.id,
+          context.workspace,
+        );
         const teams = [];
         for (const teamId of teamIds) {
-          const team = await getPostgresTeam(context.persistence, { id: teamId });
+          const team = await getPostgresTeam(
+            context.persistence,
+            { id: teamId },
+            context.workspace,
+          );
           if (
             team &&
-            (await canDiscoverPostgresTeam(context.persistence, viewer, team)) &&
+            (await canDiscoverPostgresTeam(context.persistence, viewer, team, context.workspace)) &&
             apiKeyTeamsWithinLimit(context.auth, [teamId])
           ) {
             teams.push(mapPostgresTeam(team));
@@ -174,7 +190,9 @@ export const projectResolvers = {
             context.persistence,
             requireViewer(context),
             context.auth,
+            context.workspace,
           ),
+          context: context.workspace,
         });
         return {
           nodes: page.rows.map(mapIssue),
@@ -198,9 +216,9 @@ export const projectResolvers = {
     updates: async (project: MappedProject, _args: unknown, context: Context) => {
       if (context.persistence) {
         return (await postgresProjectTeamsAllowed(context, project.id))
-          ? (await listPostgresProjectUpdates(context.persistence, project.id)).map(
-              mapPostgresProjectUpdate,
-            )
+          ? (
+              await listPostgresProjectUpdates(context.persistence, project.id, context.workspace)
+            ).map(mapPostgresProjectUpdate)
           : [];
       }
       return projectTeamsAllowed(context, project.id)
@@ -214,7 +232,11 @@ export const projectResolvers = {
   ProjectStatusUpdate: {
     project: async (update: { projectId: string }, _args: unknown, context: Context) => {
       if (context.persistence) {
-        const project = await getPostgresProject(context.persistence, update.projectId);
+        const project = await getPostgresProject(
+          context.persistence,
+          update.projectId,
+          context.workspace,
+        );
         return project && (await postgresProjectTeamsAllowed(context, project.id))
           ? mapPostgresProject(project)
           : null;
@@ -224,7 +246,11 @@ export const projectResolvers = {
     },
     author: async (update: { authorId: string }, _args: unknown, context: Context) => {
       if (context.persistence) {
-        const actor = await getPostgresActor(context.persistence, update.authorId);
+        const actor = await getPostgresActor(
+          context.persistence,
+          update.authorId,
+          context.workspace.workspaceId,
+        );
         return actor ? mapPostgresActor(actor) : null;
       }
       return mapActor(lookupActor(context, update.authorId)!);
@@ -240,7 +266,11 @@ export const projectResolvers = {
   Milestone: {
     project: async (milestone: { projectId: string }, _args: unknown, context: Context) => {
       if (context.persistence) {
-        const project = await getPostgresProject(context.persistence, milestone.projectId);
+        const project = await getPostgresProject(
+          context.persistence,
+          milestone.projectId,
+          context.workspace,
+        );
         return project && (await postgresProjectTeamsAllowed(context, project.id))
           ? mapPostgresProject(project)
           : null;
@@ -254,7 +284,11 @@ export const projectResolvers = {
       context: Context,
     ) => {
       if (context.persistence) {
-        const milestoneRow = await getPostgresMilestone(context.persistence, milestone.id);
+        const milestoneRow = await getPostgresMilestone(
+          context.persistence,
+          milestone.id,
+          context.workspace,
+        );
         if (
           !milestoneRow ||
           !(await postgresProjectTeamsAllowed(context, milestoneRow.project_id))
@@ -269,7 +303,9 @@ export const projectResolvers = {
             context.persistence,
             requireViewer(context),
             context.auth,
+            context.workspace,
           ),
+          context: context.workspace,
         });
         return {
           nodes: page.rows.map(mapIssue),
@@ -326,8 +362,15 @@ export const projectResolvers = {
       const viewer = requireViewer(context);
       if (context.persistence) {
         if (args.team) {
-          const team = await getPostgresTeam(context.persistence, { id: args.team });
-          if (!team || !(await canDiscoverPostgresTeam(context.persistence, viewer, team)))
+          const team = await getPostgresTeam(
+            context.persistence,
+            { id: args.team },
+            context.workspace,
+          );
+          if (
+            !team ||
+            !(await canDiscoverPostgresTeam(context.persistence, viewer, team, context.workspace))
+          )
             return [];
           if (team.archived_at && !args.includeArchived) return [];
         }
@@ -340,10 +383,15 @@ export const projectResolvers = {
         const visible = [];
         for (const project of rows) {
           if (
-            (await canAccessPostgresProject(context.persistence, viewer, project.id)) &&
+            (await canAccessPostgresProject(
+              context.persistence,
+              viewer,
+              project.id,
+              context.workspace,
+            )) &&
             apiKeyTeamsWithinLimit(
               context.auth,
-              await listPostgresProjectTeamIds(context.persistence, project.id),
+              await listPostgresProjectTeamIds(context.persistence, project.id, context.workspace),
             )
           ) {
             visible.push(mapPostgresProject(project));
@@ -372,12 +420,17 @@ export const projectResolvers = {
     project: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const row = await getPostgresProject(context.persistence, args.id);
+        const row = await getPostgresProject(context.persistence, args.id, context.workspace);
         return row &&
-          (await canAccessPostgresProject(context.persistence, viewer, row.id)) &&
+          (await canAccessPostgresProject(
+            context.persistence,
+            viewer,
+            row.id,
+            context.workspace,
+          )) &&
           apiKeyTeamsWithinLimit(
             context.auth,
-            await listPostgresProjectTeamIds(context.persistence, row.id),
+            await listPostgresProjectTeamIds(context.persistence, row.id, context.workspace),
           )
           ? mapPostgresProject(row)
           : null;
@@ -397,15 +450,21 @@ export const projectResolvers = {
       if (context.persistence) {
         const teamIds =
           args.input.teamIds == null
-            ? (await listPostgresTeams(context.persistence)).map((team) => team.id)
+            ? (await listPostgresTeams(context.persistence, false, context.workspace)).map(
+                (team) => team.id,
+              )
             : args.input.teamIds;
         for (const teamId of teamIds) {
-          const team = await getPostgresTeam(context.persistence, { id: teamId });
+          const team = await getPostgresTeam(
+            context.persistence,
+            { id: teamId },
+            context.workspace,
+          );
           if (!team) throw apiError("NOT_FOUND", "Team not found");
         }
         await assertPostgresProjectKeyLimit(context, teamIds);
         const project = mapPostgresProject(
-          await createPostgresProject(context.persistence, viewer, args.input),
+          await createPostgresProject(context.persistence, viewer, args.input, context.workspace),
         );
         context.events.emit("project.created", viewer, project);
         return { success: true, project };
@@ -422,14 +481,27 @@ export const projectResolvers = {
     milestoneDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const milestone = await getPostgresMilestone(context.persistence, args.id);
+        const milestone = await getPostgresMilestone(
+          context.persistence,
+          args.id,
+          context.workspace,
+        );
         if (milestone) {
           await assertPostgresProjectKeyLimit(
             context,
-            await listPostgresProjectTeamIds(context.persistence, milestone.project_id),
+            await listPostgresProjectTeamIds(
+              context.persistence,
+              milestone.project_id,
+              context.workspace,
+            ),
           );
         }
-        const orphaned = await deletePostgresMilestone(context.persistence, viewer, args.id);
+        const orphaned = await deletePostgresMilestone(
+          context.persistence,
+          viewer,
+          args.id,
+          context.workspace,
+        );
         return { success: true, orphanedIssues: orphaned };
       }
       const milestone = getMilestone(context.db, args.id, context.workspace.workspaceId);
@@ -463,13 +535,14 @@ export const projectResolvers = {
           context.persistence,
           viewer,
           args.id,
+          context.workspace,
         );
         await assertPostgresProjectKeyLimit(
           context,
-          await listPostgresProjectTeamIds(context.persistence, args.id),
+          await listPostgresProjectTeamIds(context.persistence, args.id, context.workspace),
         );
         const archived = mapPostgresProject(
-          await archivePostgresProject(context.persistence, args.id, true),
+          await archivePostgresProject(context.persistence, args.id, true, context.workspace),
         );
         context.events.emit("project.updated", viewer, archived, {
           archivedAt: { from: projectBefore.archived_at, to: archived.archivedAt },
@@ -493,13 +566,14 @@ export const projectResolvers = {
           context.persistence,
           viewer,
           args.id,
+          context.workspace,
         );
         await assertPostgresProjectKeyLimit(
           context,
-          await listPostgresProjectTeamIds(context.persistence, args.id),
+          await listPostgresProjectTeamIds(context.persistence, args.id, context.workspace),
         );
         const restored = mapPostgresProject(
-          await archivePostgresProject(context.persistence, args.id, false),
+          await archivePostgresProject(context.persistence, args.id, false, context.workspace),
         );
         context.events.emit("project.updated", viewer, restored, {
           archivedAt: { from: projectBefore.archived_at, to: restored.archivedAt },
@@ -523,14 +597,18 @@ export const projectResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const project = await getPostgresProject(context.persistence, args.input.projectId);
+        const project = await getPostgresProject(
+          context.persistence,
+          args.input.projectId,
+          context.workspace,
+        );
         if (!project) throw apiError("NOT_FOUND", "Project not found");
         await assertPostgresProjectKeyLimit(
           context,
-          await listPostgresProjectTeamIds(context.persistence, project.id),
+          await listPostgresProjectTeamIds(context.persistence, project.id, context.workspace),
         );
         const created = mapPostgresMilestone(
-          await createPostgresMilestone(context.persistence, viewer, args.input),
+          await createPostgresMilestone(context.persistence, viewer, args.input, context.workspace),
         );
         return { success: true, milestone: created };
       }
@@ -548,15 +626,29 @@ export const projectResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const milestone = await getPostgresMilestone(context.persistence, args.id);
+        const milestone = await getPostgresMilestone(
+          context.persistence,
+          args.id,
+          context.workspace,
+        );
         if (milestone) {
           await assertPostgresProjectKeyLimit(
             context,
-            await listPostgresProjectTeamIds(context.persistence, milestone.project_id),
+            await listPostgresProjectTeamIds(
+              context.persistence,
+              milestone.project_id,
+              context.workspace,
+            ),
           );
         }
         const updated = mapPostgresMilestone(
-          await updatePostgresMilestone(context.persistence, viewer, args.id, args.input),
+          await updatePostgresMilestone(
+            context.persistence,
+            viewer,
+            args.id,
+            args.input,
+            context.workspace,
+          ),
         );
         return { success: true, milestone: updated };
       }
@@ -574,14 +666,24 @@ export const projectResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const existing = await getPostgresProject(context.persistence, args.id);
+        const existing = await getPostgresProject(context.persistence, args.id, context.workspace);
         if (!existing) throw apiError("NOT_FOUND", "Project not found");
-        const currentTeams = await listPostgresProjectTeamIds(context.persistence, existing.id);
+        const currentTeams = await listPostgresProjectTeamIds(
+          context.persistence,
+          existing.id,
+          context.workspace,
+        );
         const targetTeams =
           args.input.teamIds === undefined ? currentTeams : (args.input.teamIds ?? []);
         await assertPostgresProjectKeyLimit(context, targetTeams);
         const project = mapPostgresProject(
-          await updatePostgresProject(context.persistence, viewer, args.id, args.input),
+          await updatePostgresProject(
+            context.persistence,
+            viewer,
+            args.id,
+            args.input,
+            context.workspace,
+          ),
         );
         context.events.emit("project.updated", viewer, project);
         return { success: true, project };
@@ -617,7 +719,11 @@ export const projectResolvers = {
       if (context.persistence) {
         await assertPostgresProjectKeyLimit(
           context,
-          await listPostgresProjectTeamIds(context.persistence, args.input.projectId),
+          await listPostgresProjectTeamIds(
+            context.persistence,
+            args.input.projectId,
+            context.workspace,
+          ),
         );
         const projectUpdate = mapPostgresProjectUpdate(
           await createPostgresProjectUpdate(context.persistence, viewer, args.input),
@@ -646,11 +752,19 @@ export const projectResolvers = {
     projectUpdateDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const projectUpdate = await getPostgresProjectUpdate(context.persistence, args.id);
+        const projectUpdate = await getPostgresProjectUpdate(
+          context.persistence,
+          args.id,
+          context.workspace,
+        );
         if (projectUpdate) {
           await assertPostgresProjectKeyLimit(
             context,
-            await listPostgresProjectTeamIds(context.persistence, projectUpdate.project_id),
+            await listPostgresProjectTeamIds(
+              context.persistence,
+              projectUpdate.project_id,
+              context.workspace,
+            ),
           );
         }
         return { success: await deletePostgresProjectUpdate(context.persistence, viewer, args.id) };

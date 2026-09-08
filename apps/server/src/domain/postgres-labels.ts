@@ -4,6 +4,13 @@ import { newId, now } from "../db/util.ts";
 import { getPostgresTeam, isPostgresTeamOwner } from "./postgres-teams.ts";
 import type { IssueRow } from "./issues.ts";
 import type { ActorRow } from "../auth/viewer.ts";
+import type { PostgresWorkspaceContext } from "./postgres-workspace-scope.ts";
+import {
+  issueWorkspaceScope,
+  labelWorkspaceScope,
+  scopedWorkspacePredicate,
+  workspaceIdOf,
+} from "./postgres-workspace-scope.ts";
 
 export interface PostgresLabelRow {
   id: string;
@@ -20,35 +27,61 @@ export function mapPostgresLabel(row: PostgresLabelRow) {
 export async function getPostgresLabel(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow | null> {
-  return persistence.one<PostgresLabelRow>("SELECT * FROM labels WHERE id = $1", [id]);
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => labelWorkspaceScope("labels", workspaceParam),
+    "$2",
+  );
+  return persistence.one<PostgresLabelRow>(
+    `SELECT labels.* FROM labels WHERE labels.id = $1 AND ${scope}`,
+    [id, ...(context ? [context.workspaceId] : [])],
+  );
 }
 
 export async function listPostgresLabels(
   persistence: Persistence | PersistenceTransaction,
   teamId?: string | null,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow[]> {
-  if (teamId) {
-    return [
-      ...(await persistence.many<PostgresLabelRow>(
-        "SELECT * FROM labels WHERE team_id IS NULL OR team_id = $1 ORDER BY name, id",
-        [teamId],
-      )),
-    ];
-  }
-  return [...(await persistence.many<PostgresLabelRow>("SELECT * FROM labels ORDER BY name, id"))];
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => labelWorkspaceScope("labels", workspaceParam),
+    teamId ? "$2" : "$1",
+  );
+  const teamClause = teamId ? "AND (labels.team_id IS NULL OR labels.team_id = $1)" : "";
+  return [
+    ...(await persistence.many<PostgresLabelRow>(
+      `SELECT labels.* FROM labels WHERE ${scope} ${teamClause} ORDER BY labels.name, labels.id`,
+      [teamId ? teamId : null, ...(context ? [context.workspaceId] : [])].filter(
+        (value): value is string => value !== null,
+      ),
+    )),
+  ];
 }
 
 export async function listPostgresIssueLabels(
   persistence: Persistence | PersistenceTransaction,
   issueId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow[]> {
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) =>
+      `(${issueWorkspaceScope("issues", workspaceParam)} AND ${labelWorkspaceScope("labels", workspaceParam)})`,
+    "$2",
+  );
   return [
     ...(await persistence.many<PostgresLabelRow>(
       `SELECT labels.* FROM labels
        JOIN issue_labels ON issue_labels.label_id = labels.id
-       WHERE issue_labels.issue_id = $1 ORDER BY labels.name, labels.id`,
-      [issueId],
+       JOIN issues ON issues.id = issue_labels.issue_id
+       WHERE issue_labels.issue_id = $1
+         AND ${scope}
+         ${context ? "AND issue_labels.workspace_id = $2" : ""}
+       ORDER BY labels.name, labels.id`,
+      [issueId, ...(context ? [context.workspaceId] : [])],
     )),
   ];
 }
@@ -57,6 +90,7 @@ async function assertLabelManageAccess(
   persistence: Persistence | PersistenceTransaction,
   viewer: ActorRow,
   teamId: string | null,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   if (!teamId) {
     if (viewer.workspace_role !== "admin") {
@@ -64,12 +98,12 @@ async function assertLabelManageAccess(
     }
     return;
   }
-  const team = await getPostgresTeam(persistence, { id: teamId });
+  const team = await getPostgresTeam(persistence, { id: teamId }, context);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
   if (
     viewer.workspace_role !== "admin" &&
-    !(await isPostgresTeamOwner(persistence, teamId, viewer.id))
+    !(await isPostgresTeamOwner(persistence, teamId, viewer.id, context))
   ) {
     throw apiError("UNAUTHORIZED", "Team owner permission is required");
   }
@@ -79,23 +113,38 @@ export async function createPostgresLabel(
   persistence: Persistence,
   viewer: ActorRow,
   input: { name: string; color?: string | null; teamId?: string | null },
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
-  await assertLabelManageAccess(persistence, viewer, input.teamId ?? null);
+  await assertLabelManageAccess(persistence, viewer, input.teamId ?? null, context);
+  const duplicateScope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => labelWorkspaceScope("labels", workspaceParam),
+    input.teamId ? "$3" : "$2",
+  );
   const duplicate = await persistence.one(
     input.teamId
-      ? "SELECT id FROM labels WHERE team_id = $1 AND name = $2"
-      : "SELECT id FROM labels WHERE team_id IS NULL AND name = $1",
-    input.teamId ? [input.teamId, name] : [name],
+      ? `SELECT id FROM labels WHERE team_id = $1 AND name = $2 AND ${duplicateScope}`
+      : `SELECT id FROM labels WHERE team_id IS NULL AND name = $1 AND ${duplicateScope}`,
+    input.teamId
+      ? [input.teamId, name, ...(context ? [workspaceIdOf(context)] : [])]
+      : [name, ...(context ? [workspaceIdOf(context)] : [])],
   );
   if (duplicate) throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
   const id = newId();
-  await persistence.execute(
-    "INSERT INTO labels (id, name, color, team_id, created_at) VALUES ($1, $2, $3, $4, $5)",
-    [id, name, input.color ?? "#95a2b3", input.teamId ?? null, now()],
-  );
-  return (await getPostgresLabel(persistence, id))!;
+  if (context) {
+    await persistence.execute(
+      "INSERT INTO labels (workspace_id, id, name, color, team_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+      [workspaceIdOf(context), id, name, input.color ?? "#95a2b3", input.teamId ?? null, now()],
+    );
+  } else {
+    await persistence.execute(
+      "INSERT INTO labels (id, name, color, team_id, created_at) VALUES ($1, $2, $3, $4, $5)",
+      [id, name, input.color ?? "#95a2b3", input.teamId ?? null, now()],
+    );
+  }
+  return (await getPostgresLabel(persistence, id, context))!;
 }
 
 export async function updatePostgresLabel(
@@ -103,20 +152,28 @@ export async function updatePostgresLabel(
   viewer: ActorRow,
   id: string,
   input: { name?: string | null; color?: string | null },
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow> {
-  const label = await getPostgresLabel(persistence, id);
+  const label = await getPostgresLabel(persistence, id, context);
   if (!label) throw apiError("NOT_FOUND", "Label not found");
-  await assertLabelManageAccess(persistence, viewer, label.team_id);
+  await assertLabelManageAccess(persistence, viewer, label.team_id, context);
   const params: SqlValue[] = [];
   const sets: string[] = [];
   if (input.name != null) {
     const name = input.name.trim();
     if (!name) throw apiError("VALIDATION_FAILED", "Label name cannot be empty");
+    const duplicateScope = scopedWorkspacePredicate(
+      context,
+      (workspaceParam) => labelWorkspaceScope("labels", workspaceParam),
+      label.team_id ? "$4" : "$3",
+    );
     const duplicate = await persistence.one(
       label.team_id
-        ? "SELECT id FROM labels WHERE team_id = $1 AND name = $2 AND id <> $3"
-        : "SELECT id FROM labels WHERE team_id IS NULL AND name = $1 AND id <> $2",
-      label.team_id ? [label.team_id, name, id] : [name, id],
+        ? `SELECT id FROM labels WHERE team_id = $1 AND name = $2 AND id <> $3 AND ${duplicateScope}`
+        : `SELECT id FROM labels WHERE team_id IS NULL AND name = $1 AND id <> $2 AND ${duplicateScope}`,
+      label.team_id
+        ? [label.team_id, name, id, ...(context ? [workspaceIdOf(context)] : [])]
+        : [name, id, ...(context ? [workspaceIdOf(context)] : [])],
     );
     if (duplicate)
       throw apiError("VALIDATION_FAILED", `Label ${name} already exists in this scope`);
@@ -129,47 +186,86 @@ export async function updatePostgresLabel(
   }
   if (sets.length) {
     params.push(id);
-    await persistence.execute(
-      `UPDATE labels SET ${sets.join(", ")} WHERE id = $${params.length}`,
-      params,
-    );
+    if (context) {
+      params.push(workspaceIdOf(context));
+      await persistence.execute(
+        `UPDATE labels SET ${sets.join(", ")} WHERE id = $${params.length - 1} AND workspace_id = $${params.length}`,
+        params,
+      );
+    } else {
+      await persistence.execute(
+        `UPDATE labels SET ${sets.join(", ")} WHERE id = $${params.length}`,
+        params,
+      );
+    }
   }
-  return (await getPostgresLabel(persistence, id))!;
+  return (await getPostgresLabel(persistence, id, context))!;
 }
 
 export async function deletePostgresLabel(
   persistence: Persistence,
   viewer: ActorRow,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<number> {
   return persistence.transaction(async (tx) => {
-    const label = await getPostgresLabel(tx, id);
+    const label = await getPostgresLabel(tx, id, context);
     if (!label) throw apiError("NOT_FOUND", "Label not found");
-    await assertLabelManageAccess(tx, viewer, label.team_id);
+    await assertLabelManageAccess(tx, viewer, label.team_id, context);
     const issues = await tx.many<{ issue_id: string }>(
-      "SELECT issue_id FROM issue_labels WHERE label_id = $1",
-      [id],
+      `SELECT issue_labels.issue_id FROM issue_labels
+         JOIN issues ON issues.id = issue_labels.issue_id
+        WHERE issue_labels.label_id = $1
+          ${context ? "AND issue_labels.workspace_id = $2 AND issues.workspace_id = $2" : ""}`,
+      [id, ...(context ? [workspaceIdOf(context)] : [])],
     );
     const timestamp = now();
     for (const issue of issues) {
-      await tx.execute("UPDATE issues SET updated_at = $1 WHERE id = $2", [
-        timestamp,
-        issue.issue_id,
-      ]);
       await tx.execute(
-        `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
-         VALUES ($1, $2, $3, 'unlabeled', $4, $5)`,
-        [
-          newId(),
-          issue.issue_id,
-          viewer.id,
-          JSON.stringify({ label: label.name, reason: "label_deleted" }),
-          timestamp,
-        ],
+        context
+          ? "UPDATE issues SET updated_at = $1 WHERE id = $2 AND workspace_id = $3"
+          : "UPDATE issues SET updated_at = $1 WHERE id = $2",
+        context ? [timestamp, issue.issue_id, workspaceIdOf(context)] : [timestamp, issue.issue_id],
       );
+      if (context) {
+        await tx.execute(
+          `INSERT INTO activity (id, workspace_id, issue_id, actor_id, type, payload, created_at)
+           VALUES ($1, $2, $3, $4, 'unlabeled', $5, $6)`,
+          [
+            newId(),
+            workspaceIdOf(context),
+            issue.issue_id,
+            viewer.id,
+            JSON.stringify({ label: label.name, reason: "label_deleted" }),
+            timestamp,
+          ],
+        );
+      } else {
+        await tx.execute(
+          `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
+           VALUES ($1, $2, $3, 'unlabeled', $4, $5)`,
+          [
+            newId(),
+            issue.issue_id,
+            viewer.id,
+            JSON.stringify({ label: label.name, reason: "label_deleted" }),
+            timestamp,
+          ],
+        );
+      }
     }
-    await tx.execute("DELETE FROM issue_labels WHERE label_id = $1", [id]);
-    await tx.execute("DELETE FROM labels WHERE id = $1", [id]);
+    await tx.execute(
+      context
+        ? "DELETE FROM issue_labels WHERE workspace_id = $1 AND label_id = $2"
+        : "DELETE FROM issue_labels WHERE label_id = $1",
+      context ? [workspaceIdOf(context), id] : [id],
+    );
+    await tx.execute(
+      context
+        ? "DELETE FROM labels WHERE workspace_id = $1 AND id = $2"
+        : "DELETE FROM labels WHERE id = $1",
+      context ? [workspaceIdOf(context), id] : [id],
+    );
     return issues.length;
   });
 }
@@ -178,13 +274,38 @@ async function applicableLabel(
   persistence: Persistence | PersistenceTransaction,
   issue: IssueRow,
   labelId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresLabelRow> {
-  const label = await getPostgresLabel(persistence, labelId);
+  const label = await getPostgresLabel(persistence, labelId, context);
   if (!label) throw apiError("NOT_FOUND", `Label not found: ${labelId}`);
   if (label.team_id !== null && label.team_id !== issue.team_id) {
     throw apiError("VALIDATION_FAILED", `Label ${label.name} belongs to another team`);
   }
   return label;
+}
+
+async function recordPostgresLabelActivity(
+  persistence: PersistenceTransaction,
+  context: PostgresWorkspaceContext | undefined,
+  issueId: string,
+  actorId: string,
+  type: string,
+  payload: Record<string, unknown>,
+  timestamp: string,
+): Promise<void> {
+  if (context) {
+    await persistence.execute(
+      `INSERT INTO activity (id, workspace_id, issue_id, actor_id, type, payload, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [newId(), workspaceIdOf(context), issueId, actorId, type, JSON.stringify(payload), timestamp],
+    );
+    return;
+  }
+  await persistence.execute(
+    `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [newId(), issueId, actorId, type, JSON.stringify(payload), timestamp],
+  );
 }
 
 export async function applyPostgresLabelOps(
@@ -196,8 +317,9 @@ export async function applyPostgresLabelOps(
     addLabelIds?: string[] | null;
     removeLabelIds?: string[] | null;
   },
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
-  const currentRows = await listPostgresIssueLabels(persistence, issue.id);
+  const currentRows = await listPostgresIssueLabels(persistence, issue.id, context);
   const current = new Set(currentRows.map((label) => label.id));
   const target = new Set(current);
   if (ops.labelIds != null) (target.clear(), ops.labelIds.forEach((id) => target.add(id)));
@@ -208,27 +330,44 @@ export async function applyPostgresLabelOps(
   if (!toAdd.length && !toRemove.length) return false;
   const timestamp = now();
   for (const labelId of toAdd) {
-    const label = await applicableLabel(persistence, issue, labelId);
-    await persistence.execute("INSERT INTO issue_labels (issue_id, label_id) VALUES ($1, $2)", [
+    const label = await applicableLabel(persistence, issue, labelId, context);
+    if (context) {
+      await persistence.execute(
+        "INSERT INTO issue_labels (workspace_id, issue_id, label_id) VALUES ($1, $2, $3)",
+        [workspaceIdOf(context), issue.id, labelId],
+      );
+    } else {
+      await persistence.execute("INSERT INTO issue_labels (issue_id, label_id) VALUES ($1, $2)", [
+        issue.id,
+        labelId,
+      ]);
+    }
+    await recordPostgresLabelActivity(
+      persistence,
+      context,
       issue.id,
-      labelId,
-    ]);
-    await persistence.execute(
-      `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
-       VALUES ($1, $2, $3, 'labeled', $4, $5)`,
-      [newId(), issue.id, actorId, JSON.stringify({ label: label.name }), timestamp],
+      actorId,
+      "labeled",
+      { label: label.name },
+      timestamp,
     );
   }
   for (const labelId of toRemove) {
-    const label = await getPostgresLabel(persistence, labelId);
-    await persistence.execute("DELETE FROM issue_labels WHERE issue_id = $1 AND label_id = $2", [
-      issue.id,
-      labelId,
-    ]);
+    const label = await getPostgresLabel(persistence, labelId, context);
     await persistence.execute(
-      `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
-       VALUES ($1, $2, $3, 'unlabeled', $4, $5)`,
-      [newId(), issue.id, actorId, JSON.stringify({ label: label?.name ?? labelId }), timestamp],
+      context
+        ? "DELETE FROM issue_labels WHERE workspace_id = $1 AND issue_id = $2 AND label_id = $3"
+        : "DELETE FROM issue_labels WHERE issue_id = $1 AND label_id = $2",
+      context ? [workspaceIdOf(context), issue.id, labelId] : [issue.id, labelId],
+    );
+    await recordPostgresLabelActivity(
+      persistence,
+      context,
+      issue.id,
+      actorId,
+      "unlabeled",
+      { label: label?.name ?? labelId },
+      timestamp,
     );
   }
   return true;

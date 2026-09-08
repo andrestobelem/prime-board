@@ -5,6 +5,12 @@ import { assertCanManagePostgresProject, canAccessPostgresProject } from "./post
 import { getPostgresActor } from "./postgres-actors.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 import type { ProjectUpdateHealth } from "./project-updates.ts";
+import type { PostgresWorkspaceContext } from "./postgres-workspace-scope.ts";
+import {
+  projectWorkspaceScope,
+  scopedWorkspacePredicate,
+  workspaceIdOf,
+} from "./postgres-workspace-scope.ts";
 
 export interface PostgresProjectUpdateRow {
   id: string;
@@ -33,19 +39,33 @@ export function mapPostgresProjectUpdate(row: PostgresProjectUpdateRow) {
 export async function getPostgresProjectUpdate(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresProjectUpdateRow | null> {
-  return persistence.one<PostgresProjectUpdateRow>("SELECT * FROM project_updates WHERE id = $1", [
-    id,
-  ]);
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => projectWorkspaceScope("project_updates", workspaceParam),
+    "$2",
+  );
+  return persistence.one<PostgresProjectUpdateRow>(
+    `SELECT project_updates.* FROM project_updates WHERE project_updates.id = $1 AND ${scope}`,
+    [id, ...(context ? [workspaceIdOf(context)] : [])],
+  );
 }
 
 export async function listPostgresProjectUpdates(
   persistence: Persistence,
   projectId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<readonly PostgresProjectUpdateRow[]> {
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => projectWorkspaceScope("project_updates", workspaceParam),
+    "$2",
+  );
   return persistence.many<PostgresProjectUpdateRow>(
-    "SELECT * FROM project_updates WHERE project_id = $1 ORDER BY created_at DESC, id DESC",
-    [projectId],
+    `SELECT project_updates.* FROM project_updates WHERE project_updates.project_id = $1 AND ${scope}
+      ORDER BY project_updates.created_at DESC, project_updates.id DESC`,
+    [projectId, ...(context ? [workspaceIdOf(context)] : [])],
   );
 }
 
@@ -61,37 +81,54 @@ async function assertProjectUpdateAccess(
   persistence: Persistence,
   viewer: ActorRow,
   projectId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
-  await assertCanManagePostgresProject(persistence, viewer, projectId);
+  await assertCanManagePostgresProject(persistence, viewer, projectId, context);
 }
 
 export async function createPostgresProjectUpdate(
   persistence: Persistence,
   viewer: ActorRow,
   input: { projectId: string; health: string; body: string; risks?: string | null },
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresProjectUpdateRow> {
-  await assertProjectUpdateAccess(persistence, viewer, input.projectId);
+  await assertProjectUpdateAccess(persistence, viewer, input.projectId, context);
   const body = input.body.trim();
   if (!body) throw apiError("VALIDATION_FAILED", "Project update body cannot be empty");
-  const author = await getPostgresActor(persistence, viewer.id);
+  const author = await getPostgresActor(persistence, viewer.id, context?.workspaceId);
   if (!author) throw apiError("NOT_FOUND", "Actor not found");
   const id = newId();
   const timestamp = now();
   await persistence.execute(
-    `INSERT INTO project_updates
-     (id, project_id, author_id, health, body, risks, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-    [
-      id,
-      input.projectId,
-      viewer.id,
-      resolveHealth(input.health),
-      body,
-      input.risks?.trim() || null,
-      timestamp,
-    ],
+    context
+      ? `INSERT INTO project_updates
+         (workspace_id, id, project_id, author_id, health, body, risks, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`
+      : `INSERT INTO project_updates
+         (id, project_id, author_id, health, body, risks, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+    context
+      ? [
+          workspaceIdOf(context),
+          id,
+          input.projectId,
+          viewer.id,
+          resolveHealth(input.health),
+          body,
+          input.risks?.trim() || null,
+          timestamp,
+        ]
+      : [
+          id,
+          input.projectId,
+          viewer.id,
+          resolveHealth(input.health),
+          body,
+          input.risks?.trim() || null,
+          timestamp,
+        ],
   );
-  const row = await getPostgresProjectUpdate(persistence, id);
+  const row = await getPostgresProjectUpdate(persistence, id, context);
   if (!row) throw new Error("PostgreSQL project update insert returned no row");
   return row;
 }
@@ -100,11 +137,17 @@ export async function deletePostgresProjectUpdate(
   persistence: Persistence,
   viewer: ActorRow,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
-  const existing = await getPostgresProjectUpdate(persistence, id);
+  const existing = await getPostgresProjectUpdate(persistence, id, context);
   if (!existing) throw apiError("NOT_FOUND", "Project update not found");
-  await assertProjectUpdateAccess(persistence, viewer, existing.project_id);
-  await persistence.execute("DELETE FROM project_updates WHERE id = $1", [id]);
+  await assertProjectUpdateAccess(persistence, viewer, existing.project_id, context);
+  await persistence.execute(
+    context
+      ? "DELETE FROM project_updates WHERE id = $1 AND workspace_id = $2"
+      : "DELETE FROM project_updates WHERE id = $1",
+    context ? [id, workspaceIdOf(context)] : [id],
+  );
   return true;
 }
 
@@ -112,9 +155,10 @@ export async function canAccessPostgresProjectUpdate(
   persistence: Persistence,
   viewer: ActorRow,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
-  const update = await getPostgresProjectUpdate(persistence, id);
+  const update = await getPostgresProjectUpdate(persistence, id, context);
   return Boolean(
-    update && (await canAccessPostgresProject(persistence, viewer, update.project_id)),
+    update && (await canAccessPostgresProject(persistence, viewer, update.project_id, context)),
   );
 }
