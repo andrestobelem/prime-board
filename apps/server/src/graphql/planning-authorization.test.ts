@@ -1,4 +1,9 @@
 import { afterAll, describe, expect, it } from "bun:test";
+import {
+  createProject as createDomainProject,
+  listProjectTeamIds,
+  updateProject,
+} from "../domain/projects.ts";
 import { createTestApp, gql } from "../test-helpers.ts";
 
 const app = createTestApp();
@@ -188,5 +193,41 @@ describe("planning mutation authorization", () => {
     );
     expect(deleted.errors).toBeUndefined();
     expect(rowCount("initiative_updates")).toBe(0);
+  });
+
+  it("rejects archived Teams in SQLite project persistence", async () => {
+    const workspace = app.db.query<{ id: string }, []>("SELECT id FROM workspace LIMIT 1").get();
+    const team = app.db
+      .query<{ id: string }, [string]>("SELECT id FROM teams WHERE key = ?1")
+      .get("PB");
+    if (!workspace || !team) throw new Error("Seed workspace and PB Team are required");
+
+    const project = createDomainProject(
+      app.db,
+      { name: "PRB-609 archived Team project", teamIds: [team.id] },
+      workspace.id,
+    );
+    app.db
+      .query("UPDATE teams SET archived_at = ?1 WHERE id = ?2")
+      .run("2026-09-07T00:00:00.000Z", team.id);
+
+    expect(() =>
+      createDomainProject(
+        app.db,
+        { name: "PRB-609 rejected archived Team project", teamIds: [team.id] },
+        workspace.id,
+      ),
+    ).toThrow("Team is archived");
+    expect(
+      app.db
+        .query<{ id: string }, []>(
+          "SELECT id FROM projects WHERE name = 'PRB-609 rejected archived Team project'",
+        )
+        .get(),
+    ).toBeNull();
+    expect(() => updateProject(app.db, project.id, { teamIds: [team.id] }, workspace.id)).toThrow(
+      "Team is archived",
+    );
+    expect(listProjectTeamIds(app.db, project.id, workspace.id)).toEqual([team.id]);
   });
 });

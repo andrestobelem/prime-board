@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
 import { getActor } from "./actors.ts";
+import { assertTeamActive } from "./teams.ts";
 import { parseDateTime } from "./datetime.ts";
 
 function workspaceClause(column: string, parameter: string): string {
@@ -158,6 +159,7 @@ function setProjectTeams(
           .get(teamId, workspaceId)
       : db.query("SELECT id FROM teams WHERE id = ?1").get(teamId);
     if (!team) throw apiError("NOT_FOUND", `Team not found: ${teamId}`);
+    assertTeamActive(db, teamId, workspaceId);
   }
   if (workspaceId) {
     db.query(
