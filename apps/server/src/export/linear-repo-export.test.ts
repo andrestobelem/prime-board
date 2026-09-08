@@ -253,6 +253,28 @@ describe("validación del plan Linear", () => {
     }
   });
 
+  it("rechaza Teams sin Workflow States antes de escribir", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-empty-states-"));
+    try {
+      const invalid: LinearExport = {
+        ...source,
+        teams: [{ ...source.teams[0]!, states: [] }],
+        issues: [],
+        projects: [],
+        comments: [],
+        relations: [],
+      };
+      const result = writeLinearExportToRepo(invalid, root, { dryRun: true });
+      expect(result.conflicts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "EMPTY_TEAM_STATES" })]),
+      );
+      expect(result.files).toBe(0);
+      expect(existsSync(join(root, ".prime-board"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rechaza snapshots sin memberships en vez de inferir owners", () => {
     const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-missing-members-"));
     try {

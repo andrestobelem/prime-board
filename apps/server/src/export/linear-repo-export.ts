@@ -848,6 +848,13 @@ export function writeLinearExportToRepo(
         });
       }
     }
+    if (exportedStates.length === 0)
+      add(
+        conflicts,
+        "EMPTY_TEAM_STATES",
+        `Team ${key} must define at least one supported workflow state`,
+        team.id,
+      );
     exportStatesByTeam.set(team.id, exportedStates);
     if (team.defaultStateId != null && !stateNameById.has(team.defaultStateId))
       add(
