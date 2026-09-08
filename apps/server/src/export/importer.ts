@@ -206,14 +206,16 @@ function validateRepoIssueReferences(base: string, snapshots: Array<Record<strin
   const actors = readJson(join(base, "meta", "actors.json")) as unknown;
   if (!Array.isArray(actors)) throw new Error("Repo actors metadata must be an array");
   const actorNames = new Set<string>();
+  const actorNameKeys = new Set<string>();
   for (const actor of actors) {
     if (!actor || typeof actor !== "object" || Array.isArray(actor))
       throw new Error("Repo actor metadata must be an object");
     const name = String(actor.name ?? "");
     const normalizedName = name.toLowerCase();
-    if (!name || actorNames.has(normalizedName))
+    if (!name || actorNameKeys.has(normalizedName))
       throw new Error(`Ambiguous actor reference in repo: ${name}`);
-    actorNames.add(normalizedName);
+    actorNames.add(name);
+    actorNameKeys.add(normalizedName);
   }
   const teams = readJson(join(base, "meta", "teams.json")) as unknown;
   if (!Array.isArray(teams)) throw new Error("Repo teams metadata must be an array");
@@ -282,7 +284,7 @@ function validateRepoIssueReferences(base: string, snapshots: Array<Record<strin
     const name = String(project.name ?? "");
     if (!name) throw new Error("Project is missing a name");
     if (projectTeams.has(name)) throw new Error(`Ambiguous project reference in repo: ${name}`);
-    if (project.lead != null && !actorNames.has(String(project.lead).toLowerCase()))
+    if (project.lead != null && !actorNames.has(String(project.lead)))
       throw new Error(`Project ${name} references unknown lead ${String(project.lead)}`);
     const projectTeamReferences: string[] = (Array.isArray(project.teams) ? project.teams : []).map(
       (team: unknown) => String(team),
@@ -329,12 +331,12 @@ function validateRepoIssueReferences(base: string, snapshots: Array<Record<strin
     const team = String(issue.team ?? "");
     if (!teamKeys.has(team)) throw new Error(`Issue ${id} references unknown team ${team}`);
     const creator = String(issue.creator ?? "");
-    if (!actorNames.has(creator.toLowerCase()))
+    if (!actorNames.has(creator))
       throw new Error(`Issue ${id} references unknown creator ${creator}`);
-    if (issue.assignee != null && !actorNames.has(String(issue.assignee).toLowerCase()))
+    if (issue.assignee != null && !actorNames.has(String(issue.assignee)))
       throw new Error(`Issue ${id} references unknown assignee ${String(issue.assignee)}`);
     for (const subscriber of Array.isArray(issue.subscribers) ? issue.subscribers : [])
-      if (!actorNames.has(String(subscriber).toLowerCase()))
+      if (!actorNames.has(String(subscriber)))
         throw new Error(`Issue ${id} references unknown subscriber ${String(subscriber)}`);
     if (issue.subscribers != null && !Array.isArray(issue.subscribers))
       throw new Error(`Issue ${id} field subscribers must be an array`);
