@@ -18,6 +18,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -76,14 +77,46 @@ function captureReplicaSnapshot(root: string): ReplicaFileSnapshot {
   return { existed: true, files };
 }
 
-function restoreReplicaSnapshot(root: string, snapshot: ReplicaFileSnapshot): void {
-  const base = join(root, ".prime-board");
-  rmSync(base, { recursive: true, force: true });
-  if (!snapshot.existed) return;
-  for (const file of snapshot.files) {
-    const path = join(root, file.relativePath);
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    writeFileSync(path, file.contents, { mode: file.mode });
+function fileMatchesSnapshot(root: string, file: ReplicaFileSnapshot["files"][number]): boolean {
+  const path = join(root, file.relativePath);
+  try {
+    return statSync(path).isFile() && readFileSync(path).equals(file.contents);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Restores only paths that still contain this mutation's bytes. This keeps a
+ * replacement made by an uncooperating Documents writer instead of clobbering
+ * it while rolling back the export.
+ */
+function restoreReplicaChanges(
+  root: string,
+  before: ReplicaFileSnapshot,
+  after: ReplicaFileSnapshot,
+): void {
+  const beforeByPath = new Map(before.files.map((file) => [file.relativePath, file]));
+  const afterByPath = new Map(after.files.map((file) => [file.relativePath, file]));
+  const paths = new Set([...beforeByPath.keys(), ...afterByPath.keys()]);
+  for (const relativePath of paths) {
+    const previous = beforeByPath.get(relativePath);
+    const current = afterByPath.get(relativePath);
+    const path = join(root, relativePath);
+    if (current) {
+      if (!fileMatchesSnapshot(root, current)) continue;
+      if (previous) {
+        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        writeFileSync(path, previous.contents, { mode: previous.mode });
+      } else {
+        unlinkSync(path);
+      }
+    } else if (previous && !existsSync(path)) {
+      // The mutation retired a path. Restore it only while it remains absent;
+      // a concurrent replacement must win.
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      writeFileSync(path, previous.contents, { mode: previous.mode });
+    }
   }
 }
 
@@ -148,15 +181,17 @@ class RepoSyncLeaseImpl implements RepoSyncLease {
   private released = false;
   private commitEventLog: (() => void) | undefined;
   private restoreEventLog: (() => void) | undefined;
+  private captureAfterRetire: (() => void) | undefined;
 
   constructor(
     readonly lock: CanonicalEventLogLease,
     readonly retiredDocuments: RetiredDocumentsReservation,
   ) {}
 
-  setRollback(restore: () => void): void {
+  setRollback(restore: () => void, captureAfterRetire?: () => void): void {
     if (this.released) throw new Error("Repo sync lease is already released");
     this.restoreEventLog = restore;
+    this.captureAfterRetire = captureAfterRetire;
   }
 
   markReady(commitEventLog: () => void): void {
@@ -176,6 +211,7 @@ class RepoSyncLeaseImpl implements RepoSyncLease {
       // step fails, the DB transaction can still roll back without a Git event.
       this.lock.run(() => {
         this.retiredDocuments.retire();
+        this.captureAfterRetire?.();
         this.commitEventLog!();
       });
       this.completed = true;
@@ -261,20 +297,35 @@ export function createRepoSync(
   ): void => {
     const eventLogSnapshot = eventPipeline.captureEventLog();
     const replicaSnapshot = captureReplicaSnapshot(root);
-    lease.setRollback(() => {
-      restoreReplicaSnapshot(root, replicaSnapshot);
-      eventPipeline.restoreEventLog(eventLogSnapshot);
-    });
-    lease.lock.run(() => {
-      appendActivityEvents(db, root, eventPipeline.eventLog, (eventIds) =>
-        eventPipeline.recordPendingEventIds(eventIds),
-      );
-      // Keep the append and projection inside the lease, but publish the Git
-      // commit only from lease.complete(), after Documents validation and while
-      // the caller's DB transaction is still open.
-      eventPipeline.project();
-      exporter(lease.retiredDocuments);
-    });
+    let replicaAfterSync = replicaSnapshot;
+    lease.setRollback(
+      () => {
+        eventPipeline.restoreEventLog(eventLogSnapshot);
+        restoreReplicaChanges(root, replicaSnapshot, replicaAfterSync);
+      },
+      () => {
+        replicaAfterSync = captureReplicaSnapshot(root);
+      },
+    );
+    try {
+      lease.lock.run(() => {
+        appendActivityEvents(db, root, eventPipeline.eventLog, (eventIds) =>
+          eventPipeline.recordPendingEventIds(eventIds),
+        );
+        // Keep the append and projection inside the lease, but publish the Git
+        // commit only from lease.complete(), after Documents validation and while
+        // the caller's DB transaction is still open.
+        eventPipeline.project();
+        exporter(lease.retiredDocuments);
+      });
+      replicaAfterSync = captureReplicaSnapshot(root);
+    } catch (error) {
+      // Exporters can fail after creating only part of the replica. Record that
+      // intermediate state so abort removes those paths without clobbering an
+      // unrelated replacement.
+      replicaAfterSync = captureReplicaSnapshot(root);
+      throw error;
+    }
     lease.markReady(() => eventPipeline.commit(undefined, lease.lock));
   };
   const sync = (
