@@ -402,6 +402,7 @@ export async function updatePostgresCycle(
       [id],
     );
     if (!current) throw apiError("NOT_FOUND", "Cycle not found");
+    assertCyclesEnabled(team);
 
     if (
       input.cadenceSource != null &&

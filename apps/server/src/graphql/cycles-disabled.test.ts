@@ -1,14 +1,9 @@
-// PRB-627: verifica en PostgreSQL el retiro completo de futuros de Cycles.
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { openDatabase } from "../db/database.ts";
-import { bootstrapPostgres } from "../db/postgres/bootstrap.ts";
-import { createPostgresPersistence } from "../db/postgres/persistence.ts";
-import { createPostgresHarness, type PostgresHarness } from "../db/postgres/test-harness.ts";
-import { resolveBootstrapIdentity } from "../db/bootstrap-config.ts";
-import { createApp } from "../server.ts";
-import type { Config } from "../config.ts";
+// PRB-627: desactivar Cycles retira todos los futuros sin perder históricos.
+import { afterAll, describe, expect, it } from "bun:test";
+import { createTestApp, gql } from "../test-helpers.ts";
 
-const integration = process.env.PRIME_BOARD_POSTGRES_URL ? it : it.skip;
+const app = createTestApp();
+afterAll(() => app.stop());
 
 type CycleSnapshot = {
   id: string;
@@ -18,62 +13,16 @@ type CycleSnapshot = {
   archivedAt: string | null;
 };
 
-type GraphQLResponse = {
-  data?: Record<string, any>;
-  errors?: Array<{ message: string; extensions?: { code?: string } }>;
+type Scenario = {
+  id: string;
+  cycleUpcomingCount: number;
+  manualId: string;
+  cadenceIds: string[];
 };
 
-let harness: PostgresHarness | undefined;
-let persistence: ReturnType<typeof createPostgresPersistence> | undefined;
-let db: ReturnType<typeof openDatabase> | undefined;
-let stop: (() => void) | undefined;
-let request: (query: string, variables?: Record<string, unknown>) => Promise<GraphQLResponse>;
-
-beforeAll(async () => {
-  const url = process.env.PRIME_BOARD_POSTGRES_URL;
-  if (!url) return;
-
-  harness = await createPostgresHarness({ url, schemaPrefix: "prb627_cycles" });
-  persistence = createPostgresPersistence(harness.sql as unknown as Bun.SQL, { close: false });
-  db = openDatabase(":memory:");
-  const config: Config = {
-    port: 0,
-    host: "127.0.0.1",
-    authMode: "api-key",
-    dbPath: ":memory:",
-    postgresUrl: url,
-    persistenceBackend: "postgres",
-    dev: false,
-    webDist: "/tmp/prime-board-no-web",
-    repoRoot: null,
-    bootstrap: resolveBootstrapIdentity({}),
-  };
-  const bootstrapped = await bootstrapPostgres(persistence, config.bootstrap);
-  if (!bootstrapped.adminApiKey) throw new Error("PostgreSQL fixture did not return an admin key");
-  const app = createApp({ db, config, persistence });
-  stop = () => app.server.stop();
-  request = async (query, variables = {}) => {
-    const response = await fetch(`http://127.0.0.1:${app.server.port}/graphql`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${bootstrapped.adminApiKey}`,
-      },
-      body: JSON.stringify({ query, variables }),
-    });
-    return (await response.json()) as GraphQLResponse;
-  };
-});
-
-afterAll(async () => {
-  stop?.();
-  db?.close();
-  await persistence?.close();
-  await harness?.close();
-});
-
 async function createTeam(key: string, cycleUpcomingCount: number) {
-  const result = await request(
+  const result = await gql(
+    app,
     `mutation($key: String!, $count: Int!) {
       teamCreate(input: {
         name: $key, key: $key, cyclesEnabled: true, cycleUpcomingCount: $count
@@ -95,7 +44,8 @@ async function createTeam(key: string, cycleUpcomingCount: number) {
 }
 
 async function createManualCycle(teamId: string, name: string): Promise<CycleSnapshot> {
-  const result = await request(
+  const result = await gql(
+    app,
     `mutation($teamId: ID!, $name: String!) {
       cycleCreate(input: {
         teamId: $teamId, name: $name,
@@ -109,7 +59,8 @@ async function createManualCycle(teamId: string, name: string): Promise<CycleSna
 }
 
 async function createCadenceCycle(teamId: string, name: string): Promise<CycleSnapshot> {
-  const result = await request(
+  const result = await gql(
+    app,
     `mutation($teamId: ID!, $name: String!) {
       cycleCreateFromCadence(input: { teamId: $teamId, name: $name }) {
         cycle { id name state cadenceSource archivedAt }
@@ -126,7 +77,8 @@ async function createCycle(
   name: string,
   state: "ACTIVE" | "COMPLETED",
 ): Promise<CycleSnapshot> {
-  const result = await request(
+  const result = await gql(
+    app,
     `mutation($teamId: ID!, $name: String!, $state: CycleState!) {
       cycleCreate(input: {
         teamId: $teamId, name: $name, state: $state,
@@ -140,7 +92,8 @@ async function createCycle(
 }
 
 async function listCycles(teamId: string, includeArchived = false): Promise<CycleSnapshot[]> {
-  const result = await request(
+  const result = await gql(
+    app,
     `query($teamId: ID!, $includeArchived: Boolean!) {
       cycles(teamId: $teamId, includeArchived: $includeArchived) {
         id name state cadenceSource archivedAt
@@ -152,22 +105,11 @@ async function listCycles(teamId: string, includeArchived = false): Promise<Cycl
   return result.data!.cycles as CycleSnapshot[];
 }
 
-describe("PostgreSQL cycles disabled", () => {
-  integration("allows cadence cycle creation through PostgreSQL dispatch", async () => {
-    const team = await createTeam("G627P", 2);
-    const cycle = await createCadenceCycle(team.id, "Cadence dispatch");
-
-    expect(cycle).toMatchObject({
-      state: "UPCOMING",
-      cadenceSource: "CADENCE",
-      archivedAt: null,
-    });
-  });
-
-  integration("archives all future sources and does not restore retired cycles", async () => {
-    const manualTeam = await createTeam("M627P", 0);
-    const cadenceTeam = await createTeam("C627P", 2);
-    const mixedTeam = await createTeam("X627P", 2);
+describe("cycles disabled", () => {
+  it("archives manual, cadence, and mixed futures while preserving history", async () => {
+    const manualTeam = await createTeam("M627", 0);
+    const cadenceTeam = await createTeam("C627", 2);
+    const mixedTeam = await createTeam("X627", 2);
 
     const manual = await createManualCycle(manualTeam.id, "Manual only");
     await createCadenceCycle(cadenceTeam.id, "Cadence only");
@@ -186,19 +128,32 @@ describe("PostgreSQL cycles disabled", () => {
     expect(cadence.every((cycle) => cycle.cadenceSource === "CADENCE")).toBe(true);
     expect(mixedCadence).toHaveLength(2);
 
-    const scenarios = [
-      { id: manualTeam.id, count: 0, future: [manual.id] },
-      { id: cadenceTeam.id, count: 2, future: cadence.map((cycle) => cycle.id) },
+    const scenarios: Scenario[] = [
+      {
+        id: manualTeam.id,
+        cycleUpcomingCount: 0,
+        manualId: manual.id,
+        cadenceIds: [],
+      },
+      {
+        id: cadenceTeam.id,
+        cycleUpcomingCount: 2,
+        manualId: "",
+        cadenceIds: cadence.map((cycle) => cycle.id),
+      },
       {
         id: mixedTeam.id,
-        count: 2,
-        future: [mixedManual.id, ...mixedCadence.map((cycle) => cycle.id)],
+        cycleUpcomingCount: 2,
+        manualId: mixedManual.id,
+        cadenceIds: mixedCadence.map((cycle) => cycle.id),
       },
     ];
+
     const beforeDisable = new Map<string, CycleSnapshot[]>();
     for (const scenario of scenarios) {
       beforeDisable.set(scenario.id, await listCycles(scenario.id, true));
-      const updated = await request(
+      const updated = await gql(
+        app,
         `mutation($id: ID!) {
           teamUpdate(id: $id, input: { cyclesEnabled: false }) {
             team { cyclesEnabled cycleUpcomingCount }
@@ -209,7 +164,7 @@ describe("PostgreSQL cycles disabled", () => {
       expect(updated.errors).toBeUndefined();
       expect(updated.data!.teamUpdate.team).toMatchObject({
         cyclesEnabled: false,
-        cycleUpcomingCount: scenario.count,
+        cycleUpcomingCount: scenario.cycleUpcomingCount,
       });
 
       const activeCycles = await listCycles(scenario.id);
@@ -220,8 +175,18 @@ describe("PostgreSQL cycles disabled", () => {
       ).toEqual([]);
       expect(
         allCycles.filter((cycle) => cycle.state === "UPCOMING" && cycle.archivedAt !== null),
-      ).toHaveLength(scenario.future.length);
+      ).toHaveLength(scenario.cadenceIds.length + (scenario.manualId ? 1 : 0));
     }
+
+    const mixedAfterDisable = await listCycles(mixedTeam.id, true);
+    expect(mixedAfterDisable.find((cycle) => cycle.id === active.id)).toMatchObject({
+      state: "COMPLETED",
+      archivedAt: null,
+    });
+    expect(mixedAfterDisable.find((cycle) => cycle.id === completed.id)).toMatchObject({
+      state: "COMPLETED",
+      archivedAt: null,
+    });
 
     const disabledUpdates = [
       `{ name: "Must stay unchanged" }`,
@@ -232,7 +197,8 @@ describe("PostgreSQL cycles disabled", () => {
       `{ cadenceSource: MANUAL }`,
     ];
     for (const input of disabledUpdates) {
-      const rejectedUpdate = await request(
+      const rejectedUpdate = await gql(
+        app,
         `mutation($id: ID!) { cycleUpdate(id: $id, input: ${input}) { success } }`,
         { id: active.id },
       );
@@ -245,8 +211,8 @@ describe("PostgreSQL cycles disabled", () => {
       name: "Historical active",
     });
 
-    const beforeReactivate = await listCycles(mixedTeam.id, true);
-    const reactivated = await request(
+    const reactivated = await gql(
+      app,
       `mutation($id: ID!) {
         teamUpdate(id: $id, input: { cyclesEnabled: true }) {
           team { cyclesEnabled cycleUpcomingCount }
@@ -259,29 +225,36 @@ describe("PostgreSQL cycles disabled", () => {
       cyclesEnabled: true,
       cycleUpcomingCount: 2,
     });
-    const afterReactivate = await listCycles(mixedTeam.id, true);
-    expect(
-      afterReactivate.filter((cycle) => cycle.state === "UPCOMING" && cycle.archivedAt === null),
-    ).toHaveLength(2);
-    for (const oldCycle of beforeReactivate) {
-      expect(afterReactivate.find((cycle) => cycle.id === oldCycle.id)).toMatchObject({
-        id: oldCycle.id,
-        name: oldCycle.name,
-        state: oldCycle.state,
-        archivedAt: oldCycle.archivedAt,
-      });
-    }
-    expect(afterReactivate.find((cycle) => cycle.id === mixedManual.id)).toMatchObject({
+    const mixedAfterReactivate = await listCycles(mixedTeam.id, true);
+    const visibleUpcoming = mixedAfterReactivate.filter(
+      (cycle) => cycle.state === "UPCOMING" && cycle.archivedAt === null,
+    );
+    expect(visibleUpcoming).toHaveLength(2);
+    expect(visibleUpcoming.every((cycle) => cycle.cadenceSource === "CADENCE")).toBe(true);
+    expect(mixedAfterReactivate.find((cycle) => cycle.id === mixedManual.id)).toMatchObject({
       archivedAt: expect.any(String),
       name: "Mixed manual",
     });
-    expect(afterReactivate.find((cycle) => cycle.id === active.id)).toMatchObject({
+    expect(mixedAfterReactivate.find((cycle) => cycle.id === active.id)).toMatchObject({
       state: "COMPLETED",
       archivedAt: null,
     });
-    expect(afterReactivate.find((cycle) => cycle.id === completed.id)).toMatchObject({
+    expect(mixedAfterReactivate.find((cycle) => cycle.id === completed.id)).toMatchObject({
       state: "COMPLETED",
       archivedAt: null,
     });
+
+    for (const scenario of scenarios) {
+      const previous = beforeDisable.get(scenario.id)!;
+      const after = await listCycles(scenario.id, true);
+      for (const oldCycle of previous) {
+        expect(after.find((cycle) => cycle.id === oldCycle.id)).toMatchObject({
+          id: oldCycle.id,
+          name: oldCycle.name,
+          state: oldCycle.state === "ACTIVE" ? "COMPLETED" : oldCycle.state,
+          archivedAt: oldCycle.state === "UPCOMING" ? expect.any(String) : null,
+        });
+      }
+    }
   });
 });

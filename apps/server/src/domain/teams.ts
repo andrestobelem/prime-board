@@ -708,7 +708,7 @@ export function updateTeam(
         "UPDATE cycles SET state = 'completed', updated_at = ?1 WHERE team_id = ?2 AND state = 'active'",
       ).run(timestamp, team.id);
       db.query(
-        "UPDATE cycles SET archived_at = ?1, updated_at = ?1 WHERE team_id = ?2 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL",
+        "UPDATE cycles SET archived_at = ?1, updated_at = ?1 WHERE team_id = ?2 AND state = 'upcoming' AND archived_at IS NULL",
       ).run(timestamp, team.id);
     }
 

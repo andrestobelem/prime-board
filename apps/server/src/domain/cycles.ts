@@ -463,6 +463,8 @@ export function updateCycle(
     const existing = getCycle(db, id, workspaceId);
     if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
     const team = getTeamSettings(db, existing.team_id, workspaceId);
+    // Con Cycles deshabilitado no se permiten mutaciones, incluidas las históricas.
+    assertCyclesEnabled(team);
     if (
       input.cadenceSource != null &&
       input.cadenceSource !== "cadence" &&
