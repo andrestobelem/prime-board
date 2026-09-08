@@ -3115,6 +3115,7 @@ export const resolvers = {
               viewer,
               args.fromCycleId,
               args.toCycleId,
+              context.workspace,
             );
             return { success: true, movedIssues };
           }

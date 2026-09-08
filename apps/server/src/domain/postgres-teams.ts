@@ -5,7 +5,6 @@ import { apiError } from "../graphql/errors.ts";
 import type { TeamRow, WorkflowStateRow } from "./teams.ts";
 import {
   scopedWorkspacePredicate,
-  teamWorkspaceScope,
   workspaceColumnScope,
   workspaceIdOf,
   workspaceMembershipScope,
@@ -113,8 +112,12 @@ export async function archivePostgresTeam(
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   if (archived && team.archived_at) return team;
   const row = await persistence.one<TeamRow>(
-    "UPDATE teams SET archived_at = $1, updated_at = $2 WHERE id = $3 RETURNING *",
-    [archived ? now() : null, now(), id],
+    context
+      ? "UPDATE teams SET archived_at = $1, updated_at = $2 WHERE id = $3 AND workspace_id = $4 RETURNING *"
+      : "UPDATE teams SET archived_at = $1, updated_at = $2 WHERE id = $3 RETURNING *",
+    context
+      ? [archived ? now() : null, now(), id, workspaceIdOf(context)]
+      : [archived ? now() : null, now(), id],
   );
   if (!row) throw apiError("NOT_FOUND", "Team not found");
   return row;
@@ -180,7 +183,12 @@ async function seedPostgresWorkflow(
       );
     }
   }
-  await tx.execute("UPDATE teams SET default_state_id = $1 WHERE id = $2", [firstId, teamId]);
+  await tx.execute(
+    context
+      ? "UPDATE teams SET default_state_id = $1 WHERE id = $2 AND workspace_id = $3"
+      : "UPDATE teams SET default_state_id = $1 WHERE id = $2",
+    context ? [firstId, teamId, workspaceIdOf(context)] : [firstId, teamId],
+  );
 }
 
 export async function createPostgresTeam(
@@ -310,10 +318,19 @@ export async function updatePostgresTeam(
   if (sets.length === 0) return team;
   push("updated_at", now());
   params.push(id);
-  const row = await persistence.one<TeamRow>(
-    `UPDATE teams SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
-    params,
-  );
+  let row: TeamRow | null;
+  if (context) {
+    params.push(workspaceIdOf(context));
+    row = await persistence.one<TeamRow>(
+      `UPDATE teams SET ${sets.join(", ")} WHERE id = $${params.length - 1} AND workspace_id = $${params.length} RETURNING *`,
+      params,
+    );
+  } else {
+    row = await persistence.one<TeamRow>(
+      `UPDATE teams SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      params,
+    );
+  }
   if (!row) throw apiError("NOT_FOUND", "Team not found");
   return row;
 }
@@ -398,16 +415,20 @@ export async function createPostgresWorkflowState(
     throw apiError("VALIDATION_FAILED", `Invalid state type: ${input.type}`);
   }
   if (
-    await persistence.one("SELECT id FROM workflow_states WHERE team_id = $1 AND name = $2", [
-      team.id,
-      name,
-    ])
+    await persistence.one(
+      context
+        ? "SELECT id FROM workflow_states WHERE workspace_id = $1 AND team_id = $2 AND name = $3"
+        : "SELECT id FROM workflow_states WHERE team_id = $1 AND name = $2",
+      context ? [workspaceIdOf(context), team.id, name] : [team.id, name],
+    )
   ) {
     throw apiError("VALIDATION_FAILED", "State name already exists in this team");
   }
   const max = await persistence.one<{ max: number }>(
-    "SELECT coalesce(max(position), -1) AS max FROM workflow_states WHERE team_id = $1",
-    [team.id],
+    context
+      ? "SELECT coalesce(max(position), -1) AS max FROM workflow_states WHERE team_id = $1 AND workspace_id = $2"
+      : "SELECT coalesce(max(position), -1) AS max FROM workflow_states WHERE team_id = $1",
+    context ? [team.id, workspaceIdOf(context)] : [team.id],
   );
   const id = newId();
   const timestamp = now();
@@ -468,8 +489,10 @@ export async function updatePostgresWorkflowState(
   }
   if (input.type != null && input.type !== state.type && state.type === "completed") {
     const count = await persistence.one<{ n: number }>(
-      "SELECT count(*)::int AS n FROM workflow_states WHERE team_id = $1 AND type = 'completed' AND id <> $2",
-      [state.team_id, id],
+      context
+        ? "SELECT count(*)::int AS n FROM workflow_states WHERE workspace_id = $1 AND team_id = $2 AND type = 'completed' AND id <> $3"
+        : "SELECT count(*)::int AS n FROM workflow_states WHERE team_id = $1 AND type = 'completed' AND id <> $2",
+      context ? [workspaceIdOf(context), state.team_id, id] : [state.team_id, id],
     );
     if ((count?.n ?? 0) === 0)
       throw apiError("VALIDATION_FAILED", "A team must keep at least one completed state");
@@ -480,8 +503,10 @@ export async function updatePostgresWorkflowState(
     if (!name) throw apiError("VALIDATION_FAILED", "State name cannot be empty");
     if (
       await persistence.one(
-        "SELECT id FROM workflow_states WHERE team_id = $1 AND name = $2 AND id <> $3",
-        [state.team_id, name, id],
+        context
+          ? "SELECT id FROM workflow_states WHERE workspace_id = $1 AND team_id = $2 AND name = $3 AND id <> $4"
+          : "SELECT id FROM workflow_states WHERE team_id = $1 AND name = $2 AND id <> $3",
+        context ? [workspaceIdOf(context), state.team_id, name, id] : [state.team_id, name, id],
       )
     ) {
       throw apiError("VALIDATION_FAILED", "State name already exists in this team");
@@ -501,10 +526,19 @@ export async function updatePostgresWorkflowState(
   push("updated_at", now());
   params.push(id);
   try {
-    const row = await persistence.one<WorkflowStateRow>(
-      `UPDATE workflow_states SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
-      params,
-    );
+    let row: WorkflowStateRow | null;
+    if (context) {
+      params.push(workspaceIdOf(context));
+      row = await persistence.one<WorkflowStateRow>(
+        `UPDATE workflow_states SET ${sets.join(", ")} WHERE id = $${params.length - 1} AND workspace_id = $${params.length} RETURNING *`,
+        params,
+      );
+    } else {
+      row = await persistence.one<WorkflowStateRow>(
+        `UPDATE workflow_states SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+        params,
+      );
+    }
     if (!row) throw apiError("NOT_FOUND", "Workflow state not found");
     return row;
   } catch (error) {
@@ -518,9 +552,13 @@ async function preservePostgresStateActivityReferences(
   tx: PersistenceTransaction,
   stateId: string,
   reference: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   const rows = await tx.many<{ id: string; payload: string }>(
-    "SELECT id, payload FROM activity WHERE type IN ('state_changed', 'created')",
+    context
+      ? "SELECT id, payload FROM activity WHERE type IN ('state_changed', 'created') AND workspace_id = $1"
+      : "SELECT id, payload FROM activity WHERE type IN ('state_changed', 'created')",
+    context ? [workspaceIdOf(context)] : [],
   );
   for (const activity of rows) {
     let payload: Record<string, unknown>;
@@ -554,8 +592,10 @@ export async function deletePostgresWorkflowState(
   const state = await getPostgresWorkflowState(persistence, id, context);
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
   const siblings = await persistence.many<WorkflowStateRow>(
-    "SELECT * FROM workflow_states WHERE team_id = $1 AND id <> $2",
-    [state.team_id, id],
+    context
+      ? "SELECT * FROM workflow_states WHERE workspace_id = $1 AND team_id = $2 AND id <> $3"
+      : "SELECT * FROM workflow_states WHERE team_id = $1 AND id <> $2",
+    context ? [workspaceIdOf(context), state.team_id, id] : [state.team_id, id],
   );
   if (!siblings.length)
     throw apiError("VALIDATION_FAILED", "A team must keep at least one workflow state");
@@ -563,8 +603,10 @@ export async function deletePostgresWorkflowState(
     throw apiError("VALIDATION_FAILED", "A team must keep at least one completed state");
   }
   const affected = await persistence.one<{ n: number }>(
-    "SELECT count(*)::int AS n FROM issues WHERE state_id = $1",
-    [id],
+    context
+      ? "SELECT count(*)::int AS n FROM issues WHERE workspace_id = $1 AND state_id = $2"
+      : "SELECT count(*)::int AS n FROM issues WHERE state_id = $1",
+    context ? [workspaceIdOf(context), id] : [id],
   );
   const affectedCount = affected?.n ?? 0;
   let target: WorkflowStateRow | null = null;
@@ -583,41 +625,66 @@ export async function deletePostgresWorkflowState(
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   return persistence.transaction(async (tx) => {
     if (target) {
-      const issues = await tx.many<{ id: string }>("SELECT id FROM issues WHERE state_id = $1", [
-        id,
-      ]);
-      await tx.execute("UPDATE issues SET state_id = $1, updated_at = $2 WHERE state_id = $3", [
-        target.id,
-        now(),
-        id,
-      ]);
+      const issues = await tx.many<{ id: string }>(
+        context
+          ? "SELECT id FROM issues WHERE workspace_id = $1 AND state_id = $2"
+          : "SELECT id FROM issues WHERE state_id = $1",
+        context ? [workspaceIdOf(context), id] : [id],
+      );
+      await tx.execute(
+        context
+          ? "UPDATE issues SET state_id = $1, updated_at = $2 WHERE state_id = $3 AND workspace_id = $4"
+          : "UPDATE issues SET state_id = $1, updated_at = $2 WHERE state_id = $3",
+        context ? [target.id, now(), id, workspaceIdOf(context)] : [target.id, now(), id],
+      );
       for (const issue of issues) {
         await tx.execute(
-          "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES ($1, $2, $3, 'state_changed', $4, $5)",
-          [
-            newId(),
-            issue.id,
-            actorId,
-            JSON.stringify({ from: id, to: target.id, reason: "state_deleted" }),
-            now(),
-          ],
+          context
+            ? "INSERT INTO activity (id, workspace_id, issue_id, actor_id, type, payload, created_at) VALUES ($1, $2, $3, $4, 'state_changed', $5, $6)"
+            : "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES ($1, $2, $3, 'state_changed', $4, $5)",
+          context
+            ? [
+                newId(),
+                workspaceIdOf(context),
+                issue.id,
+                actorId,
+                JSON.stringify({ from: id, to: target.id, reason: "state_deleted" }),
+                now(),
+              ]
+            : [
+                newId(),
+                issue.id,
+                actorId,
+                JSON.stringify({ from: id, to: target.id, reason: "state_deleted" }),
+                now(),
+              ],
         );
       }
     }
     const current = await tx.one<{ default_state_id: string | null }>(
-      "SELECT default_state_id FROM teams WHERE id = $1 FOR UPDATE",
-      [state.team_id],
+      context
+        ? "SELECT default_state_id FROM teams WHERE id = $1 AND workspace_id = $2 FOR UPDATE"
+        : "SELECT default_state_id FROM teams WHERE id = $1 FOR UPDATE",
+      context ? [state.team_id, workspaceIdOf(context)] : [state.team_id],
     );
     if (current?.default_state_id === id) {
       const fallback = target ?? [...siblings].sort((a, b) => a.position - b.position)[0]!;
-      await tx.execute("UPDATE teams SET default_state_id = $1, updated_at = $2 WHERE id = $3", [
-        fallback.id,
-        now(),
-        state.team_id,
-      ]);
+      await tx.execute(
+        context
+          ? "UPDATE teams SET default_state_id = $1, updated_at = $2 WHERE id = $3 AND workspace_id = $4"
+          : "UPDATE teams SET default_state_id = $1, updated_at = $2 WHERE id = $3",
+        context
+          ? [fallback.id, now(), state.team_id, workspaceIdOf(context)]
+          : [fallback.id, now(), state.team_id],
+      );
     }
-    await preservePostgresStateActivityReferences(tx, id, `${team.key}/${state.name}`);
-    await tx.execute("DELETE FROM workflow_states WHERE id = $1", [id]);
+    await preservePostgresStateActivityReferences(tx, id, `${team.key}/${state.name}`, context);
+    await tx.execute(
+      context
+        ? "DELETE FROM workflow_states WHERE id = $1 AND workspace_id = $2"
+        : "DELETE FROM workflow_states WHERE id = $1",
+      context ? [id, workspaceIdOf(context)] : [id],
+    );
     return affectedCount;
   });
 }
@@ -634,7 +701,7 @@ export async function deletePostgresTeam(
     throw apiError("VALIDATION_FAILED", `Confirmation must exactly match team key ${initial.key}`);
   }
   await persistence.transaction(async (tx) => {
-    const team = await getPostgresTeam(tx, { id });
+    const team = await getPostgresTeam(tx, { id }, context);
     if (!team) throw apiError("NOT_FOUND", "Team not found");
     if (confirmation !== team.key) {
       throw apiError("VALIDATION_FAILED", `Confirmation must exactly match team key ${team.key}`);
@@ -653,7 +720,13 @@ export async function deletePostgresTeam(
     ];
     const blockers: string[] = [];
     for (const [resource, statement] of dependencies) {
-      const row = await tx.one<{ count: number }>(statement, [team.id]);
+      const scopedStatement = context
+        ? statement.replace(/ WHERE /, " WHERE workspace_id = $2 AND ")
+        : statement;
+      const row = await tx.one<{ count: number }>(
+        scopedStatement,
+        context ? [team.id, workspaceIdOf(context)] : [team.id],
+      );
       if ((row?.count ?? 0) > 0) blockers.push(`${resource}=${row!.count}`);
     }
     if (blockers.length) {
@@ -662,10 +735,30 @@ export async function deletePostgresTeam(
         `Cannot delete team ${team.key}: remove dependent resources first (${blockers.join(", ")})`,
       );
     }
-    await tx.execute("UPDATE teams SET default_state_id = NULL WHERE id = $1", [team.id]);
-    await tx.execute("DELETE FROM workflow_states WHERE team_id = $1", [team.id]);
-    await tx.execute("DELETE FROM team_memberships WHERE team_id = $1", [team.id]);
-    await tx.execute("DELETE FROM teams WHERE id = $1", [team.id]);
+    await tx.execute(
+      context
+        ? "UPDATE teams SET default_state_id = NULL WHERE id = $1 AND workspace_id = $2"
+        : "UPDATE teams SET default_state_id = NULL WHERE id = $1",
+      context ? [team.id, workspaceIdOf(context)] : [team.id],
+    );
+    await tx.execute(
+      context
+        ? "DELETE FROM workflow_states WHERE team_id = $1 AND workspace_id = $2"
+        : "DELETE FROM workflow_states WHERE team_id = $1",
+      context ? [team.id, workspaceIdOf(context)] : [team.id],
+    );
+    await tx.execute(
+      context
+        ? "DELETE FROM team_memberships WHERE team_id = $1 AND workspace_id = $2"
+        : "DELETE FROM team_memberships WHERE team_id = $1",
+      context ? [team.id, workspaceIdOf(context)] : [team.id],
+    );
+    await tx.execute(
+      context
+        ? "DELETE FROM teams WHERE id = $1 AND workspace_id = $2"
+        : "DELETE FROM teams WHERE id = $1",
+      context ? [team.id, workspaceIdOf(context)] : [team.id],
+    );
   });
   return initial;
 }
@@ -684,7 +777,8 @@ export async function canDiscoverPostgresTeam(
        JOIN actors ON actors.id = team_memberships.actor_id
        JOIN workspace_memberships ON workspace_memberships.actor_id = team_memberships.actor_id
        WHERE team_memberships.team_id = $1 AND team_memberships.actor_id = $2
-         AND actors.status = 'active' ${scope}`,
+         AND actors.status = 'active'
+         ${context ? "AND team_memberships.workspace_id = $3" : ""} ${scope}`,
       [team.id, viewer.id, ...(context ? [workspaceIdOf(context)] : [])],
     ),
   );
@@ -703,7 +797,7 @@ export async function isPostgresTeamOwner(
        JOIN workspace_memberships ON workspace_memberships.actor_id = team_memberships.actor_id
        WHERE team_memberships.team_id = $1 AND team_memberships.actor_id = $2
          AND team_memberships.role = 'owner' AND actors.status = 'active'
-         ${context ? "AND workspace_memberships.workspace_id = $3 AND workspace_memberships.status = 'active'" : ""}`,
+         ${context ? "AND team_memberships.workspace_id = $3 AND workspace_memberships.workspace_id = $3 AND workspace_memberships.status = 'active'" : ""}`,
       [teamId, actorId, ...(context ? [workspaceIdOf(context)] : [])],
     ),
   );
@@ -735,7 +829,7 @@ export async function getPostgresTeamMembership(
   context?: PostgresWorkspaceContext,
 ): Promise<PostgresTeamMembershipRow | null> {
   const scope = context
-    ? "AND workspace_memberships.workspace_id = $2 AND workspace_memberships.status = 'active'"
+    ? "AND team_memberships.workspace_id = $2 AND workspace_memberships.workspace_id = $2 AND workspace_memberships.status = 'active'"
     : "";
   return persistence.one<PostgresTeamMembershipRow>(
     `SELECT team_memberships.* FROM team_memberships
@@ -775,7 +869,7 @@ export async function isPostgresTeamMember(
        JOIN workspace_memberships ON workspace_memberships.actor_id = team_memberships.actor_id
        WHERE team_memberships.team_id = $1 AND team_memberships.actor_id = $2
          AND actors.status = 'active'
-         ${context ? "AND workspace_memberships.workspace_id = $3 AND workspace_memberships.status = 'active'" : ""}`,
+         ${context ? "AND team_memberships.workspace_id = $3 AND workspace_memberships.workspace_id = $3 AND workspace_memberships.status = 'active'" : ""}`,
       [teamId, actorId, ...(context ? [workspaceIdOf(context)] : [])],
     ),
   );
@@ -848,7 +942,12 @@ export async function createPostgresTeamMembership(
       const team = await getPostgresTeam(tx, { id: input.teamId }, context);
       if (!team) throw apiError("NOT_FOUND", "Team not found");
       if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
-      const actor = await tx.one("SELECT id FROM actors WHERE id = $1", [input.actorId]);
+      const actor = await tx.one(
+        context
+          ? "SELECT actors.id FROM actors JOIN workspace_memberships ON workspace_memberships.actor_id = actors.id WHERE actors.id = $1 AND workspace_memberships.workspace_id = $2 AND workspace_memberships.status = 'active'"
+          : "SELECT id FROM actors WHERE id = $1",
+        context ? [input.actorId, workspaceIdOf(context)] : [input.actorId],
+      );
       if (!actor) throw apiError("NOT_FOUND", "Actor not found");
       if (!allowAdmin && !(await isPostgresTeamOwner(tx, team.id, viewerId, context))) {
         throw apiError("NOT_FOUND", "Team resource not found");
@@ -858,9 +957,14 @@ export async function createPostgresTeamMembership(
         throw apiError("VALIDATION_FAILED", `Invalid team membership role: ${input.role}`);
       }
       await tx.execute(
-        `INSERT INTO team_memberships (id, team_id, actor_id, role, created_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [id, team.id, input.actorId, role, now()],
+        context
+          ? `INSERT INTO team_memberships (workspace_id, id, team_id, actor_id, role, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6)`
+          : `INSERT INTO team_memberships (id, team_id, actor_id, role, created_at)
+             VALUES ($1, $2, $3, $4, $5)`,
+        context
+          ? [workspaceIdOf(context), id, team.id, input.actorId, role, now()]
+          : [id, team.id, input.actorId, role, now()],
       );
     });
   } catch (error) {
@@ -883,10 +987,14 @@ export async function deletePostgresTeamMembership(
 ): Promise<boolean> {
   return persistence.transaction(async (tx) => {
     const membership = await tx.one<PostgresTeamMembershipRow>(
-      `SELECT team_memberships.* FROM team_memberships
-       JOIN teams ON teams.id = team_memberships.team_id
-       WHERE team_memberships.id = $1 FOR UPDATE`,
-      [id],
+      context
+        ? `SELECT team_memberships.* FROM team_memberships
+           JOIN teams ON teams.id = team_memberships.team_id AND teams.workspace_id = team_memberships.workspace_id
+          WHERE team_memberships.id = $1 AND team_memberships.workspace_id = $2 FOR UPDATE`
+        : `SELECT team_memberships.* FROM team_memberships
+           JOIN teams ON teams.id = team_memberships.team_id
+          WHERE team_memberships.id = $1 FOR UPDATE`,
+      context ? [id, workspaceIdOf(context)] : [id],
     );
     if (!membership) throw apiError("NOT_FOUND", "Team membership not found");
     const team = await getPostgresTeam(tx, { id: membership.team_id }, context);
