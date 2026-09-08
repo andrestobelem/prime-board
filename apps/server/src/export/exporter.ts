@@ -546,6 +546,7 @@ function restoreDocumentArchiveSnapshot(
   } catch {
     return;
   }
+  let restorationComplete = false;
   try {
     const claimed = captureDocumentArchiveSnapshot(quarantinePath);
     if (!sameDocumentArchiveSnapshot(claimed, after)) {
@@ -574,8 +575,23 @@ function restoreDocumentArchiveSnapshot(
         if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
       }
     }
+    // A new archive has been fully removed; an old archive has been linked
+    // back (or an external replacement won the link race).
+    restorationComplete = true;
   } finally {
-    if (existsSync(quarantinePath)) unlinkSync(quarantinePath);
+    // If restoration failed, keep the claimed archive reachable instead of
+    // deleting the only preserved copy. A replacement already at the public
+    // path wins and the claimed mutation bytes are discarded.
+    if (existsSync(quarantinePath)) {
+      if (!restorationComplete && !existsSync(path)) {
+        try {
+          linkSync(quarantinePath, path);
+        } catch (error) {
+          if (!isFileExistsError(error)) throw error;
+        }
+      }
+      if (existsSync(quarantinePath)) unlinkSync(quarantinePath);
+    }
   }
 }
 
