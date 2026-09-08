@@ -34,6 +34,9 @@ export interface CanonicalEventLog {
   read(): DomainEvent[];
   /** Remove a torn JSONL tail before the next append/retry when supported. */
   recover?(): void;
+  /** Captures/restores the append bytes for an aborted mutation when supported. */
+  snapshot?(): unknown;
+  restore?(snapshot: unknown): void;
 }
 
 export interface CanonicalEventLogLease {
@@ -205,6 +208,24 @@ export class IssueEventPipeline {
   recordPendingEventIds(eventIds: readonly string[]): void {
     for (const eventId of eventIds) {
       if (eventId.trim()) this.pendingEventIds.add(eventId);
+    }
+  }
+
+  /** Captures the event-log bytes before a mutation starts appending. */
+  captureEventLog(): unknown {
+    return this.eventLog.snapshot?.();
+  }
+
+  /**
+   * Discards only the append made by an aborted mutation. Pending IDs from a
+   * previous failed commit remain available for a later retry.
+   */
+  restoreEventLog(snapshot: unknown): void {
+    if (snapshot === undefined || !this.eventLog.restore) return;
+    this.eventLog.restore(snapshot);
+    const present = new Set(this.eventLog.read().map((event) => event.eventId));
+    for (const eventId of this.pendingEventIds) {
+      if (!present.has(eventId)) this.pendingEventIds.delete(eventId);
     }
   }
 

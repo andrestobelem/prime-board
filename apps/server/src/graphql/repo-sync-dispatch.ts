@@ -28,8 +28,10 @@ export interface TrackedRepoSync extends RepoSync {
   preflightAsync(): void | Promise<void>;
   /** ¿Se llamó a sync()/syncIssue() desde que se reseteó el rastreo? */
   wasCalled(): boolean;
-  /** Completa la reserva después de que resolver y sync terminaron bien. */
+  /** Prepara la reserva después del sync sin liberar su lock todavía. */
   complete(): void;
+  /** Libera la reserva después de confirmar la transacción SQLite. */
+  release(): void;
   /** Libera la reserva sin retirar una captura. */
   abort(): void;
   /** Reinicia el rastreo — se llama antes de cada mutation top-level. */
@@ -97,12 +99,16 @@ export function trackedRepoSync(repo: RepoSync): TrackedRepoSync {
       if (!current) return;
       try {
         current.complete();
-        lease = undefined;
       } catch (error) {
         lease = undefined;
         current.abort();
         throw error;
       }
+    },
+    release() {
+      const current = lease;
+      lease = undefined;
+      current?.release?.();
     },
     abort: abortLease,
     wasCalled: () => called,
@@ -341,18 +347,7 @@ export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(muta
           } catch (error) {
             return fail(error);
           }
-          return settleMaybe(
-            synced,
-            () => {
-              try {
-                tracker.complete();
-              } catch (error) {
-                return fail(error);
-              }
-              return undefined;
-            },
-            fail,
-          );
+          return settleMaybe(synced, () => undefined, fail);
         };
         const execute = (): unknown => {
           if (context?.db) {
@@ -385,6 +380,8 @@ export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(muta
                 () => {
                   let usage: unknown;
                   try {
+                    // Auth metadata is part of the same transaction. Validate
+                    // it before complete() can retire Documents or publish Git.
                     usage = recordUsage(context);
                   } catch (error) {
                     return fail(error);
@@ -393,10 +390,21 @@ export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(muta
                     usage,
                     () => {
                       try {
+                        tracker.complete();
+                      } catch (error) {
+                        return fail(error);
+                      }
+                      try {
                         transaction?.commit();
                         transaction = undefined;
                       } catch (error) {
                         return fail(error);
+                      }
+                      try {
+                        tracker.release();
+                      } catch {
+                        // The DB transaction is already durable. Do not turn a
+                        // cleanup error into an ambiguous mutation response.
                       }
                       return value;
                     },

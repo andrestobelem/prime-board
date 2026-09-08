@@ -242,6 +242,34 @@ try {
     }
   });
 
+  it("revierte la mutación y el append canónico si falla el commit Git", async () => {
+    const failingRoot = mkdtempSync(join(tmpdir(), "pb-reposync-git-rollback-"));
+    execFileSync("git", ["-C", failingRoot, "init", "-q"]);
+    execFileSync("git", ["-C", failingRoot, "config", "user.email", "test@example.test"]);
+    execFileSync("git", ["-C", failingRoot, "config", "user.name", "PRB test"]);
+    const failing = createTestApp(failingRoot, "api-key", {}, undefined, {
+      commitGit: () => {
+        throw new Error("git unavailable");
+      },
+    });
+    try {
+      const result = await gql(
+        failing,
+        `mutation { issueCreate(input: { teamKey: "PB", title: "must rollback Git" }) { success } }`,
+      );
+      expect(result.errors?.[0]?.message).toContain("git unavailable");
+      expect(result.data).toBeNull();
+      expect(
+        (failing.db.query("SELECT count(*) AS count FROM issues").get() as { count: number }).count,
+      ).toBe(0);
+      expect(readEventLog({ rootDir: failingRoot })).toHaveLength(0);
+      expect(existsSync(join(failingRoot, ".prime-board", "issues", "PB-1.md"))).toBe(false);
+    } finally {
+      failing.stop();
+      rmSync(failingRoot, { recursive: true, force: true });
+    }
+  });
+
   it("propaga el fallo de sync hasta GraphQL sin informar éxito", async () => {
     const failing = createTestApp(
       undefined,
@@ -625,6 +653,33 @@ try {
       expect(existsSync(lockPath)).toBe(true);
       expect(() => repo!.preflight()).toThrow(/already holds the lock/);
       lease!.abort();
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("mantiene el lease hasta release después de completar el sync", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-lease-release-"));
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      execFileSync("git", ["-C", isolatedRoot, "init", "-q"]);
+      const repo = createRepoSync(isolated.db, isolatedRoot);
+      expect(repo).not.toBeNull();
+      const lease = repo!.preflight();
+      expect(lease).toBeDefined();
+      if (!lease) throw new Error("expected repo sync lease");
+      repo!.sync(lease);
+      lease.complete();
+      const indexPath = execFileSync(
+        "git",
+        ["-C", isolatedRoot, "rev-parse", "--git-path", "index"],
+        { encoding: "utf8" },
+      ).trim();
+      const lockPath = join(isolatedRoot, indexPath) + ".prime-board-event-log.lock";
+      expect(existsSync(lockPath)).toBe(true);
+      lease!.release?.();
       expect(existsSync(lockPath)).toBe(false);
     } finally {
       isolated.stop();

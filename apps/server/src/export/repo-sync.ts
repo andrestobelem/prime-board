@@ -11,8 +11,16 @@
 // dos agentes que escriben en branches distintas mergean sin conflicto
 // (verificado experimentalmente en la investigación de AT-153).
 import type { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   exportBoard,
   exportIssue,
@@ -28,6 +36,56 @@ import {
   type CanonicalEventLogLease,
   type IssueEventPipelineOptions,
 } from "./issue-event-pipeline.ts";
+
+interface ReplicaFileSnapshot {
+  readonly existed: boolean;
+  readonly files: readonly {
+    readonly relativePath: string;
+    readonly contents: Buffer;
+    readonly mode: number;
+  }[];
+}
+
+function captureReplicaSnapshot(root: string): ReplicaFileSnapshot {
+  const base = join(root, ".prime-board");
+  if (!existsSync(base)) return { existed: false, files: [] };
+  const files: {
+    relativePath: string;
+    contents: Buffer;
+    mode: number;
+  }[] = [];
+  const walk = (directory: string, relativeDirectory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const relativePath = join(relativeDirectory, entry.name);
+      const absolutePath = join(root, relativePath);
+      if (entry.isDirectory()) {
+        walk(absolutePath, relativePath);
+      } else if (entry.isFile()) {
+        const stat = statSync(absolutePath);
+        files.push({
+          relativePath,
+          contents: readFileSync(absolutePath),
+          mode: stat.mode & 0o777,
+        });
+      } else {
+        throw new Error(`Repository replica contains unsupported entry: ${relativePath}`);
+      }
+    }
+  };
+  walk(base, ".prime-board");
+  return { existed: true, files };
+}
+
+function restoreReplicaSnapshot(root: string, snapshot: ReplicaFileSnapshot): void {
+  const base = join(root, ".prime-board");
+  rmSync(base, { recursive: true, force: true });
+  if (!snapshot.existed) return;
+  for (const file of snapshot.files) {
+    const path = join(root, file.relativePath);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, file.contents, { mode: file.mode });
+  }
+}
 
 export { appendActivityEvents, activityToDomainEvent } from "./activity-stream.ts";
 export {
@@ -60,7 +118,10 @@ export interface RepoSyncOptions extends IssueEventPipelineOptions {
  * cuando el resolver también terminó con éxito.
  */
 export interface RepoSyncLease {
+  /** Prepares Documents and the event-log commit while the DB transaction is open. */
   complete(): void;
+  /** Releases the repository lease after the caller commits its transaction. */
+  release?(): void;
   abort(): void;
 }
 
@@ -83,39 +144,73 @@ export interface RepoSync {
 
 class RepoSyncLeaseImpl implements RepoSyncLease {
   private ready = false;
-  private closed = false;
+  private completed = false;
+  private released = false;
+  private commitEventLog: (() => void) | undefined;
+  private restoreEventLog: (() => void) | undefined;
 
   constructor(
     readonly lock: CanonicalEventLogLease,
     readonly retiredDocuments: RetiredDocumentsReservation,
   ) {}
 
-  markReady(): void {
-    if (this.closed) throw new Error("Repo sync lease is already closed");
+  setRollback(restore: () => void): void {
+    if (this.released) throw new Error("Repo sync lease is already released");
+    this.restoreEventLog = restore;
+  }
+
+  markReady(commitEventLog: () => void): void {
+    if (this.released) throw new Error("Repo sync lease is already released");
+    this.commitEventLog = commitEventLog;
     this.ready = true;
   }
 
   complete(): void {
-    if (this.closed) return;
-    if (!this.ready) {
+    if (this.released || this.completed) return;
+    if (!this.ready || !this.commitEventLog) {
       this.abort();
       throw new Error("Cannot complete a RepoSync lease before sync succeeds");
     }
     try {
-      // Conserva el lock canónico durante la comprobación final y unlink.
-      this.lock.run(() => this.retiredDocuments.retire());
-    } finally {
-      this.closed = true;
-      this.lock.release();
+      // Retire Documents before publishing the event-log commit. If either
+      // step fails, the DB transaction can still roll back without a Git event.
+      this.lock.run(() => {
+        this.retiredDocuments.retire();
+        this.commitEventLog!();
+      });
+      this.completed = true;
+    } catch (error) {
+      this.abort();
+      throw error;
     }
   }
 
+  release(): void {
+    if (this.released) return;
+    if (!this.completed) {
+      this.abort();
+      return;
+    }
+    this.released = true;
+    this.lock.release();
+  }
+
   abort(): void {
-    if (this.closed) return;
-    this.closed = true;
+    if (this.released) return;
     try {
+      if (!this.completed) {
+        // The caller still owns the lock, so restoring the append cannot race
+        // another RepoSync writer in this process or worktree.
+        try {
+          this.lock.run(() => this.restoreEventLog?.());
+        } catch {
+          // Preserve the original mutation error. A later sync can recover the
+          // append if an injected event log does not support restoration.
+        }
+      }
       this.retiredDocuments.release();
     } finally {
+      this.released = true;
       this.lock.release();
     }
   }
@@ -164,18 +259,23 @@ export function createRepoSync(
     lease: RepoSyncLeaseImpl,
     exporter: (documents: RetiredDocumentsReservation) => void,
   ): void => {
+    const eventLogSnapshot = eventPipeline.captureEventLog();
+    const replicaSnapshot = captureReplicaSnapshot(root);
+    lease.setRollback(() => {
+      restoreReplicaSnapshot(root, replicaSnapshot);
+      eventPipeline.restoreEventLog(eventLogSnapshot);
+    });
     lease.lock.run(() => {
       appendActivityEvents(db, root, eventPipeline.eventLog, (eventIds) =>
         eventPipeline.recordPendingEventIds(eventIds),
       );
-      // Append, Git commit, projection and export are all inside the same
-      // lease. El committer predeterminado reutiliza el lease explícito en
-      // vez de intentar adquirir el lock de archivo otra vez.
-      eventPipeline.commit(undefined, lease.lock);
+      // Keep the append and projection inside the lease, but publish the Git
+      // commit only from lease.complete(), after Documents validation and while
+      // the caller's DB transaction is still open.
       eventPipeline.project();
       exporter(lease.retiredDocuments);
     });
-    lease.markReady();
+    lease.markReady(() => eventPipeline.commit(undefined, lease.lock));
   };
   const sync = (
     exporter: (documents: RetiredDocumentsReservation) => void,
@@ -184,7 +284,10 @@ export function createRepoSync(
     const current = lease ? leaseFor(lease, root) : reserve();
     try {
       runSync(current, exporter);
-      if (!lease) current.complete();
+      if (!lease) {
+        current.complete();
+        current.release();
+      }
     } catch (error) {
       current.abort();
       throw error;

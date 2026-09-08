@@ -6,7 +6,9 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  rmSync,
   truncateSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -443,11 +445,44 @@ function parseLog(filePath: string): DomainEvent[] {
  * RepoSync remains an explicit caller boundary in this slice: this writer does
  * not trigger repository exports or mutate API/SQLite/PostgreSQL state.
  */
+export interface EventLogSnapshot {
+  readonly existed: boolean;
+  readonly bytes: Buffer;
+}
+
+function isEventLogSnapshot(value: unknown): value is EventLogSnapshot {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "existed" in value &&
+    typeof value.existed === "boolean" &&
+    "bytes" in value &&
+    Buffer.isBuffer(value.bytes)
+  );
+}
+
 export class EventLogWriter {
   readonly filePath: string;
 
   constructor(options: EventLogLocation = {}) {
     this.filePath = resolveLogPath(options);
+  }
+
+  /** Capture exact bytes so a failed mutation can discard its append. */
+  snapshot(): EventLogSnapshot {
+    if (!existsSync(this.filePath)) return { existed: false, bytes: Buffer.alloc(0) };
+    return { existed: true, bytes: readFileSync(this.filePath) };
+  }
+
+  /** Restore an append snapshot while the caller still owns the repo lease. */
+  restore(snapshot: unknown): void {
+    if (!isEventLogSnapshot(snapshot)) throw new Error("Invalid event log snapshot");
+    if (snapshot.existed) {
+      ensureDirectory(this.filePath);
+      writeFileSync(this.filePath, snapshot.bytes, { mode: 0o600 });
+    } else if (existsSync(this.filePath)) {
+      rmSync(this.filePath, { force: true });
+    }
   }
 
   recover(): RecoveryResult {
