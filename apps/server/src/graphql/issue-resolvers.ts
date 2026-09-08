@@ -142,7 +142,11 @@ export async function canQueryPostgresIssueFilter(
     if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) return false;
   }
   for (const milestoneId of postgresMilestoneIdsInIssueFilter(filter)) {
-    const milestone = await getPostgresMilestone(context.persistence!, milestoneId);
+    const milestone = await getPostgresMilestone(
+      context.persistence!,
+      milestoneId,
+      context.workspace,
+    );
     if (!milestone) return false;
     const teamIds = await listPostgresProjectTeamIds(context.persistence!, milestone.project_id);
     if (!apiKeyTeamsWithinLimit(context.auth, teamIds)) return false;
@@ -344,7 +348,11 @@ export const issueResolvers = {
   Issue: {
     team: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
-        const team = await getPostgresTeam(context.persistence, { id: issue._row.team_id });
+        const team = await getPostgresTeam(
+          context.persistence,
+          { id: issue._row.team_id },
+          context.workspace,
+        );
         return team ? mapPostgresTeam(team) : null;
       }
       return mapTeam(lookupTeam(context, { id: issue._row.team_id })!);
@@ -395,13 +403,22 @@ export const issueResolvers = {
     parent: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.parent_id) return null;
       if (context.persistence) {
-        const parent = await getPostgresIssue(context.persistence, issue._row.parent_id);
+        const parent = await getPostgresIssue(
+          context.persistence,
+          issue._row.parent_id,
+          context.workspace,
+        );
         const team = parent
-          ? await getPostgresTeam(context.persistence, { id: parent.team_id })
+          ? await getPostgresTeam(context.persistence, { id: parent.team_id }, context.workspace)
           : null;
         return parent &&
           team &&
-          (await canDiscoverPostgresTeam(context.persistence, requireViewer(context), team)) &&
+          (await canDiscoverPostgresTeam(
+            context.persistence,
+            requireViewer(context),
+            team,
+            context.workspace,
+          )) &&
           apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, parent.team_id])
           ? mapIssue(parent)
           : null;
@@ -424,13 +441,18 @@ export const issueResolvers = {
           context.persistence,
           issue.id,
           Boolean(args.includeArchived),
+          context.workspace,
         );
         const visible: IssueRow[] = [];
         for (const child of children) {
-          const team = await getPostgresTeam(context.persistence, { id: child.team_id });
+          const team = await getPostgresTeam(
+            context.persistence,
+            { id: child.team_id },
+            context.workspace,
+          );
           if (
             team &&
-            (await canDiscoverPostgresTeam(context.persistence, viewer, team)) &&
+            (await canDiscoverPostgresTeam(context.persistence, viewer, team, context.workspace)) &&
             apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, child.team_id])
           ) {
             visible.push(child);
@@ -450,12 +472,20 @@ export const issueResolvers = {
       if (context.persistence) {
         const viewer = requireViewer(context);
         const visible = [];
-        for (const label of await listPostgresIssueLabels(context.persistence, issue.id)) {
+        for (const label of await listPostgresIssueLabels(
+          context.persistence,
+          issue.id,
+          context.workspace,
+        )) {
           if (!label.team_id) {
             visible.push(label);
             continue;
           }
-          const labelTeam = await getPostgresTeam(context.persistence, { id: label.team_id });
+          const labelTeam = await getPostgresTeam(
+            context.persistence,
+            { id: label.team_id },
+            context.workspace,
+          );
           if (
             labelTeam &&
             (await canDiscoverPostgresTeam(context.persistence, viewer, labelTeam)) &&
@@ -485,7 +515,11 @@ export const issueResolvers = {
         ) {
           return null;
         }
-        const teamIds = await listPostgresProjectTeamIds(context.persistence, project.id);
+        const teamIds = await listPostgresProjectTeamIds(
+          context.persistence,
+          project.id,
+          context.workspace,
+        );
         return apiKeyTeamsWithinLimit(context.auth, teamIds) ? mapPostgresProject(project) : null;
       }
       const project = lookupProject(context, issue._row.project_id);
@@ -505,11 +539,15 @@ export const issueResolvers = {
     milestone: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.milestone_id) return null;
       if (context.persistence) {
-        const milestone = await getPostgresMilestone(context.persistence, issue._row.milestone_id);
+        const milestone = await getPostgresMilestone(
+          context.persistence,
+          issue._row.milestone_id,
+          context.workspace,
+        );
         if (!milestone) return null;
         const project = await getPostgresProject(context.persistence, milestone.project_id);
         const teamIds = project
-          ? await listPostgresProjectTeamIds(context.persistence, project.id)
+          ? await listPostgresProjectTeamIds(context.persistence, project.id, context.workspace)
           : [];
         return project &&
           (await canAccessPostgresProject(
@@ -542,13 +580,22 @@ export const issueResolvers = {
     cycle: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.cycle_id) return null;
       if (context.persistence) {
-        const cycle = await getPostgresCycle(context.persistence, issue._row.cycle_id);
+        const cycle = await getPostgresCycle(
+          context.persistence,
+          issue._row.cycle_id,
+          context.workspace,
+        );
         const team = cycle
-          ? await getPostgresTeam(context.persistence, { id: cycle.team_id })
+          ? await getPostgresTeam(context.persistence, { id: cycle.team_id }, context.workspace)
           : null;
         return cycle &&
           team &&
-          (await canDiscoverPostgresTeam(context.persistence, requireViewer(context), team)) &&
+          (await canDiscoverPostgresTeam(
+            context.persistence,
+            requireViewer(context),
+            team,
+            context.workspace,
+          )) &&
           apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, cycle.team_id])
           ? mapPostgresCycle(cycle)
           : null;
@@ -575,18 +622,40 @@ export const issueResolvers = {
         const viewer = requireViewer(context);
         const result: Array<ReturnType<typeof mapPostgresRelation> & { _sourceTeamId: string }> =
           [];
-        for (const relation of await listPostgresRelations(context.persistence, issue.id)) {
-          const related = await getPostgresIssue(context.persistence, relation.relatedId);
+        for (const relation of await listPostgresRelations(
+          context.persistence,
+          issue.id,
+          context.workspace,
+        )) {
+          const related = await getPostgresIssue(
+            context.persistence,
+            relation.relatedId,
+            context.workspace,
+          );
           const relatedTeam = related
-            ? await getPostgresTeam(context.persistence, { id: related.team_id })
+            ? await getPostgresTeam(context.persistence, { id: related.team_id }, context.workspace)
             : null;
-          const sourceTeam = await getPostgresTeam(context.persistence, { id: issue._row.team_id });
+          const sourceTeam = await getPostgresTeam(
+            context.persistence,
+            { id: issue._row.team_id },
+            context.workspace,
+          );
           if (
             related &&
             relatedTeam &&
             sourceTeam &&
-            (await canDiscoverPostgresTeam(context.persistence, viewer, sourceTeam)) &&
-            (await canDiscoverPostgresTeam(context.persistence, viewer, relatedTeam)) &&
+            (await canDiscoverPostgresTeam(
+              context.persistence,
+              viewer,
+              sourceTeam,
+              context.workspace,
+            )) &&
+            (await canDiscoverPostgresTeam(
+              context.persistence,
+              viewer,
+              relatedTeam,
+              context.workspace,
+            )) &&
             apiKeyTeamsWithinLimit(context.auth, [issue._row.team_id, related.team_id])
           ) {
             result.push({ ...mapPostgresRelation(relation), _sourceTeamId: issue._row.team_id });
@@ -611,10 +680,14 @@ export const issueResolvers = {
     activity: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
         const viewer = requireViewer(context);
-        const team = await getPostgresTeam(context.persistence, { id: issue._row.team_id });
+        const team = await getPostgresTeam(
+          context.persistence,
+          { id: issue._row.team_id },
+          context.workspace,
+        );
         if (
           !team ||
-          !(await canDiscoverPostgresTeam(context.persistence, viewer, team)) ||
+          !(await canDiscoverPostgresTeam(context.persistence, viewer, team, context.workspace)) ||
           !apiKeyTeamsWithinLimit(context.auth, [team.id])
         )
           return [];
@@ -650,19 +723,37 @@ export const issueResolvers = {
       context: Context,
     ) => {
       if (context.persistence) {
-        const related = await getPostgresIssue(context.persistence, relation._relatedId);
+        const related = await getPostgresIssue(
+          context.persistence,
+          relation._relatedId,
+          context.workspace,
+        );
         const viewer = requireViewer(context);
         const sourceTeam = relation._sourceTeamId
-          ? await getPostgresTeam(context.persistence, { id: relation._sourceTeamId })
+          ? await getPostgresTeam(
+              context.persistence,
+              { id: relation._sourceTeamId },
+              context.workspace,
+            )
           : null;
         const relatedTeam = related
-          ? await getPostgresTeam(context.persistence, { id: related.team_id })
+          ? await getPostgresTeam(context.persistence, { id: related.team_id }, context.workspace)
           : null;
         return related &&
           relatedTeam &&
           (!sourceTeam ||
-            (await canDiscoverPostgresTeam(context.persistence, viewer, sourceTeam))) &&
-          (await canDiscoverPostgresTeam(context.persistence, viewer, relatedTeam)) &&
+            (await canDiscoverPostgresTeam(
+              context.persistence,
+              viewer,
+              sourceTeam,
+              context.workspace,
+            ))) &&
+          (await canDiscoverPostgresTeam(
+            context.persistence,
+            viewer,
+            relatedTeam,
+            context.workspace,
+          )) &&
           (!relation._sourceTeamId ||
             apiKeyTeamsWithinLimit(context.auth, [relation._sourceTeamId, related.team_id]))
           ? mapIssue(related)
@@ -747,11 +838,13 @@ export const issueResolvers = {
     issue: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const row = await getPostgresIssueByRef(context.persistence, args.id);
-        const team = row ? await getPostgresTeam(context.persistence, { id: row.team_id }) : null;
+        const row = await getPostgresIssueByRef(context.persistence, args.id, context.workspace);
+        const team = row
+          ? await getPostgresTeam(context.persistence, { id: row.team_id }, context.workspace)
+          : null;
         return row &&
           team &&
-          (await canDiscoverPostgresTeam(context.persistence, viewer, team)) &&
+          (await canDiscoverPostgresTeam(context.persistence, viewer, team, context.workspace)) &&
           apiKeyTeamsWithinLimit(context.auth, [row.team_id])
           ? mapIssue(row)
           : null;
@@ -804,8 +897,12 @@ export const issueResolvers = {
       assertCanUseImportFields(viewer, args.input);
       if (context.persistence) {
         const team = args.input.teamId
-          ? await getPostgresTeam(context.persistence, { id: args.input.teamId })
-          : await getPostgresTeam(context.persistence, { key: args.input.teamKey });
+          ? await getPostgresTeam(context.persistence, { id: args.input.teamId }, context.workspace)
+          : await getPostgresTeam(
+              context.persistence,
+              { key: args.input.teamKey },
+              context.workspace,
+            );
         if (team && !apiKeyTeamsWithinLimit(context.auth, [team.id])) {
           throw apiError("NOT_FOUND", "Team resource not found");
         }
@@ -849,7 +946,11 @@ export const issueResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const existing = await getPostgresIssueByRef(context.persistence, args.id);
+        const existing = await getPostgresIssueByRef(
+          context.persistence,
+          args.id,
+          context.workspace,
+        );
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
@@ -915,17 +1016,17 @@ export const issueResolvers = {
       const viewer = requireViewer(context);
       if (viewer.status !== "active") throw apiError("UNAUTHORIZED", "Active actor required");
       if (context.persistence) {
-        const issue = await getPostgresIssueByRef(
-          context.persistence,
-          args.id,
-          context.workspace.workspaceId,
-        );
+        const issue = await getPostgresIssueByRef(context.persistence, args.id, context.workspace);
         if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${args.id}`);
-        const team = await getPostgresTeam(context.persistence, { id: issue.team_id });
+        const team = await getPostgresTeam(
+          context.persistence,
+          { id: issue.team_id },
+          context.workspace,
+        );
         if (
           !team ||
           team.archived_at ||
-          !(await canDiscoverPostgresTeam(context.persistence, viewer, team))
+          !(await canDiscoverPostgresTeam(context.persistence, viewer, team, context.workspace))
         ) {
           throw apiError("NOT_FOUND", "Issue not found");
         }
@@ -967,14 +1068,17 @@ export const issueResolvers = {
       const viewer = requireViewer(context);
       if (viewer.status !== "active") throw apiError("UNAUTHORIZED", "Active actor required");
       if (context.persistence) {
-        const issue = await getPostgresIssueByRef(
-          context.persistence,
-          args.id,
-          context.workspace.workspaceId,
-        );
+        const issue = await getPostgresIssueByRef(context.persistence, args.id, context.workspace);
         if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${args.id}`);
-        const team = await getPostgresTeam(context.persistence, { id: issue.team_id });
-        if (!team || !(await canDiscoverPostgresTeam(context.persistence, viewer, team))) {
+        const team = await getPostgresTeam(
+          context.persistence,
+          { id: issue.team_id },
+          context.workspace,
+        );
+        if (
+          !team ||
+          !(await canDiscoverPostgresTeam(context.persistence, viewer, team, context.workspace))
+        ) {
           throw apiError("NOT_FOUND", "Issue not found");
         }
         if (!apiKeyTeamsWithinLimit(context.auth, [issue.team_id])) {
@@ -1012,7 +1116,11 @@ export const issueResolvers = {
     issueArchive: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const existing = await getPostgresIssueByRef(context.persistence, args.id);
+        const existing = await getPostgresIssueByRef(
+          context.persistence,
+          args.id,
+          context.workspace,
+        );
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
@@ -1030,7 +1138,11 @@ export const issueResolvers = {
     issueUnarchive: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const existing = await getPostgresIssueByRef(context.persistence, args.id);
+        const existing = await getPostgresIssueByRef(
+          context.persistence,
+          args.id,
+          context.workspace,
+        );
         if (existing && !apiKeyTeamsWithinLimit(context.auth, [existing.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
         }
@@ -1052,7 +1164,11 @@ export const issueResolvers = {
     ) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const issue = await getPostgresIssueByRef(context.persistence, args.input.issueId);
+        const issue = await getPostgresIssueByRef(
+          context.persistence,
+          args.input.issueId,
+          context.workspace,
+        );
         if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${args.input.issueId}`);
         const relatedIssue = await getPostgresIssueByRef(
           context.persistence,
@@ -1129,10 +1245,18 @@ export const issueResolvers = {
     issueRelationDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
       const viewer = requireViewer(context);
       if (context.persistence) {
-        const relation = await getPostgresRelation(context.persistence, args.id);
+        const relation = await getPostgresRelation(context.persistence, args.id, context.workspace);
         if (!relation) throw apiError("NOT_FOUND", "Relation not found");
-        const source = await getPostgresIssue(context.persistence, relation.issue_id);
-        const target = await getPostgresIssue(context.persistence, relation.related_id);
+        const source = await getPostgresIssue(
+          context.persistence,
+          relation.issue_id,
+          context.workspace,
+        );
+        const target = await getPostgresIssue(
+          context.persistence,
+          relation.related_id,
+          context.workspace,
+        );
         if (!source || !target) throw apiError("NOT_FOUND", "Issue not found");
         if (!apiKeyTeamsWithinLimit(context.auth, [source.team_id, target.team_id])) {
           throw apiError("NOT_FOUND", "Issue resource not found");
