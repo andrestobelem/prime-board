@@ -7553,6 +7553,68 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("preserva el orden LIFO entre un trigger cross-table y el canónico de su target", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.query(
+        "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES ('order-workspace', 'Order Workspace', 'order-workspace', '2026-01-01', '2026-01-01')",
+      ).run();
+      db.exec(`
+        DROP TRIGGER projects_workspace_scope_insert;
+        DROP TRIGGER teams_workspace_scope_insert;
+        CREATE TABLE trigger_cross_canonical_order_log (value TEXT NOT NULL);
+        CREATE TRIGGER projects_workspace_scope_insert
+        AFTER INSERT ON teams
+        BEGIN
+          INSERT INTO trigger_cross_canonical_order_log(value)
+          VALUES (COALESCE((SELECT workspace_id FROM teams WHERE id = NEW.id), 'NULL'));
+        END;
+        CREATE TRIGGER teams_workspace_scope_insert
+        AFTER INSERT ON teams
+        WHEN NEW.workspace_id IS NULL AND (SELECT count(*) FROM workspace) = 1
+        BEGIN
+          UPDATE teams SET workspace_id = (SELECT id FROM workspace) WHERE id = NEW.id;
+        END;
+      `);
+
+      const workspaceId = String(
+        db.query("SELECT id FROM workspace LIMIT 1").values()[0]?.[0] ?? "",
+      );
+      db.query(
+        "INSERT INTO teams (id, workspace_id, name, key, created_at, updated_at) " +
+          "VALUES ('order-before-canonical', NULL, 'Before Canonical', 'OBC', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM trigger_cross_canonical_order_log").all()).toEqual([
+        { value: workspaceId },
+      ]);
+      db.exec("DELETE FROM trigger_cross_canonical_order_log");
+
+      migrate(db);
+
+      expect(
+        db
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'teams' " +
+              "AND lower(name) IN ('projects_workspace_scope_insert_legacy', 'teams_workspace_scope_insert') " +
+              "ORDER BY rowid",
+          )
+          .all(),
+      ).toEqual([
+        { name: "projects_workspace_scope_insert_legacy" },
+        { name: "teams_workspace_scope_insert" },
+      ]);
+      db.query(
+        "INSERT INTO teams (id, workspace_id, name, key, created_at, updated_at) " +
+          "VALUES ('order-after-canonical', NULL, 'After Canonical', 'OAC', '2026-01-01', '2026-01-01')",
+      ).run();
+      expect(db.query("SELECT value FROM trigger_cross_canonical_order_log").all()).toEqual([
+        { value: workspaceId },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("reescribe INDEXED BY cuando un índice cross-table ocupa un nombre canónico", () => {
     const db = databaseWithMigrationsThrough(24);
     try {
