@@ -590,7 +590,16 @@ function tryCreateCanonicalRecoveryMarker(recoveryPath: string): boolean {
 function waitForCanonicalLockRecovery(recoveryPath: string): boolean {
   if (!existsSync(recoveryPath)) return false;
 
-  const owner = readCanonicalRecoveryOwner(recoveryPath);
+  let owner: number | undefined;
+  try {
+    owner = readCanonicalRecoveryOwner(recoveryPath);
+  } catch (error) {
+    // A recovery owner is published by rename(2), but the claimant removes
+    // that directory as soon as it finishes. Treat that short race as a live
+    // recovery instead of surfacing a transient "owner metadata is missing".
+    if (!existsSync(recoveryPath)) return true;
+    throw error;
+  }
   if (owner !== undefined && isProcessAlive(owner)) return true;
 
   const stalePath = `${recoveryPath}.stale.${process.pid}.${Date.now()}.${Math.random()

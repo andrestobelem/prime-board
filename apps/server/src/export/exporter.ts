@@ -7,10 +7,14 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import {
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
   linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -508,36 +512,62 @@ interface SnapshotVersion {
 }
 
 function readSnapshotVersion(path: string): SnapshotVersion {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new Error(`Documents snapshot must be a regular file: ${path}`);
+  let descriptor: number | undefined;
+  try {
+    // Open the inode once and inspect that descriptor. A path-level stat/read
+    // pair can follow a replacement (or a symlink) between the two calls.
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = fstatSync(descriptor);
+    if (!before.isFile()) {
+      throw new Error(`Documents snapshot must be a regular file: ${path}`);
+    }
+    const bytes = readFileSync(descriptor, "utf8");
+    const after = fstatSync(descriptor);
+    if (!after.isFile() || after.dev !== before.dev || after.ino !== before.ino) {
+      throw new Error("Documents snapshot changed during validation");
+    }
+    return { bytes, device: after.dev, inode: after.ino };
+  } catch (error) {
+    const code =
+      error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "ELOOP") {
+      throw new Error(`Documents snapshot must be a regular file: ${path}`);
+    }
+    throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
-  const bytes = readFileSync(path, "utf8");
-  const after = lstatSync(path);
-  if (
-    !after.isFile() ||
-    after.isSymbolicLink() ||
-    after.dev !== stat.dev ||
-    after.ino !== stat.ino ||
-    readFileSync(path, "utf8") !== bytes
-  ) {
-    throw new Error("Documents snapshot changed during validation");
-  }
-  return { bytes, device: stat.dev, inode: stat.ino };
 }
 
 function snapshotStillMatches(path: string, expected: SnapshotVersion): boolean {
+  let descriptor: number | undefined;
   try {
-    const stat = lstatSync(path);
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = fstatSync(descriptor);
+    if (!before.isFile() || before.dev !== expected.device || before.ino !== expected.inode)
+      return false;
+    const bytes = readFileSync(descriptor, "utf8");
+    const after = fstatSync(descriptor);
+    if (
+      !after.isFile() ||
+      after.dev !== expected.device ||
+      after.ino !== expected.inode ||
+      bytes !== expected.bytes
+    )
+      return false;
+    // Confirm that the path still names the descriptor we validated. A writer
+    // may have replaced the directory entry while the descriptor was open.
+    const pathStat = lstatSync(path);
     return (
-      stat.isFile() &&
-      !stat.isSymbolicLink() &&
-      stat.dev === expected.device &&
-      stat.ino === expected.inode &&
-      readFileSync(path, "utf8") === expected.bytes
+      pathStat.isFile() &&
+      !pathStat.isSymbolicLink() &&
+      pathStat.dev === expected.device &&
+      pathStat.ino === expected.inode
     );
   } catch {
     return false;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 
