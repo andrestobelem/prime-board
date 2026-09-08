@@ -16,7 +16,7 @@ export function parseDateTime(value: unknown, field: string): number {
 export function parseFutureDateTime(
   value: unknown,
   field: string,
-  referenceTimestamp = Date.now(),
+  referenceTimestamp: number,
 ): number {
   const timestamp = parseDateTime(value, field);
   if (timestamp <= referenceTimestamp) {

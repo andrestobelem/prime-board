@@ -577,12 +577,12 @@ describe("cycles", () => {
     }
   });
 
-  it("rechaza fechas pasadas sin mutar un ciclo UPCOMING ni su horizonte", async () => {
+  it("rechaza fechas pasadas sin mutar un ciclo UPCOMING", async () => {
     const team = await gql(
       app,
       `mutation {
         teamCreate(input: {
-          name: "Cycle date guard", key: "GUARD", cyclesEnabled: true, cycleUpcomingCount: 2
+          name: "Cycle date guard", key: "GUARD", cyclesEnabled: true, cycleUpcomingCount: 0
         }) { team { id } }
       }`,
     );
@@ -590,14 +590,15 @@ describe("cycles", () => {
     const created = await gql(
       app,
       `mutation($teamId: ID!) {
-        cycleCreateFromCadence(input: { teamId: $teamId, name: "Cadence cycle" }) {
-          cycle { id name startsAt endsAt state cadenceSource archivedAt }
-        }
+        cycleCreate(input: {
+          teamId: $teamId, name: "Future manual cycle",
+          startsAt: "2040-01-01T00:00:00.000Z", endsAt: "2040-01-14T23:59:59.000Z"
+        }) { cycle { id name startsAt endsAt state cadenceSource archivedAt } }
       }`,
       { teamId },
     );
     expect(created.errors).toBeUndefined();
-    const cycle = created.data!.cycleCreateFromCadence.cycle;
+    const cycle = created.data!.cycleCreate.cycle;
     const before = await gql(
       app,
       `query($teamId: ID!) {
@@ -699,6 +700,71 @@ describe("cycles", () => {
       { id: completedCycle.id, startsAt: dateFromNow(70), endsAt: dateFromNow(77) },
     );
     expect(completedRejected.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("rechaza cada fecha pasada de un ciclo futuro MANUAL sin mutarlo", async () => {
+    const teamResult = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "PRB-625 independent date guard", key: "P625F",
+          cyclesEnabled: true, cycleUpcomingCount: 0
+        }) { team { id } }
+      }`,
+    );
+    expect(teamResult.errors).toBeUndefined();
+    const teamId = teamResult.data!.teamCreate.team.id as string;
+    const created = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Future manual cycle",
+          startsAt: "2040-01-01T00:00:00.000Z", endsAt: "2040-01-14T23:59:59.000Z"
+        }) { cycle { id name startsAt endsAt state cadenceSource archivedAt } }
+      }`,
+      { teamId },
+    );
+    expect(created.errors).toBeUndefined();
+    const cycle = created.data!.cycleCreate.cycle;
+    const before = await gql(
+      app,
+      `query($id: ID!, $teamId: ID!) {
+        cycle(id: $id) { id name startsAt endsAt state cadenceSource archivedAt }
+        cycles(teamId: $teamId) { id }
+      }`,
+      { id: cycle.id, teamId },
+    );
+    expect(before.errors).toBeUndefined();
+
+    const rejectedStart = await gql(
+      app,
+      `mutation($id: ID!) {
+        cycleUpdate(id: $id, input: { startsAt: "2020-01-01T00:00:00.000Z" }) { success }
+      }`,
+      { id: cycle.id },
+    );
+    expect(rejectedStart.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const rejectedEnd = await gql(
+      app,
+      `mutation($id: ID!) {
+        cycleUpdate(id: $id, input: { endsAt: "2020-01-14T23:59:59.000Z" }) { success }
+      }`,
+      { id: cycle.id },
+    );
+    expect(rejectedEnd.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+
+    const after = await gql(
+      app,
+      `query($id: ID!, $teamId: ID!) {
+        cycle(id: $id) { id name startsAt endsAt state cadenceSource archivedAt }
+        cycles(teamId: $teamId) { id }
+      }`,
+      { id: cycle.id, teamId },
+    );
+    expect(after.errors).toBeUndefined();
+    expect(after.data!.cycle).toEqual(before.data!.cycle);
+    expect(after.data!.cycles).toEqual(before.data!.cycles);
   });
 
   it("serializa la creación concurrente de ciclos activos y conserva count=0", async () => {

@@ -497,13 +497,16 @@ export function updateCycle(
     if (datesChanged && existing.state !== "upcoming") {
       throw apiError("VALIDATION_FAILED", "Only future cycle dates can be adjusted");
     }
-    const referenceTimestamp = Date.now();
-    const startsTimestamp = datesChanged
-      ? parseFutureDateTime(startsAt, "Cycle startsAt", referenceTimestamp)
-      : parseDateTime(startsAt, "Cycle startsAt");
-    const endsTimestamp = datesChanged
-      ? parseFutureDateTime(endsAt, "Cycle endsAt", referenceTimestamp)
-      : parseDateTime(endsAt, "Cycle endsAt");
+    let startsTimestamp: number;
+    let endsTimestamp: number;
+    if (datesChanged) {
+      const referenceTimestamp = Date.now();
+      startsTimestamp = parseFutureDateTime(startsAt, "Cycle startsAt", referenceTimestamp);
+      endsTimestamp = parseFutureDateTime(endsAt, "Cycle endsAt", referenceTimestamp);
+    } else {
+      startsTimestamp = parseDateTime(startsAt, "Cycle startsAt");
+      endsTimestamp = parseDateTime(endsAt, "Cycle endsAt");
+    }
     if (startsTimestamp > endsTimestamp) {
       throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
     }
