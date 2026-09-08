@@ -5,6 +5,7 @@
 // reserva vive hasta que terminan resolver, append, commit y export; solo
 // entonces retira una captura histórica de Documents. Si el resolver falla,
 // aborta la reserva y conserva la captura.
+import type { Database } from "bun:sqlite";
 import type { RepoSync, RepoSyncLease } from "../export/repo-sync.ts";
 
 /**
@@ -179,6 +180,7 @@ function settleMaybe(
 }
 
 interface DispatchContext {
+  readonly db?: Database;
   readonly repo?: TrackedRepoSync | null;
   readonly auth?: {
     readonly recordUsage?: () => unknown;
@@ -188,6 +190,65 @@ interface DispatchContext {
 function recordUsage(context: DispatchContext | undefined): unknown {
   const callback = context?.auth?.recordUsage;
   return typeof callback === "function" ? callback() : undefined;
+}
+
+/**
+ * GraphQL runs each resolver independently, while SQLite has one connection.
+ * Queue the request-scoped mutation work so an open transaction cannot be
+ * interleaved with another resolver on that connection.
+ */
+const mutationQueues = new WeakMap<Database, Promise<void>>();
+
+function enqueueMutation<T>(db: Database, operation: () => T): Promise<T> {
+  const previous = mutationQueues.get(db) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  mutationQueues.set(db, current);
+  return previous
+    .catch(() => undefined)
+    .then(operation)
+    .finally(() => {
+      if (mutationQueues.get(db) === current) mutationQueues.delete(db);
+      release();
+    });
+}
+
+let transactionSequence = 0;
+
+interface MutationTransaction {
+  commit(): void;
+  rollback(): void;
+}
+
+/** Keeps a SQLite write transaction open across an async resolver and sync. */
+function beginMutationTransaction(db: Database): MutationTransaction {
+  const savepoint = db.inTransaction
+    ? `prime_board_mutation_${process.pid}_${transactionSequence++}`
+    : undefined;
+  if (savepoint) db.exec(`SAVEPOINT ${savepoint}`);
+  else db.exec("BEGIN IMMEDIATE");
+
+  let closed = false;
+  return {
+    commit() {
+      if (closed) return;
+      if (savepoint) db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      else db.exec("COMMIT");
+      closed = true;
+    },
+    rollback() {
+      if (closed) return;
+      closed = true;
+      try {
+        if (savepoint) db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        else db.exec("ROLLBACK");
+      } finally {
+        if (savepoint) db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      }
+    },
+  };
 }
 
 /**
@@ -208,112 +269,152 @@ export function withRepoSyncDispatch<T extends Record<string, AnyResolver>>(muta
   for (const [name, resolver] of Object.entries(mutations)) {
     wrapped[name] = (...callArgs: unknown[]) => {
       const context = callArgs[2] as DispatchContext | undefined;
-      const tracker = context?.repo;
-      const fail = (error: unknown): never => {
-        if (tracker) {
+      const dispatch = (): unknown => {
+        const tracker = context?.repo;
+        let transaction: MutationTransaction | undefined;
+        const rollback = (): void => {
+          if (!transaction) return;
           try {
-            tracker.abort();
+            transaction.rollback();
           } catch {
-            // Conservamos el fallo de la mutación, no un error secundario de cleanup.
+            // Conservamos el fallo original. La conexión puede quedar marcada
+            // para que el siguiente request detecte el estado roto.
           }
-        }
-        throw error;
-      };
-      const runResolverAndRecord = (): unknown => {
-        let result: unknown;
-        try {
-          result = resolver(...callArgs);
-        } catch (error) {
+          transaction = undefined;
+        };
+        const fail = (error: unknown): never => {
+          rollback();
+          if (tracker) {
+            try {
+              tracker.abort();
+            } catch {
+              // Conservamos el fallo de la mutación, no un error secundario de cleanup.
+            }
+          }
           throw error;
-        }
-        return settleMaybe(
-          result,
-          (value) => {
-            let usage: unknown;
-            try {
-              usage = recordUsage(context);
-            } catch (error) {
-              throw error;
-            }
-            return settleMaybe(
-              usage,
-              () => value,
-              (error) => {
-                throw error;
-              },
-            );
-          },
-          (error) => {
+        };
+        const runResolverAndRecord = (): unknown => {
+          let result: unknown;
+          try {
+            result = resolver(...callArgs);
+          } catch (error) {
             throw error;
-          },
-        );
-      };
-      if (!tracker || SYNC_EXCLUDED_MUTATIONS.has(name)) return runResolverAndRecord();
+          }
+          return settleMaybe(
+            result,
+            (value) => {
+              let usage: unknown;
+              try {
+                usage = recordUsage(context);
+              } catch (error) {
+                throw error;
+              }
+              return settleMaybe(
+                usage,
+                () => value,
+                (error) => {
+                  throw error;
+                },
+              );
+            },
+            (error) => {
+              throw error;
+            },
+          );
+        };
+        if (!tracker || SYNC_EXCLUDED_MUTATIONS.has(name)) return runResolverAndRecord();
 
-      tracker.reset();
-      let preflight: unknown;
-      try {
-        // La reserva se toma antes de que el resolver pueda escribir SQLite o
-        // emitir Activity/eventos canónicos. La variante async nunca espera con
-        // Atomics.wait en el event loop HTTP.
-        preflight = tracker.preflightAsync();
-      } catch (error) {
-        return fail(error);
-      }
-      const finish = (): unknown => {
-        let synced: unknown;
+        tracker.reset();
+        let preflight: unknown;
         try {
-          if (!tracker.wasCalled()) synced = tracker.sync();
+          // La reserva se toma antes de que el resolver pueda escribir SQLite o
+          // emitir Activity/eventos canónicos. La variante async nunca espera con
+          // Atomics.wait en el event loop HTTP.
+          preflight = tracker.preflightAsync();
         } catch (error) {
           return fail(error);
         }
-        return settleMaybe(
-          synced,
-          () => {
+        const finish = (): unknown => {
+          let synced: unknown;
+          try {
+            if (!tracker.wasCalled()) synced = tracker.sync();
+          } catch (error) {
+            return fail(error);
+          }
+          return settleMaybe(
+            synced,
+            () => {
+              try {
+                tracker.complete();
+              } catch (error) {
+                return fail(error);
+              }
+              return undefined;
+            },
+            fail,
+          );
+        };
+        const execute = (): unknown => {
+          if (context?.db) {
             try {
-              tracker.complete();
+              // Keep the DB write set open until repo sync and Documents
+              // retirement succeed. The queue prevents another resolver from
+              // interleaving with this transaction on the same SQLite handle.
+              transaction = beginMutationTransaction(context.db);
             } catch (error) {
               return fail(error);
             }
-            return undefined;
-          },
-          fail,
-        );
+          }
+          let result: unknown;
+          try {
+            result = resolver(...callArgs);
+          } catch (error) {
+            return fail(error);
+          }
+          return settleMaybe(
+            result,
+            (value) => {
+              let finished: unknown;
+              try {
+                finished = finish();
+              } catch (error) {
+                return fail(error);
+              }
+              return settleMaybe(
+                finished,
+                () => {
+                  let usage: unknown;
+                  try {
+                    usage = recordUsage(context);
+                  } catch (error) {
+                    return fail(error);
+                  }
+                  return settleMaybe(
+                    usage,
+                    () => {
+                      try {
+                        transaction?.commit();
+                        transaction = undefined;
+                      } catch (error) {
+                        return fail(error);
+                      }
+                      return value;
+                    },
+                    fail,
+                  );
+                },
+                fail,
+              );
+            },
+            fail,
+          );
+        };
+        return settleMaybe(preflight, execute, fail);
       };
-      const execute = (): unknown => {
-        let result: unknown;
-        try {
-          result = resolver(...callArgs);
-        } catch (error) {
-          return fail(error);
-        }
-        return settleMaybe(
-          result,
-          (value) => {
-            let finished: unknown;
-            try {
-              finished = finish();
-            } catch (error) {
-              return fail(error);
-            }
-            return settleMaybe(
-              finished,
-              () => {
-                let usage: unknown;
-                try {
-                  usage = recordUsage(context);
-                } catch (error) {
-                  return fail(error);
-                }
-                return settleMaybe(usage, () => value, fail);
-              },
-              fail,
-            );
-          },
-          fail,
-        );
-      };
-      return settleMaybe(preflight, execute, fail);
+      // A request context owns a single SQLite connection. Serialize mutation
+      // dispatches before acquiring the Documents lease, including no-git
+      // fixtures where the repository lock is a no-op.
+      return context?.db ? enqueueMutation(context.db, dispatch) : dispatch();
     };
   }
   Object.defineProperty(wrapped, DISPATCHED, { value: true, enumerable: false });

@@ -265,6 +265,10 @@ try {
       );
       expect(result.errors?.length).toBeGreaterThan(0);
       expect(result.data).toBeNull();
+      // A sync failure must not leave the successful resolver write behind.
+      expect(
+        (failing.db.query("SELECT count(*) AS count FROM issues").get() as { count: number }).count,
+      ).toBe(0);
     } finally {
       failing.stop();
     }
