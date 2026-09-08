@@ -3557,14 +3557,21 @@ function validateWorkspaceConstraintsMigrationNames(db: Database): void {
     const dependencyNames = temporary
       ? WORKSPACE_CONSTRAINTS_MIGRATION_CHANGED_NAMES
       : WORKSPACE_CONSTRAINTS_MIGRATION_STAGING_NAMES;
-    const dependency = temporary
-      ? undefined
-      : references.find(
-          (reference) =>
-            workspaceConstraintReferenceUsesMigratedSchema(reference) &&
-            reference.kind === "table" &&
-            dependencyNames.has(normalizeSqliteIdentifier(reference.name)),
-        );
+    const dependency = references.find((reference) => {
+      if (!workspaceConstraintReferenceUsesMigratedSchema(reference)) return false;
+      if (!dependencyNames.has(normalizeSqliteIdentifier(reference.name))) return false;
+      if (!temporary) return reference.kind === "table";
+
+      // Una TEMP View/trigger puede leer una tabla MAIN que 0025 reconstruye
+      // porque el nombre y la tabla sobreviven. Staging, tablas auxiliares y
+      // referencias desde TEMP indexes no tienen ese contrato.
+      const survivesRebuild =
+        (object.type === "view" || object.type === "trigger") &&
+        reference.kind === "table" &&
+        (reference.schema === null || sameSqliteIdentifier(reference.schema, "main")) &&
+        rebuiltTableNames.has(normalizeSqliteIdentifier(reference.name));
+      return !survivesRebuild;
+    });
     if (dependency !== undefined) {
       throw new Error(
         `Cannot apply migration 0025 safely: ${temporary ? "temporary " : ""}${object.type} ` +
@@ -4249,6 +4256,163 @@ function migrationPreflightNameSet(
   return names;
 }
 
+function migrationPreflightWithoutIndexHints(sql: string): string | null {
+  const tokens = sqliteTokens(sql);
+  if (tokens === null) return null;
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (let position = 0; position < tokens.length - 2; position += 1) {
+    if (!isSqlKeyword(tokens[position], "indexed") || !isSqlKeyword(tokens[position + 1], "by")) {
+      continue;
+    }
+    const indexedToken = tokens[position];
+    const indexToken = tokens[position + 2];
+    if (indexedToken === undefined || !isSqlNameToken(indexToken)) return null;
+    ranges.push({ start: indexedToken.start, end: indexToken.end });
+    position += 2;
+  }
+  let result = sql;
+  for (const range of ranges.reverse())
+    result = result.slice(0, range.start) + result.slice(range.end);
+  return result;
+}
+
+function migrationPreflightTemporaryTargetDefinitionCompiles(
+  object: MigrationPreflightSchemaObject,
+  schemaObjects: readonly MigrationPreflightSchemaObject[],
+  targetDefinitions: ReadonlyMap<string, string>,
+): boolean {
+  if (object.object.sql === null) return false;
+  const references = workspaceConstraintMigrationReferenceNames(object.object.sql);
+  if (references === null) return false;
+  const validationDb = new Database(":memory:", { create: true, strict: true });
+  try {
+    for (const definition of targetDefinitions.values()) validationDb.exec(definition);
+
+    const requiredTables = new Set(
+      references
+        .filter((reference) => reference.kind === "table" && reference.schema === null)
+        .map((reference) => normalizeSqliteIdentifier(reference.name)),
+    );
+    if (object.object.type === "trigger") {
+      const trigger = triggerDefinitionFromSql(object.object.sql);
+      if (trigger === null) return false;
+      requiredTables.add(normalizeSqliteIdentifier(trigger.table));
+    }
+
+    for (const candidate of schemaObjects) {
+      if (candidate.object.sql === null) continue;
+      const candidateName = normalizeSqliteIdentifier(candidate.object.name);
+      if (!requiredTables.has(candidateName)) continue;
+      const targetDefinition = targetDefinitions.get(candidateName);
+      if (targetDefinition !== undefined && !candidate.temporary) continue;
+      if (candidate.object.type !== "table") continue;
+      const definition = candidate.temporary
+        ? candidate.object.sql.replace(/^\s*CREATE\s+/i, "CREATE TEMP ")
+        : candidate.object.sql;
+      validationDb.exec(definition);
+    }
+
+    for (const reference of references.filter((candidate) => candidate.kind === "index")) {
+      const candidate = schemaObjects.find(
+        (entry) =>
+          !entry.temporary &&
+          entry.object.type === "index" &&
+          sameSqliteIdentifier(entry.object.name, reference.name),
+      );
+      if (candidate !== undefined && candidate.object.sql !== null) {
+        validationDb.exec(candidate.object.sql);
+      }
+    }
+
+    const definition = migrationPreflightWithoutIndexHints(object.object.sql);
+    if (definition === null) return false;
+    validationDb.exec(definition.replace(/^\s*CREATE\s+/i, "CREATE TEMP "));
+    if (object.object.type === "view") {
+      validationDb.query(`EXPLAIN SELECT * FROM temp.${quoteIdentifier(object.object.name)}`).all();
+      return true;
+    }
+
+    const trigger = triggerDefinitionFromSql(definition.replace(/^\s*CREATE\s+/i, "CREATE TEMP "));
+    if (
+      trigger === null ||
+      (trigger.tableSchema !== null && !sameSqliteIdentifier(trigger.tableSchema, "main"))
+    ) {
+      return false;
+    }
+    const table = quoteIdentifier(trigger.table);
+    const schema = trigger.tableSchema === null ? "main" : trigger.tableSchema;
+    const tableInfo = validationDb
+      .query<{ name: string }, SQLQueryBindings[]>(`PRAGMA ${schema}.table_info(${table})`)
+      .all();
+    if (tableInfo.length === 0) return false;
+    const eventSql =
+      trigger.event.kind === "insert"
+        ? `INSERT INTO ${schema}.${table} DEFAULT VALUES`
+        : trigger.event.kind === "delete"
+          ? `DELETE FROM ${schema}.${table} WHERE 0`
+          : `UPDATE ${schema}.${table} SET ${quoteIdentifier(tableInfo[0]?.name ?? "")} = ${quoteIdentifier(tableInfo[0]?.name ?? "")} WHERE 0`;
+    validationDb.query(`EXPLAIN ${eventSql}`).all();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    validationDb.close();
+  }
+}
+
+function migrationPreflightTemporaryReferenceCanBeDeferred(
+  reference: WorkspaceConstraintMigrationReference,
+  object: MigrationPreflightSchemaObject,
+  state: readonly MigrationPreflightStateObject[],
+  schemaObjects: readonly MigrationPreflightSchemaObject[],
+  operations: readonly MigrationPreflightOperation[],
+  applied: ReadonlySet<number>,
+  viewsGuardReady: boolean,
+  rebuiltTables: ReadonlySet<string>,
+): boolean {
+  if (!object.temporary || (object.object.type !== "view" && object.object.type !== "trigger")) {
+    return false;
+  }
+  if (reference.schema !== null && !sameSqliteIdentifier(reference.schema, "main")) {
+    return false;
+  }
+
+  const workspaceConstraintsGuardReady =
+    operations.some((operation) => operation.version === 25) &&
+    migrationPreflightCustomGuardReady(25, applied);
+  const viewsMigrationGuardReady =
+    operations.some((operation) => operation.version === 33) && viewsGuardReady;
+  if (reference.kind === "table") {
+    const targetTable = normalizeSqliteIdentifier(reference.name);
+    const targetWillSurvive =
+      (workspaceConstraintsGuardReady && rebuiltTables.has(targetTable)) ||
+      (viewsMigrationGuardReady && sameSqliteIdentifier(reference.name, "saved_views"));
+    if (!targetWillSurvive) return false;
+    const targetDefinitions = migrationPreflightTargetTableDefinitions(
+      workspaceConstraintsGuardReady,
+      viewsMigrationGuardReady,
+    );
+    return migrationPreflightTemporaryTargetDefinitionCompiles(
+      object,
+      schemaObjects,
+      targetDefinitions,
+    );
+  }
+
+  const index = state.find(
+    (candidate) =>
+      sameSqliteIdentifier(candidate.namespace, "main") &&
+      candidate.object.type === "index" &&
+      sameSqliteIdentifier(candidate.object.name, reference.name),
+  );
+  if (index === undefined) return false;
+  const owner = normalizeSqliteIdentifier(index.object.tbl_name);
+  return (
+    (workspaceConstraintsGuardReady && rebuiltTables.has(owner)) ||
+    (viewsMigrationGuardReady && sameSqliteIdentifier(owner, "saved_views"))
+  );
+}
+
 function migrationPreflightValidateReference(
   reference: WorkspaceConstraintMigrationReference,
   object: MigrationPreflightSchemaObject,
@@ -4256,6 +4420,7 @@ function migrationPreflightValidateReference(
   attachedSchemas: ReadonlySet<string>,
   affectedNames: ReadonlySet<string>,
   deferredMainAffectedNames: ReadonlySet<string>,
+  deferTemporaryReference: boolean,
 ): void {
   if (!migrationPreflightKnownSchema(reference.schema, attachedSchemas)) {
     throw new Error(
@@ -4298,10 +4463,12 @@ function migrationPreflightValidateReference(
     }
   }
   if (object.temporary) {
-    // TEMP views and triggers can continue to reference a MAIN object that is
-    // rebuilt. Specialized migration guards validate whether the object itself
-    // is lost and rewrite INDEXED BY dependencies when an index is renamed.
-    return;
+    if (deferTemporaryReference) return;
+    if (!affectedNames.has(normalized)) return;
+    throw new Error(
+      `Cannot run migrations safely: temporary ${object.object.type} ${object.object.name} ` +
+        `depends on pending migration name ${reference.name}`,
+    );
   }
   if (deferredMainAffectedNames.has(normalized)) return;
   if (!affectedNames.has(normalized)) return;
@@ -4363,7 +4530,8 @@ function migrationPreflightValidateCurrentObjects(
     ...WORKSPACE_CONSTRAINTS_REBUILT_TABLES.map(normalizeSqliteIdentifier),
     "saved_views",
   ]);
-  for (const entry of migrationPreflightSchemaObjects(db)) {
+  const schemaObjects = migrationPreflightSchemaObjects(db);
+  for (const entry of schemaObjects) {
     const object = entry.object;
     const normalizedName = normalizeSqliteIdentifier(object.name);
     const references =
@@ -4386,12 +4554,6 @@ function migrationPreflightValidateCurrentObjects(
       );
     }
     for (const reference of references) {
-      const deferredSavedViewsDependency =
-        migrationPreflightCustomGuardReady(33, applied) &&
-        entry.temporary &&
-        object.type === "view" &&
-        sameSqliteIdentifier(reference.name, "saved_views");
-      if (deferredSavedViewsDependency) continue;
       migrationPreflightValidateReference(
         reference,
         entry,
@@ -4399,6 +4561,16 @@ function migrationPreflightValidateCurrentObjects(
         attachedSchemas,
         affectedNames,
         deferredMainAffectedNames,
+        migrationPreflightTemporaryReferenceCanBeDeferred(
+          reference,
+          entry,
+          state,
+          schemaObjects,
+          operations,
+          applied,
+          viewsGuardReady,
+          rebuiltTables,
+        ),
       );
     }
     if (entry.temporary && object.type === "trigger") {
@@ -5064,8 +5236,11 @@ const WORKSPACE_CONSTRAINTS_PREVIOUS_OWNER_INDEX_DEFINITIONS = new Map(
   ]),
 );
 
-function workspaceConstraintTargetTableDefinitions(): Map<string, string> {
-  const tokens = sqliteTokens(migration0025);
+function workspaceConstraintTargetTableDefinitions(
+  migrationSql = migration0025,
+  stagingPrefix = "_prb25_",
+): Map<string, string> {
+  const tokens = sqliteTokens(migrationSql);
   const result = new Map<string, string>();
   if (tokens === null) return result;
 
@@ -5100,15 +5275,40 @@ function workspaceConstraintTargetTableDefinitions(): Map<string, string> {
     const closingToken = tokens[closing];
     if (closing < 0 || closingToken === undefined) continue;
     const tableName = normalizeSqliteIdentifier(tableToken.value);
-    if (tableName.startsWith("_prb25_")) {
+    if (tableName.startsWith(stagingPrefix)) {
       result.set(
-        tableName.slice("_prb25_".length),
-        migration0025.slice(tokens[position]?.start ?? 0, closingToken.end),
+        tableName.slice(stagingPrefix.length),
+        migrationSql.slice(tokens[position]?.start ?? 0, closingToken.end),
       );
     }
     position = closing;
   }
   return result;
+}
+
+function migrationPreflightTargetTableDefinitions(
+  workspaceConstraintsGuardReady: boolean,
+  viewsMigrationGuardReady: boolean,
+): Map<string, string> {
+  const definitions = new Map<string, string>();
+  if (workspaceConstraintsGuardReady) {
+    for (const [table, definition] of workspaceConstraintTargetTableDefinitions()) {
+      definitions.set(table, definition.replace(`_prb25_${table}`, table));
+    }
+  }
+  if (viewsMigrationGuardReady) {
+    const savedViewsDefinition = workspaceConstraintTargetTableDefinitions(
+      migration0033,
+      "_prb390_",
+    ).get("saved_views");
+    if (savedViewsDefinition !== undefined) {
+      definitions.set(
+        "saved_views",
+        savedViewsDefinition.replace("_prb390_saved_views", "saved_views"),
+      );
+    }
+  }
+  return definitions;
 }
 
 function workspaceConstraintTargetColumnCollations(): Map<string, Map<string, string>> {

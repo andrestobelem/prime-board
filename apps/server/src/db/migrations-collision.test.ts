@@ -9300,4 +9300,141 @@ describe("colisión de migraciones SQLite", () => {
       db.close();
     }
   });
+
+  it("rechaza refs TEMP a Documents y staging antes de crear markers", () => {
+    const cases = [
+      {
+        sql: "CREATE TEMP VIEW temp_documents_reference AS SELECT id FROM documents",
+        view: "temp_documents_reference",
+        reference: "documents",
+      },
+      {
+        sql: "CREATE TEMP VIEW temp_staging_reference AS SELECT id FROM _prb25_teams",
+        view: "temp_staging_reference",
+        reference: "_prb25_teams",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const db = databaseWithMigrationsThrough(24);
+      try {
+        db.exec(testCase.sql);
+        const beforeMain = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all();
+        const beforeTemp = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const beforeSchemaVersion = db.query("PRAGMA schema_version").get();
+        const beforeForeignKeys = db.query("PRAGMA foreign_keys").get();
+
+        expect(() => migrate(db)).toThrow(
+          new RegExp(`temporary view ${testCase.view}.*${testCase.reference}`, "i"),
+        );
+        expect(
+          db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+        ).toEqual(beforeMain);
+        expect(
+          db
+            .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+            .all(),
+        ).toEqual(beforeTemp);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(db.query("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
+        expect(db.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("rechaza refs TEMP a columnas retiradas de teams y projects antes del DDL", () => {
+    for (const table of ["teams", "projects"] as const) {
+      const db = databaseWithMigrationsThrough(24);
+      const view = `temp_${table}_removed_column`;
+      try {
+        db.exec(`
+          ALTER TABLE ${table} ADD COLUMN legacy_temp_value TEXT;
+          CREATE TEMP VIEW ${view} AS SELECT legacy_temp_value FROM ${table};
+        `);
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+        expect(() => migrate(db)).toThrow(
+          new RegExp(
+            `temporary view ${view}.*legacy_temp_value|temporary view ${view}.*${table}`,
+            "i",
+          ),
+        );
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(() => db.query(`SELECT legacy_temp_value FROM ${view}`).all()).not.toThrow();
+
+        db.exec(`DROP VIEW temp.${view}`);
+        expect(() => migrate(db)).not.toThrow();
+        expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 32 });
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("rechaza refs TEMP de triggers a columnas retiradas antes del DDL", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(`
+        ALTER TABLE projects ADD COLUMN legacy_temp_value TEXT;
+        CREATE TEMP TRIGGER temp_removed_column_trigger
+        AFTER INSERT ON actors
+        BEGIN
+          SELECT legacy_temp_value FROM projects;
+        END;
+      `);
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(/temporary trigger temp_removed_column_trigger.*projects/i);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("conserva refs TEMP a tablas MAIN reconstruidas", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec("CREATE TEMP VIEW temp_rebuilt_reference AS SELECT id FROM projects");
+      migrate(db);
+
+      expect(() => db.query("SELECT id FROM temp_rebuilt_reference").all()).not.toThrow();
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 32 });
+      expect(
+        db.query("SELECT sql FROM sqlite_temp_master WHERE name = 'temp_rebuilt_reference'").get(),
+      ).toEqual({ sql: "CREATE VIEW temp_rebuilt_reference AS SELECT id FROM projects" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza refs TEMP INDEXED BY sin un índice preservable", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec(
+        "CREATE TEMP VIEW temp_missing_index_reference AS " +
+          "SELECT id FROM teams INDEXED BY idx_documents_workspace_updated",
+      );
+      const beforeMain = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+
+      expect(() => migrate(db)).toThrow(
+        /temporary view temp_missing_index_reference.*idx_documents_workspace_updated/i,
+      );
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeMain);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+    } finally {
+      db.close();
+    }
+  });
 });
