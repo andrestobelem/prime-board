@@ -242,6 +242,98 @@ describe("cycle progress and carry-over", () => {
       type: "cycle_changed",
       payload: { from: null, to: `AUA/${source.number}`, reason: "cycle_auto_add" },
     });
+
+    const disabledTeam = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "Auto-add advance off", key: "AUF", cyclesEnabled: true,
+          cycleUpcomingCount: 0, cycleAutoAddEnabled: false
+        }) { team { id states { id type } } }
+      }`,
+    );
+    expect(disabledTeam.errors).toBeUndefined();
+    const disabled = disabledTeam.data!.teamCreate.team;
+    const disabledStarted = disabled.states.find(
+      (state: { type: string }) => state.type === "STARTED",
+    );
+    const disabledCompleted = disabled.states.find(
+      (state: { type: string }) => state.type === "COMPLETED",
+    );
+    expect(disabledStarted).toBeDefined();
+    expect(disabledCompleted).toBeDefined();
+    const disabledSource = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Disabled source", state: ACTIVE,
+          startsAt: "2026-10-01", endsAt: "2026-10-14"
+        }) { cycle { id } }
+      }`,
+      { teamId: disabled.id },
+    );
+    const disabledStartedIssue = await gql(
+      app,
+      `mutation($stateId: ID!) {
+        issueCreate(input: { teamKey: "AUF", title: "Started advance disabled", stateId: $stateId }) {
+          issue { id }
+        }
+      }`,
+      { stateId: disabledStarted.id },
+    );
+    const disabledCompletedIssue = await gql(
+      app,
+      `mutation($stateId: ID!) {
+        issueCreate(input: {
+          teamKey: "AUF", title: "Completed advance disabled", stateId: $stateId
+        }) { issue { id } }
+      }`,
+      { stateId: disabledCompleted.id },
+    );
+    const disabledTarget = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreate(input: {
+          teamId: $teamId, name: "Disabled target",
+          startsAt: "2026-10-15", endsAt: "2026-10-28"
+        }) { cycle { id state } }
+      }`,
+      { teamId: disabled.id },
+    );
+    expect(disabledSource.errors).toBeUndefined();
+    expect(disabledStartedIssue.errors).toBeUndefined();
+    expect(disabledCompletedIssue.errors).toBeUndefined();
+    expect(disabledTarget.errors).toBeUndefined();
+    const disabledAdvanced = await gql(
+      app,
+      `mutation($id: ID!) {
+        cycleAdvance(id: $id) { success movedIssues cycle { id state } }
+      }`,
+      { id: disabledSource.data!.cycleCreate.cycle.id },
+    );
+    expect(disabledAdvanced.errors).toBeUndefined();
+    expect(disabledAdvanced.data!.cycleAdvance).toMatchObject({
+      success: true,
+      movedIssues: 0,
+      cycle: { id: disabledTarget.data!.cycleCreate.cycle.id, state: "ACTIVE" },
+    });
+
+    const disabledAssigned = await gql(
+      app,
+      `query($startedId: ID!, $completedId: ID!) {
+        started: issue(id: $startedId) { cycle { id } activity { type } }
+        completed: issue(id: $completedId) { cycle { id } activity { type } }
+      }`,
+      {
+        startedId: disabledStartedIssue.data!.issueCreate.issue.id,
+        completedId: disabledCompletedIssue.data!.issueCreate.issue.id,
+      },
+    );
+    expect(disabledAssigned.errors).toBeUndefined();
+    expect(disabledAssigned.data!.started.cycle).toBeNull();
+    expect(disabledAssigned.data!.completed.cycle).toBeNull();
+    expect(disabledAssigned.data!.started.activity).not.toContainEqual({ type: "cycle_changed" });
+    expect(disabledAssigned.data!.completed.activity).not.toContainEqual({ type: "cycle_changed" });
   });
 
   it("registra el actor y la desasignación al borrar un cycle", async () => {
