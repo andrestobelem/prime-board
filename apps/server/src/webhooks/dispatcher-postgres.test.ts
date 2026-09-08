@@ -4,34 +4,54 @@ import type { Persistence } from "../db/persistence.ts";
 import { WebhookDispatcher, signPayload, type WebhookRow } from "./dispatcher.ts";
 
 function fakePersistence(
-  hook: WebhookRow,
+  hooks: WebhookRow | readonly WebhookRow[],
   workspaceId = "workspace-1",
   state: { membershipStatus: "active" | "suspended" | "left" } = {
     membershipStatus: "active",
   },
+  queries: string[] = [],
+  resourceWorkspaceId = workspaceId,
+  workspaceIds: readonly string[] = [workspaceId],
 ): Persistence {
+  const rows = Array.isArray(hooks) ? hooks : [hooks];
   return {
     one: async <Row extends object>(sql: string, params = []) => {
+      const hook = rows[0];
       if (sql.includes("workspace_memberships")) {
         return {
-          id: hook.owner_id,
+          id: hook?.owner_id ?? null,
           status: state.membershipStatus,
           workspace_role: "admin",
         } as Row;
       }
       if (sql.includes("FROM workspace ")) {
-        return params[0] === workspaceId ? ({ id: workspaceId } as Row) : null;
+        return typeof params[0] === "string" && workspaceIds.includes(params[0])
+          ? ({ id: params[0] } as Row)
+          : null;
       }
       if (sql.includes("workspace_role")) {
-        return { id: hook.owner_id, status: "active", workspace_role: "admin" } as Row;
+        return { id: hook?.owner_id ?? null, status: "active", workspace_role: "admin" } as Row;
       }
       if (sql.includes("FROM teams")) {
-        return params[0] === hook.team_id ? ({ id: hook.team_id } as Row) : null;
+        const hasMatchingWorkspace = params.length < 2 || params[1] === resourceWorkspaceId;
+        return params[0] === hook?.team_id && hasMatchingWorkspace
+          ? ({ id: hook.team_id } as Row)
+          : null;
       }
       return null;
     },
-    many: async <Row extends object>(sql: string) =>
-      sql.includes("FROM workspace ") ? ([{ id: workspaceId }] as Row[]) : ([hook] as Row[]),
+    many: async <Row extends object>(sql: string, params = []) => {
+      queries.push(`${sql} ${JSON.stringify(params)}`);
+      if (sql.includes("FROM workspace ")) return workspaceIds.map((id) => ({ id })) as Row[];
+      if (sql.includes("FROM webhooks")) {
+        return sql.includes("workspace_id = $1")
+          ? (rows.filter(
+              (hook) => hook.workspace_id == null || hook.workspace_id === params[0],
+            ) as Row[])
+          : (rows as Row[]);
+      }
+      return rows as Row[];
+    },
     execute: async () => ({ rows: [], rowCount: 0 }),
     transaction: async () => {
       throw new Error("not used");
@@ -248,6 +268,98 @@ describe("PostgreSQL webhook dispatcher", () => {
     await dispatcher.idle();
 
     expect(requests).toHaveLength(0);
+  });
+
+  it("rechaza recursos de otro Workspace en PostgreSQL", async () => {
+    const hook: WebhookRow = {
+      id: "hook-resource-scope",
+      url: "https://example.test/resource-scope",
+      secret: "SUPERSECRET",
+      events: '["issue.created"]',
+      enabled: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+      owner_id: "admin-1",
+      team_id: "team-1",
+      workspace_id: "workspace-b",
+    };
+    const requests: string[] = [];
+    const fetchFn = Object.assign(
+      async (input: Parameters<typeof fetch>[0]) => {
+        requests.push(String(input));
+        return new Response("ok");
+      },
+      { preconnect: fetch.preconnect },
+    );
+    const dispatcher = new WebhookDispatcher(
+      new Database(":memory:"),
+      { fetchFn, retryDelays: [] },
+      fakePersistence(hook, "workspace-b", undefined, [], "workspace-a"),
+    );
+
+    dispatcher.emitForWorkspace(
+      "workspace-b",
+      "issue.created",
+      { id: "admin-1", name: "admin", type: "human" },
+      { issueId: "issue-1", teamId: "team-1" },
+    );
+    await dispatcher.idle();
+
+    expect(requests).toHaveLength(0);
+  });
+
+  it("consulta solo los hooks del Workspace efectivo en PostgreSQL", async () => {
+    const hookA: WebhookRow = {
+      id: "hook-workspace-a",
+      url: "https://example.test/workspace-a",
+      secret: "SECRET-A",
+      events: '["workspace.created"]',
+      enabled: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+      owner_id: "admin-1",
+      team_id: null,
+      workspace_id: "workspace-a",
+    };
+    const hookB: WebhookRow = {
+      ...hookA,
+      id: "hook-workspace-b",
+      url: "https://example.test/workspace-b",
+      secret: "SECRET-B",
+      workspace_id: "workspace-b",
+    };
+    const requests: string[] = [];
+    const queries: string[] = [];
+    const fetchFn = Object.assign(
+      async (input: Parameters<typeof fetch>[0]) => {
+        requests.push(String(input));
+        return new Response("ok");
+      },
+      { preconnect: fetch.preconnect },
+    );
+    const dispatcher = new WebhookDispatcher(
+      new Database(":memory:"),
+      { fetchFn, retryDelays: [] },
+      fakePersistence(
+        [hookA, hookB],
+        "workspace-b",
+        undefined,
+        queries,
+        "workspace-b",
+        ["workspace-a", "workspace-b"],
+      ),
+    );
+
+    dispatcher.emitForWorkspace(
+      "workspace-b",
+      "workspace.created",
+      { id: "admin-1", name: "admin", type: "human" },
+      { id: "workspace-b" },
+    );
+    await dispatcher.idle();
+
+    expect(requests).toEqual(["https://example.test/workspace-b"]);
+    const hooksQuery = queries.find((query) => query.includes("FROM webhooks"));
+    expect(hooksQuery).toContain("workspace_id = $1");
+    expect(hooksQuery).toContain("workspace-b");
   });
 
   it("detiene los reintentos cuando la Membership PostgreSQL queda suspendida o retirada", async () => {
