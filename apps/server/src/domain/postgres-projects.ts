@@ -12,6 +12,8 @@ import {
 import { newId, now } from "../db/util.ts";
 import { PROJECT_STATES } from "./projects.ts";
 import type { ActorRow } from "../auth/viewer.ts";
+import type { PostgresWorkspaceContext } from "./postgres-workspace-scope.ts";
+import { projectWorkspaceScope, scopedWorkspacePredicate } from "./postgres-workspace-scope.ts";
 
 export interface PostgresProjectRow {
   id: string;
@@ -60,17 +62,35 @@ export function mapPostgresProject(row: PostgresProjectRow) {
 export async function getPostgresProject(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresProjectRow | null> {
-  return persistence.one<PostgresProjectRow>("SELECT * FROM projects WHERE id = $1", [id]);
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => projectWorkspaceScope("projects", workspaceParam),
+    "$2",
+  );
+  return persistence.one<PostgresProjectRow>(
+    `SELECT projects.* FROM projects WHERE projects.id = $1 AND ${scope}`,
+    [id, ...(context ? [context.workspaceId] : [])],
+  );
 }
 
 export async function listPostgresProjectTeamIds(
   persistence: Persistence | PersistenceTransaction,
   projectId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<string[]> {
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => projectWorkspaceScope("projects", workspaceParam),
+    "$2",
+  );
   const rows = await persistence.many<{ team_id: string }>(
-    "SELECT team_id FROM project_teams WHERE project_id = $1 ORDER BY team_id",
-    [projectId],
+    `SELECT project_teams.team_id FROM project_teams
+       JOIN projects ON projects.id = project_teams.project_id
+      WHERE project_teams.project_id = $1 AND ${scope}
+      ORDER BY project_teams.team_id`,
+    [projectId, ...(context ? [context.workspaceId] : [])],
   );
   return rows.map((row) => row.team_id);
 }
@@ -80,9 +100,17 @@ export async function listPostgresProjects(
   state?: string | null,
   teamId?: string | null,
   includeArchived = false,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresProjectRow[]> {
   const clauses: string[] = [];
   const params: SqlValue[] = [];
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => projectWorkspaceScope("projects", workspaceParam),
+    "$1",
+  );
+  if (context) params.push(context.workspaceId);
+  clauses.push(scope);
   if (!includeArchived) clauses.push("projects.archived_at IS NULL");
   if (state) {
     params.push(state);
@@ -106,9 +134,10 @@ export async function listPostgresProjects(
 async function validateLead(
   persistence: Persistence | PersistenceTransaction,
   leadId: string | null | undefined,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   if (leadId === undefined || leadId === null) return;
-  if (!(await getPostgresActor(persistence, leadId))) {
+  if (!(await getPostgresActor(persistence, leadId, context?.workspaceId))) {
     throw apiError("NOT_FOUND", "Lead actor not found");
   }
 }
@@ -137,14 +166,15 @@ async function validateProjectTeams(
   persistence: Persistence,
   viewer: ActorRow,
   teamIds: readonly string[],
+  context?: PostgresWorkspaceContext,
 ): Promise<string[]> {
   const uniqueTeamIds = [...new Set(teamIds)];
   if (uniqueTeamIds.length === 0) {
     throw apiError("VALIDATION_FAILED", "A project must belong to at least one team");
   }
   for (const teamId of uniqueTeamIds) {
-    const team = await assertPostgresTeamActive(persistence, teamId);
-    if (!(await canWritePostgresTeam(persistence, viewer, team.id))) {
+    const team = await assertPostgresTeamActive(persistence, teamId, context);
+    if (!(await canWritePostgresTeam(persistence, viewer, team.id, context))) {
       throw apiError("UNAUTHORIZED", "Project access policy does not allow this operation");
     }
   }
@@ -155,13 +185,14 @@ export async function canAccessPostgresProject(
   persistence: Persistence,
   viewer: Pick<ActorRow, "id" | "workspace_role">,
   projectId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
-  const teamIds = await listPostgresProjectTeamIds(persistence, projectId);
+  const teamIds = await listPostgresProjectTeamIds(persistence, projectId, context);
   if (teamIds.length === 0) return false;
   if (viewer.workspace_role === "admin") return true;
   for (const teamId of teamIds) {
-    const team = await getPostgresTeam(persistence, { id: teamId });
-    if (!team || !(await canDiscoverPostgresTeam(persistence, viewer, team))) return false;
+    const team = await getPostgresTeam(persistence, { id: teamId }, context);
+    if (!team || !(await canDiscoverPostgresTeam(persistence, viewer, team, context))) return false;
   }
   return true;
 }
@@ -170,14 +201,15 @@ export async function assertCanManagePostgresProject(
   persistence: Persistence,
   viewer: ActorRow,
   projectId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresProjectRow> {
-  const project = await getPostgresProject(persistence, projectId);
+  const project = await getPostgresProject(persistence, projectId, context);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
-  const teamIds = await listPostgresProjectTeamIds(persistence, projectId);
+  const teamIds = await listPostgresProjectTeamIds(persistence, projectId, context);
   if (teamIds.length === 0) throw apiError("NOT_FOUND", "Project not found");
   if (viewer.workspace_role !== "admin") {
     for (const teamId of teamIds) {
-      if (!(await canWritePostgresTeam(persistence, viewer, teamId))) {
+      if (!(await canWritePostgresTeam(persistence, viewer, teamId, context))) {
         throw apiError("UNAUTHORIZED", "Project access policy does not allow this operation");
       }
     }
@@ -189,16 +221,17 @@ export async function createPostgresProject(
   persistence: Persistence,
   viewer: ActorRow,
   input: PostgresProjectInput,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresProjectRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Project name cannot be empty");
   validateProjectFields(input);
-  await validateLead(persistence, input.leadId);
+  await validateLead(persistence, input.leadId, context);
   const teams =
     input.teamIds == null
-      ? (await listPostgresTeams(persistence)).map((team) => team.id)
+      ? (await listPostgresTeams(persistence, false, context)).map((team) => team.id)
       : input.teamIds;
-  const teamIds = await validateProjectTeams(persistence, viewer, teams);
+  const teamIds = await validateProjectTeams(persistence, viewer, teams, context);
   const id = newId();
   const timestamp = now();
   await persistence.transaction(async (tx) => {
@@ -223,7 +256,7 @@ export async function createPostgresProject(
       ]);
     }
   });
-  const project = await getPostgresProject(persistence, id);
+  const project = await getPostgresProject(persistence, id, context);
   if (!project) throw new Error("PostgreSQL project insert returned no row");
   return project;
 }
@@ -233,14 +266,15 @@ export async function updatePostgresProject(
   viewer: ActorRow,
   id: string,
   input: PostgresProjectUpdateInput,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresProjectRow> {
-  const existing = await assertCanManagePostgresProject(persistence, viewer, id);
+  const existing = await assertCanManagePostgresProject(persistence, viewer, id, context);
   validateProjectFields(input);
-  await validateLead(persistence, input.leadId);
+  await validateLead(persistence, input.leadId, context);
   const teamIds =
     input.teamIds === undefined
       ? null
-      : await validateProjectTeams(persistence, viewer, input.teamIds ?? []);
+      : await validateProjectTeams(persistence, viewer, input.teamIds ?? [], context);
   const sets: string[] = [];
   const params: SqlValue[] = [];
   const push = (column: string, value: SqlValue) => {
@@ -276,15 +310,16 @@ export async function updatePostgresProject(
       }
     }
   });
-  return (await getPostgresProject(persistence, existing.id))!;
+  return (await getPostgresProject(persistence, existing.id, context))!;
 }
 
 export async function archivePostgresProject(
   persistence: Persistence,
   id: string,
   archived: boolean,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresProjectRow> {
-  const project = await getPostgresProject(persistence, id);
+  const project = await getPostgresProject(persistence, id, context);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
   const archivedAt = archived ? (project.archived_at ?? now()) : null;
   const row = await persistence.one<PostgresProjectRow>(

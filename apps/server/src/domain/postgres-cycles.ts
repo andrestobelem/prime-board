@@ -8,6 +8,12 @@ import {
   getPostgresTeam,
 } from "./postgres-teams.ts";
 import type { ActorRow } from "../auth/viewer.ts";
+import type { PostgresWorkspaceContext } from "./postgres-workspace-scope.ts";
+import {
+  issueWorkspaceScope,
+  scopedWorkspacePredicate,
+  teamWorkspaceScope,
+} from "./postgres-workspace-scope.ts";
 
 export type PostgresCycleState = "upcoming" | "active" | "completed";
 
@@ -42,18 +48,33 @@ export function mapPostgresCycle(row: PostgresCycleRow) {
 export async function getPostgresCycle(
   persistence: Persistence | PersistenceTransaction,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresCycleRow | null> {
-  return persistence.one<PostgresCycleRow>("SELECT * FROM cycles WHERE id = $1", [id]);
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => teamWorkspaceScope("cycles.team_id", workspaceParam),
+    "$2",
+  );
+  return persistence.one<PostgresCycleRow>(
+    `SELECT cycles.* FROM cycles WHERE cycles.id = $1 AND ${scope}`,
+    [id, ...(context ? [context.workspaceId] : [])],
+  );
 }
 
 export async function listPostgresCycles(
   persistence: Persistence,
   teamId: string,
   includeArchived = false,
+  context?: PostgresWorkspaceContext,
 ): Promise<readonly PostgresCycleRow[]> {
+  const scope = scopedWorkspacePredicate(
+    context,
+    (workspaceParam) => teamWorkspaceScope("cycles.team_id", workspaceParam),
+    "$2",
+  );
   return persistence.many<PostgresCycleRow>(
-    `SELECT * FROM cycles WHERE team_id = $1 ${includeArchived ? "" : "AND archived_at IS NULL"} ORDER BY number`,
-    [teamId],
+    `SELECT cycles.* FROM cycles WHERE cycles.team_id = $1 AND ${scope} ${includeArchived ? "" : "AND cycles.archived_at IS NULL"} ORDER BY cycles.number`,
+    [teamId, ...(context ? [context.workspaceId] : [])],
   );
 }
 
@@ -120,6 +141,7 @@ export async function createPostgresCycle(
     endsAt: string;
     state?: string | null;
   },
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresCycleRow> {
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
@@ -146,7 +168,7 @@ export async function createPostgresCycle(
       ],
     );
   });
-  const row = await getPostgresCycle(persistence, id);
+  const row = await getPostgresCycle(persistence, id, context);
   if (!row) throw new Error("PostgreSQL cycle insert returned no row");
   return row;
 }
@@ -162,8 +184,9 @@ export async function updatePostgresCycle(
     state?: string | null;
     archived?: boolean | null;
   },
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresCycleRow> {
-  const existing = await getPostgresCycle(persistence, id);
+  const existing = await getPostgresCycle(persistence, id, context);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
   await assertPostgresCycleAccess(persistence, viewer, existing.team_id);
   const startsAt = input.startsAt ?? existing.starts_at;
@@ -194,7 +217,7 @@ export async function updatePostgresCycle(
     );
     if (!row) throw apiError("NOT_FOUND", "Cycle not found");
   }
-  return (await getPostgresCycle(persistence, id))!;
+  return (await getPostgresCycle(persistence, id, context))!;
 }
 
 async function preserveCycleActivityReferences(
@@ -246,8 +269,9 @@ export async function deletePostgresCycle(
   persistence: Persistence,
   viewer: ActorRow,
   id: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
-  const existing = await getPostgresCycle(persistence, id);
+  const existing = await getPostgresCycle(persistence, id, context);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
   await assertPostgresCycleAccess(persistence, viewer, existing.team_id);
   const team = await getPostgresTeam(persistence, { id: existing.team_id });
@@ -274,6 +298,7 @@ export async function deletePostgresCycle(
 export async function cycleProgress(
   persistence: Persistence,
   cycleId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<{ totalIssues: number; completedIssues: number; progress: number }> {
   const row = await persistence.one<{ total: number; done: number | null }>(
     `SELECT count(*)::int AS total,
@@ -296,9 +321,10 @@ export async function carryOverPostgresCycle(
   viewer: ActorRow,
   fromCycleId: string,
   toCycleId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<number> {
-  const from = await getPostgresCycle(persistence, fromCycleId);
-  const to = await getPostgresCycle(persistence, toCycleId);
+  const from = await getPostgresCycle(persistence, fromCycleId, context);
+  const to = await getPostgresCycle(persistence, toCycleId, context);
   if (!from || !to) throw apiError("NOT_FOUND", "Cycle not found");
   if (from.team_id !== to.team_id) {
     throw apiError("VALIDATION_FAILED", "Carry-over requires cycles of the same team");
@@ -331,8 +357,9 @@ export async function validatePostgresCycleForTeam(
   persistence: Persistence | PersistenceTransaction,
   cycleId: string,
   teamId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
-  const cycle = await getPostgresCycle(persistence, cycleId);
+  const cycle = await getPostgresCycle(persistence, cycleId, context);
   if (!cycle) throw apiError("NOT_FOUND", "Cycle not found");
   if (cycle.team_id !== teamId) {
     throw apiError("VALIDATION_FAILED", "Cycle belongs to a different team");
@@ -343,8 +370,9 @@ export async function canAccessPostgresCycle(
   persistence: Persistence,
   viewer: ActorRow,
   cycleId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
-  const cycle = await getPostgresCycle(persistence, cycleId);
-  const team = cycle ? await getPostgresTeam(persistence, { id: cycle.team_id }) : null;
+  const cycle = await getPostgresCycle(persistence, cycleId, context);
+  const team = cycle ? await getPostgresTeam(persistence, { id: cycle.team_id }, context) : null;
   return Boolean(team && (await canDiscoverPostgresTeam(persistence, viewer, team)));
 }

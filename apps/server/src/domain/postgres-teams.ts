@@ -3,11 +3,12 @@ import { DEFAULT_WORKFLOW } from "../db/defaults.ts";
 import { newId, now } from "../db/util.ts";
 import { apiError } from "../graphql/errors.ts";
 import type { TeamRow, WorkflowStateRow } from "./teams.ts";
-import type { WorkspaceContext } from "./workspace-context.ts";
 import {
   scopedWorkspacePredicate,
   teamWorkspaceScope,
+  workspaceIdOf,
   workspaceMembershipScope,
+  type PostgresWorkspaceContext,
 } from "./postgres-workspace-scope.ts";
 
 const STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"] as const;
@@ -49,7 +50,7 @@ export function mapPostgresWorkflowState(row: WorkflowStateRow) {
 export async function getPostgresTeam(
   persistence: Persistence | PersistenceTransaction,
   ref: { id?: string | null; key?: string | null },
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<TeamRow | null> {
   const scope = scopedWorkspacePredicate(
     context,
@@ -59,13 +60,13 @@ export async function getPostgresTeam(
   if (ref.id) {
     return persistence.one<TeamRow>(`SELECT * FROM teams WHERE teams.id = $1 AND ${scope}`, [
       ref.id,
-      ...(context ? [context.workspaceId] : []),
+      ...(context ? [workspaceIdOf(context)] : []),
     ]);
   }
   if (ref.key) {
     return persistence.one<TeamRow>(`SELECT * FROM teams WHERE teams.key = $1 AND ${scope}`, [
       ref.key.toUpperCase(),
-      ...(context ? [context.workspaceId] : []),
+      ...(context ? [workspaceIdOf(context)] : []),
     ]);
   }
   return null;
@@ -74,7 +75,7 @@ export async function getPostgresTeam(
 export async function listPostgresTeams(
   persistence: Persistence,
   includeArchived = false,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<TeamRow[]> {
   const scope = scopedWorkspacePredicate(
     context,
@@ -85,7 +86,7 @@ export async function listPostgresTeams(
   return [
     ...(await persistence.many<TeamRow>(
       `SELECT teams.* FROM teams WHERE ${scope}${archived} ORDER BY teams.created_at`,
-      context ? [context.workspaceId] : [],
+      context ? [workspaceIdOf(context)] : [],
     )),
   ];
 }
@@ -93,7 +94,7 @@ export async function listPostgresTeams(
 export async function assertPostgresTeamActive(
   persistence: Persistence | PersistenceTransaction,
   teamId: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<TeamRow> {
   const team = await getPostgresTeam(persistence, { id: teamId }, context);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
@@ -105,7 +106,7 @@ export async function archivePostgresTeam(
   persistence: Persistence,
   id: string,
   archived: boolean,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<TeamRow> {
   const team = await getPostgresTeam(persistence, { id }, context);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
@@ -177,7 +178,7 @@ export async function createPostgresTeam(
     accessPolicy?: "workspace_members" | "team_members" | null;
   },
   ownerId?: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<TeamRow> {
   const values = validateTeamInput(input);
   if (await getPostgresTeam(persistence, { key: values.key }, context)) {
@@ -231,7 +232,7 @@ export async function updatePostgresTeam(
   persistence: Persistence,
   id: string,
   input: PostgresTeamUpdateInput,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<TeamRow> {
   const team = await getPostgresTeam(persistence, { id }, context);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
@@ -280,7 +281,7 @@ export async function updatePostgresTeam(
 export async function getPostgresWorkflowState(
   persistence: Persistence | PersistenceTransaction,
   id: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<WorkflowStateRow | null> {
   const scope = scopedWorkspacePredicate(
     context,
@@ -292,14 +293,14 @@ export async function getPostgresWorkflowState(
        FROM workflow_states
        JOIN teams AS scope_state ON scope_state.id = workflow_states.team_id
       WHERE workflow_states.id = $1 AND ${scope}`,
-    [id, ...(context ? [context.workspaceId] : [])],
+    [id, ...(context ? [workspaceIdOf(context)] : [])],
   );
 }
 
 export async function listPostgresTeamStates(
   persistence: Persistence | PersistenceTransaction,
   teamId: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<WorkflowStateRow[]> {
   const scope = scopedWorkspacePredicate(
     context,
@@ -309,7 +310,7 @@ export async function listPostgresTeamStates(
   return [
     ...(await persistence.many<WorkflowStateRow>(
       `SELECT workflow_states.* FROM workflow_states WHERE workflow_states.team_id = $1 AND ${scope} ORDER BY position`,
-      [teamId, ...(context ? [context.workspaceId] : [])],
+      [teamId, ...(context ? [workspaceIdOf(context)] : [])],
     )),
   ];
 }
@@ -317,7 +318,7 @@ export async function listPostgresTeamStates(
 export async function getPostgresDefaultState(
   persistence: Persistence,
   team: TeamRow,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<WorkflowStateRow> {
   if (team.default_state_id) {
     const state = await getPostgresWorkflowState(persistence, team.default_state_id, context);
@@ -332,7 +333,7 @@ export async function getPostgresDefaultState(
     `SELECT workflow_states.* FROM workflow_states
       WHERE workflow_states.team_id = $1 AND ${scope}
       ORDER BY workflow_states.position LIMIT 1`,
-    [team.id, ...(context ? [context.workspaceId] : [])],
+    [team.id, ...(context ? [workspaceIdOf(context)] : [])],
   );
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
   return state;
@@ -347,7 +348,7 @@ export async function createPostgresWorkflowState(
     color?: string | null;
     position?: number | null;
   },
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<WorkflowStateRow> {
   const team = await getPostgresTeam(persistence, { id: input.teamId }, context);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
@@ -403,7 +404,7 @@ export async function updatePostgresWorkflowState(
     color?: string | null;
     position?: number | null;
   },
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<WorkflowStateRow> {
   const state = await getPostgresWorkflowState(persistence, id, context);
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
@@ -493,7 +494,7 @@ export async function deletePostgresWorkflowState(
   actorId: string,
   id: string,
   moveToStateId?: string | null,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<number> {
   const state = await getPostgresWorkflowState(persistence, id, context);
   if (!state) throw apiError("NOT_FOUND", "Workflow state not found");
@@ -570,7 +571,7 @@ export async function deletePostgresTeam(
   persistence: Persistence,
   id: string,
   confirmation: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<TeamRow> {
   const initial = await getPostgresTeam(persistence, { id }, context);
   if (!initial) throw apiError("NOT_FOUND", "Team not found");
@@ -618,7 +619,7 @@ export async function canDiscoverPostgresTeam(
   persistence: Persistence,
   viewer: { id: string; workspace_role: string },
   team: TeamRow,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
   if (viewer.workspace_role === "admin" || team.visibility === "public") return true;
   const scope = context ? `AND ${workspaceMembershipScope("workspace_memberships", "$3")}` : "";
@@ -629,7 +630,7 @@ export async function canDiscoverPostgresTeam(
        JOIN workspace_memberships ON workspace_memberships.actor_id = team_memberships.actor_id
        WHERE team_memberships.team_id = $1 AND team_memberships.actor_id = $2
          AND actors.status = 'active' ${scope}`,
-      [team.id, viewer.id, ...(context ? [context.workspaceId] : [])],
+      [team.id, viewer.id, ...(context ? [workspaceIdOf(context)] : [])],
     ),
   );
 }
@@ -638,7 +639,7 @@ export async function isPostgresTeamOwner(
   persistence: Persistence | PersistenceTransaction,
   teamId: string,
   actorId: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
   return Boolean(
     await persistence.one(
@@ -648,7 +649,7 @@ export async function isPostgresTeamOwner(
        WHERE team_memberships.team_id = $1 AND team_memberships.actor_id = $2
          AND team_memberships.role = 'owner' AND actors.status = 'active'
          ${context ? "AND workspace_memberships.workspace_id = $3 AND workspace_memberships.status = 'active'" : ""}`,
-      [teamId, actorId, ...(context ? [context.workspaceId] : [])],
+      [teamId, actorId, ...(context ? [workspaceIdOf(context)] : [])],
     ),
   );
 }
@@ -676,7 +677,7 @@ export function mapPostgresTeamMembership(row: PostgresTeamMembershipRow) {
 export async function getPostgresTeamMembership(
   persistence: Persistence | PersistenceTransaction,
   id: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresTeamMembershipRow | null> {
   const scope = context
     ? "AND workspace_memberships.workspace_id = $2 AND workspace_memberships.status = 'active'"
@@ -685,14 +686,14 @@ export async function getPostgresTeamMembership(
     `SELECT team_memberships.* FROM team_memberships
        JOIN workspace_memberships ON workspace_memberships.actor_id = team_memberships.actor_id
       WHERE team_memberships.id = $1 ${scope}`,
-    [id, ...(context ? [context.workspaceId] : [])],
+    [id, ...(context ? [workspaceIdOf(context)] : [])],
   );
 }
 
 export async function listPostgresTeamMemberships(
   persistence: Persistence | PersistenceTransaction,
   teamId: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresTeamMembershipRow[]> {
   return [
     ...(await persistence.many<PostgresTeamMembershipRow>(
@@ -701,7 +702,7 @@ export async function listPostgresTeamMemberships(
         WHERE team_memberships.team_id = $1
           ${context ? "AND workspace_memberships.workspace_id = $2 AND workspace_memberships.status = 'active'" : ""}
         ORDER BY team_memberships.created_at, team_memberships.id`,
-      [teamId, ...(context ? [context.workspaceId] : [])],
+      [teamId, ...(context ? [workspaceIdOf(context)] : [])],
     )),
   ];
 }
@@ -710,7 +711,7 @@ export async function isPostgresTeamMember(
   persistence: Persistence | PersistenceTransaction,
   teamId: string,
   actorId: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
   return Boolean(
     await persistence.one(
@@ -720,7 +721,7 @@ export async function isPostgresTeamMember(
        WHERE team_memberships.team_id = $1 AND team_memberships.actor_id = $2
          AND actors.status = 'active'
          ${context ? "AND workspace_memberships.workspace_id = $3 AND workspace_memberships.status = 'active'" : ""}`,
-      [teamId, actorId, ...(context ? [context.workspaceId] : [])],
+      [teamId, actorId, ...(context ? [workspaceIdOf(context)] : [])],
     ),
   );
 }
@@ -729,7 +730,7 @@ export async function canAccessPostgresTeam(
   persistence: Persistence,
   viewer: { id: string; workspace_role: string },
   teamId: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
   const team = await getPostgresTeam(persistence, { id: teamId }, context);
   return team ? canDiscoverPostgresTeam(persistence, viewer, team, context) : false;
@@ -739,7 +740,7 @@ export async function canWritePostgresTeam(
   persistence: Persistence,
   viewer: { id: string; workspace_role: string },
   teamId: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
   const team = await getPostgresTeam(persistence, { id: teamId }, context);
   if (!team) return false;
@@ -756,9 +757,9 @@ export async function assertCanAccessPostgresTeam(
   persistence: Persistence,
   viewer: { id: string; workspace_role: string },
   teamId: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
-  if (!(await canAccessPostgresTeam(persistence, viewer, teamId))) {
+  if (!(await canAccessPostgresTeam(persistence, viewer, teamId, context))) {
     throw apiError("NOT_FOUND", "Team resource not found");
   }
 }
@@ -767,7 +768,7 @@ export async function assertCanManagePostgresTeam(
   persistence: Persistence,
   viewer: { id: string; workspace_role: string },
   teamId: string,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   const team = await getPostgresTeam(persistence, { id: teamId }, context);
   if (!team) return;
@@ -784,19 +785,17 @@ export async function createPostgresTeamMembership(
   viewerId: string,
   input: { teamId: string; actorId: string; role?: string | null },
   allowAdmin = false,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<PostgresTeamMembershipRow> {
   const id = newId();
   try {
     await persistence.transaction(async (tx) => {
-      const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
-        input.teamId,
-      ]);
+      const team = await getPostgresTeam(tx, { id: input.teamId }, context);
       if (!team) throw apiError("NOT_FOUND", "Team not found");
       if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
       const actor = await tx.one("SELECT id FROM actors WHERE id = $1", [input.actorId]);
       if (!actor) throw apiError("NOT_FOUND", "Actor not found");
-      if (!allowAdmin && !(await isPostgresTeamOwner(tx, team.id, viewerId))) {
+      if (!allowAdmin && !(await isPostgresTeamOwner(tx, team.id, viewerId, context))) {
         throw apiError("NOT_FOUND", "Team resource not found");
       }
       const role = (input.role ?? "member").toLowerCase();
@@ -815,7 +814,7 @@ export async function createPostgresTeamMembership(
     }
     throw error;
   }
-  const membership = await getPostgresTeamMembership(persistence, id);
+  const membership = await getPostgresTeamMembership(persistence, id, context);
   if (!membership) throw new Error("PostgreSQL team membership insert returned no row");
   return membership;
 }
@@ -825,7 +824,7 @@ export async function deletePostgresTeamMembership(
   viewerId: string,
   id: string,
   allowAdmin = false,
-  context?: WorkspaceContext,
+  context?: PostgresWorkspaceContext,
 ): Promise<boolean> {
   return persistence.transaction(async (tx) => {
     const membership = await tx.one<PostgresTeamMembershipRow>(
@@ -835,12 +834,10 @@ export async function deletePostgresTeamMembership(
       [id],
     );
     if (!membership) throw apiError("NOT_FOUND", "Team membership not found");
-    const team = await tx.one<TeamRow>("SELECT * FROM teams WHERE id = $1 FOR UPDATE", [
-      membership.team_id,
-    ]);
+    const team = await getPostgresTeam(tx, { id: membership.team_id }, context);
     if (!team) throw apiError("NOT_FOUND", "Team not found");
     if (team.archived_at) throw apiError("VALIDATION_FAILED", "Team is archived");
-    if (!allowAdmin && !(await isPostgresTeamOwner(tx, team.id, viewerId))) {
+    if (!allowAdmin && !(await isPostgresTeamOwner(tx, team.id, viewerId, context))) {
       throw apiError("NOT_FOUND", "Team resource not found");
     }
     if (membership.role === "owner") {
