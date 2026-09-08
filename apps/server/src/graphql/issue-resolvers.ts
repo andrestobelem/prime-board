@@ -281,7 +281,9 @@ async function postgresActivityPayload(
 ): Promise<Record<string, unknown>> {
   const persistence = context.persistence!;
   const payload = { ...activity.payload };
-  const source = activity._issueId ? await getPostgresIssue(persistence, activity._issueId) : null;
+  const source = activity._issueId
+    ? await getPostgresIssue(persistence, activity._issueId, context.workspace)
+    : null;
   if (context.auth?.teamIds) {
     const refs = ACTIVITY_REFS[activity.type as keyof typeof ACTIVITY_REFS] ?? [];
     for (const ref of refs) {
@@ -289,24 +291,30 @@ async function postgresActivityPayload(
       if (typeof value !== "string") continue;
       let teams: string[] | null = null;
       if (ref.table === "issues") {
-        const row = await getPostgresIssueByRef(persistence, value);
+        const row = await getPostgresIssueByRef(persistence, value, context.workspace);
         teams = row ? [row.team_id] : null;
       } else if (ref.table === "teams") {
-        const row = await getPostgresTeam(persistence, { id: value });
+        const row = await getPostgresTeam(persistence, { id: value }, context.workspace);
         teams = row ? [row.id] : null;
       } else if (ref.table === "states") {
-        const row = await getPostgresWorkflowState(persistence, value);
+        const row = await getPostgresWorkflowState(persistence, value, context.workspace);
         teams = row ? [row.team_id] : null;
       } else if (ref.table === "cycles") {
-        const row = await getPostgresCycle(persistence, value);
+        const row = await getPostgresCycle(persistence, value, context.workspace);
         teams = row ? [row.team_id] : null;
       } else if (ref.table === "projects") {
-        const row = await getPostgresProject(persistence, value);
-        teams = row ? await listPostgresProjectTeamIds(persistence, row.id) : null;
+        const row = await getPostgresProject(persistence, value, context.workspace);
+        teams = row
+          ? await listPostgresProjectTeamIds(persistence, row.id, context.workspace)
+          : null;
       } else if (ref.table === "milestones") {
-        const row = await getPostgresMilestone(persistence, value);
-        const project = row ? await getPostgresProject(persistence, row.project_id) : null;
-        teams = project ? await listPostgresProjectTeamIds(persistence, project.id) : null;
+        const row = await getPostgresMilestone(persistence, value, context.workspace);
+        const project = row
+          ? await getPostgresProject(persistence, row.project_id, context.workspace)
+          : null;
+        teams = project
+          ? await listPostgresProjectTeamIds(persistence, project.id, context.workspace)
+          : null;
       } else {
         teams = [];
       }
@@ -318,7 +326,9 @@ async function postgresActivityPayload(
     if (activity.type === "relation_added" || activity.type === "relation_removed") {
       const value = payload.issue;
       const related =
-        typeof value === "string" ? await getPostgresIssueByRef(persistence, value) : null;
+        typeof value === "string"
+          ? await getPostgresIssueByRef(persistence, value, context.workspace)
+          : null;
       if (
         !source ||
         !related ||
@@ -328,23 +338,28 @@ async function postgresActivityPayload(
       }
     }
   }
+  const workspaceId = context.workspace.workspaceId;
   const queries: Record<RefTable, string> = {
-    states: "SELECT name FROM workflow_states WHERE id = $1",
-    actors: "SELECT name FROM actors WHERE id = $1",
-    projects: "SELECT name FROM projects WHERE id = $1",
-    milestones: "SELECT name FROM milestones WHERE id = $1",
+    states:
+      "SELECT workflow_states.name FROM workflow_states WHERE workflow_states.id = $1 AND workflow_states.workspace_id = $2",
+    actors:
+      "SELECT actors.name FROM actors JOIN workspace_memberships ON workspace_memberships.actor_id = actors.id WHERE actors.id = $1 AND workspace_memberships.workspace_id = $2 AND workspace_memberships.status = 'active'",
+    projects:
+      "SELECT projects.name FROM projects WHERE projects.id = $1 AND projects.workspace_id = $2",
+    milestones:
+      "SELECT milestones.name FROM milestones WHERE milestones.id = $1 AND milestones.workspace_id = $2",
     cycles:
-      "SELECT teams.key || '/' || cycles.number AS name FROM cycles JOIN teams ON teams.id = cycles.team_id WHERE cycles.id = $1",
-    teams: "SELECT key AS name FROM teams WHERE id = $1",
+      "SELECT teams.key || '/' || cycles.number AS name FROM cycles JOIN teams ON teams.id = cycles.team_id AND teams.workspace_id = cycles.workspace_id WHERE cycles.id = $1 AND cycles.workspace_id = $2",
+    teams: "SELECT key AS name FROM teams WHERE id = $1 AND workspace_id = $2",
     issues:
-      "SELECT teams.key || '-' || issues.number AS name FROM issues JOIN teams ON teams.id = issues.team_id WHERE issues.id = $1",
+      "SELECT teams.key || '-' || issues.number AS name FROM issues JOIN teams ON teams.id = issues.team_id AND teams.workspace_id = issues.workspace_id WHERE issues.id = $1 AND issues.workspace_id = $2",
   };
   const values = new Map<string, string | undefined>();
   const refs = ACTIVITY_REFS[activity.type as keyof typeof ACTIVITY_REFS] ?? [];
   for (const ref of refs) {
     const value = payload[ref.field];
     if (typeof value !== "string") continue;
-    const row = await persistence.one<{ name: string }>(queries[ref.table], [value]);
+    const row = await persistence.one<{ name: string }>(queries[ref.table], [value, workspaceId]);
     values.set(`${ref.table}:${value}`, row?.name);
   }
   return translateActivityRefs(activity.type, payload, (table, value) =>
@@ -386,14 +401,22 @@ export const issueResolvers = {
     assignee: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (!issue._row.assignee_id) return null;
       if (context.persistence) {
-        const actor = await getPostgresActor(context.persistence, issue._row.assignee_id);
+        const actor = await getPostgresActor(
+          context.persistence,
+          issue._row.assignee_id,
+          context.workspace.workspaceId,
+        );
         return actor ? mapPostgresActor(actor) : null;
       }
       return mapActor(lookupActor(context, issue._row.assignee_id)!);
     },
     creator: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
-        const actor = await getPostgresActor(context.persistence, issue._row.creator_id);
+        const actor = await getPostgresActor(
+          context.persistence,
+          issue._row.creator_id,
+          context.workspace.workspaceId,
+        );
         return actor ? mapPostgresActor(actor) : null;
       }
       return mapActor(lookupActor(context, issue._row.creator_id)!);
@@ -736,7 +759,11 @@ export const issueResolvers = {
       const row: IssueRow = issue._row;
       const owner = context.persistence
         ? row.assignee_id
-          ? await getPostgresActor(context.persistence, row.assignee_id)
+          ? await getPostgresActor(
+              context.persistence,
+              row.assignee_id,
+              context.workspace.workspaceId,
+            )
           : null
         : row.assignee_id
           ? lookupActor(context, row.assignee_id)
@@ -893,7 +920,12 @@ export const issueResolvers = {
         if (!(await canQueryPostgresIssueFilter(context, args.filter))) {
           return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
         }
-        const teamIds = await accessiblePostgresTeamIds(context.persistence, viewer, context.auth);
+        const teamIds = await accessiblePostgresTeamIds(
+          context.persistence,
+          viewer,
+          context.auth,
+          context.workspace,
+        );
         const page = await listPostgresIssues(context.persistence, {
           filter: args.filter,
           first: args.first ?? 50,
