@@ -69,7 +69,9 @@ export async function listPostgresMilestones(
   return persistence.many<PostgresMilestoneRow>(
     `SELECT milestones.* FROM milestones
        JOIN projects ON projects.id = milestones.project_id
-      WHERE milestones.project_id = $1 AND ${scope}
+      WHERE milestones.project_id = $1
+        AND ${scope}
+        ${context ? "AND milestones.workspace_id = $2" : ""}
       ORDER BY milestones.position, milestones.created_at, milestones.id`,
     [projectId, ...(context ? [context.workspaceId] : [])],
   );
@@ -122,12 +124,17 @@ export async function createPostgresMilestone(
   const timestamp = now();
   try {
     await persistence.transaction(async (tx) => {
-      await tx.one<{ id: string }>("SELECT id FROM projects WHERE id = $1 FOR UPDATE", [
-        input.projectId,
-      ]);
+      await tx.one<{ id: string }>(
+        context
+          ? "SELECT id FROM projects WHERE id = $1 AND workspace_id = $2 FOR UPDATE"
+          : "SELECT id FROM projects WHERE id = $1 FOR UPDATE",
+        context ? [input.projectId, workspaceIdOf(context)] : [input.projectId],
+      );
       const max = await tx.one<{ max: number }>(
-        "SELECT COALESCE(MAX(position), -1) AS max FROM milestones WHERE project_id = $1",
-        [input.projectId],
+        context
+          ? "SELECT COALESCE(MAX(position), -1) AS max FROM milestones WHERE project_id = $1 AND workspace_id = $2"
+          : "SELECT COALESCE(MAX(position), -1) AS max FROM milestones WHERE project_id = $1",
+        context ? [input.projectId, workspaceIdOf(context)] : [input.projectId],
       );
       if (context) {
         await tx.execute(
@@ -208,10 +215,19 @@ export async function updatePostgresMilestone(
     push("updated_at", now());
     params.push(id);
     try {
-      const row = await persistence.one<PostgresMilestoneRow>(
-        `UPDATE milestones SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
-        params,
-      );
+      let row: PostgresMilestoneRow | null;
+      if (context) {
+        params.push(workspaceIdOf(context));
+        row = await persistence.one<PostgresMilestoneRow>(
+          `UPDATE milestones SET ${sets.join(", ")} WHERE id = $${params.length - 1} AND workspace_id = $${params.length} RETURNING *`,
+          params,
+        );
+      } else {
+        row = await persistence.one<PostgresMilestoneRow>(
+          `UPDATE milestones SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+          params,
+        );
+      }
       if (!row) throw apiError("NOT_FOUND", "Milestone not found");
     } catch (error) {
       if (isUniqueViolation(error)) {
@@ -227,9 +243,13 @@ async function preserveMilestoneActivityReferences(
   tx: PersistenceTransaction,
   milestoneId: string,
   reference: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   const activities = await tx.many<{ id: string; payload: string }>(
-    "SELECT id, payload FROM activity WHERE type IN ('milestone_changed', 'created')",
+    context
+      ? "SELECT id, payload FROM activity WHERE type IN ('milestone_changed', 'created') AND workspace_id = $1"
+      : "SELECT id, payload FROM activity WHERE type IN ('milestone_changed', 'created')",
+    context ? [workspaceIdOf(context)] : [],
   );
   for (const activity of activities) {
     let payload: Record<string, unknown>;
@@ -260,11 +280,17 @@ async function recordPostgresActivity(
   actorId: string,
   payload: Record<string, unknown>,
   createdAt: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   await tx.execute(
-    `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
-     VALUES ($1, $2, $3, 'milestone_changed', $4, $5)`,
-    [newId(), issueId, actorId, JSON.stringify(payload), createdAt],
+    context
+      ? `INSERT INTO activity (id, workspace_id, issue_id, actor_id, type, payload, created_at)
+         VALUES ($1, $2, $3, $4, 'milestone_changed', $5, $6)`
+      : `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
+         VALUES ($1, $2, $3, 'milestone_changed', $4, $5)`,
+    context
+      ? [newId(), workspaceIdOf(context), issueId, actorId, JSON.stringify(payload), createdAt]
+      : [newId(), issueId, actorId, JSON.stringify(payload), createdAt],
   );
 }
 
@@ -284,10 +310,14 @@ export async function deletePostgresMilestone(
   await persistence.transaction(async (tx) => {
     const timestamp = now();
     const issues = await tx.many<{ id: string }>(
-      `UPDATE issues SET milestone_id = NULL, updated_at = $1
-       WHERE milestone_id = $2
-       RETURNING id`,
-      [timestamp, id],
+      context
+        ? `UPDATE issues SET milestone_id = NULL, updated_at = $1
+           WHERE milestone_id = $2 AND workspace_id = $3
+           RETURNING id`
+        : `UPDATE issues SET milestone_id = NULL, updated_at = $1
+           WHERE milestone_id = $2
+           RETURNING id`,
+      context ? [timestamp, id, workspaceIdOf(context)] : [timestamp, id],
     );
     affected = issues.length;
     for (const issue of issues) {
@@ -297,11 +327,17 @@ export async function deletePostgresMilestone(
         viewer.id,
         { from: reference, to: null, reason: "milestone_deleted" },
         timestamp,
+        context,
       );
     }
 
-    await preserveMilestoneActivityReferences(tx, id, reference);
-    await tx.execute("DELETE FROM milestones WHERE id = $1", [id]);
+    await preserveMilestoneActivityReferences(tx, id, reference, context);
+    await tx.execute(
+      context
+        ? "DELETE FROM milestones WHERE id = $1 AND workspace_id = $2"
+        : "DELETE FROM milestones WHERE id = $1",
+      context ? [id, workspaceIdOf(context)] : [id],
+    );
   });
   return affected;
 }
@@ -330,6 +366,7 @@ export async function canAccessPostgresMilestone(
 ): Promise<boolean> {
   const milestone = await getPostgresMilestone(persistence, milestoneId, context);
   return Boolean(
-    milestone && (await canAccessPostgresProject(persistence, viewer, milestone.project_id)),
+    milestone &&
+    (await canAccessPostgresProject(persistence, viewer, milestone.project_id, context)),
   );
 }

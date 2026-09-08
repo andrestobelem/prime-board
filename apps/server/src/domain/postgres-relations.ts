@@ -172,11 +172,14 @@ export async function createPostgresRelation(
         [id, source.id, target.id, normalized.type, timestamp],
       );
     }
-    await tx.execute("UPDATE issues SET updated_at = $1 WHERE id IN ($2, $3)", [
-      timestamp,
-      source.id,
-      target.id,
-    ]);
+    await tx.execute(
+      context
+        ? "UPDATE issues SET updated_at = $1 WHERE id IN ($2, $3) AND workspace_id = $4"
+        : "UPDATE issues SET updated_at = $1 WHERE id IN ($2, $3)",
+      context
+        ? [timestamp, source.id, target.id, context.workspaceId]
+        : [timestamp, source.id, target.id],
+    );
     const payloadSource = JSON.stringify({
       type: normalized.type,
       issue: `${target.team_key}-${target.number}`,
@@ -239,12 +242,20 @@ export async function deletePostgresRelation(
     const target = await getPostgresIssue(tx, row.related_id, context);
     if (!source || !target) throw apiError("NOT_FOUND", "Issue not found");
     const timestamp = now();
-    await tx.execute("DELETE FROM issue_relations WHERE id = $1", [id]);
-    await tx.execute("UPDATE issues SET updated_at = $1 WHERE id IN ($2, $3)", [
-      timestamp,
-      source.id,
-      target.id,
-    ]);
+    await tx.execute(
+      context
+        ? "DELETE FROM issue_relations WHERE id = $1 AND workspace_id = $2"
+        : "DELETE FROM issue_relations WHERE id = $1",
+      context ? [id, context.workspaceId] : [id],
+    );
+    await tx.execute(
+      context
+        ? "UPDATE issues SET updated_at = $1 WHERE id IN ($2, $3) AND workspace_id = $4"
+        : "UPDATE issues SET updated_at = $1 WHERE id IN ($2, $3)",
+      context
+        ? [timestamp, source.id, target.id, context.workspaceId]
+        : [timestamp, source.id, target.id],
+    );
     for (const [issueId, payload] of [
       [source.id, { type: row.type, issue: `${target.team_key}-${target.number}` }],
       [target.id, { type: INVERSE[row.type], issue: `${source.team_key}-${source.number}` }],

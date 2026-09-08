@@ -34,7 +34,7 @@ import {
 } from "./postgres-workspace-scope.ts";
 
 const SELECT_ISSUE =
-  "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id";
+  "SELECT issues.*, teams.key AS team_key FROM issues JOIN teams ON teams.id = issues.team_id AND teams.workspace_id = issues.workspace_id";
 
 function postgresPlaceholders(sql: string): string {
   return sql.replace(/\?(\d+)/g, (_match, number: string) => `$${number}`);
@@ -213,6 +213,7 @@ export async function listPostgresIssues(
     workspaceScope,
     buildIssueFilter(filter, params, {
       ...POSTGRES_FILTER_OPTIONS,
+      workspaceId: options.context?.workspaceId,
       subscriberId: options.subscriberId,
     }),
     addTeamScope(params, options.teamIds),
@@ -381,8 +382,9 @@ async function assertPostgresParent(
          UNION ALL
          SELECT issues.parent_id FROM issues JOIN ancestors ON issues.id = ancestors.id
          WHERE issues.parent_id IS NOT NULL
+           ${context ? "AND issues.workspace_id = $3" : ""}
        ) SELECT 1 FROM ancestors WHERE id = $2 LIMIT 1`,
-      [parentId, issueId],
+      context ? [parentId, issueId, context.workspaceId] : [parentId, issueId],
     );
     if (cycle) throw apiError("VALIDATION_FAILED", "Parent assignment would create a cycle");
   }
@@ -459,10 +461,12 @@ export async function createPostgresIssue(
         throw apiError("VALIDATION_FAILED", "Issue number must be a positive integer");
       }
       if (
-        await tx.one("SELECT 1 FROM issues WHERE team_id = $1 AND number = $2", [
-          team.id,
-          input.number,
-        ])
+        await tx.one(
+          context
+            ? "SELECT 1 FROM issues WHERE workspace_id = $1 AND team_id = $2 AND number = $3"
+            : "SELECT 1 FROM issues WHERE team_id = $1 AND number = $2",
+          context ? [context.workspaceId, team.id, input.number] : [team.id, input.number],
+        )
       ) {
         throw apiError(
           "VALIDATION_FAILED",
@@ -471,20 +475,33 @@ export async function createPostgresIssue(
       }
       number = input.number;
       await tx.execute(
-        `UPDATE teams SET next_issue_number = GREATEST(next_issue_number, $2), updated_at = $3 WHERE id = $1`,
-        [team.id, number + 1, createdAt],
+        context
+          ? `UPDATE teams SET next_issue_number = GREATEST(next_issue_number, $2), updated_at = $3 WHERE id = $1 AND workspace_id = $4`
+          : `UPDATE teams SET next_issue_number = GREATEST(next_issue_number, $2), updated_at = $3 WHERE id = $1`,
+        context
+          ? [team.id, number + 1, createdAt, context.workspaceId]
+          : [team.id, number + 1, createdAt],
       );
     } else {
       const allocated = await tx.one<{ number: number }>(
-        `UPDATE teams
-         SET next_issue_number = GREATEST(
-           next_issue_number,
-           COALESCE((SELECT MAX(number) + 1 FROM issues WHERE team_id = $1), 1)
-         ) + 1,
-         updated_at = $2
-         WHERE id = $1
-         RETURNING next_issue_number - 1 AS number`,
-        [team.id, createdAt],
+        context
+          ? `UPDATE teams
+             SET next_issue_number = GREATEST(
+               next_issue_number,
+               COALESCE((SELECT MAX(number) + 1 FROM issues WHERE team_id = $1 AND workspace_id = $3), 1)
+             ) + 1,
+             updated_at = $2
+             WHERE id = $1 AND workspace_id = $3
+             RETURNING next_issue_number - 1 AS number`
+          : `UPDATE teams
+             SET next_issue_number = GREATEST(
+               next_issue_number,
+               COALESCE((SELECT MAX(number) + 1 FROM issues WHERE team_id = $1), 1)
+             ) + 1,
+             updated_at = $2
+             WHERE id = $1
+             RETURNING next_issue_number - 1 AS number`,
+        context ? [team.id, createdAt, context.workspaceId] : [team.id, createdAt],
       );
       if (!allocated) throw apiError("NOT_FOUND", "Team not found");
       number = Number(allocated.number);
@@ -717,7 +734,18 @@ export async function updatePostgresIssue(
       const updatedAt = now();
       push("updated_at", updatedAt);
       params.push(issue.id);
-      await tx.execute(`UPDATE issues SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
+      if (context) {
+        params.push(context.workspaceId);
+        await tx.execute(
+          `UPDATE issues SET ${sets.join(", ")} WHERE id = $${params.length - 1} AND workspace_id = $${params.length}`,
+          params,
+        );
+      } else {
+        await tx.execute(
+          `UPDATE issues SET ${sets.join(", ")} WHERE id = $${params.length}`,
+          params,
+        );
+      }
       for (const entry of activity)
         await recordPostgresActivity(
           tx,
@@ -746,8 +774,10 @@ export async function archivePostgresIssue(
     await requirePostgresIssueWrite(tx, viewer, issue.team_id, context);
     const archivedAt = now();
     const update = await tx.execute(
-      "UPDATE issues SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
-      [archivedAt, issue.id],
+      context
+        ? "UPDATE issues SET archived_at = $1, updated_at = $1 WHERE id = $2 AND workspace_id = $3 AND archived_at IS NULL"
+        : "UPDATE issues SET archived_at = $1, updated_at = $1 WHERE id = $2 AND archived_at IS NULL",
+      context ? [archivedAt, issue.id, context.workspaceId] : [archivedAt, issue.id],
     );
     const changed = update.rowCount > 0;
     if (changed)
@@ -768,8 +798,10 @@ export async function unarchivePostgresIssue(
     await requirePostgresIssueWrite(tx, viewer, issue.team_id, context);
     const updatedAt = now();
     const update = await tx.execute(
-      "UPDATE issues SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND archived_at IS NOT NULL",
-      [updatedAt, issue.id],
+      context
+        ? "UPDATE issues SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND workspace_id = $3 AND archived_at IS NOT NULL"
+        : "UPDATE issues SET archived_at = NULL, updated_at = $1 WHERE id = $2 AND archived_at IS NOT NULL",
+      context ? [updatedAt, issue.id, context.workspaceId] : [updatedAt, issue.id],
     );
     const changed = update.rowCount > 0;
     if (changed)

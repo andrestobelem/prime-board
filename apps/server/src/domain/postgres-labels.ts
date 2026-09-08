@@ -77,7 +77,9 @@ export async function listPostgresIssueLabels(
       `SELECT labels.* FROM labels
        JOIN issue_labels ON issue_labels.label_id = labels.id
        JOIN issues ON issues.id = issue_labels.issue_id
-       WHERE issue_labels.issue_id = $1 AND ${scope}
+       WHERE issue_labels.issue_id = $1
+         AND ${scope}
+         ${context ? "AND issue_labels.workspace_id = $2" : ""}
        ORDER BY labels.name, labels.id`,
       [issueId, ...(context ? [context.workspaceId] : [])],
     )),
@@ -352,10 +354,12 @@ export async function applyPostgresLabelOps(
   }
   for (const labelId of toRemove) {
     const label = await getPostgresLabel(persistence, labelId, context);
-    await persistence.execute("DELETE FROM issue_labels WHERE issue_id = $1 AND label_id = $2", [
-      issue.id,
-      labelId,
-    ]);
+    await persistence.execute(
+      context
+        ? "DELETE FROM issue_labels WHERE workspace_id = $1 AND issue_id = $2 AND label_id = $3"
+        : "DELETE FROM issue_labels WHERE issue_id = $1 AND label_id = $2",
+      context ? [workspaceIdOf(context), issue.id, labelId] : [issue.id, labelId],
+    );
     await recordPostgresLabelActivity(
       persistence,
       context,

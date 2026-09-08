@@ -12,7 +12,7 @@ import type { PostgresWorkspaceContext } from "./postgres-workspace-scope.ts";
 import {
   issueWorkspaceScope,
   scopedWorkspacePredicate,
-  teamWorkspaceScope,
+  workspaceColumnScope,
   workspaceIdOf,
 } from "./postgres-workspace-scope.ts";
 
@@ -53,7 +53,7 @@ export async function getPostgresCycle(
 ): Promise<PostgresCycleRow | null> {
   const scope = scopedWorkspacePredicate(
     context,
-    (workspaceParam) => teamWorkspaceScope("cycles.team_id", workspaceParam),
+    (workspaceParam) => workspaceColumnScope("cycles", workspaceParam),
     "$2",
   );
   return persistence.one<PostgresCycleRow>(
@@ -70,7 +70,7 @@ export async function listPostgresCycles(
 ): Promise<readonly PostgresCycleRow[]> {
   const scope = scopedWorkspacePredicate(
     context,
-    (workspaceParam) => teamWorkspaceScope("cycles.team_id", workspaceParam),
+    (workspaceParam) => workspaceColumnScope("cycles", workspaceParam),
     "$2",
   );
   return persistence.many<PostgresCycleRow>(
@@ -99,7 +99,7 @@ async function assertPostgresCycleAccess(
   teamId: string,
   context?: PostgresWorkspaceContext,
 ): Promise<void> {
-  await assertCanManagePostgresTeam(persistence, viewer, teamId);
+  await assertCanManagePostgresTeam(persistence, viewer, teamId, context);
 }
 
 async function nextPostgresCycleNumber(
@@ -107,15 +107,20 @@ async function nextPostgresCycleNumber(
   teamId: string,
   context?: PostgresWorkspaceContext,
 ): Promise<number> {
-  const team = await getPostgresTeam(persistence, { id: teamId });
+  const team = await getPostgresTeam(persistence, { id: teamId }, context);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   const row = await persistence.one<{ n: number }>(
-    "SELECT COALESCE(MAX(number), 0) AS n FROM cycles WHERE team_id = $1",
-    [teamId],
+    context
+      ? "SELECT COALESCE(MAX(number), 0) AS n FROM cycles WHERE team_id = $1 AND workspace_id = $2"
+      : "SELECT COALESCE(MAX(number), 0) AS n FROM cycles WHERE team_id = $1",
+    context ? [teamId, workspaceIdOf(context)] : [teamId],
   );
   let highest = Number(row?.n ?? 0);
   const events = await persistence.many<{ payload: string }>(
-    "SELECT payload FROM activity WHERE type = 'cycle_changed'",
+    context
+      ? "SELECT payload FROM activity WHERE type = 'cycle_changed' AND workspace_id = $1"
+      : "SELECT payload FROM activity WHERE type = 'cycle_changed'",
+    context ? [workspaceIdOf(context)] : [],
   );
   const prefix = `${team.key}/`;
   for (const event of events) {
@@ -153,7 +158,12 @@ export async function createPostgresCycle(
   const id = newId();
   const timestamp = now();
   await persistence.transaction(async (tx) => {
-    await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [input.teamId]);
+    await tx.one<{ id: string }>(
+      context
+        ? "SELECT id FROM teams WHERE id = $1 AND workspace_id = $2 FOR UPDATE"
+        : "SELECT id FROM teams WHERE id = $1 FOR UPDATE",
+      context ? [input.teamId, workspaceIdOf(context)] : [input.teamId],
+    );
     const number = await nextPostgresCycleNumber(tx, input.teamId, context);
     if (context) {
       await tx.execute(
@@ -210,7 +220,7 @@ export async function updatePostgresCycle(
 ): Promise<PostgresCycleRow> {
   const existing = await getPostgresCycle(persistence, id, context);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
-  await assertPostgresCycleAccess(persistence, viewer, existing.team_id);
+  await assertPostgresCycleAccess(persistence, viewer, existing.team_id, context);
   const startsAt = input.startsAt ?? existing.starts_at;
   const endsAt = input.endsAt ?? existing.ends_at;
   validateDates(startsAt, endsAt);
@@ -233,11 +243,20 @@ export async function updatePostgresCycle(
   if (sets.length) {
     push("updated_at", now());
     params.push(id);
-    const row = await persistence.one<PostgresCycleRow>(
-      `UPDATE cycles SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
-      params,
-    );
-    if (!row) throw apiError("NOT_FOUND", "Cycle not found");
+    if (context) {
+      params.push(workspaceIdOf(context));
+      const row = await persistence.one<PostgresCycleRow>(
+        `UPDATE cycles SET ${sets.join(", ")} WHERE id = $${params.length - 1} AND workspace_id = $${params.length} RETURNING *`,
+        params,
+      );
+      if (!row) throw apiError("NOT_FOUND", "Cycle not found");
+    } else {
+      const row = await persistence.one<PostgresCycleRow>(
+        `UPDATE cycles SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+        params,
+      );
+      if (!row) throw apiError("NOT_FOUND", "Cycle not found");
+    }
   }
   return (await getPostgresCycle(persistence, id, context))!;
 }
@@ -246,9 +265,13 @@ async function preserveCycleActivityReferences(
   tx: PersistenceTransaction,
   cycleId: string,
   reference: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   const activities = await tx.many<{ id: string; payload: string }>(
-    "SELECT id, payload FROM activity WHERE type = 'cycle_changed'",
+    context
+      ? "SELECT id, payload FROM activity WHERE type = 'cycle_changed' AND workspace_id = $1"
+      : "SELECT id, payload FROM activity WHERE type = 'cycle_changed'",
+    context ? [workspaceIdOf(context)] : [],
   );
   for (const activity of activities) {
     let payload: Record<string, unknown>;
@@ -279,11 +302,17 @@ async function recordCycleActivity(
   actorId: string,
   payload: Record<string, unknown>,
   createdAt: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   await tx.execute(
-    `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
-     VALUES ($1, $2, $3, 'cycle_changed', $4, $5)`,
-    [newId(), issueId, actorId, JSON.stringify(payload), createdAt],
+    context
+      ? `INSERT INTO activity (id, workspace_id, issue_id, actor_id, type, payload, created_at)
+         VALUES ($1, $2, $3, $4, 'cycle_changed', $5, $6)`
+      : `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
+         VALUES ($1, $2, $3, 'cycle_changed', $4, $5)`,
+    context
+      ? [newId(), workspaceIdOf(context), issueId, actorId, JSON.stringify(payload), createdAt]
+      : [newId(), issueId, actorId, JSON.stringify(payload), createdAt],
   );
 }
 
@@ -295,24 +324,40 @@ export async function deletePostgresCycle(
 ): Promise<boolean> {
   const existing = await getPostgresCycle(persistence, id, context);
   if (!existing) throw apiError("NOT_FOUND", "Cycle not found");
-  await assertPostgresCycleAccess(persistence, viewer, existing.team_id);
-  const team = await getPostgresTeam(persistence, { id: existing.team_id });
+  await assertPostgresCycleAccess(persistence, viewer, existing.team_id, context);
+  const team = await getPostgresTeam(persistence, { id: existing.team_id }, context);
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   const reference = `${team.key}/${existing.number}`;
   await persistence.transaction(async (tx) => {
-    await preserveCycleActivityReferences(tx, id, reference);
+    await preserveCycleActivityReferences(tx, id, reference, context);
     const timestamp = now();
     const issues = await tx.many<{ id: string }>(
-      `UPDATE issues SET cycle_id = NULL, updated_at = $1
-       WHERE cycle_id = $2
-       RETURNING id`,
-      [timestamp, id],
+      context
+        ? `UPDATE issues SET cycle_id = NULL, updated_at = $1
+           WHERE cycle_id = $2 AND workspace_id = $3
+           RETURNING id`
+        : `UPDATE issues SET cycle_id = NULL, updated_at = $1
+           WHERE cycle_id = $2
+           RETURNING id`,
+      context ? [timestamp, id, workspaceIdOf(context)] : [timestamp, id],
     );
     for (const issue of issues) {
-      await recordCycleActivity(tx, issue.id, viewer.id, { from: reference, to: null }, timestamp);
+      await recordCycleActivity(
+        tx,
+        issue.id,
+        viewer.id,
+        { from: reference, to: null },
+        timestamp,
+        context,
+      );
     }
 
-    await tx.execute("DELETE FROM cycles WHERE id = $1", [id]);
+    await tx.execute(
+      context
+        ? "DELETE FROM cycles WHERE id = $1 AND workspace_id = $2"
+        : "DELETE FROM cycles WHERE id = $1",
+      context ? [id, workspaceIdOf(context)] : [id],
+    );
   });
   return true;
 }
@@ -326,8 +371,9 @@ export async function cycleProgress(
     `SELECT count(*)::int AS total,
             COALESCE(sum(CASE WHEN workflow_states.type IN ('completed', 'canceled') THEN 1 ELSE 0 END), 0)::int AS done
      FROM issues JOIN workflow_states ON workflow_states.id = issues.state_id
-     WHERE issues.cycle_id = $1 AND issues.archived_at IS NULL`,
-    [cycleId],
+     WHERE issues.cycle_id = $1 AND issues.archived_at IS NULL
+       ${context ? "AND issues.workspace_id = $2 AND workflow_states.workspace_id = $2" : ""}`,
+    [cycleId, ...(context ? [workspaceIdOf(context)] : [])],
   );
   const totalIssues = Number(row?.total ?? 0);
   const completedIssues = Number(row?.done ?? 0);
@@ -351,16 +397,23 @@ export async function carryOverPostgresCycle(
   if (from.team_id !== to.team_id) {
     throw apiError("VALIDATION_FAILED", "Carry-over requires cycles of the same team");
   }
-  await assertPostgresCycleAccess(persistence, viewer, from.team_id);
+  await assertPostgresCycleAccess(persistence, viewer, from.team_id, context);
   let affected: readonly { id: string }[] = [];
   await persistence.transaction(async (tx) => {
     const timestamp = now();
     affected = await tx.many<{ id: string }>(
-      `UPDATE issues SET cycle_id = $2, updated_at = $3
-       WHERE cycle_id = $1 AND archived_at IS NULL
-         AND state_id IN (SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled'))
-       RETURNING id`,
-      [fromCycleId, toCycleId, timestamp],
+      context
+        ? `UPDATE issues SET cycle_id = $2, updated_at = $3
+           WHERE cycle_id = $1 AND archived_at IS NULL AND workspace_id = $4
+             AND state_id IN (SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled') AND workspace_id = $4)
+           RETURNING id`
+        : `UPDATE issues SET cycle_id = $2, updated_at = $3
+           WHERE cycle_id = $1 AND archived_at IS NULL
+             AND state_id IN (SELECT id FROM workflow_states WHERE type NOT IN ('completed', 'canceled'))
+           RETURNING id`,
+      context
+        ? [fromCycleId, toCycleId, timestamp, workspaceIdOf(context)]
+        : [fromCycleId, toCycleId, timestamp],
     );
     for (const issue of affected) {
       await recordCycleActivity(
@@ -369,6 +422,7 @@ export async function carryOverPostgresCycle(
         viewer.id,
         { from: fromCycleId, to: toCycleId },
         timestamp,
+        context,
       );
     }
   });
@@ -396,5 +450,5 @@ export async function canAccessPostgresCycle(
 ): Promise<boolean> {
   const cycle = await getPostgresCycle(persistence, cycleId, context);
   const team = cycle ? await getPostgresTeam(persistence, { id: cycle.team_id }, context) : null;
-  return Boolean(team && (await canDiscoverPostgresTeam(persistence, viewer, team)));
+  return Boolean(team && (await canDiscoverPostgresTeam(persistence, viewer, team, context)));
 }

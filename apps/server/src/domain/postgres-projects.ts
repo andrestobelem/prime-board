@@ -92,7 +92,9 @@ export async function listPostgresProjectTeamIds(
   const rows = await persistence.many<{ team_id: string }>(
     `SELECT project_teams.team_id FROM project_teams
        JOIN projects ON projects.id = project_teams.project_id
-      WHERE project_teams.project_id = $1 AND ${scope}
+      WHERE project_teams.project_id = $1
+        AND ${scope}
+        ${context ? "AND project_teams.workspace_id = $2" : ""}
       ORDER BY project_teams.team_id`,
     [projectId, ...(context ? [context.workspaceId] : [])],
   );
@@ -123,7 +125,7 @@ export async function listPostgresProjects(
   if (teamId) {
     params.push(teamId);
     clauses.push(
-      `EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = projects.id AND project_teams.team_id = $${params.length})`,
+      `EXISTS (SELECT 1 FROM project_teams WHERE project_teams.project_id = projects.id AND project_teams.team_id = $${params.length}${context ? ` AND project_teams.workspace_id = $1` : ""})`,
     );
   }
   const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
@@ -335,13 +337,27 @@ export async function updatePostgresProject(
       if (sets.length) {
         push("updated_at", now());
         params.push(id);
-        const row = await tx.one<PostgresProjectRow>(
-          `UPDATE projects SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
-          params,
-        );
-        if (!row) throw apiError("NOT_FOUND", "Project not found");
+        if (context) {
+          params.push(workspaceIdOf(context));
+          const row = await tx.one<PostgresProjectRow>(
+            `UPDATE projects SET ${sets.join(", ")} WHERE id = $${params.length - 1} AND workspace_id = $${params.length} RETURNING *`,
+            params,
+          );
+          if (!row) throw apiError("NOT_FOUND", "Project not found");
+        } else {
+          const row = await tx.one<PostgresProjectRow>(
+            `UPDATE projects SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+            params,
+          );
+          if (!row) throw apiError("NOT_FOUND", "Project not found");
+        }
       } else {
-        await tx.execute("UPDATE projects SET updated_at = $1 WHERE id = $2", [now(), id]);
+        await tx.execute(
+          context
+            ? "UPDATE projects SET updated_at = $1 WHERE id = $2 AND workspace_id = $3"
+            : "UPDATE projects SET updated_at = $1 WHERE id = $2",
+          context ? [now(), id, workspaceIdOf(context)] : [now(), id],
+        );
       }
     }
   });
@@ -358,8 +374,10 @@ export async function archivePostgresProject(
   if (!project) throw apiError("NOT_FOUND", "Project not found");
   const archivedAt = archived ? (project.archived_at ?? now()) : null;
   const row = await persistence.one<PostgresProjectRow>(
-    "UPDATE projects SET archived_at = $1, updated_at = $2 WHERE id = $3 RETURNING *",
-    [archivedAt, now(), id],
+    context
+      ? "UPDATE projects SET archived_at = $1, updated_at = $2 WHERE id = $3 AND workspace_id = $4 RETURNING *"
+      : "UPDATE projects SET archived_at = $1, updated_at = $2 WHERE id = $3 RETURNING *",
+    context ? [archivedAt, now(), id, workspaceIdOf(context)] : [archivedAt, now(), id],
   );
   if (!row) throw apiError("NOT_FOUND", "Project not found");
   return row;
