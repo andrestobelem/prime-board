@@ -9470,6 +9470,77 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("rechaza un source comments ausente o sin body antes del marker 0028", () => {
+    const cases = ["DROP TABLE comments", "ALTER TABLE comments RENAME COLUMN body TO content"];
+    for (const sql of cases) {
+      const db = databaseWithMigrationsThrough(27);
+      try {
+        db.exec(sql);
+        const beforeMain = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all();
+        const beforeTemp = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        const beforeSchemaVersion = db.query("PRAGMA schema_version").get();
+        const beforeForeignKeys = db.query("PRAGMA foreign_keys").get();
+
+        expect(() => migrate(db)).toThrow(/comments.*source.*comments.*(?:missing|body)/i);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+        expect(
+          db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+        ).toEqual(beforeMain);
+        expect(
+          db
+            .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+            .all(),
+        ).toEqual(beforeTemp);
+        expect(db.query("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
+        expect(db.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+        expect(db.query("SELECT version FROM _migrations WHERE version >= 28").all()).toEqual([]);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("rechaza una tabla FTS5 parcial sin escribir antes del marker", () => {
+    const db = databaseWithMigrationsThrough(28);
+    try {
+      db.exec("CREATE TABLE comments_fts(body TEXT)");
+      const beforeMain = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const beforeSchemaVersion = db.query("PRAGMA schema_version").get();
+
+      expect(() => migrate(db)).toThrow(/comments_fts.*virtual|FTS5/i);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeMain);
+      expect(db.query("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("acepta la tabla FTS5 con opciones canónicas en otro orden y casing", () => {
+    const db = databaseWithMigrationsThrough(28);
+    try {
+      db.exec(
+        "CREATE VIRTUAL TABLE COMMENTS_FTS USING FTS5(BODY, CONTENT_ROWID = 'ROWID', CONTENT = 'COMMENTS')",
+      );
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.query("SELECT version, name FROM _migrations WHERE version = 29").all()).toEqual([
+        { version: 29, name: "comments_fts" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("rechaza triggers FTS incompatibles aunque IF NOT EXISTS los omita", () => {
     const db = databaseWithMigrationsThrough(28);
     try {

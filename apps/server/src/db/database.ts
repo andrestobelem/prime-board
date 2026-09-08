@@ -4854,6 +4854,11 @@ interface ParsedVirtualTableDefinition {
   options: readonly SqlToken[];
 }
 
+interface Fts5TableContract {
+  columns: readonly string[];
+  options: ReadonlyMap<string, string>;
+}
+
 function virtualTableDefinitionFromSql(definition: string): ParsedVirtualTableDefinition | null {
   const parsed = sqliteTokens(definition);
   const tokens = parsed === null ? null : singleSqlStatement(parsed);
@@ -4897,6 +4902,87 @@ function virtualTableDefinitionFromSql(definition: string): ParsedVirtualTableDe
   return options.length > 0 ? { name, schema, module: module.value, options } : null;
 }
 
+function fts5OptionValue(token: SqlToken | undefined): string | null {
+  if (token === undefined) return null;
+  if (token.kind === "identifier" || token.kind === "quoted_identifier") return token.value;
+  if (token.kind !== "string" || token.value.length < 2) return null;
+  return token.value.slice(1, -1).replaceAll("''", "'");
+}
+
+function fts5TableContract(definition: ParsedVirtualTableDefinition): Fts5TableContract | null {
+  const opening = definition.options[0];
+  const closing = definition.options[definition.options.length - 1];
+  if (opening?.value !== "(" || closing?.value !== ")") return null;
+
+  const argumentsList: SqlToken[][] = [];
+  let argumentStart = 1;
+  let depth = 0;
+  for (let position = 1; position < definition.options.length - 1; position += 1) {
+    const token = definition.options[position];
+    if (token?.value === "(") depth += 1;
+    else if (token?.value === ")") {
+      depth -= 1;
+      if (depth < 0) return null;
+    } else if (token?.value === "," && depth === 0) {
+      const argument = definition.options.slice(argumentStart, position);
+      if (argument.length === 0) return null;
+      argumentsList.push([...argument]);
+      argumentStart = position + 1;
+    }
+  }
+  if (depth !== 0) return null;
+  const lastArgument = definition.options.slice(argumentStart, -1);
+  if (lastArgument.length === 0) return null;
+  argumentsList.push([...lastArgument]);
+
+  const columns: string[] = [];
+  const options = new Map<string, string>();
+  for (const argument of argumentsList) {
+    if (argument.length === 1 && isSqlNameToken(argument[0])) {
+      columns.push(argument[0].value);
+      continue;
+    }
+    if (argument.length !== 3 || !isSqlNameToken(argument[0]) || argument[1]?.value !== "=") {
+      return null;
+    }
+    const key = normalizeSqliteIdentifier(argument[0].value);
+    const value = fts5OptionValue(argument[2]);
+    if (value === null || options.has(key)) return null;
+    options.set(key, value);
+  }
+  return { columns, options };
+}
+
+function sameFts5TableContract(
+  actual: ParsedVirtualTableDefinition,
+  expected: ParsedVirtualTableDefinition,
+): boolean {
+  if (
+    !sameSqliteIdentifier(actual.name, expected.name) ||
+    (actual.schema !== null && !sameSqliteIdentifier(actual.schema, "main")) ||
+    !sameSqliteIdentifier(actual.module, expected.module)
+  ) {
+    return false;
+  }
+  const actualContract = fts5TableContract(actual);
+  const expectedContract = fts5TableContract(expected);
+  if (actualContract === null || expectedContract === null) return false;
+  if (
+    actualContract.columns.length !== expectedContract.columns.length ||
+    !actualContract.columns.every((column, position) => {
+      const expectedColumn = expectedContract.columns[position];
+      return expectedColumn !== undefined && sameSqliteIdentifier(column, expectedColumn);
+    }) ||
+    actualContract.options.size !== expectedContract.options.size
+  ) {
+    return false;
+  }
+  return [...expectedContract.options].every(([key, expectedValue]) => {
+    const actualValue = actualContract.options.get(key);
+    return actualValue !== undefined && sameSqliteIdentifier(actualValue, expectedValue);
+  });
+}
+
 function commentsFtsMigrationSchemaProblems(db: Database, applied: ReadonlySet<number>): string[] {
   const problems: string[] = [];
   const existing = schemaObjectsWithName(db, "comments_fts").find(({ temporary }) => !temporary);
@@ -4924,13 +5010,7 @@ function commentsFtsMigrationSchemaProblems(db: Database, applied: ReadonlySet<n
       tableList.ncol !== 3 ||
       actualDefinition === null ||
       expectedDefinition === null ||
-      !sameSqliteIdentifier(actualDefinition.name, expectedDefinition.name) ||
-      actualDefinition.schema !== expectedDefinition.schema ||
-      !sameSqliteIdentifier(actualDefinition.module, expectedDefinition.module) ||
-      !sameSqlTokens(
-        comparableSqlTokens(actualDefinition.options),
-        comparableSqlTokens(expectedDefinition.options),
-      )
+      !sameFts5TableContract(actualDefinition, expectedDefinition)
     ) {
       problems.push("comments_fts is not the canonical FTS5 virtual table");
     }
@@ -4939,7 +5019,7 @@ function commentsFtsMigrationSchemaProblems(db: Database, applied: ReadonlySet<n
   // Una base nueva crea `comments` antes de la migración 0029. Si el marker 0028
   // ya existe, una tabla fuente ausente o alterada impide conservar el contrato
   // de contenido y triggers FTS5.
-  if (applied.has(28)) {
+  if (applied.has(1)) {
     if (!hasTable(db, "comments")) {
       problems.push("comments_fts source table comments is missing");
     } else if (!hasColumn(db, "comments", "body")) {
