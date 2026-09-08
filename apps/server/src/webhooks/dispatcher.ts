@@ -331,7 +331,7 @@ async function postgresEventWorkspaceId(
 ): Promise<string | null> {
   const workspaceId = await postgresSingleWorkspaceId(persistence);
   if (!workspaceId) return null;
-  if (data._workspaceId !== undefined) {
+  if (Object.prototype.hasOwnProperty.call(data, "_workspaceId")) {
     return typeof data._workspaceId === "string" && data._workspaceId === workspaceId
       ? workspaceId
       : null;

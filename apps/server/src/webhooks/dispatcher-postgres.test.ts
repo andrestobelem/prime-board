@@ -192,6 +192,38 @@ describe("PostgreSQL webhook dispatcher", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("falla cerrado cuando _workspaceId está presente y no es string en PostgreSQL", async () => {
+    const hook: WebhookRow = {
+      id: "hook-invalid-workspace-metadata",
+      url: "https://example.test/invalid-workspace-metadata",
+      secret: "fixture-secret",
+      events: '["issue.created"]',
+      enabled: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+      owner_id: "admin-1",
+      team_id: null,
+    };
+    const requests: Request[] = [];
+    const fetchFn = (async (input: URL | RequestInfo, init?: RequestInit) => {
+      requests.push(new Request(input, init));
+      return new Response("ok");
+    }) as typeof fetch;
+    const dispatcher = new WebhookDispatcher(
+      new Database(":memory:"),
+      { fetchFn, retryDelays: [] },
+      fakePersistence(hook),
+    );
+
+    dispatcher.emit(
+      "issue.created",
+      { id: "admin-1", name: "admin", type: "human" },
+      { id: "issue-1", teamId: "team-1", _workspaceId: undefined },
+    );
+    await dispatcher.idle();
+
+    expect(requests).toHaveLength(0);
+  });
+
   it("filtra hooks PostgreSQL con Workspace distinto", async () => {
     const hook: WebhookRow = {
       id: "hook-foreign-row",
