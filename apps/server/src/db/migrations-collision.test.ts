@@ -9438,6 +9438,38 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("rechaza TEMP INDEXED BY ausente en fresh sin markers, DDL ni PRAGMA", () => {
+    const db = new Database(":memory:", { strict: true });
+    try {
+      db.exec(
+        "PRAGMA foreign_keys = ON; " +
+          "CREATE TEMP VIEW bad AS SELECT id FROM workspace INDEXED BY missing_idx",
+      );
+      const snapshot = () => ({
+        main: db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all(),
+        temp: db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_temp_master ORDER BY type, name")
+          .all(),
+        databases: db.query("PRAGMA database_list").all(),
+        schemaVersion: db.query("PRAGMA schema_version").get(),
+        foreignKeys: db.query("PRAGMA foreign_keys").get(),
+      });
+      const before = snapshot();
+
+      expect(() => migrate(db)).toThrow(
+        /temporary view bad.*missing.*index missing_idx.*workspace/i,
+      );
+      expect(
+        db.query("SELECT count(*) AS count FROM sqlite_master WHERE name = '_migrations'").get(),
+      ).toEqual({ count: 0 });
+      expect(snapshot()).toEqual(before);
+    } finally {
+      db.close();
+    }
+  });
+
   it("rechaza una tabla ordinaria que ocupa el nombre de comments_fts antes de crear markers", () => {
     const db = databaseWithMigrationsThrough(28);
     try {

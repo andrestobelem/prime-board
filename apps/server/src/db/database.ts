@@ -4413,6 +4413,34 @@ function migrationPreflightTemporaryReferenceCanBeDeferred(
   );
 }
 
+function migrationPreflightValidateTemporaryIndexedBy(
+  db: Database,
+  entry: MigrationPreflightSchemaObject,
+): void {
+  if (!entry.temporary || (entry.object.type !== "view" && entry.object.type !== "trigger")) {
+    return;
+  }
+  if (entry.object.sql === null) return;
+  const references = indexedByReferences(entry.object.sql);
+  if (references === null) return;
+
+  for (const reference of references) {
+    if (reference.source.kind === "cte") {
+      throw new Error(
+        `Cannot run migrations safely: temporary ${entry.object.type} ${entry.object.name} ` +
+          `uses INDEXED BY ${reference.indexName} on CTE ${reference.tableName}`,
+      );
+    }
+    if (!indexedByReferenceUsesExistingIndex({ db, reference, temporary: true })) {
+      throw new Error(
+        `Cannot run migrations safely: temporary ${entry.object.type} ${entry.object.name} ` +
+          `references missing or unrelated index ${reference.indexName} for table ` +
+          `${reference.tableName}`,
+      );
+    }
+  }
+}
+
 function migrationPreflightValidateReference(
   reference: WorkspaceConstraintMigrationReference,
   object: MigrationPreflightSchemaObject,
@@ -4573,6 +4601,7 @@ function migrationPreflightValidateCurrentObjects(
         ),
       );
     }
+    migrationPreflightValidateTemporaryIndexedBy(db, entry);
     if (entry.temporary && object.type === "trigger") {
       const definition = object.sql === null ? null : triggerDefinitionFromSql(object.sql);
       if (definition === null) {
