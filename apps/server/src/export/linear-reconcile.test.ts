@@ -60,6 +60,12 @@ describe("reconcileLinearExport", () => {
       const valid: LinearExport = {
         ...source,
         actors: [{ id: "00000000-0000-4000-8000-000000000025", name: "admin", type: "human" }],
+        teams: [
+          {
+            ...source.teams[0]!,
+            members: [{ actorId: "00000000-0000-4000-8000-000000000025", role: "owner" }],
+          },
+        ],
         issues: [{ ...source.issues[0]!, creatorId: "00000000-0000-4000-8000-000000000025" }],
       };
       writeLinearExportToRepo(valid, root);

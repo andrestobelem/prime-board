@@ -23,12 +23,18 @@ export interface LinearState {
   position?: number | null;
   description?: string | null;
 }
+export interface LinearTeamMember {
+  actorId: string;
+  role: "member" | "owner";
+}
 export interface LinearTeam {
   id: string;
   key: string;
   name: string;
   description?: string | null;
   states: LinearState[];
+  /** Memberships are required to avoid inferring every actor as an owner. */
+  members?: LinearTeamMember[];
   defaultStateId?: string | null;
   autoClosePeriod?: number | null;
   autoArchivePeriod?: number | null;
@@ -191,8 +197,10 @@ function assertLinearExportShape(source: LinearExport): void {
         throw new Error(`Invalid Linear export ${label}[${index}]: expected object`);
     });
   };
-  for (const [index, team] of source.teams.entries())
+  for (const [index, team] of source.teams.entries()) {
     assertArray(team.states, `teams[${index}].states`);
+    if (team.members != null) assertArray(team.members, `teams[${index}].members`);
+  }
   for (const [index, project] of source.projects.entries()) {
     if (!Array.isArray(project.teamIds))
       throw new Error(`Invalid Linear export projects[${index}].teamIds: expected array`);
@@ -418,6 +426,8 @@ export function validateLinearExportUuidIds(source: LinearExport): MigrationFind
     check(team.id, "team", team.key);
     check(team.defaultStateId, "team.defaultStateId", team.key);
     check(team.autoCloseStateId, "team.autoCloseStateId", team.key);
+    for (const member of Array.isArray(team.members) ? team.members : [])
+      check(member.actorId, "team.member.actorId", team.key);
     for (const state of Array.isArray(team.states) ? team.states : [])
       check(state.id, "state", state.name);
   }
@@ -657,6 +667,7 @@ export function writeLinearExportToRepo(
 
   const teamById = new Map(source.teams.map((team) => [team.id, team]));
   const teamKeyById = new Map<string, string>();
+  const teamMembersById = new Map<string, LinearTeamMember[]>();
   const teamKeys = new Map<string, string>();
   const stateNameById = new Map<string, string>();
   const stateTypeById = new Map<string, string>();
@@ -691,6 +702,55 @@ export function writeLinearExportToRepo(
       );
     teamKeys.set(key, team.id);
     teamKeyById.set(team.id, key);
+    const members = team.members;
+    const validMembers: LinearTeamMember[] = [];
+    if (!Array.isArray(members)) {
+      add(
+        conflicts,
+        "MISSING_TEAM_MEMBERSHIPS",
+        `Team ${key} must declare memberships instead of inferring owners`,
+        team.id,
+      );
+    } else if (members.length === 0) {
+      add(conflicts, "EMPTY_TEAM_MEMBERSHIPS", `Team ${key} must have members`, team.id);
+    } else {
+      const memberActorIds = new Set<string>();
+      for (const member of members) {
+        if (!requiredString(member.actorId, "team member actorId", conflicts, team.id)) continue;
+        if (!actorNameById.has(member.actorId)) {
+          add(
+            conflicts,
+            "UNKNOWN_TEAM_MEMBER",
+            `Team ${key} refers to unknown member ${member.actorId}`,
+            team.id,
+          );
+          continue;
+        }
+        if (member.role !== "member" && member.role !== "owner") {
+          add(
+            conflicts,
+            "INVALID_TEAM_MEMBER_ROLE",
+            `Team ${key} member ${member.actorId} has invalid role ${String(member.role)}`,
+            team.id,
+          );
+          continue;
+        }
+        if (memberActorIds.has(member.actorId)) {
+          add(
+            conflicts,
+            "DUPLICATE_TEAM_MEMBER",
+            `Team ${key} repeats member ${member.actorId}`,
+            team.id,
+          );
+          continue;
+        }
+        memberActorIds.add(member.actorId);
+        validMembers.push(member);
+      }
+      if (!validMembers.some((member) => member.role === "owner"))
+        add(conflicts, "MISSING_TEAM_OWNER", `Team ${key} must have an owner`, team.id);
+    }
+    teamMembersById.set(team.id, validMembers);
     if (!Array.isArray(team.states)) {
       add(conflicts, "INVALID_FIELD", `Team ${key} states must be an array`, team.id);
       continue;
@@ -1516,6 +1576,12 @@ export function writeLinearExportToRepo(
               .filter((label) => label.teamId === team.id)
               .map((label) => ({ name: label.name, color: label.color ?? "#95a2b3" }))
               .sort((a, b) => a.name.localeCompare(b.name)),
+            members: (teamMembersById.get(team.id) ?? [])
+              .map((member) => ({
+                actor: actorNameById.get(member.actorId)!,
+                role: member.role,
+              }))
+              .sort((a, b) => a.actor.localeCompare(b.actor) || a.role.localeCompare(b.role)),
           };
         })
         .sort((a, b) => a.key!.localeCompare(b.key!)),

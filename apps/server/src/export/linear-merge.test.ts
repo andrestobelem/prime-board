@@ -16,6 +16,7 @@ const source: LinearExport = {
       key: "AT",
       name: "Linear",
       states: [{ id: "00000000-0000-4000-8000-000000000034", name: "Todo", type: "unstarted" }],
+      members: [{ actorId: "00000000-0000-4000-8000-000000000032", role: "owner" }],
     },
   ],
   labels: [],

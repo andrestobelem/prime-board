@@ -40,6 +40,10 @@ const source: LinearExport = {
           position: 1,
         },
       ],
+      members: [
+        { actorId: "00000000-0000-4000-8000-000000000002", role: "owner" },
+        { actorId: "00000000-0000-4000-8000-000000000003", role: "member" },
+      ],
     },
   ],
   labels: [
@@ -150,6 +154,13 @@ describe("writeLinearExportToRepo", () => {
       expect(readFileSync(join(root, ".prime-board", "issues", "AT-1.md"), "utf8")).toContain(
         "assignee: agent",
       );
+      expect(
+        JSON.parse(readFileSync(join(root, ".prime-board", "meta", "teams.json"), "utf8"))[0]
+          .members,
+      ).toEqual([
+        { actor: "agent", role: "member" },
+        { actor: "Andrés", role: "owner" },
+      ]);
       expect(readFileSync(join(root, ".prime-board", "log", "AT-2.jsonl"), "utf8")).toContain(
         '"type":"state_changed"',
       );
@@ -236,6 +247,23 @@ describe("validación del plan Linear", () => {
       expect(result.files).toBe(0);
       expect(existsSync(join(root, ".prime-board"))).toBe(false);
       expect(() => writeLinearExportToRepo(invalid, root)).toThrow(/conflict/);
+      expect(existsSync(join(root, ".prime-board"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza snapshots sin memberships en vez de inferir owners", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-missing-members-"));
+    try {
+      const teamWithoutMembers = { ...source.teams[0]! };
+      delete teamWithoutMembers.members;
+      const invalid: LinearExport = { ...source, teams: [teamWithoutMembers] };
+      const result = writeLinearExportToRepo(invalid, root, { dryRun: true });
+      expect(result.conflicts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "MISSING_TEAM_MEMBERSHIPS" })]),
+      );
+      expect(result.files).toBe(0);
       expect(existsSync(join(root, ".prime-board"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
