@@ -856,6 +856,7 @@ export function rebuildFromRepo(
 
       if (!Array.isArray(team.members))
         throw new Error(`Team "${team.key}" is missing memberships`);
+      if (team.members.length === 0) throw new Error(`Team "${team.key}" has no memberships`);
       const members = team.members;
       for (const member of members as Array<Record<string, any>>) {
         const actorId = actorIds.get(member.actor);

@@ -157,6 +157,19 @@ describe("rebuildFromRepo", () => {
           )
           .get(),
       ).toEqual(before);
+      teams[0]!.members = [];
+      writeFileSync(teamsPath, JSON.stringify(teams));
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/memberships/);
+      expect(
+        fresh
+          .query(
+            `SELECT
+               (SELECT count(*) FROM actors) AS actors,
+               (SELECT count(*) FROM teams) AS teams,
+               (SELECT count(*) FROM team_memberships) AS memberships`,
+          )
+          .get(),
+      ).toEqual(before);
     } finally {
       fresh.close();
       rmSync(snapshot, { recursive: true, force: true });
