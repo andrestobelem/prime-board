@@ -366,6 +366,46 @@ describe("cycles", () => {
         expect(Date.parse(first.endsAt)).toBeLessThanOrEqual(Date.parse(manual.startsAt));
         expect(Date.parse(manual.endsAt)).toBeLessThanOrEqual(Date.parse(lastCadence.startsAt));
       }
+
+      const cadenceToDelete =
+        scenario.position === "after"
+          ? cycles.find((cycle) => cycle.number === 3)!
+          : cycles.find((cycle) => cycle.number === 1)!;
+      const deleted = await gql(app, `mutation($id: ID!) { cycleDelete(id: $id) { success } }`, {
+        id: cadenceToDelete.id,
+      });
+      expect(deleted.errors).toBeUndefined();
+
+      const replenishedResult = await gql(
+        app,
+        `query($teamId: ID!) {
+          cycles(teamId: $teamId) {
+            id number startsAt endsAt cadenceSource archivedAt
+          }
+        }`,
+        { teamId },
+      );
+      expect(replenishedResult.errors).toBeUndefined();
+      const replenished = replenishedResult.data!.cycles as typeof initialCycles;
+      expect(replenished).toHaveLength(3);
+      expect(replenished.filter((cycle) => cycle.cadenceSource === "CADENCE")).toHaveLength(2);
+      expect(replenished.every((cycle) => cycle.archivedAt === null)).toBe(true);
+      expect(replenished).toContainEqual(
+        expect.objectContaining({
+          id: second.id,
+          startsAt: manualStartsAt,
+          endsAt: manualEndsAt,
+          cadenceSource: "MANUAL",
+        }),
+      );
+      const replenishedByDate = [...replenished].sort(
+        (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt) || a.number - b.number,
+      );
+      for (let index = 1; index < replenishedByDate.length; index += 1) {
+        expect(Date.parse(replenishedByDate[index - 1]!.endsAt)).toBeLessThanOrEqual(
+          Date.parse(replenishedByDate[index]!.startsAt),
+        );
+      }
     }
   });
 

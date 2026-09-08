@@ -62,15 +62,41 @@ function cycle(
   };
 }
 
-function transactionFor(cycles: PostgresCycleRow[]): PersistenceTransaction {
+function transactionFor(cycles: PostgresCycleRow[], team = planningTeam()): PersistenceTransaction {
   return {
-    async one<Row extends object>(): Promise<Row | null> {
+    async one<Row extends object>(sql: string, params?: SqlParameters): Promise<Row | null> {
+      if (sql.includes("SELECT * FROM teams WHERE id = $1")) {
+        return team as unknown as Row;
+      }
+      if (sql.includes("SELECT COALESCE(MAX(number)")) {
+        const highest = cycles.reduce((value, row) => Math.max(value, row.number), 0);
+        return { n: highest } as unknown as Row;
+      }
+      if (sql.includes("INSERT INTO cycles")) {
+        const [id, teamId, number, name, startsAt, endsAt, createdAt] = params ?? [];
+        const row = cycle(
+          String(id),
+          Number(number),
+          "upcoming",
+          String(startsAt),
+          String(endsAt),
+          "cadence",
+        );
+        row.team_id = String(teamId);
+        row.name = String(name);
+        row.created_at = String(createdAt);
+        row.updated_at = String(createdAt);
+        cycles.push(row);
+        return row as unknown as Row;
+      }
       return null;
     },
     async many<Row extends object>(sql: string): Promise<readonly Row[]> {
+      if (sql.includes("FROM activity")) return [];
       const rows = sql.includes("state = 'upcoming'")
         ? cycles.filter((row) => row.state === "upcoming" && row.archived_at === null)
         : cycles.filter((row) => row.archived_at === null);
+      if (sql.includes("ORDER BY number")) rows.sort((a, b) => a.number - b.number);
       return rows as unknown as readonly Row[];
     },
     async execute<Row extends object>(
@@ -177,6 +203,85 @@ describe("PostgreSQL cycles", () => {
       } else {
         expect(Date.parse(first.ends_at)).toBeLessThanOrEqual(Date.parse(manual.starts_at));
         expect(Date.parse(manual.ends_at)).toBeLessThanOrEqual(Date.parse(last.starts_at));
+      }
+    }
+  });
+
+  it("repone el horizonte tras borrar CADENCE alrededor de un MANUAL", async () => {
+    const scenarios = [
+      { name: "before", startsAt: "2029-12-10T00:00:00.000Z", endsAt: "2029-12-16T00:00:00.000Z" },
+      { name: "between", startsAt: "2030-01-10T00:00:00.000Z", endsAt: "2030-01-16T00:00:00.000Z" },
+      { name: "after", startsAt: "2030-02-01T00:00:00.000Z", endsAt: "2030-02-07T00:00:00.000Z" },
+    ];
+
+    for (const scenario of scenarios) {
+      const rows = [
+        cycle(
+          `${scenario.name}-anchor`,
+          0,
+          "completed",
+          "2029-12-26T00:00:00.000Z",
+          "2030-01-01T00:00:00.000Z",
+          "manual",
+        ),
+        cycle(
+          `${scenario.name}-first`,
+          1,
+          "upcoming",
+          "2030-01-03T00:00:00.000Z",
+          "2030-01-09T00:00:00.000Z",
+          "cadence",
+        ),
+        cycle(
+          `${scenario.name}-manual`,
+          2,
+          "upcoming",
+          scenario.startsAt,
+          scenario.endsAt,
+          "manual",
+        ),
+        cycle(
+          `${scenario.name}-last`,
+          3,
+          "upcoming",
+          "2030-01-10T00:00:00.000Z",
+          "2030-01-16T00:00:00.000Z",
+          "cadence",
+        ),
+      ];
+      const manual = rows[2]!;
+      const manualDates = { startsAt: manual.starts_at, endsAt: manual.ends_at };
+      const deletedId =
+        scenario.name === "after" ? `${scenario.name}-last` : `${scenario.name}-first`;
+      rows.splice(
+        rows.findIndex((row) => row.id === deletedId),
+        1,
+      );
+
+      const result = await ensureUpcomingPostgresCadenceCyclesInTransaction(
+        transactionFor(rows),
+        planningTeam(),
+      );
+
+      expect(result).toHaveLength(3);
+      const upcoming = rows.filter((row) => row.state === "upcoming" && row.archived_at === null);
+      expect(upcoming).toHaveLength(3);
+      expect(upcoming.filter((row) => row.cadence_source === "cadence")).toHaveLength(2);
+      expect(manual).toMatchObject({
+        id: `${scenario.name}-manual`,
+        number: 2,
+        starts_at: manualDates.startsAt,
+        ends_at: manualDates.endsAt,
+        cadence_source: "manual",
+      });
+
+      const ordered = [...upcoming].sort(
+        (a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at) || a.number - b.number,
+      );
+      for (let index = 1; index < ordered.length; index += 1) {
+        expect(Date.parse(ordered[index - 1]!.ends_at)).toBeLessThanOrEqual(
+          Date.parse(ordered[index]!.starts_at),
+        );
       }
     }
   });
