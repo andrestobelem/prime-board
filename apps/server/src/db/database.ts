@@ -6351,35 +6351,10 @@ function indexExpressionCaseClosingEnds(expression: readonly SqlToken[]): Set<nu
   return closingEnds;
 }
 
-function indexExpressionIsSimpleColumn(expression: readonly SqlToken[]): boolean {
-  let core = expression;
-  const order = core[core.length - 1];
-  if (core.length > 1 && (isSqlKeyword(order, "asc") || isSqlKeyword(order, "desc"))) {
-    core = core.slice(0, -1);
-  }
-  core = stripRedundantParentheses(core);
-  let collationPosition = -1;
-  let depth = 0;
-  for (let position = 0; position < core.length; position += 1) {
-    const token = core[position];
-    if (token?.value === "(") depth += 1;
-    if (token?.value === ")") depth -= 1;
-    if (depth === 0 && isSqlKeyword(token, "collate")) collationPosition = position;
-  }
-  if (collationPosition >= 0) {
-    if (!isSqlNameToken(core[collationPosition + 1]) || collationPosition + 2 !== core.length) {
-      return false;
-    }
-    core = stripRedundantParentheses(core.slice(0, collationPosition));
-  }
-  return core.length === 1 && isSqlNameToken(core[0]);
-}
-
 function indexExpressionCollationMismatch(
   db: Database,
   table: string,
   expression: readonly SqlToken[],
-  predicate = false,
 ): boolean {
   if (expression.length === 0) return false;
   const sourceRow = db
@@ -6443,17 +6418,7 @@ function indexExpressionCollationMismatch(
     }
     if (indexExpressionTokenHasExplicitCollation(expression, position)) {
       if (!sourceCollations.has(name)) return true;
-      if (!targetCollations.has(name)) {
-        if (
-          predicate ||
-          (token.kind === "identifier" &&
-            INDEX_EXPRESSION_KEYWORDS.has(name) &&
-            !indexExpressionIsSimpleColumn(expression))
-        ) {
-          return true;
-        }
-        continue;
-      }
+      if (!targetCollations.has(name)) return true;
       continue;
     }
     if (
@@ -6465,17 +6430,9 @@ function indexExpressionCollationMismatch(
     const sourceCollation = sourceCollations.get(name);
     const targetCollation = targetCollations.get(name);
     if (sourceCollation === undefined || targetCollation === undefined) {
-      if (sourceCollation !== undefined && targetCollation === undefined) {
-        if (
-          predicate ||
-          (token.kind === "identifier" &&
-            INDEX_EXPRESSION_KEYWORDS.has(name) &&
-            !indexExpressionIsSimpleColumn(expression))
-        ) {
-          return true;
-        }
-        continue;
-      }
+      // Una columna solo presente en source se retira durante 0025. Rechazarla
+      // aquí mantiene el fallo antes del DDL, en vez de esperar al restore.
+      if (sourceCollation !== undefined && targetCollation === undefined) return true;
       if (targetCollation !== undefined) return true;
       if (expression[position + 1]?.value === ".") continue;
       return true;
@@ -6490,7 +6447,7 @@ function indexPredicateCollationMismatch(
   table: string,
   predicate: readonly SqlToken[],
 ): boolean {
-  return indexExpressionCollationMismatch(db, table, predicate, true);
+  return indexExpressionCollationMismatch(db, table, predicate);
 }
 
 function parsedIndexTermMetadata(

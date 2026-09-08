@@ -5934,12 +5934,17 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
-  it("revierte un fallo al restaurar un índice custom y permite reparar y reintentar", () => {
+  it("rechaza en preflight un índice custom sobre una columna retirada y permite reparar y reintentar", () => {
     const db = databaseWithMigrationsThrough(24);
     try {
       db.exec(
-        "ALTER TABLE teams ADD COLUMN legacy_custom_value TEXT COLLATE NOCASE; CREATE INDEX custom_bad_restore ON teams(legacy_custom_value)",
+        "ALTER TABLE teams ADD COLUMN legacy_custom_value TEXT; CREATE INDEX custom_bad_restore ON teams(legacy_custom_value)",
       );
+      db.exec(
+        "INSERT INTO teams (id, name, key, created_at, updated_at, legacy_custom_value) " +
+          "VALUES ('legacy-team', 'Legacy Team', 'LGC', '2026-01-01', '2026-01-01', 'legacy')",
+      );
+      const beforeRows = db.query("SELECT * FROM teams ORDER BY id").all();
       const beforeSchema = db
         .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
         .all();
@@ -5954,11 +5959,12 @@ describe("colisión de migraciones SQLite", () => {
       };
 
       expect(runMigration()).toMatch(
-        /migration 0025.*custom index custom_bad_restore on teams cannot be restored safely/i,
+        /migration 0025.*custom index custom_bad_restore on teams cannot be preserved safely/i,
       );
       expect(
         db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
       ).toEqual(beforeSchema);
+      expect(db.query("SELECT * FROM teams ORDER BY id").all()).toEqual(beforeRows);
       expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
 
@@ -6264,7 +6270,7 @@ describe("colisión de migraciones SQLite", () => {
         .all();
       const beforeMarkers = outerTerm.query("SELECT * FROM _migrations ORDER BY version").all();
       expect(() => migrate(outerTerm)).toThrow(
-        /migration 0025.*custom index custom_outer_collate_term on teams cannot be restored safely/i,
+        /migration 0025.*custom index custom_outer_collate_term on teams cannot be preserved safely/i,
       );
       expect(
         outerTerm
@@ -6429,7 +6435,7 @@ describe("colisión de migraciones SQLite", () => {
         .all();
       const beforeMarkers = keywordSimple.query("SELECT * FROM _migrations ORDER BY version").all();
       expect(() => migrate(keywordSimple)).toThrow(
-        /migration 0025.*custom index custom_keyword_simple on teams changed its metadata during restoration/i,
+        /migration 0025.*custom index custom_keyword_simple on teams cannot be preserved safely/i,
       );
       expect(keywordSimple.query('SELECT id, "true" FROM teams').all()).toEqual(beforeRows);
       expect(
@@ -6463,7 +6469,7 @@ describe("colisión de migraciones SQLite", () => {
       const beforeRows = keywordEnd.query('SELECT id, "end" FROM teams').all();
       const beforeMarkers = keywordEnd.query("SELECT * FROM _migrations ORDER BY version").all();
       expect(() => migrate(keywordEnd)).toThrow(
-        /migration 0025.*custom index custom_keyword_end on teams cannot be restored safely/i,
+        /migration 0025.*custom index custom_keyword_end on teams cannot be preserved safely/i,
       );
       expect(keywordEnd.query('SELECT id, "end" FROM teams').all()).toEqual(beforeRows);
       expect(keywordEnd.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(
