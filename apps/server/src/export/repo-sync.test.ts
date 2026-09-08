@@ -5,11 +5,13 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  lstatSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -892,6 +894,41 @@ try {
       second.rollback?.();
       expect(readFileSync(archivePath, "utf8")).toBe(replacementArchive);
       second.release();
+
+      const eexist = prepareRetiredDocuments(isolated.db, isolatedRoot, archivePath, {
+        beforeArchiveRollbackLink: () => {
+          writeFileSync(archivePath, "replacement disappears before rollback retry");
+          return () => rmSync(archivePath);
+        },
+      });
+      eexist.retire();
+      eexist.rollback?.();
+      expect(readFileSync(archivePath, "utf8")).toBe(replacementArchive);
+      eexist.release();
+    } finally {
+      isolated.db.exec("DROP TABLE IF EXISTS documents");
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("conserva un symlink dangling que reemplaza al archive durante el undo", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-archive-symlink-"));
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      isolated.db.exec(`
+        CREATE TABLE documents (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL);
+        INSERT INTO documents (id, title, content) VALUES ('sqlite-row', 'SQLite', 'keep');
+      `);
+      archiveDocumentRows([], archivePath, "replica");
+      const reservation = prepareRetiredDocuments(isolated.db, isolatedRoot, archivePath);
+      reservation.retire();
+      rmSync(archivePath);
+      symlinkSync("missing-archive.json", archivePath);
+      expect(() => reservation.rollback?.()).not.toThrow();
+      expect(lstatSync(archivePath).isSymbolicLink()).toBe(true);
+      reservation.release();
     } finally {
       isolated.db.exec("DROP TABLE IF EXISTS documents");
       isolated.stop();

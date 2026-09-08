@@ -529,6 +529,29 @@ function sameDocumentArchiveSnapshot(
   return left.existed === right.existed && (!left.existed || left.bytes.equals(right.bytes));
 }
 
+function pathPresent(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    if (code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function tryCaptureDocumentArchiveSnapshot(path: string): DocumentArchiveSnapshot | undefined {
+  try {
+    return captureDocumentArchiveSnapshot(path);
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    // A replacement symlink or special entry belongs to the external writer.
+    // Leave it untouched instead of treating existsSync(path) as absence.
+    if (code === "ELOOP" || pathPresent(path)) return undefined;
+    throw error;
+  }
+}
+
 /**
  * Restores an archive only when the path still contains this mutation's bytes.
  * A hard-link claim avoids replacing a new operator-owned archive during undo.
@@ -537,9 +560,10 @@ function restoreDocumentArchiveSnapshot(
   path: string,
   before: DocumentArchiveSnapshot,
   after: DocumentArchiveSnapshot,
+  beforeLink?: () => void | (() => void),
 ): void {
-  const current = captureDocumentArchiveSnapshot(path);
-  if (!sameDocumentArchiveSnapshot(current, after)) return;
+  const current = tryCaptureDocumentArchiveSnapshot(path);
+  if (!current || !sameDocumentArchiveSnapshot(current, after)) return;
   const quarantinePath = `${path}.rollback.${process.pid}.${randomUUID()}`;
   try {
     renameSync(path, quarantinePath);
@@ -552,7 +576,7 @@ function restoreDocumentArchiveSnapshot(
     if (!sameDocumentArchiveSnapshot(claimed, after)) {
       // The claimed inode changed. Preserve it unless an external writer has
       // already installed a replacement at the public path.
-      if (!existsSync(path)) {
+      if (!pathPresent(path)) {
         try {
           linkSync(quarantinePath, path);
         } catch (error) {
@@ -563,15 +587,30 @@ function restoreDocumentArchiveSnapshot(
     }
     if (before.existed) {
       const temporaryPath = `${path}.rollback.${process.pid}.${randomUUID()}.tmp`;
+      let cleanupReplacement: (() => void) | undefined;
+      let cleanupCalled = false;
       try {
         writeFileSync(temporaryPath, before.bytes, { mode: before.mode });
         chmodSync(temporaryPath, before.mode);
+        cleanupReplacement = beforeLink?.() ?? undefined;
         try {
           linkSync(temporaryPath, path);
         } catch (error) {
           if (!isFileExistsError(error)) throw error;
+          // The replacement may disappear after EEXIST. lstat, unlike
+          // existsSync, treats dangling symlinks as present.
+          cleanupReplacement?.();
+          cleanupCalled = true;
+          if (!pathPresent(path)) {
+            try {
+              linkSync(temporaryPath, path);
+            } catch (retryError) {
+              if (!isFileExistsError(retryError)) throw retryError;
+            }
+          }
         }
       } finally {
+        if (!cleanupCalled) cleanupReplacement?.();
         if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
       }
     }
@@ -582,15 +621,15 @@ function restoreDocumentArchiveSnapshot(
     // If restoration failed, keep the claimed archive reachable instead of
     // deleting the only preserved copy. A replacement already at the public
     // path wins and the claimed mutation bytes are discarded.
-    if (existsSync(quarantinePath)) {
-      if (!restorationComplete && !existsSync(path)) {
+    if (pathPresent(quarantinePath)) {
+      if (!restorationComplete && !pathPresent(path)) {
         try {
           linkSync(quarantinePath, path);
         } catch (error) {
           if (!isFileExistsError(error)) throw error;
         }
       }
-      if (existsSync(quarantinePath)) unlinkSync(quarantinePath);
+      if (pathPresent(quarantinePath)) unlinkSync(quarantinePath);
     }
   }
 }
@@ -746,7 +785,11 @@ export function prepareRetiredDocuments(
   db: Database,
   rootDir: string,
   archivePath?: string,
-  options: { readonly beforeRetire?: () => void } = {},
+  options: {
+    readonly beforeRetire?: () => void;
+    /** Test seam for an EEXIST replacement that disappears before retry. */
+    readonly beforeArchiveRollbackLink?: () => void | (() => void);
+  } = {},
 ): RetiredDocumentsReservation {
   const sqliteDocuments = readRetiredSqliteDocuments(db);
   const documentsSnapshot = join(rootDir, ".prime-board", "meta", "documents.json");
@@ -858,7 +901,12 @@ export function prepareRetiredDocuments(
     },
     rollback() {
       if (!archiveAfter) return;
-      restoreDocumentArchiveSnapshot(configuredArchivePath, archiveBefore, archiveAfter);
+      restoreDocumentArchiveSnapshot(
+        configuredArchivePath,
+        archiveBefore,
+        archiveAfter,
+        options.beforeArchiveRollbackLink,
+      );
       archiveAfter = undefined;
     },
   };
