@@ -32,6 +32,33 @@ function snapshotFiles(root: string): Record<string, string> {
   return out;
 }
 
+function historyEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    actor: "worker",
+    issue: "PB-1",
+    payload: { from: "old", to: "new" },
+    ts: "2025-01-01T00:00:00.000Z",
+    type: "title_changed",
+    ...overrides,
+  };
+}
+
+function writeHistory(root: string, events: Record<string, unknown>[]): void {
+  writeFileSync(
+    join(root, ".prime-board", "log", "PB-1.jsonl"),
+    `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+  );
+}
+
+function rebuildBaseline(db: Database, root: string): Record<string, number> {
+  rebuildFromRepo(db, root);
+  return db
+    .query(
+      "SELECT (SELECT count(*) FROM issues) AS issues, (SELECT count(*) FROM activity) AS activity",
+    )
+    .get() as Record<string, number>;
+}
+
 beforeAll(async () => {
   app = createTestApp();
   dir = mkdtempSync(join(tmpdir(), "pb-rebuild-"));
@@ -214,6 +241,176 @@ describe("rebuildFromRepo", () => {
       const result = rebuildFromRepo(fresh, snapshot);
       expect(result.comments).toBe(1);
       expect(fresh.query("SELECT body FROM comments").get()).toEqual({ body: "hola" });
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  it("usa el stream canónico cuando el log por Issue está vacío", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-empty-history-fallback-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      writeFileSync(join(snapshot, ".prime-board", "log", "PB-1.jsonl"), "");
+      appendEvent(
+        {
+          schemaVersion: 1,
+          eventId: "canonical-empty-log-fallback",
+          aggregate: "issue",
+          aggregateKey: "PB-1",
+          type: "commented",
+          actor: "worker",
+          occurredAt: "2025-01-01T00:00:00.000Z",
+          payload: { body: "recovered from canonical stream" },
+        },
+        { rootDir: snapshot },
+      );
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+
+      expect(rebuildFromRepo(fresh, snapshot).comments).toBe(1);
+      expect(fresh.query("SELECT body FROM comments").get()).toEqual({
+        body: "recovered from canonical stream",
+      });
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza un ActivityType desconocido del fallback canónico y no escribe", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-invalid-canonical-activity-type-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      const before = rebuildBaseline(fresh, snapshot);
+      for (const file of ["PB-1.jsonl", "PB-2.jsonl"]) {
+        unlinkSync(join(snapshot, ".prime-board", "log", file));
+      }
+      appendEvent(
+        {
+          schemaVersion: 1,
+          eventId: "canonical-invalid-activity-type",
+          aggregate: "issue",
+          aggregateKey: "PB-1",
+          type: "unknown_activity",
+          actor: "worker",
+          occurredAt: "2025-01-01T00:00:00.000Z",
+          payload: {},
+        },
+        { rootDir: snapshot },
+      );
+
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/unknown ActivityType/);
+      expect(
+        fresh
+          .query(
+            "SELECT (SELECT count(*) FROM issues) AS issues, (SELECT count(*) FROM activity) AS activity",
+          )
+          .get(),
+      ).toEqual(before);
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza un ActivityType desconocido antes de escribir", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-invalid-activity-type-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      const before = rebuildBaseline(fresh, snapshot);
+      writeHistory(snapshot, [historyEvent({ type: "admin_secret" })]);
+
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/unknown ActivityType/);
+      expect(
+        fresh
+          .query(
+            "SELECT (SELECT count(*) FROM issues) AS issues, (SELECT count(*) FROM activity) AS activity",
+          )
+          .get(),
+      ).toEqual(before);
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza un evento cuyo destino no coincide con el Issue del log", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-invalid-history-target-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      const before = rebuildBaseline(fresh, snapshot);
+      writeHistory(snapshot, [historyEvent({ issue: "PB-2" })]);
+
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/expected PB-1/);
+      expect(
+        fresh
+          .query(
+            "SELECT (SELECT count(*) FROM issues) AS issues, (SELECT count(*) FROM activity) AS activity",
+          )
+          .get(),
+      ).toEqual(before);
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza un timestamp inválido antes de abrir la transacción", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-invalid-history-timestamp-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      const before = rebuildBaseline(fresh, snapshot);
+      writeHistory(snapshot, [historyEvent({ ts: "not-a-date" })]);
+
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/ts must be a valid ISO-8601 date/);
+      expect(
+        fresh
+          .query(
+            "SELECT (SELECT count(*) FROM issues) AS issues, (SELECT count(*) FROM activity) AS activity",
+          )
+          .get(),
+      ).toEqual(before);
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
+  it("rechaza timestamps de historial fuera de orden y no escribe", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-unsorted-history-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      const before = rebuildBaseline(fresh, snapshot);
+      writeHistory(snapshot, [
+        historyEvent({ ts: "2025-01-02T00:00:00.000Z" }),
+        historyEvent({ type: "description_changed", ts: "2025-01-01T00:00:00.000Z" }),
+      ]);
+
+      expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/timestamps must be ordered/);
+      expect(
+        fresh
+          .query(
+            "SELECT (SELECT count(*) FROM issues) AS issues, (SELECT count(*) FROM activity) AS activity",
+          )
+          .get(),
+      ).toEqual(before);
     } finally {
       fresh.close();
       rmSync(snapshot, { recursive: true, force: true });

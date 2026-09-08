@@ -82,6 +82,7 @@ export const ALL_ACTIVITY_TYPES: ActivityType[] = [
   "state_changed",
   "priority_changed",
   "assigned",
+  "assignee_changed",
   "parent_changed",
   "project_changed",
   "milestone_changed",

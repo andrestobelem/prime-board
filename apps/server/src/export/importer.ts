@@ -10,10 +10,15 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_URL_KEY } from "../db/defaults.ts";
 import { newId, now } from "../db/util.ts";
-import { translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
+import {
+  ALL_ACTIVITY_TYPES,
+  translateActivityRefs,
+  type RefTable,
+} from "../domain/activity-schema.ts";
+import { parseDateTime } from "../domain/datetime.ts";
 import { translateSavedViewFilter, type SavedViewRefTable } from "./saved-view-filter.ts";
 import { readReplicaMetadata, type ReadReplicaMetadata } from "./replica-metadata.ts";
-import { readEventLog } from "./event-log.ts";
+import { readEventLog, type DomainEvent } from "./event-log.ts";
 import { archiveDocumentSnapshot } from "./documents-archive.ts";
 import { normalizeAvatarUrl } from "../domain/actors.ts";
 
@@ -33,6 +38,194 @@ export interface RebuildOptions {
 }
 
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+
+const VALID_ACTIVITY_TYPES = new Set<string>(ALL_ACTIVITY_TYPES);
+const CANONICAL_ISSUE_EVENT_TYPES = new Set([
+  "issue.created",
+  "issue.updated",
+  "issue.archived",
+  "issue.unarchived",
+  "issue.deleted",
+  "deleted",
+  "snapshot_imported",
+  "issue.snapshot_imported",
+]);
+const ISSUE_HISTORY_FIELDS = new Set(["actor", "issue", "payload", "ts", "type"]);
+
+type RebuildEvent = {
+  actor: unknown;
+  type: string;
+  payload: Record<string, unknown>;
+  ts: string;
+};
+
+interface ValidatedReplayHistory {
+  issueLogs: Map<string, RebuildEvent[]>;
+  /** Los logs no vacíos son autoritativos. Los vacíos usan el fallback canónico. */
+  issueLogFiles: Set<string>;
+  canonicalEvents: DomainEvent[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isCanonicalActor(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0;
+  return (
+    isRecord(value) &&
+    ["id", "name"].some(
+      (field) => typeof value[field] === "string" && value[field].trim().length > 0,
+    )
+  );
+}
+
+function issueIdentifiers(base: string): Set<string> {
+  const issuesDir = join(base, "issues");
+  if (!existsSync(issuesDir))
+    throw new Error(`Refusing rebuild: missing issues directory: ${issuesDir}`);
+  const identifiers = new Set<string>();
+  for (const file of readdirSync(issuesDir)) {
+    if (!file.endsWith(".md")) continue;
+    const identifier = file.slice(0, -3);
+    const issue = readIssueMarkdown(join(issuesDir, file));
+    if (issue.id !== identifier) {
+      throw new Error(
+        `Issue snapshot ${file} declares a different identifier: ${issue.id ?? "<missing>"}`,
+      );
+    }
+    identifiers.add(identifier);
+  }
+  return identifiers;
+}
+
+function parseIssueHistory(
+  path: string,
+  identifier: string,
+  actorNames: ReadonlySet<string>,
+): RebuildEvent[] {
+  const raw = readFileSync(path, "utf8");
+  if (raw.trim().length === 0) return [];
+  const lines = raw.endsWith("\n") ? raw.slice(0, -1).split("\n") : raw.split("\n");
+  const events: RebuildEvent[] = [];
+  let previousTimestamp = -Infinity;
+  for (const [index, line] of lines.entries()) {
+    const location = `${path}:${index + 1}`;
+    if (line.trim().length === 0) throw new Error(`Invalid Issue history ${location}: empty line`);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      throw new Error(`Invalid Issue history ${location}: line is not valid JSON`);
+    }
+    if (!isRecord(parsed))
+      throw new Error(`Invalid Issue history ${location}: event must be an object`);
+    for (const key of Object.keys(parsed)) {
+      if (!ISSUE_HISTORY_FIELDS.has(key)) {
+        throw new Error(`Invalid Issue history ${location}: unknown field ${key}`);
+      }
+    }
+    for (const key of ISSUE_HISTORY_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(parsed, key)) {
+        throw new Error(`Invalid Issue history ${location}: missing field ${key}`);
+      }
+    }
+    if (parsed.issue !== identifier) {
+      throw new Error(
+        `Invalid Issue history ${location}: event targets ${String(parsed.issue)}, expected ${identifier}`,
+      );
+    }
+    if (typeof parsed.actor !== "string" || parsed.actor.trim().length === 0) {
+      throw new Error(`Invalid Issue history ${location}: actor must be a non-empty string`);
+    }
+    if (!actorNames.has(parsed.actor)) {
+      throw new Error(`Invalid Issue history ${location}: unknown actor ${parsed.actor}`);
+    }
+    if (typeof parsed.type !== "string" || !VALID_ACTIVITY_TYPES.has(parsed.type)) {
+      throw new Error(
+        `Invalid Issue history ${location}: unknown ActivityType ${String(parsed.type)}`,
+      );
+    }
+    if (!isRecord(parsed.payload)) {
+      throw new Error(`Invalid Issue history ${location}: payload must be an object`);
+    }
+    if (typeof parsed.ts !== "string") {
+      throw new Error(`Invalid Issue history ${location}: ts must be a valid ISO-8601 date`);
+    }
+    let timestamp: number;
+    try {
+      timestamp = parseDateTime(parsed.ts, "Activity timestamp");
+    } catch {
+      throw new Error(`Invalid Issue history ${location}: ts must be a valid ISO-8601 date`);
+    }
+    if (timestamp < previousTimestamp) {
+      throw new Error(`Invalid Issue history ${location}: timestamps must be ordered`);
+    }
+    previousTimestamp = timestamp;
+    events.push({
+      actor: parsed.actor,
+      type: parsed.type,
+      payload: parsed.payload,
+      ts: parsed.ts,
+    });
+  }
+  return events;
+}
+
+/**
+ * Valida toda entrada del replay antes de abrir la transacción destructiva. Un
+ * log manipulado no debe borrar ni reconstruir parcialmente la DB destino.
+ */
+function validateReplayHistory(rootDir: string): ValidatedReplayHistory {
+  const base = join(rootDir, ".prime-board");
+  const identifiers = issueIdentifiers(base);
+  const actors = readJson(join(base, "meta", "actors.json")) as Array<Record<string, unknown>>;
+  const actorNames = new Set(
+    actors
+      .map((actor) => actor.name)
+      .filter((name): name is string => typeof name === "string" && name.length > 0),
+  );
+  const logDir = join(base, "log");
+  if (!existsSync(logDir)) throw new Error(`Refusing rebuild: missing log directory: ${logDir}`);
+
+  const issueLogs = new Map<string, RebuildEvent[]>();
+  const issueLogFiles = new Set<string>();
+  for (const file of readdirSync(logDir).filter((file) => file.endsWith(".jsonl"))) {
+    if (file === "events.jsonl") continue;
+    const identifier = file.slice(0, -".jsonl".length);
+    if (!identifiers.has(identifier)) {
+      throw new Error(`Invalid Issue history ${file}: no matching Issue snapshot`);
+    }
+    const events = parseIssueHistory(join(logDir, file), identifier, actorNames);
+    issueLogs.set(identifier, events);
+    if (events.length > 0) issueLogFiles.add(file);
+  }
+
+  const canonicalEvents = readEventLog({ rootDir });
+  for (const event of canonicalEvents) {
+    if (
+      (event.aggregate !== "issue" && event.aggregate !== "issues") ||
+      !identifiers.has(event.aggregateKey) ||
+      CANONICAL_ISSUE_EVENT_TYPES.has(event.type)
+    ) {
+      continue;
+    }
+    if (!VALID_ACTIVITY_TYPES.has(event.type)) {
+      throw new Error(
+        `Invalid canonical Issue history ${event.eventId}: unknown ActivityType ${event.type}`,
+      );
+    }
+    if (!isCanonicalActor(event.actor)) {
+      throw new Error(`Invalid canonical Issue history ${event.eventId}: actor is invalid`);
+    }
+  }
+
+  return {
+    issueLogs,
+    issueLogFiles,
+    canonicalEvents,
+  };
+}
 
 /**
  * Puerta de seguridad de la fuente de rebuild. Una captura histórica no es una
@@ -209,6 +402,11 @@ export function rebuildFromRepo(
 ): RebuildResult {
   const base = join(rootDir, ".prime-board");
   if (!existsSync(base)) throw new Error(`No .prime-board directory in ${rootDir}`);
+
+  // Valida todos los logs por Issue y el fallback canónico antes de modificar
+  // la fuente o la DB. Un log manipulado debe fallar de forma segura aunque el
+  // destino ya tenga datos.
+  const replayHistory = validateReplayHistory(rootDir);
 
   // La captura retirada se archiva (o se rechaza) antes de leer metadata,
   // credenciales o abrir la transacción destructiva.
@@ -1037,12 +1235,6 @@ export function rebuildFromRepo(
     };
     // activityIdsByIssue: índice estable para rehidratar inbox_receipts (PRB-224).
     const activityIdsByIssue = new Map<string, string[]>();
-    type RebuildEvent = {
-      actor: unknown;
-      type: string;
-      payload?: Record<string, unknown>;
-      ts: string;
-    };
     const processHistory = (
       identifier: string,
       issueId: string,
@@ -1098,25 +1290,17 @@ export function rebuildFromRepo(
 
     // 9. Historial desde los logs por Issue. El stream canónico se usa solo
     // como fallback para un Issue que no tiene log histórico propio.
-    const logDir = join(base, "log");
-    const logFiles = readdirSync(logDir).filter((file) => file.endsWith(".jsonl"));
-    const issueLogFiles = new Set(logFiles.filter((file) => file !== "events.jsonl"));
-    for (const file of logFiles) {
-      if (file === "events.jsonl") continue;
-      const identifier = file.replace(/\.jsonl$/, "");
+    for (const [identifier, events] of replayHistory.issueLogs) {
       const issueId = issueIds.get(identifier);
-      if (!issueId) continue;
-      const contents = readFileSync(join(logDir, file), "utf8").trim();
-      if (!contents) continue;
-      const events = contents.split("\n").map((line) => JSON.parse(line) as RebuildEvent);
-      processHistory(identifier, issueId, events, true);
+      if (!issueId) throw new Error(`Issue history references unknown issue ${identifier}`);
+      if (events.length > 0) processHistory(identifier, issueId, events, true);
     }
 
-    const canonicalEvents = readEventLog({ rootDir });
     const canonicalByIssue = new Map<string, RebuildEvent[]>();
-    for (const event of canonicalEvents) {
+    for (const event of replayHistory.canonicalEvents) {
       if (event.aggregate !== "issue" || !issueIds.has(event.aggregateKey)) continue;
-      if (issueLogFiles.has(`${event.aggregateKey}.jsonl`)) continue;
+      if (CANONICAL_ISSUE_EVENT_TYPES.has(event.type)) continue;
+      if (replayHistory.issueLogFiles.has(`${event.aggregateKey}.jsonl`)) continue;
       const events = canonicalByIssue.get(event.aggregateKey) ?? [];
       events.push({
         actor: event.actor,

@@ -1,4 +1,4 @@
-// Test del esquema de referencias de Activity (AT-187): cubre los 20
+// Test del esquema de referencias de Activity (AT-187): cubre los 21
 // ActivityType y prueba que translateActivityRefs replica exactamente el
 // comportamiento que antes vivía duplicado en exporter.ts e importer.ts.
 import { describe, expect, it } from "bun:test";
@@ -32,14 +32,14 @@ const nameToId = (table: string, value: string) =>
   )[table]?.[value];
 
 describe("ACTIVITY_REFS", () => {
-  it("cubre los 20 ActivityType existentes (declarados con refs o sin ellas)", () => {
+  it("cubre los 21 ActivityType existentes (declarados con refs o sin ellas)", () => {
     for (const type of ALL_ACTIVITY_TYPES) {
       // No hace falta que todos tengan entrada (la mayoría no tiene refs) —
       // pero el tipo tiene que existir en el union, y el test lo enumera acá
       // para que agregar un ActivityType nuevo obligue a mirar esta lista.
       expect(ALL_ACTIVITY_TYPES).toContain(type);
     }
-    expect(ALL_ACTIVITY_TYPES.length).toBe(20);
+    expect(ALL_ACTIVITY_TYPES.length).toBe(21);
   });
 
   it("los tipos sin referencias no tienen entrada en ACTIVITY_REFS", () => {
