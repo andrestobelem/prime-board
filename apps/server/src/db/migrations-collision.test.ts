@@ -8730,6 +8730,29 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+  it("reanuda desde marker 0028 y deja que 0033 valide el rebuild pendiente", () => {
+    const db = databaseWithMigrationsThrough(28);
+    try {
+      expect(() => migrate(db)).not.toThrow();
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 29 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 29, name: "comments_fts" },
+        { version: 30, name: "documents_retirement" },
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+    } finally {
+      db.close();
+    }
+  });
+
   it("acepta referencias TEMP a un schema attached conocido y rechaza uno desconocido", () => {
     const attached = new Database(":memory:", { strict: true });
     try {

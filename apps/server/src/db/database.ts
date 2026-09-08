@@ -3673,6 +3673,23 @@ interface MigrationPreflightOperation {
   references: readonly WorkspaceConstraintMigrationReference[];
 }
 
+function migrationPreflightChainWillReachViewsGuard(
+  applied: ReadonlySet<number>,
+  operations: readonly MigrationPreflightOperation[],
+): boolean {
+  if (migrationPreflightCustomGuardReady(33, applied)) return true;
+  // Un retry desde marker 0028 todavía tiene 0029 y 0030 pendientes. La
+  // simulación genérica valida esas operaciones antes de 0033, por lo que el
+  // guard de Views puede hacerse cargo del rebuild de saved_views aunque su
+  // límite histórico todavía no esté completamente marcado.
+  return MIGRATIONS.every(
+    (candidate) =>
+      candidate.version >= 30 ||
+      applied.has(candidate.version) ||
+      operations.some((operation) => operation.version === candidate.version),
+  );
+}
+
 interface MigrationPreflightStateObject {
   namespace: string;
   object: SchemaObjectRow;
@@ -4236,10 +4253,13 @@ function migrationPreflightValidateCurrentObjects(
 ): void {
   const affectedNames = migrationPreflightAffectedNames(operations);
   const deferredMainAffectedNames = new Set<string>();
+  const viewsGuardReady = migrationPreflightChainWillReachViewsGuard(applied, operations);
   for (const operation of operations) {
     if (
       (operation.version === 25 || operation.version === 33) &&
-      migrationPreflightCustomGuardReady(operation.version, applied) &&
+      (operation.version === 33
+        ? viewsGuardReady
+        : migrationPreflightCustomGuardReady(operation.version, applied)) &&
       operation.name !== null &&
       (operation.kind === "drop" ||
         operation.kind === "alter" ||
