@@ -27,6 +27,7 @@ import {
 } from "../domain/postgres-subscribers.ts";
 import { ACTIVITY_REFS, translateActivityRefs, type RefTable } from "../domain/activity-schema.ts";
 import { createComment, listComments, mapComment } from "../domain/comments.ts";
+import { listPostgresComments, mapPostgresComment } from "../domain/postgres-comments.ts";
 import { listIssueLabels, mapLabel } from "../domain/labels.ts";
 import { getMilestone, mapMilestone } from "../domain/milestones.ts";
 import { getPostgresMilestone, mapPostgresMilestone } from "../domain/postgres-milestones.ts";
@@ -608,12 +609,30 @@ export const issueResolvers = {
         : null;
     },
     sortOrder: (issue: MappedIssue) => issue._row.sort_order,
-    comments: (issue: MappedIssue, _args: unknown, context: Context) => {
+    comments: async (issue: MappedIssue, _args: unknown, context: Context) => {
       if (context.persistence) {
-        throw apiError(
-          "VALIDATION_FAILED",
-          "Issue comments are not yet available with PostgreSQL persistence",
+        const workspaceId = context.workspace.workspaceId;
+        const scopedIssue = await getPostgresIssue(
+          context.persistence,
+          issue.id,
+          context.workspace,
         );
+        if (!scopedIssue) return [];
+        const team = await getPostgresTeam(
+          context.persistence,
+          { id: scopedIssue.team_id },
+          context.workspace,
+        );
+        if (
+          !team ||
+          !(await canDiscoverPostgresTeam(context.persistence, requireViewer(context), team)) ||
+          !apiKeyTeamsWithinLimit(context.auth, [scopedIssue.team_id])
+        ) {
+          return [];
+        }
+        return (
+          await listPostgresComments(context.persistence, scopedIssue.id, context.workspace)
+        ).map(mapPostgresComment);
       }
       return listComments(context.db, issue.id, context.workspace.workspaceId).map(mapComment);
     },
@@ -774,10 +793,49 @@ export const issueResolvers = {
   },
 
   Comment: {
-    actor: (comment: { actorId: string }, _args: unknown, context: Context) =>
-      mapActor(lookupActor(context, comment.actorId)!),
-    issue: (comment: { issueId: string }, _args: unknown, context: Context) =>
-      mapIssue(lookupIssueById(context, comment.issueId)!),
+    actor: async (
+      comment: { actorId: string; _workspaceId?: string },
+      _args: unknown,
+      context: Context,
+    ) => {
+      if (context.persistence) {
+        const workspaceId = context.workspace.workspaceId;
+        if (comment._workspaceId && comment._workspaceId !== workspaceId) return null;
+        const actor = await getPostgresActor(context.persistence, comment.actorId, workspaceId);
+        return actor ? mapPostgresActor(actor) : null;
+      }
+      return mapActor(lookupActor(context, comment.actorId)!);
+    },
+    issue: async (
+      comment: { issueId: string; _workspaceId?: string },
+      _args: unknown,
+      context: Context,
+    ) => {
+      if (context.persistence) {
+        const workspaceId = context.workspace.workspaceId;
+        if (comment._workspaceId && comment._workspaceId !== workspaceId) return null;
+        const issue = await getPostgresIssue(
+          context.persistence,
+          comment.issueId,
+          context.workspace,
+        );
+        if (!issue) return null;
+        const team = await getPostgresTeam(
+          context.persistence,
+          { id: issue.team_id },
+          context.workspace,
+        );
+        if (
+          !team ||
+          !(await canDiscoverPostgresTeam(context.persistence, requireViewer(context), team)) ||
+          !apiKeyTeamsWithinLimit(context.auth, [issue.team_id])
+        ) {
+          return null;
+        }
+        return mapIssue(issue);
+      }
+      return mapIssue(lookupIssueById(context, comment.issueId)!);
+    },
   },
 
   Activity: {
