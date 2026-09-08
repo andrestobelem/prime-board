@@ -405,39 +405,45 @@ export class WebhookDispatcher implements WebhookEventSink {
         ? data._teamOwnerIds.filter((id): id is string => typeof id === "string")
         : [];
     const canReceive = async (hook: WebhookRow): Promise<boolean> => {
-      const ownerCanReceive = this.persistence
-        ? await postgresOwnerCanReceive(
-            this.persistence,
-            hook.owner_id,
-            postgresWorkspaceId!,
-            teamIds,
-            deletedTeamOwnerIds,
-          )
-        : await sqliteOwnerCanReceive(
-            this.db,
-            hook.owner_id,
-            teamIds,
-            sqliteWorkspaceId!,
-            deletedTeamOwnerIds,
-          );
+      if (this.persistence) {
+        if (!postgresWorkspaceId) return false;
+        const ownerCanReceive = await postgresOwnerCanReceive(
+          this.persistence,
+          hook.owner_id,
+          postgresWorkspaceId,
+          teamIds,
+          deletedTeamOwnerIds,
+        );
+        if (!ownerCanReceive) return false;
+        if (!hook.team_id) return true;
+        if (!teamIds.includes(hook.team_id)) return false;
+        return postgresOwnerCanReceive(
+          this.persistence,
+          hook.owner_id,
+          postgresWorkspaceId,
+          [hook.team_id],
+          deletedTeamOwnerIds,
+        );
+      }
+
+      if (!sqliteWorkspaceId) return false;
+      const ownerCanReceive = await sqliteOwnerCanReceive(
+        this.db,
+        hook.owner_id,
+        teamIds,
+        sqliteWorkspaceId,
+        deletedTeamOwnerIds,
+      );
       if (!ownerCanReceive) return false;
       if (!hook.team_id) return true;
       if (!teamIds.includes(hook.team_id)) return false;
-      return this.persistence
-        ? postgresOwnerCanReceive(
-            this.persistence,
-            hook.owner_id,
-            postgresWorkspaceId!,
-            [hook.team_id],
-            deletedTeamOwnerIds,
-          )
-        : sqliteOwnerCanReceive(
-            this.db,
-            hook.owner_id,
-            [hook.team_id],
-            sqliteWorkspaceId!,
-            deletedTeamOwnerIds,
-          );
+      return sqliteOwnerCanReceive(
+        this.db,
+        hook.owner_id,
+        [hook.team_id],
+        sqliteWorkspaceId,
+        deletedTeamOwnerIds,
+      );
     };
     const subscribed: WebhookRow[] = [];
     for (const hook of hooks) {
