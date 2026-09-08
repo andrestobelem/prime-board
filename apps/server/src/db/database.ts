@@ -393,6 +393,18 @@ interface IndexDefinitionRow {
   sql: string;
 }
 
+interface SavedViewsIndexRow {
+  name: string;
+  unique_value: number;
+  partial: number;
+  sql: string;
+}
+
+interface SavedViewsTriggerDefinition {
+  name: string;
+  sql: string;
+}
+
 interface IndexRow {
   unique_value: number;
 }
@@ -519,10 +531,10 @@ function hasViewPreferencesKeyIndex(db: Database): boolean {
   );
 }
 
-function savedViewsIndexDefinitions(db: Database): IndexDefinitionRow[] {
+function savedViewsIndexRows(db: Database): SavedViewsIndexRow[] {
   return db
-    .query<IndexDefinitionRow, SQLQueryBindings[]>(
-      `SELECT indexes.name, sqlite_master.sql
+    .query<SavedViewsIndexRow, SQLQueryBindings[]>(
+      `SELECT indexes.name, indexes."unique" AS unique_value, indexes.partial, sqlite_master.sql
        FROM pragma_index_list('saved_views') AS indexes
        JOIN sqlite_master
          ON sqlite_master.type = 'index'
@@ -533,9 +545,206 @@ function savedViewsIndexDefinitions(db: Database): IndexDefinitionRow[] {
     .all();
 }
 
+function savedViewsIndexDefinitions(db: Database): IndexDefinitionRow[] {
+  return savedViewsIndexRows(db).map(({ name, sql }) => ({ name, sql }));
+}
+
+function quoteSqlIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function quoteSqlString(value: string): string {
+  return value.replaceAll("'", "''");
+}
+
+const SAVED_VIEWS_WORKSPACE_INDEXES = [
+  { name: "idx_saved_views_workspace_id", columns: ["workspace_id", "id"], unique: true },
+  { name: "idx_saved_views_scope", columns: ["scope", "team_id"], unique: false },
+  { name: "idx_saved_views_owner", columns: ["owner_id"], unique: false },
+  { name: "idx_saved_views_project", columns: ["workspace_id", "project_id"], unique: false },
+  { name: "idx_saved_views_initiative", columns: ["workspace_id", "initiative_id"], unique: false },
+] as const;
+
+const SAVED_VIEWS_WORKSPACE_STAGING_NAMES = [
+  ...migration0025.matchAll(/\bCREATE\s+TABLE\s+(_prb25_[A-Za-z0-9_]+)/gi),
+].map((match) => match[1]);
+
+function savedViewsIndexColumns(db: Database, name: string): Array<string | null> {
+  return db
+    .query<IndexColumnRow, SQLQueryBindings[]>(
+      `SELECT seqno, name FROM pragma_index_info('${quoteSqlString(name)}') ORDER BY seqno`,
+    )
+    .all()
+    .map(({ name: column }) => column);
+}
+
+function savedViewsIndexSqlForProbe(
+  definition: string,
+  indexName: string,
+  tableName: string,
+): string | null {
+  const indexPattern =
+    /^(\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+)(?:"(?:[^"]|"")+"|`(?:[^`]|``)*`|\[[^\]]+\]|[^\s(]+)(\s+ON\s+)/i;
+  const withProbeIndex = definition.replace(indexPattern, `$1${quoteSqlIdentifier(indexName)}$2`);
+  if (withProbeIndex === definition) return null;
+  const tablePattern =
+    /(\s+ON\s+)(?:(?:"(?:[^"]|"")+"|`(?:[^`]|``)*`|\[[^\]]+\]|[^\s(]+)\s*\.\s*)?(?:"saved_views"|`saved_views`|\[saved_views\]|saved_views)(?=\s*\()/i;
+  const withProbeTable = withProbeIndex.replace(tablePattern, `$1${quoteSqlIdentifier(tableName)}`);
+  return withProbeTable === withProbeIndex ? null : withProbeTable;
+}
+
+function savedViewsIndexCanCompileAgainstColumns(
+  db: Database,
+  definition: string,
+  columns: readonly string[],
+): boolean {
+  let suffix = 1;
+  let probeTable = "__prb620_saved_views_probe";
+  let probeIndex = "__prb620_saved_views_index";
+  while (
+    db.query("SELECT 1 FROM sqlite_temp_master WHERE name IN (?1, ?2)").get(probeTable, probeIndex)
+  ) {
+    suffix += 1;
+    probeTable = `__prb620_saved_views_probe_${suffix}`;
+    probeIndex = `__prb620_saved_views_index_${suffix}`;
+  }
+  const sql = savedViewsIndexSqlForProbe(definition, probeIndex, probeTable);
+  if (sql === null) return false;
+  const table = quoteSqlIdentifier(probeTable);
+  try {
+    db.exec(
+      `CREATE TEMP TABLE ${table} (${columns
+        .map((column) => `${quoteSqlIdentifier(column)} TEXT`)
+        .join(", ")})`,
+    );
+    db.exec(sql);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      db.exec(`DROP INDEX ${quoteSqlIdentifier(probeIndex)}`);
+    } catch {
+      // El índice puede no haberse creado si la definición no compila.
+    }
+    try {
+      db.exec(`DROP TABLE ${table}`);
+    } catch {
+      // Mantén el diagnóstico original cuando el probe no pudo limpiarse.
+    }
+  }
+}
+
+function savedViewsCanonicalIndexMatches(
+  definition: SavedViewsIndexRow,
+  expected: (typeof SAVED_VIEWS_WORKSPACE_INDEXES)[number],
+): boolean {
+  const columns = definition.sql.replace(/\s+/g, " ").trim().toLowerCase();
+  const expectedSql = `create ${expected.unique ? "unique " : ""}index ${expected.name} on saved_views(${expected.columns.join(", ")})`;
+  return (
+    definition.unique_value === (expected.unique ? 1 : 0) &&
+    definition.partial === 0 &&
+    columns === expectedSql
+  );
+}
+
+function validateSavedViewsIndexesBeforeWorkspaceMigration(
+  db: Database,
+  definitions: readonly IndexDefinitionRow[],
+): void {
+  const rows = savedViewsIndexRows(db);
+  const rowsByName = new Map(rows.map((row) => [row.name.toLowerCase(), row]));
+  const targetColumns = new Set(SAVED_VIEWS_MIGRATION_COLUMNS);
+
+  for (const definition of definitions) {
+    const row = rowsByName.get(definition.name.toLowerCase());
+    if (row === undefined) {
+      throw new Error(
+        `Cannot apply migration 0025 safely: saved_views index ${definition.name} disappeared during preflight`,
+      );
+    }
+    const expected = SAVED_VIEWS_WORKSPACE_INDEXES.find(
+      (index) => index.name.toLowerCase() === definition.name.toLowerCase(),
+    );
+    if (expected !== undefined && !savedViewsCanonicalIndexMatches(row, expected)) {
+      throw new Error(
+        `Cannot apply migration 0025 safely: saved_views index ${definition.name} has an incompatible canonical definition`,
+      );
+    }
+    if (
+      SAVED_VIEWS_WORKSPACE_STAGING_NAMES.some(
+        (name) => name?.toLowerCase() === definition.name.toLowerCase(),
+      )
+    ) {
+      throw new Error(
+        `Cannot apply migration 0025 safely: saved_views index ${definition.name} collides with a staging table`,
+      );
+    }
+    const indexedColumns = savedViewsIndexColumns(db, definition.name);
+    if (
+      indexedColumns.some((column) => column !== null && !targetColumns.has(column)) ||
+      !savedViewsIndexCanCompileAgainstColumns(db, definition.sql, SAVED_VIEWS_MIGRATION_COLUMNS)
+    ) {
+      throw new Error(
+        `Cannot apply migration 0025 safely: saved_views index ${definition.name} cannot be preserved against the legacy schema`,
+      );
+    }
+  }
+}
+
 function restoreSavedViewsIndexes(db: Database, definitions: IndexDefinitionRow[]): void {
   for (const definition of definitions) {
     if (!hasNamedIndex(db, "saved_views", definition.name)) db.exec(definition.sql);
+  }
+}
+
+function savedViewsDependentTriggerDefinitions(db: Database): SavedViewsTriggerDefinition[] {
+  return db
+    .query<SavedViewsTriggerDefinition, SQLQueryBindings[]>(
+      `SELECT name, sql
+         FROM sqlite_master
+        WHERE type = 'trigger' AND sql IS NOT NULL
+          AND lower(sql) LIKE '%saved_views%'
+        ORDER BY rowid`,
+    )
+    .all()
+    .filter(
+      (definition) =>
+        !(
+          definition.name.toLowerCase() === "saved_views_workspace_scope_insert" &&
+          /\bafter\s+insert\s+on\s+(?:"saved_views"|saved_views)\b/i.test(definition.sql)
+        ),
+    );
+}
+
+function restoreSavedViewsDependentTriggers(
+  db: Database,
+  definitions: readonly SavedViewsTriggerDefinition[],
+): void {
+  for (const definition of definitions) {
+    if (!hasTrigger(db, definition.name)) db.exec(definition.sql);
+  }
+}
+
+function validateSavedViewsDependentTriggersBeforeWorkspaceMigration(
+  definitions: readonly SavedViewsTriggerDefinition[],
+): void {
+  const reservedNames = new Set(
+    [
+      "saved_views_workspace_scope_insert",
+      "saved_views_workspace_required_insert",
+      "saved_views_workspace_required_update",
+      ...SAVED_VIEWS_WORKSPACE_STAGING_NAMES,
+    ].map((name) => name?.toLowerCase()),
+  );
+  const collision = definitions.find((definition) =>
+    reservedNames.has(definition.name.toLowerCase()),
+  );
+  if (collision !== undefined) {
+    throw new Error(
+      `Cannot apply migration 0025 safely: saved_views-dependent trigger ${collision.name} ` +
+        "uses a reserved migration name",
+    );
   }
 }
 
@@ -1009,7 +1218,14 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
     // de una transacción activa. El runner desactiva las comprobaciones solo
     // alrededor de estas migraciones y las reactiva aun si una falla.
     const rebuild = migration.version === 25 || migration.version === 33;
-    const savedViewIndexes = migration.version === 33 ? savedViewsIndexDefinitions(db) : [];
+    const savedViewIndexes =
+      migration.version === 25 || migration.version === 33 ? savedViewsIndexDefinitions(db) : [];
+    const savedViewsDependentTriggers =
+      migration.version === 25 ? savedViewsDependentTriggerDefinitions(db) : [];
+    if (migration.version === 25) {
+      validateSavedViewsIndexesBeforeWorkspaceMigration(db, savedViewIndexes);
+      validateSavedViewsDependentTriggersBeforeWorkspaceMigration(savedViewsDependentTriggers);
+    }
     if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
@@ -1017,7 +1233,12 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
         if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "before");
         if (migration.version === 30) verifyDocumentsBeforeRetirement(db, options);
         db.exec(migration.sql);
-        if (migration.version === 33) restoreSavedViewsIndexes(db, savedViewIndexes);
+        if (migration.version === 25 || migration.version === 33) {
+          restoreSavedViewsIndexes(db, savedViewIndexes);
+        }
+        if (migration.version === 25) {
+          restoreSavedViewsDependentTriggers(db, savedViewsDependentTriggers);
+        }
         if (migration.version === 24) {
           normalizeBackfilledMembershipIds(db);
           validateWorkspaceMigration(db, "after");
