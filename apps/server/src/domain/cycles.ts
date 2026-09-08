@@ -759,12 +759,14 @@ export function ensureUpcomingCadenceCycles(
           .all(teamId, workspaceId)
       : db.query("SELECT * FROM cycles WHERE team_id = ?1 AND archived_at IS NULL").all(teamId)
   ) as CycleRow[];
+  // Cycle numbers define the cadence sequence. A manual date edit must not
+  // move a generated Cycle to another sequence position.
   const upcoming = all
     .filter((cycle) => cycle.state === "upcoming")
     .sort(
       (a, b) =>
-        parseDateTime(a.starts_at, "Cycle startsAt") -
-          parseDateTime(b.starts_at, "Cycle startsAt") || a.number - b.number,
+        a.number - b.number ||
+        parseDateTime(a.starts_at, "Cycle startsAt") - parseDateTime(b.starts_at, "Cycle startsAt"),
     );
   const manual = upcoming.filter((cycle) => cycle.cadence_source === "manual");
   const cadence = upcoming.filter((cycle) => cycle.cadence_source === "cadence");
@@ -828,8 +830,8 @@ export function ensureUpcomingCadenceCycles(
 
   const updatedUpcoming = upcoming.sort(
     (a, b) =>
-      parseDateTime(a.starts_at, "Cycle startsAt") - parseDateTime(b.starts_at, "Cycle startsAt") ||
-      a.number - b.number,
+      a.number - b.number ||
+      parseDateTime(a.starts_at, "Cycle startsAt") - parseDateTime(b.starts_at, "Cycle startsAt"),
   );
   const updatedCadence = updatedUpcoming.filter((cycle) => cycle.cadence_source === "cadence");
   const keepCadence = Math.max(0, settings.cycleUpcomingCount - manual.length);
@@ -1102,15 +1104,6 @@ export function deleteCycle(
     workspace_id?: string | null;
   }>;
   const reference = cycleReference(db, existing);
-  const cadenceBeforeDelete = db
-    .query(
-      `SELECT count(*) AS count FROM cycles
-       WHERE team_id = ?1 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL
-       ${workspaceId ? `AND ${workspaceClause("workspace_id", "?2")}` : ""}`,
-    )
-    .get(...(workspaceId ? [existing.team_id, workspaceId] : [existing.team_id])) as {
-    count: number;
-  };
   db.transaction(() => {
     // También canoniza eventos anteriores: una vez borrado el cycle, su UUID
     // ya no puede resolverse durante el export.
@@ -1147,8 +1140,12 @@ export function deleteCycle(
     } else {
       db.query("DELETE FROM cycles WHERE id = ?1").run(id);
     }
+    // Only deleting a non-archived future Cycle consumes a horizon slot.
+    // Keep manual Cycles and replenish generated Cycles with the same rule as
+    // PostgreSQL.
     if (
-      (existing.cadence_source === "cadence" || cadenceBeforeDelete.count > 0) &&
+      existing.state === "upcoming" &&
+      existing.archived_at === null &&
       databaseBoolean(getTeamSettings(db, existing.team_id, workspaceId).cycles_enabled)
     ) {
       ensureUpcomingCadenceCycles(db, existing.team_id, workspaceId);

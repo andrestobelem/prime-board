@@ -523,9 +523,11 @@ export async function ensureUpcomingPostgresCadenceCyclesInTransaction(
       [team.id],
     )),
   ];
+  // Cycle numbers define the cadence sequence. A manual date edit must not
+  // move a generated Cycle to another sequence position.
   const upcoming = all
     .filter((cycle) => cycle.state === "upcoming")
-    .sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at) || a.number - b.number);
+    .sort((a, b) => a.number - b.number || Date.parse(a.starts_at) - Date.parse(b.starts_at));
   const manual = upcoming.filter((cycle) => cycle.cadence_source === "manual");
   const cadence = upcoming.filter((cycle) => cycle.cadence_source === "cadence");
   const settingsForCadence = cadenceSettings(team);
@@ -578,7 +580,7 @@ export async function ensureUpcomingPostgresCadenceCyclesInTransaction(
   }
 
   const updatedUpcoming = upcoming.sort(
-    (a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at) || a.number - b.number,
+    (a, b) => a.number - b.number || Date.parse(a.starts_at) - Date.parse(b.starts_at),
   );
   const updatedCadence = updatedUpcoming.filter((cycle) => cycle.cadence_source === "cadence");
   const settings = mapTeamPlanningSettings(team);
@@ -890,10 +892,6 @@ export async function deletePostgresCycle(
   const team = await getPostgresTeam(persistence, { id: existing.team_id });
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   const reference = `${team.key}/${existing.number}`;
-  const cadenceBeforeDelete = await persistence.one<{ count: number }>(
-    "SELECT count(*)::int AS count FROM cycles WHERE team_id = $1 AND state = 'upcoming' AND cadence_source = 'cadence' AND archived_at IS NULL",
-    [existing.team_id],
-  );
   await persistence.transaction(async (tx) => {
     await preserveCycleActivityReferences(tx, id, reference);
     const timestamp = now();
@@ -913,8 +911,12 @@ export async function deletePostgresCycle(
     ]);
     if (!locked) throw apiError("NOT_FOUND", "Team not found");
     const currentTeam = await getPostgresTeam(tx, { id: existing.team_id });
+    // Only deleting a non-archived future Cycle consumes a horizon slot.
+    // Keep manual Cycles and replenish generated Cycles with the same rule as
+    // SQLite.
     if (
-      (existing.cadence_source === "cadence" || Number(cadenceBeforeDelete?.count ?? 0) > 0) &&
+      existing.state === "upcoming" &&
+      existing.archived_at === null &&
       currentTeam &&
       (currentTeam.cycles_enabled === true || currentTeam.cycles_enabled === 1)
     ) {
