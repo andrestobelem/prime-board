@@ -29,6 +29,38 @@ function databaseWithMigrationsThrough(versionLimit: number): Database {
   return db;
 }
 
+
+function injectForeignKeysRestoreFailure(
+  db: Database,
+  message: string,
+  persistent: boolean,
+): () => void {
+  const originalExec = db.exec;
+  let remainingFailures = persistent ? Number.POSITIVE_INFINITY : 1;
+  const wrappedExec = (
+    ...args: Parameters<typeof originalExec>
+  ): ReturnType<typeof originalExec> => {
+    const [sql] = args;
+    if (sql === "PRAGMA foreign_keys = ON" && remainingFailures > 0) {
+      remainingFailures -= 1;
+      throw new Error(message);
+    }
+    return originalExec.apply(db, args);
+  };
+  Object.defineProperty(db, "exec", { configurable: true, value: wrappedExec });
+  return () => {
+    Object.defineProperty(db, "exec", { configurable: true, value: originalExec });
+  };
+}
+
+function migrationErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function aggregateErrors(error: unknown): unknown[] {
+  if (!(error instanceof AggregateError)) return [];
+  return error.errors;
+}
 function installUppercaseNotificationSchema(db: Database): void {
   db.exec(`
     CREATE TABLE "NOTIFICATION_PREFERENCES" (
@@ -7357,7 +7389,7 @@ describe("colisión de migraciones SQLite", () => {
         firstError = error instanceof Error ? error.message : String(error);
       }
       expect(firstError).toMatch(
-        /migration 0025.*custom index custom_teams_idx on teams cannot be restored safely/i,
+        /migration 0025.*custom index custom_teams_idx on teams cannot be preserved safely/i,
       );
       expect(
         db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
@@ -8816,4 +8848,213 @@ describe("colisión de migraciones SQLite", () => {
     }
   });
 
+
+  it("conserva el PRAGMA foreign_keys inicial en una instalación fresh", () => {
+    for (const initialValue of [0, 1]) {
+      const db = new Database(":memory:", { strict: true });
+      try {
+        db.exec(initialValue === 1 ? "PRAGMA foreign_keys = ON" : "PRAGMA foreign_keys = OFF");
+        migrate(db);
+
+        expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 32 });
+        expect(db.query("PRAGMA foreign_keys").get()).toEqual({
+          foreign_keys: initialValue,
+        });
+
+        const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+        migrate(db);
+        expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+        expect(db.query("PRAGMA foreign_keys").get()).toEqual({
+          foreign_keys: initialValue,
+        });
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("conserva foreign_keys OFF al completar 0025, 0032 y 0033 desde 0024", () => {
+    const db = databaseWithMigrationsThrough(24);
+    try {
+      db.exec("PRAGMA foreign_keys = OFF");
+      migrate(db);
+
+      expect(
+        db
+          .query("SELECT version, name FROM _migrations WHERE version >= 25 ORDER BY version")
+          .all(),
+      ).toEqual([
+        { version: 25, name: "workspace_constraints" },
+        { version: 26, name: "api_key_workspaces" },
+        { version: 27, name: "documents" },
+        { version: 28, name: "issue_subscribers" },
+        { version: 29, name: "comments_fts" },
+        { version: 30, name: "documents_retirement" },
+        { version: 32, name: "notification_preferences" },
+        { version: 33, name: "views_preferences" },
+      ]);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+
+      const markers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      migrate(db);
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(markers);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rechaza migrar dentro de una transacción externa sin escribir", () => {
+    for (const initialValue of [0, 1]) {
+      const db = new Database(":memory:", { strict: true });
+      try {
+        db.exec(initialValue === 1 ? "PRAGMA foreign_keys = ON" : "PRAGMA foreign_keys = OFF");
+        db.exec(`
+          CREATE TABLE _migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+          );
+          CREATE TABLE migration_sentinel (value TEXT NOT NULL);
+          INSERT INTO migration_sentinel (value) VALUES ('before');
+        `);
+        const beforeSchema = db
+          .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+          .all();
+        const beforeRows = db.query("SELECT * FROM migration_sentinel").all();
+        const beforeMarkers = db.query("SELECT * FROM _migrations").all();
+        const beforeSchemaVersion = db.query("PRAGMA schema_version").get();
+        const beforeForeignKeys = db.query("PRAGMA foreign_keys").get();
+
+        db.transaction(() => {
+          expect(() => migrate(db)).toThrow(/active transaction/i);
+          expect(db.inTransaction).toBe(true);
+          expect(
+            db
+              .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+              .all(),
+          ).toEqual(beforeSchema);
+          expect(db.query("SELECT * FROM migration_sentinel").all()).toEqual(beforeRows);
+          expect(db.query("SELECT * FROM _migrations").all()).toEqual(beforeMarkers);
+          expect(db.query("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
+          expect(db.query("PRAGMA foreign_keys").get()).toEqual(beforeForeignKeys);
+        })();
+        expect(db.inTransaction).toBe(false);
+        expect(db.query("SELECT * FROM migration_sentinel").all()).toEqual(beforeRows);
+        expect(db.query("SELECT * FROM _migrations").all()).toEqual(beforeMarkers);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  it("reintenta una restauración one-shot de foreign_keys después de COMMIT", () => {
+    const db = new Database(":memory:", { strict: true });
+    const releaseInjection = (() => {
+      db.exec("PRAGMA foreign_keys = ON");
+      return injectForeignKeysRestoreFailure(db, "one-shot restore failure", false);
+    })();
+    try {
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 32 });
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      releaseInjection();
+      db.close();
+    }
+  });
+
+  it("recupera foreign_keys ON en el retry tras un restore persistente después de COMMIT", () => {
+    const db = new Database(":memory:", { strict: true });
+    db.exec("PRAGMA foreign_keys = ON");
+    const releaseInjection = injectForeignKeysRestoreFailure(
+      db,
+      "persistent restore after commit",
+      true,
+    );
+    try {
+      expect(() => migrate(db)).toThrow(
+        /Could not set SQLite PRAGMA foreign_keys to ON after 3 attempts.*persistent restore after commit/i,
+      );
+      expect(db.query("SELECT max(version) AS version FROM _migrations").get()).toEqual({
+        version: 25,
+      });
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+    } finally {
+      releaseInjection();
+    }
+
+    try {
+      migrate(db);
+      expect(db.query("SELECT count(*) AS count FROM _migrations").get()).toEqual({ count: 32 });
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("agrega el fallo de restauración persistente sin ocultar el fallo de la migración", () => {
+    const db = databaseWithMigrationsThrough(24);
+    const releaseInjection = (() => {
+      db.exec(`
+        ALTER TABLE teams ADD COLUMN legacy_custom_value TEXT;
+        CREATE TABLE custom_teams_trigger_log (value TEXT NOT NULL);
+        CREATE TRIGGER custom_teams_dropped_column
+        AFTER INSERT ON teams
+        BEGIN
+          INSERT INTO custom_teams_trigger_log(value) VALUES (NEW.legacy_custom_value);
+        END;
+      `);
+      return injectForeignKeysRestoreFailure(db, "persistent restore failure", true);
+    })();
+    try {
+      const beforeSchema = db
+        .query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all();
+      const beforeRows = db.query("SELECT * FROM teams ORDER BY id").all();
+      const beforeMarkers = db.query("SELECT * FROM _migrations ORDER BY version").all();
+      const beforeSchemaVersion = db.query("PRAGMA schema_version").get();
+      let capturedError: unknown;
+      try {
+        migrate(db);
+      } catch (error) {
+        capturedError = error;
+      }
+
+      expect(capturedError).toBeInstanceOf(AggregateError);
+      const errors = aggregateErrors(capturedError);
+      expect(errors).toHaveLength(2);
+      expect(migrationErrorMessage(errors[0])).toMatch(
+        /migration 0025.*custom trigger custom_teams_dropped_column on teams.*cannot be preserved safely/i,
+      );
+      expect(migrationErrorMessage(errors[1])).toMatch(
+        /Could not set SQLite PRAGMA foreign_keys to ON after 3 attempts.*persistent restore failure/i,
+      );
+      expect(db.query("SELECT * FROM _migrations ORDER BY version").all()).toEqual(beforeMarkers);
+      expect(db.query("SELECT * FROM teams ORDER BY id").all()).toEqual(beforeRows);
+      expect(db.query("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
+      expect(
+        db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all(),
+      ).toEqual(beforeSchema);
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      releaseInjection();
+    }
+
+    try {
+      expect(() => migrate(db)).toThrow(
+        /migration 0025.*custom trigger custom_teams_dropped_column on teams.*cannot be preserved safely/i,
+      );
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      db.exec("DROP TRIGGER custom_teams_dropped_column");
+      migrate(db);
+      expect(db.query("SELECT version FROM _migrations WHERE version = 25").get()).toEqual({
+        version: 25,
+      });
+      expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      db.close();
+    }
+  });
 });

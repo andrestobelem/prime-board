@@ -2139,73 +2139,6 @@ const WORKSPACE_CONSTRAINTS_MIGRATION_STAGING_TABLES = WORKSPACE_CONSTRAINTS_MIG
   (table) => `_prb25_${table}`,
 );
 
-interface WorkspaceConstraintMigrationIndexTarget {
-  name: string;
-  table: string;
-}
-
-const WORKSPACE_CONSTRAINTS_MIGRATION_INDEX_TARGETS = [
-  { name: "idx_workspace_url_key", table: "workspace" },
-  { name: "idx_teams_workspace_key", table: "teams" },
-  { name: "idx_teams_workspace_id", table: "teams" },
-  { name: "idx_workflow_states_workspace_id", table: "workflow_states" },
-  { name: "idx_projects_workspace_id", table: "projects" },
-  { name: "idx_milestones_workspace_id", table: "milestones" },
-  { name: "idx_issues_workspace_id", table: "issues" },
-  { name: "idx_labels_workspace_id", table: "labels" },
-  { name: "idx_cycles_workspace_id", table: "cycles" },
-  { name: "idx_initiatives_workspace_id", table: "initiatives" },
-  { name: "idx_saved_views_workspace_id", table: "saved_views" },
-  { name: "idx_activity_workspace_id", table: "activity" },
-  { name: "idx_project_updates_workspace_id", table: "project_updates" },
-  { name: "idx_reviews_workspace_id", table: "reviews" },
-  { name: "idx_webhooks_workspace_id", table: "webhooks" },
-  { name: "idx_actor_invitations_workspace_id", table: "actor_invitations" },
-  { name: "idx_workspace_labels_name", table: "labels" },
-  { name: "idx_team_labels_name", table: "labels" },
-  { name: "idx_issues_team_state", table: "issues" },
-  { name: "idx_issues_assignee", table: "issues" },
-  { name: "idx_issues_project", table: "issues" },
-  { name: "idx_issues_parent", table: "issues" },
-  { name: "idx_issues_milestone", table: "issues" },
-  { name: "idx_issues_cycle", table: "issues" },
-  { name: "idx_milestones_project", table: "milestones" },
-  { name: "idx_project_teams_team", table: "project_teams" },
-  { name: "idx_issue_relations_related", table: "issue_relations" },
-  { name: "idx_comments_issue", table: "comments" },
-  { name: "idx_activity_issue", table: "activity" },
-  { name: "idx_webhooks_owner", table: "webhooks" },
-  { name: "idx_webhooks_team", table: "webhooks" },
-  { name: "idx_saved_views_scope", table: "saved_views" },
-  { name: "idx_saved_views_owner", table: "saved_views" },
-  { name: "idx_reviews_reviewer", table: "reviews" },
-  { name: "idx_reviews_issue", table: "reviews" },
-  { name: "idx_initiative_projects_project", table: "initiative_projects" },
-  { name: "idx_initiative_teams_team", table: "initiative_teams" },
-  { name: "idx_project_updates_project", table: "project_updates" },
-  { name: "idx_team_memberships_actor", table: "team_memberships" },
-  { name: "idx_api_key_team_limits_team", table: "api_key_team_limits" },
-  { name: "idx_inbox_receipts_actor", table: "inbox_receipts" },
-  { name: "idx_favorites_actor_project", table: "favorites" },
-  { name: "idx_favorites_actor_saved_view", table: "favorites" },
-  { name: "idx_favorites_actor_position", table: "favorites" },
-  { name: "idx_actor_invitations_status", table: "actor_invitations" },
-  { name: "idx_actor_invitations_actor", table: "actor_invitations" },
-  { name: "idx_actor_invitations_pending_email", table: "actor_invitations" },
-] satisfies readonly WorkspaceConstraintMigrationIndexTarget[];
-
-interface WorkspaceConstraintMigrationTriggerTarget {
-  name: string;
-  table: string;
-}
-
-const WORKSPACE_CONSTRAINTS_MIGRATION_TRIGGER_TARGETS = [
-  ...migrationTriggerDefinitions(migration0025).values(),
-].map((definition) => ({
-  name: definition.name,
-  table: definition.table,
-})) satisfies readonly WorkspaceConstraintMigrationTriggerTarget[];
-
 const WORKSPACE_CONSTRAINTS_MIGRATION_TABLE_NAMES = new Set(
   [
     ...WORKSPACE_CONSTRAINTS_MIGRATION_TABLES,
@@ -3377,16 +3310,12 @@ function validateWorkspaceConstraintsMigrationNames(db: Database): void {
   for (const { object, temporary } of objects) {
     if (temporary) {
       if (workspaceConstraintTemporaryObjectCapturesName(object)) {
-        if (object.type === "trigger") {
+        if (object.type !== "trigger") {
           throw new Error(
-            `Cannot apply migration 0025 safely: temporary trigger ${object.name} ` +
-              "would be selected by an unqualified DROP TRIGGER",
+            `Cannot apply migration 0025 safely: temporary ${object.type} ${object.name} ` +
+              "captures a migration name in its namespace",
           );
         }
-        throw new Error(
-          `Cannot apply migration 0025 safely: temporary ${object.type} ${object.name} ` +
-            "captures a migration name in its namespace",
-        );
       }
 
       if (object.type === "trigger") {
@@ -3434,12 +3363,14 @@ function validateWorkspaceConstraintsMigrationNames(db: Database): void {
     const dependencyNames = temporary
       ? WORKSPACE_CONSTRAINTS_MIGRATION_CHANGED_NAMES
       : WORKSPACE_CONSTRAINTS_MIGRATION_STAGING_NAMES;
-    const dependency = references.find(
-      (reference) =>
-        workspaceConstraintReferenceUsesMigratedSchema(reference) &&
-        (temporary || reference.kind === "table") &&
-        dependencyNames.has(normalizeSqliteIdentifier(reference.name)),
-    );
+    const dependency = temporary
+      ? undefined
+      : references.find(
+          (reference) =>
+            workspaceConstraintReferenceUsesMigratedSchema(reference) &&
+            reference.kind === "table" &&
+            dependencyNames.has(normalizeSqliteIdentifier(reference.name)),
+        );
     if (dependency !== undefined) {
       throw new Error(
         `Cannot apply migration 0025 safely: ${temporary ? "temporary " : ""}${object.type} ` +
@@ -3462,50 +3393,7 @@ function validateWorkspaceConstraintsMigrationNames(db: Database): void {
     }
   }
 
-  for (const staging of WORKSPACE_CONSTRAINTS_MIGRATION_STAGING_TABLES) {
-    const blocker = mainObjects.find(
-      ({ object }) => sameSqliteIdentifier(object.name, staging) && object.type !== "trigger",
-    );
-    if (blocker !== undefined) {
-      throw new Error(
-        `Cannot apply migration 0025 safely: main ${blocker.object.type} ${blocker.object.name} ` +
-          `blocks staging table ${staging}`,
-      );
-    }
-  }
 
-  for (const expected of WORKSPACE_CONSTRAINTS_MIGRATION_INDEX_TARGETS) {
-    const blockers = mainObjects.filter(
-      ({ object }) => sameSqliteIdentifier(object.name, expected.name) && object.type !== "trigger",
-    );
-    for (const blocker of blockers) {
-      const sameTable =
-        blocker.object.type === "index" &&
-        typeof blocker.object.tbl_name === "string" &&
-        sameSqliteIdentifier(blocker.object.tbl_name, expected.table);
-      if (sameTable) continue;
-      throw new Error(
-        `Cannot apply migration 0025 safely: main ${blocker.object.type} ${blocker.object.name} ` +
-          `blocks index ${expected.name} on ${expected.table}`,
-      );
-    }
-  }
-
-  for (const expected of WORKSPACE_CONSTRAINTS_MIGRATION_TRIGGER_TARGETS) {
-    const blocker = mainObjects.find(
-      ({ object }) => object.type === "trigger" && sameSqliteIdentifier(object.name, expected.name),
-    );
-    if (
-      blocker !== undefined &&
-      (typeof blocker.object.tbl_name !== "string" ||
-        !sameSqliteIdentifier(blocker.object.tbl_name, expected.table))
-    ) {
-      throw new Error(
-        `Cannot apply migration 0025 safely: main trigger ${blocker.object.name} on ` +
-          `${blocker.object.tbl_name ?? "unknown"} blocks trigger ${expected.name} on ${expected.table}`,
-      );
-    }
-  }
 }
 
 function validateMigrationChainBeforeMarker(db: Database): void {
@@ -4217,31 +4105,18 @@ function migrationPreflightValidateReference(
       );
     }
   }
-  if (!object.temporary) {
-    if (deferredMainAffectedNames.has(normalized)) return;
-    if (!affectedNames.has(normalized)) return;
-    throw new Error(
-      `Cannot run migrations safely: main ${object.object.type} ${object.object.name} ` +
-        `depends on pending migration name ${reference.name}`,
-    );
+  if (object.temporary) {
+    // TEMP views and triggers can continue to reference a MAIN object that is
+    // rebuilt. Specialized migration guards validate whether the object itself
+    // is lost and rewrite INDEXED BY dependencies when an index is renamed.
+    return;
   }
+  if (deferredMainAffectedNames.has(normalized)) return;
   if (!affectedNames.has(normalized)) return;
-  const candidates = state.filter(
-    (entry) =>
-      (reference.schema === null ||
-        sameSqliteIdentifier(entry.namespace, reference.schema) ||
-        (sameSqliteIdentifier(reference.schema, "main") &&
-          sameSqliteIdentifier(entry.namespace, "main")) ||
-        (sameSqliteIdentifier(reference.schema, "temp") &&
-          sameSqliteIdentifier(entry.namespace, "temp"))) &&
-      sameSqliteIdentifier(entry.object.name, reference.name),
+  throw new Error(
+    `Cannot run migrations safely: main ${object.object.type} ${object.object.name} ` +
+      `depends on pending migration name ${reference.name}`,
   );
-  if (candidates.length === 0 || reference.kind === "index" || candidates.length > 0) {
-    throw new Error(
-      `Cannot run migrations safely: temporary ${object.object.type} ${object.object.name} ` +
-        `depends on pending migration name ${reference.name}`,
-    );
-  }
 }
 
 function migrationPreflightValidateCurrentObjects(
@@ -4434,8 +4309,8 @@ function migrationPreflightValidateCreate(
     if (migrationPreflightObjectTypeCanShareName(existing.object.type, operation.objectType))
       continue;
     if (
-      operation.version === 33 &&
-      migrationPreflightCustomGuardReady(33, applied) &&
+      (operation.version === 25 || operation.version === 33) &&
+      migrationPreflightCustomGuardReady(operation.version, applied) &&
       operation.objectType === "trigger" &&
       existing.object.type === "trigger" &&
       operation.tableName !== null &&
@@ -8824,7 +8699,111 @@ function validateViewsMigrationResult(db: Database): void {
   }
 }
 
+interface ForeignKeysPragmaRow {
+  foreign_keys: number;
+}
+
+type ForeignKeysOperationOutcome<T> =
+  | { readonly kind: "success"; readonly value: T }
+  | { readonly kind: "failure"; readonly error: unknown };
+
+const FOREIGN_KEYS_RESTORE_ATTEMPTS = 3;
+const pendingForeignKeysStates = new WeakMap<Database, boolean>();
+
+function foreignKeysEnabled(db: Database): boolean {
+  const row = db.query<ForeignKeysPragmaRow, SQLQueryBindings[]>("PRAGMA foreign_keys").get();
+  if (row === null || (row.foreign_keys !== 0 && row.foreign_keys !== 1)) {
+    throw new Error("SQLite returned an invalid PRAGMA foreign_keys value");
+  }
+  return row.foreign_keys === 1;
+}
+
+/*
+ * SQLite solo aplica cambios de PRAGMA foreign_keys fuera de una transacción.
+ * El runner desactiva las comprobaciones antes de abrir su transacción y
+ * comprueba el valor efectivo después de cada intento de restauración. Si el
+ * driver falla de forma persistente, el error se propaga y se registra el
+ * estado deseado para recuperarlo antes del siguiente migrate().
+ */
+function setForeignKeysState(db: Database, enabled: boolean): void {
+  const expected = enabled ? "ON" : "OFF";
+  let lastError: unknown = new Error(`SQLite did not set PRAGMA foreign_keys to ${expected}`);
+
+  for (let attempt = 1; attempt <= FOREIGN_KEYS_RESTORE_ATTEMPTS; attempt += 1) {
+    try {
+      db.exec(`PRAGMA foreign_keys = ${expected}`);
+      if (foreignKeysEnabled(db) === enabled) return;
+      lastError = new Error(`SQLite did not set PRAGMA foreign_keys to ${expected}`);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    `Could not set SQLite PRAGMA foreign_keys to ${expected} after ${FOREIGN_KEYS_RESTORE_ATTEMPTS} attempts: ${detail}`,
+    { cause: lastError },
+  );
+}
+
+function restorePendingForeignKeysState(db: Database): void {
+  const pendingState = pendingForeignKeysStates.get(db);
+  if (pendingState === undefined) return;
+
+  try {
+    setForeignKeysState(db, pendingState);
+    pendingForeignKeysStates.delete(db);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not recover SQLite PRAGMA foreign_keys before retrying migrations: ${detail}`,
+      { cause: error },
+    );
+  }
+}
+
+function withForeignKeysDisabled<T>(db: Database, operation: () => T): T {
+  const initiallyEnabled = foreignKeysEnabled(db);
+  if (!initiallyEnabled) return operation();
+
+  let outcome: ForeignKeysOperationOutcome<T>;
+  try {
+    setForeignKeysState(db, false);
+    outcome = { kind: "success", value: operation() };
+  } catch (error) {
+    outcome = { kind: "failure", error };
+  }
+
+  let restoreError: unknown;
+  try {
+    setForeignKeysState(db, initiallyEnabled);
+  } catch (error) {
+    restoreError = error;
+    pendingForeignKeysStates.set(db, initiallyEnabled);
+  }
+
+  if (restoreError !== undefined) {
+    if (outcome.kind === "failure") {
+      const operationDetail =
+        outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+      const restoreDetail =
+        restoreError instanceof Error ? restoreError.message : String(restoreError);
+      throw new AggregateError(
+        [outcome.error, restoreError],
+        `Migration failed: ${operationDetail}; restoring SQLite PRAGMA foreign_keys also failed: ${restoreDetail}`,
+      );
+    }
+    throw restoreError;
+  }
+  if (outcome.kind === "failure") throw outcome.error;
+  return outcome.value;
+}
+
 export function migrate(db: Database, options: MigrationOptions = {}): void {
+  if (db.inTransaction) {
+    throw new Error("Cannot run migrations inside an active transaction");
+  }
+  restorePendingForeignKeysState(db);
   // La tabla de markers se califica en MAIN antes de cualquier CREATE o SELECT
   // del runner. El probe interno conserva una reserva explícita para evitar
   // colisiones futuras.
@@ -8951,8 +8930,7 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
       migration.version === 25 || migration.version === 33
         ? captureViewsMigrationTriggers(db, "saved_views", migration.version)
         : [];
-    if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
-    try {
+    const runMigration = (): void => {
       db.transaction(() => {
         if (migration.version === 24) validateWorkspaceMigration(db, "before");
         if (migration.version === 26) validateApiKeyWorkspaceMigration(db, "before");
@@ -9022,8 +9000,11 @@ export function migrate(db: Database, options: MigrationOptions = {}): void {
           "INSERT INTO main._migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
         ).run(migration.version, migration.name, now());
       })();
-    } finally {
-      if (rebuild) db.exec("PRAGMA foreign_keys = ON");
+    };
+    if (rebuild) {
+      withForeignKeysDisabled(db, runMigration);
+    } else {
+      runMigration();
     }
     if (rebuild) {
       validateWorkspaceConstraints(db);
