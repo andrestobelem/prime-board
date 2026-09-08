@@ -677,13 +677,8 @@ export function prepareRetiredDocuments(
   const sources: Record<string, readonly Record<string, unknown>[]> = {};
   if (sqliteDocuments) sources.sqlite = sqliteDocuments;
   if (replicaDocuments) sources.replica = replicaDocuments;
-  // All sources passed validation above. Archive them in one manifest before
-  // the resolver can mutate SQLite; a write failure therefore fails closed.
-  archiveDocumentSources(sources, configuredArchivePath);
-  if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
-    throw new Error("Documents snapshot changed during reservation");
-  }
-
+  // Preflight is read-only. The archive is written by retire(), after the
+  // resolver and export have succeeded while the reservation is still held.
   let released = false;
   let retired = false;
   return {
@@ -702,7 +697,21 @@ export function prepareRetiredDocuments(
       if (sqliteDocuments) sources.sqlite = sqliteDocuments;
       if (replicaDocuments) sources.replica = replicaDocuments;
       for (const [source, rows] of Object.entries(sources)) {
-        verifyDocumentRows(rows, configuredArchivePath, source);
+        if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
+          throw new Error("Documents snapshot changed before retirement");
+        }
+        // A source may be absent on the first retirement. archiveDocumentSources
+        // adds it below; existing sources must still match exactly.
+        if (hasDocumentArchiveSource(configuredArchivePath, source)) {
+          verifyDocumentRows(rows, configuredArchivePath, source);
+        }
+      }
+      if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
+        throw new Error("Documents snapshot changed before retirement");
+      }
+      archiveDocumentSources(sources, configuredArchivePath);
+      if (expected && !snapshotStillMatches(documentsSnapshot, expected)) {
+        throw new Error("Documents snapshot changed before retirement");
       }
       if (expected) removeSnapshotSafely(documentsSnapshot, expected);
       retired = true;

@@ -716,6 +716,36 @@ try {
     }
   });
 
+  it("mantiene el preflight de Documents sin escrituras externas", () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-readonly-preflight-"));
+    const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
+    const isolated = createTestApp(isolatedRoot);
+    try {
+      isolated.db.exec(`
+        CREATE TABLE documents (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL);
+        INSERT INTO documents (id, title, content) VALUES ('sqlite-row', 'SQLite', 'keep');
+      `);
+      const repo = createRepoSync(isolated.db, isolatedRoot, { documentsArchivePath: archivePath });
+      expect(repo).not.toBeNull();
+      const lease = repo!.preflight();
+      expect(lease).toBeDefined();
+      expect(existsSync(archivePath)).toBe(false);
+      lease!.abort();
+      expect(existsSync(archivePath)).toBe(false);
+
+      const committedLease = repo!.preflight();
+      if (!committedLease) throw new Error("expected Documents lease");
+      repo!.sync(committedLease);
+      committedLease.complete();
+      expect(existsSync(archivePath)).toBe(true);
+      committedLease.release?.();
+    } finally {
+      isolated.db.exec("DROP TABLE IF EXISTS documents");
+      isolated.stop();
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("no modifica el archivo externo cuando el preflight encuentra una divergencia", () => {
     const isolatedRoot = mkdtempSync(join(tmpdir(), "pb-reposync-preflight-archive-"));
     const archivePath = join(isolatedRoot, "backup", "documents.archive.json");
