@@ -2,7 +2,7 @@
 import type { Database } from "bun:sqlite";
 import { apiError } from "../graphql/errors.ts";
 import { newId, now } from "../db/util.ts";
-import { parseDateTime } from "./datetime.ts";
+import { parseDateTime, parseFutureDateTime } from "./datetime.ts";
 import { recordActivity } from "./activity.ts";
 import { mapTeamPlanningSettings, type CycleCadenceSource } from "./teams.ts";
 import {
@@ -491,14 +491,18 @@ export function updateCycle(
     }
     const startsAt = input.startsAt ?? existing.starts_at;
     const endsAt = input.endsAt ?? existing.ends_at;
-    if (input.startsAt != null || input.endsAt != null) {
-      if (existing.state !== "upcoming") {
-        throw apiError("VALIDATION_FAILED", "Only future cycle dates can be adjusted");
-      }
-      parseDateTime(startsAt, "Cycle startsAt");
-      parseDateTime(endsAt, "Cycle endsAt");
+    const datesChanged = input.startsAt != null || input.endsAt != null;
+    if (datesChanged && existing.state !== "upcoming") {
+      throw apiError("VALIDATION_FAILED", "Only future cycle dates can be adjusted");
     }
-    if (parseDateTime(startsAt, "Cycle startsAt") > parseDateTime(endsAt, "Cycle endsAt")) {
+    const referenceTimestamp = Date.now();
+    const startsTimestamp = datesChanged
+      ? parseFutureDateTime(startsAt, "Cycle startsAt", referenceTimestamp)
+      : parseDateTime(startsAt, "Cycle startsAt");
+    const endsTimestamp = datesChanged
+      ? parseFutureDateTime(endsAt, "Cycle endsAt", referenceTimestamp)
+      : parseDateTime(endsAt, "Cycle endsAt");
+    if (startsTimestamp > endsTimestamp) {
       throw apiError("VALIDATION_FAILED", "Cycle startsAt must be before endsAt");
     }
     if (input.startsAt != null) push("starts_at", input.startsAt);

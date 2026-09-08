@@ -39,7 +39,7 @@ const SAFE_MUTATIONS = new Set(["actorUpdate", "actorLeave", ...KEY_MUTATIONS]);
 
 // PRB-430/431 migran primero Workspace, actores y credenciales. Las demás
 // operaciones no deben caer silenciosamente en el SQLite efímero del seam.
-const POSTGRES_SUPPORTED_OPERATIONS = new Set([
+export const POSTGRES_SUPPORTED_OPERATIONS: ReadonlySet<string> = new Set([
   "query:viewer",
   "query:workspace",
   "query:workspaces",
@@ -75,6 +75,7 @@ const POSTGRES_SUPPORTED_OPERATIONS = new Set([
   "mutation:milestoneUpdate",
   "mutation:milestoneDelete",
   "mutation:cycleCreate",
+  "mutation:cycleCreateFromCadence",
   "mutation:cycleUpdate",
   "mutation:cycleDelete",
   "mutation:cycleCarryOver",
