@@ -13,7 +13,11 @@ import { newId, now } from "../db/util.ts";
 import { PROJECT_STATES } from "./projects.ts";
 import type { ActorRow } from "../auth/viewer.ts";
 import type { PostgresWorkspaceContext } from "./postgres-workspace-scope.ts";
-import { projectWorkspaceScope, scopedWorkspacePredicate } from "./postgres-workspace-scope.ts";
+import {
+  projectWorkspaceScope,
+  scopedWorkspacePredicate,
+  workspaceIdOf,
+} from "./postgres-workspace-scope.ts";
 
 export interface PostgresProjectRow {
   id: string;
@@ -235,25 +239,49 @@ export async function createPostgresProject(
   const id = newId();
   const timestamp = now();
   await persistence.transaction(async (tx) => {
-    await tx.execute(
-      `INSERT INTO projects
-       (id, name, description, state, lead_id, target_date, created_at, updated_at, archived_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7, NULL)`,
-      [
-        id,
-        name,
-        input.description ?? null,
-        input.state ?? "backlog",
-        input.leadId ?? null,
-        input.targetDate ?? null,
-        timestamp,
-      ],
-    );
-    for (const teamId of teamIds) {
-      await tx.execute("INSERT INTO project_teams (project_id, team_id) VALUES ($1, $2)", [
-        id,
-        teamId,
-      ]);
+    if (context) {
+      await tx.execute(
+        `INSERT INTO projects
+         (workspace_id, id, name, description, state, lead_id, target_date, created_at, updated_at, archived_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, NULL)`,
+        [
+          workspaceIdOf(context),
+          id,
+          name,
+          input.description ?? null,
+          input.state ?? "backlog",
+          input.leadId ?? null,
+          input.targetDate ?? null,
+          timestamp,
+        ],
+      );
+      for (const teamId of teamIds) {
+        await tx.execute(
+          "INSERT INTO project_teams (workspace_id, project_id, team_id) VALUES ($1, $2, $3)",
+          [workspaceIdOf(context), id, teamId],
+        );
+      }
+    } else {
+      await tx.execute(
+        `INSERT INTO projects
+         (id, name, description, state, lead_id, target_date, created_at, updated_at, archived_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, NULL)`,
+        [
+          id,
+          name,
+          input.description ?? null,
+          input.state ?? "backlog",
+          input.leadId ?? null,
+          input.targetDate ?? null,
+          timestamp,
+        ],
+      );
+      for (const teamId of teamIds) {
+        await tx.execute("INSERT INTO project_teams (project_id, team_id) VALUES ($1, $2)", [
+          id,
+          teamId,
+        ]);
+      }
     }
   });
   const project = await getPostgresProject(persistence, id, context);
@@ -288,12 +316,19 @@ export async function updatePostgresProject(
   if (input.targetDate !== undefined) push("target_date", input.targetDate);
   await persistence.transaction(async (tx) => {
     if (teamIds) {
-      await tx.execute("DELETE FROM project_teams WHERE project_id = $1", [id]);
+      await tx.execute(
+        context
+          ? "DELETE FROM project_teams WHERE workspace_id = $1 AND project_id = $2"
+          : "DELETE FROM project_teams WHERE project_id = $1",
+        context ? [workspaceIdOf(context), id] : [id],
+      );
       for (const teamId of teamIds) {
-        await tx.execute("INSERT INTO project_teams (project_id, team_id) VALUES ($1, $2)", [
-          id,
-          teamId,
-        ]);
+        await tx.execute(
+          context
+            ? "INSERT INTO project_teams (workspace_id, project_id, team_id) VALUES ($1, $2, $3)"
+            : "INSERT INTO project_teams (project_id, team_id) VALUES ($1, $2)",
+          context ? [workspaceIdOf(context), id, teamId] : [id, teamId],
+        );
       }
     }
     if (sets.length || teamIds) {

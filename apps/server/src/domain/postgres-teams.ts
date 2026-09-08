@@ -6,6 +6,7 @@ import type { TeamRow, WorkflowStateRow } from "./teams.ts";
 import {
   scopedWorkspacePredicate,
   teamWorkspaceScope,
+  workspaceColumnScope,
   workspaceIdOf,
   workspaceMembershipScope,
   type PostgresWorkspaceContext,
@@ -54,7 +55,7 @@ export async function getPostgresTeam(
 ): Promise<TeamRow | null> {
   const scope = scopedWorkspacePredicate(
     context,
-    (workspaceParam) => teamWorkspaceScope("teams.id", workspaceParam),
+    (workspaceParam) => workspaceColumnScope("teams", workspaceParam),
     "$2",
   );
   if (ref.id) {
@@ -79,7 +80,7 @@ export async function listPostgresTeams(
 ): Promise<TeamRow[]> {
   const scope = scopedWorkspacePredicate(
     context,
-    (workspaceParam) => teamWorkspaceScope("teams.id", workspaceParam),
+    (workspaceParam) => workspaceColumnScope("teams", workspaceParam),
     "$1",
   );
   const archived = includeArchived ? "" : " AND teams.archived_at IS NULL";
@@ -153,17 +154,31 @@ function validateTeamInput(input: {
   return { name, key, visibility, accessPolicy };
 }
 
-async function seedPostgresWorkflow(tx: PersistenceTransaction, teamId: string, timestamp: string) {
+async function seedPostgresWorkflow(
+  tx: PersistenceTransaction,
+  teamId: string,
+  timestamp: string,
+  context?: PostgresWorkspaceContext,
+) {
   let firstId: string | null = null;
   for (const [index, state] of DEFAULT_WORKFLOW.entries()) {
     const id = newId();
     firstId ??= id;
-    await tx.execute(
-      `INSERT INTO workflow_states
-       (id, team_id, name, type, color, position, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-      [id, teamId, state.name, state.type, state.color, index, timestamp],
-    );
+    if (context) {
+      await tx.execute(
+        `INSERT INTO workflow_states
+         (workspace_id, id, team_id, name, type, color, position, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+        [workspaceIdOf(context), id, teamId, state.name, state.type, state.color, index, timestamp],
+      );
+    } else {
+      await tx.execute(
+        `INSERT INTO workflow_states
+         (id, team_id, name, type, color, position, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+        [id, teamId, state.name, state.type, state.color, index, timestamp],
+      );
+    }
   }
   await tx.execute("UPDATE teams SET default_state_id = $1 WHERE id = $2", [firstId, teamId]);
 }
@@ -188,26 +203,51 @@ export async function createPostgresTeam(
   try {
     await persistence.transaction(async (tx) => {
       const timestamp = now();
-      await tx.execute(
-        `INSERT INTO teams
-         (id, name, key, description, visibility, access_policy, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-        [
-          id,
-          values.name,
-          values.key,
-          input.description ?? null,
-          values.visibility,
-          values.accessPolicy,
-          timestamp,
-        ],
-      );
-      await seedPostgresWorkflow(tx, id, timestamp);
-      if (ownerId) {
+      if (context) {
         await tx.execute(
-          "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES ($1, $2, $3, 'owner', $4)",
-          [newId(), id, ownerId, timestamp],
+          `INSERT INTO teams
+           (workspace_id, id, name, key, description, visibility, access_policy, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+          [
+            workspaceIdOf(context),
+            id,
+            values.name,
+            values.key,
+            input.description ?? null,
+            values.visibility,
+            values.accessPolicy,
+            timestamp,
+          ],
         );
+      } else {
+        await tx.execute(
+          `INSERT INTO teams
+           (id, name, key, description, visibility, access_policy, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+          [
+            id,
+            values.name,
+            values.key,
+            input.description ?? null,
+            values.visibility,
+            values.accessPolicy,
+            timestamp,
+          ],
+        );
+      }
+      await seedPostgresWorkflow(tx, id, timestamp, context);
+      if (ownerId) {
+        if (context) {
+          await tx.execute(
+            "INSERT INTO team_memberships (workspace_id, id, team_id, actor_id, role, created_at) VALUES ($1, $2, $3, $4, 'owner', $5)",
+            [workspaceIdOf(context), newId(), id, ownerId, timestamp],
+          );
+        } else {
+          await tx.execute(
+            "INSERT INTO team_memberships (id, team_id, actor_id, role, created_at) VALUES ($1, $2, $3, 'owner', $4)",
+            [newId(), id, ownerId, timestamp],
+          );
+        }
       }
     });
   } catch (error) {
@@ -285,7 +325,7 @@ export async function getPostgresWorkflowState(
 ): Promise<WorkflowStateRow | null> {
   const scope = scopedWorkspacePredicate(
     context,
-    (workspaceParam) => teamWorkspaceScope("scope_state.team_id", workspaceParam),
+    (workspaceParam) => workspaceColumnScope("scope_state", workspaceParam),
     "$2",
   );
   return persistence.one<WorkflowStateRow>(
@@ -304,7 +344,7 @@ export async function listPostgresTeamStates(
 ): Promise<WorkflowStateRow[]> {
   const scope = scopedWorkspacePredicate(
     context,
-    (workspaceParam) => teamWorkspaceScope("workflow_states.team_id", workspaceParam),
+    (workspaceParam) => workspaceColumnScope("workflow_states", workspaceParam),
     "$2",
   );
   return [
@@ -326,7 +366,7 @@ export async function getPostgresDefaultState(
   }
   const scope = scopedWorkspacePredicate(
     context,
-    (workspaceParam) => teamWorkspaceScope("workflow_states.team_id", workspaceParam),
+    (workspaceParam) => workspaceColumnScope("workflow_states", workspaceParam),
     "$2",
   );
   const state = await persistence.one<WorkflowStateRow>(
@@ -373,18 +413,33 @@ export async function createPostgresWorkflowState(
   const timestamp = now();
   try {
     const row = await persistence.one<WorkflowStateRow>(
-      `INSERT INTO workflow_states
-       (id, team_id, name, type, color, position, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING *`,
-      [
-        id,
-        team.id,
-        name,
-        input.type,
-        input.color ?? "#95a2b3",
-        input.position ?? (max?.max ?? -1) + 1,
-        timestamp,
-      ],
+      context
+        ? `INSERT INTO workflow_states
+           (workspace_id, id, team_id, name, type, color, position, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) RETURNING *`
+        : `INSERT INTO workflow_states
+           (id, team_id, name, type, color, position, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING *`,
+      context
+        ? [
+            workspaceIdOf(context),
+            id,
+            team.id,
+            name,
+            input.type,
+            input.color ?? "#95a2b3",
+            input.position ?? (max?.max ?? -1) + 1,
+            timestamp,
+          ]
+        : [
+            id,
+            team.id,
+            name,
+            input.type,
+            input.color ?? "#95a2b3",
+            input.position ?? (max?.max ?? -1) + 1,
+            timestamp,
+          ],
     );
     if (!row) throw new Error("PostgreSQL workflow state insert returned no row");
     return row;

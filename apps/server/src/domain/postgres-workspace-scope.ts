@@ -3,15 +3,19 @@ import type { WorkspaceContext } from "./workspace-context.ts";
 /**
  * Predicados SQL para el esquema PostgreSQL de transición.
  *
- * PRB-678 agrega columnas de Workspace a las tablas de dominio. Mientras esa
- * migración no exista, el grafo de pertenencia es la única fuente segura de
- * alcance: los Teams se vinculan mediante Memberships activas y los recursos
- * dependientes heredan ese límite. Este adaptador evita lookups sin alcance.
+ * PRB-678 agrega columnas de Workspace a las tablas de dominio. Las consultas
+ * nuevas usan esas columnas. El adaptador legacy solo permite el singleton y
+ * falla cerrado cuando hay más de un Workspace. Así ningún caller puede omitir
+ * el límite por accidente.
  */
 export type PostgresWorkspaceContext = WorkspaceContext;
 
 export function workspaceIdOf(context: PostgresWorkspaceContext): string {
   return context.workspaceId;
+}
+
+export function workspaceColumnScope(alias: string, workspaceParam: string): string {
+  return `${alias}.workspace_id = ${workspaceParam}`;
 }
 
 export function actorWorkspaceScope(alias: string, workspaceParam: string): string {
@@ -41,49 +45,27 @@ export function teamWorkspaceScope(teamIdExpression: string, workspaceParam: str
 }
 
 export function issueWorkspaceScope(alias: string, workspaceParam: string): string {
-  return teamWorkspaceScope(`${alias}.team_id`, workspaceParam);
+  return workspaceColumnScope(`${alias}`, workspaceParam);
 }
 
 export function issueIdWorkspaceScope(issueIdExpression: string, workspaceParam: string): string {
-  return `EXISTS (
-    SELECT 1
-      FROM issues AS scope_issue
-     WHERE scope_issue.id = ${issueIdExpression}
-       AND ${issueWorkspaceScope("scope_issue", workspaceParam)}
-  )`;
+  return `EXISTS (SELECT 1 FROM issues AS scope_issue WHERE scope_issue.id = ${issueIdExpression} AND ${workspaceColumnScope("scope_issue", workspaceParam)})`;
 }
 
 export function projectWorkspaceScope(alias: string, workspaceParam: string): string {
-  return `EXISTS (
-    SELECT 1
-      FROM project_teams AS scope_project_team
-     WHERE scope_project_team.project_id = ${alias}.id
-       AND ${teamWorkspaceScope("scope_project_team.team_id", workspaceParam)}
-  )`;
+  return workspaceColumnScope(`${alias}`, workspaceParam);
 }
 
 export function milestoneWorkspaceScope(alias: string, workspaceParam: string): string {
-  return `EXISTS (
-    SELECT 1
-      FROM projects AS scope_milestone_project
-     WHERE scope_milestone_project.id = ${alias}.project_id
-       AND ${projectWorkspaceScope("scope_milestone_project", workspaceParam)}
-  )`;
+  return workspaceColumnScope(`${alias}`, workspaceParam);
 }
 
 export function labelWorkspaceScope(alias: string, workspaceParam: string): string {
-  // Las Labels globales no tienen owner en el esquema de transición. Solo se
-  // exponen mientras la base conserva el singleton documentado. Al agregar
-  // otro Workspace se ocultan para cerrar la fuga. Las Labels de Team heredan
-  // el alcance del Team.
-  return `(
-    (${alias}.team_id IS NOT NULL AND ${teamWorkspaceScope(`${alias}.team_id`, workspaceParam)})
-    OR (${alias}.team_id IS NULL AND (SELECT count(*) FROM workspace) = 1)
-  )`;
+  return workspaceColumnScope(`${alias}`, workspaceParam);
 }
 
 export function issueRelationWorkspaceScope(alias: string, workspaceParam: string): string {
-  return `(${issueIdWorkspaceScope(`${alias}.issue_id`, workspaceParam)} AND ${issueIdWorkspaceScope(`${alias}.related_id`, workspaceParam)})`;
+  return workspaceColumnScope(alias, workspaceParam);
 }
 
 /** Devuelve un límite de compatibilidad que solo permite el singleton legacy. */

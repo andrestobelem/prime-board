@@ -13,6 +13,7 @@ import {
   issueWorkspaceScope,
   scopedWorkspacePredicate,
   teamWorkspaceScope,
+  workspaceIdOf,
 } from "./postgres-workspace-scope.ts";
 
 export type PostgresCycleState = "upcoming" | "active" | "completed";
@@ -96,6 +97,7 @@ async function assertPostgresCycleAccess(
   persistence: Persistence,
   viewer: ActorRow,
   teamId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
   await assertCanManagePostgresTeam(persistence, viewer, teamId);
 }
@@ -103,6 +105,7 @@ async function assertPostgresCycleAccess(
 async function nextPostgresCycleNumber(
   persistence: Persistence | PersistenceTransaction,
   teamId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<number> {
   const team = await getPostgresTeam(persistence, { id: teamId });
   if (!team) throw apiError("NOT_FOUND", "Team not found");
@@ -146,27 +149,46 @@ export async function createPostgresCycle(
   const name = input.name.trim();
   if (!name) throw apiError("VALIDATION_FAILED", "Cycle name cannot be empty");
   validateDates(input.startsAt, input.endsAt);
-  await assertPostgresCycleAccess(persistence, viewer, input.teamId);
+  await assertPostgresCycleAccess(persistence, viewer, input.teamId, context);
   const id = newId();
   const timestamp = now();
   await persistence.transaction(async (tx) => {
     await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [input.teamId]);
-    const number = await nextPostgresCycleNumber(tx, input.teamId);
-    await tx.execute(
-      `INSERT INTO cycles
-       (id, team_id, number, name, starts_at, ends_at, state, created_at, updated_at, archived_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, NULL)`,
-      [
-        id,
-        input.teamId,
-        number,
-        name,
-        input.startsAt,
-        input.endsAt,
-        input.state ? resolveState(input.state) : "upcoming",
-        timestamp,
-      ],
-    );
+    const number = await nextPostgresCycleNumber(tx, input.teamId, context);
+    if (context) {
+      await tx.execute(
+        `INSERT INTO cycles
+         (workspace_id, id, team_id, number, name, starts_at, ends_at, state, created_at, updated_at, archived_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, NULL)`,
+        [
+          workspaceIdOf(context),
+          id,
+          input.teamId,
+          number,
+          name,
+          input.startsAt,
+          input.endsAt,
+          input.state ?? "upcoming",
+          timestamp,
+        ],
+      );
+    } else {
+      await tx.execute(
+        `INSERT INTO cycles
+         (id, team_id, number, name, starts_at, ends_at, state, created_at, updated_at, archived_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, NULL)`,
+        [
+          id,
+          input.teamId,
+          number,
+          name,
+          input.startsAt,
+          input.endsAt,
+          input.state ?? "upcoming",
+          timestamp,
+        ],
+      );
+    }
   });
   const row = await getPostgresCycle(persistence, id, context);
   if (!row) throw new Error("PostgreSQL cycle insert returned no row");

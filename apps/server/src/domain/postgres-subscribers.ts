@@ -37,7 +37,7 @@ async function changeSubscription(
   workspaceId: string,
 ): Promise<PostgresIssueSubscriptionResult> {
   return persistence.transaction(async (tx) => {
-    const issue = await getPostgresIssueByRef(tx, ref, workspaceId);
+    const issue = await getPostgresIssueByRef(tx, ref, { workspaceId });
     if (!issue) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
     if (action === "subscribe" && issue.archived_at) {
       throw apiError("VALIDATION_FAILED", "Archived issues cannot be followed");
@@ -73,7 +73,7 @@ async function changeSubscription(
         ],
       );
     }
-    const row = await getPostgresIssueByRef(tx, issue.id, workspaceId);
+    const row = await getPostgresIssueByRef(tx, issue.id, { workspaceId });
     if (!row) throw apiError("NOT_FOUND", `Issue not found: ${ref}`);
     return { row, changed };
   });

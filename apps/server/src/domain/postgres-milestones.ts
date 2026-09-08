@@ -14,6 +14,7 @@ import {
   milestoneWorkspaceScope,
   projectWorkspaceScope,
   scopedWorkspacePredicate,
+  workspaceIdOf,
 } from "./postgres-workspace-scope.ts";
 
 export interface PostgresMilestoneRow {
@@ -93,10 +94,11 @@ async function assertPostgresMilestoneAccess(
   persistence: Persistence,
   viewer: ActorRow,
   projectId: string,
+  context?: PostgresWorkspaceContext,
 ): Promise<void> {
-  const project = await getPostgresProject(persistence, projectId);
+  const project = await getPostgresProject(persistence, projectId, context);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
-  await assertCanManagePostgresProject(persistence, viewer, projectId);
+  await assertCanManagePostgresProject(persistence, viewer, projectId, context);
 }
 
 export async function createPostgresMilestone(
@@ -115,7 +117,7 @@ export async function createPostgresMilestone(
   if (!name) throw apiError("VALIDATION_FAILED", "Milestone name cannot be empty");
   validatePosition(input.position);
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
-  await assertPostgresMilestoneAccess(persistence, viewer, input.projectId);
+  await assertPostgresMilestoneAccess(persistence, viewer, input.projectId, context);
   const id = newId();
   const timestamp = now();
   try {
@@ -127,20 +129,38 @@ export async function createPostgresMilestone(
         "SELECT COALESCE(MAX(position), -1) AS max FROM milestones WHERE project_id = $1",
         [input.projectId],
       );
-      await tx.execute(
-        `INSERT INTO milestones
-         (id, project_id, name, description, target_date, position, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-        [
-          id,
-          input.projectId,
-          name,
-          input.description ?? null,
-          input.targetDate ?? null,
-          input.position ?? Number(max?.max ?? -1) + 1,
-          timestamp,
-        ],
-      );
+      if (context) {
+        await tx.execute(
+          `INSERT INTO milestones
+           (workspace_id, id, project_id, name, description, target_date, position, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+          [
+            workspaceIdOf(context),
+            id,
+            input.projectId,
+            name,
+            input.description ?? null,
+            input.targetDate ?? null,
+            input.position ?? (max?.max ?? -1) + 1,
+            timestamp,
+          ],
+        );
+      } else {
+        await tx.execute(
+          `INSERT INTO milestones
+           (id, project_id, name, description, target_date, position, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+          [
+            id,
+            input.projectId,
+            name,
+            input.description ?? null,
+            input.targetDate ?? null,
+            input.position ?? (max?.max ?? -1) + 1,
+            timestamp,
+          ],
+        );
+      }
     });
   } catch (error) {
     if (isUniqueViolation(error)) {
@@ -167,7 +187,7 @@ export async function updatePostgresMilestone(
 ): Promise<PostgresMilestoneRow> {
   const milestone = await getPostgresMilestone(persistence, id, context);
   if (!milestone) throw apiError("NOT_FOUND", "Milestone not found");
-  await assertPostgresMilestoneAccess(persistence, viewer, milestone.project_id);
+  await assertPostgresMilestoneAccess(persistence, viewer, milestone.project_id, context);
   validatePosition(input.position);
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
   const sets: string[] = [];
@@ -256,7 +276,7 @@ export async function deletePostgresMilestone(
 ): Promise<number> {
   const milestone = await getPostgresMilestone(persistence, id, context);
   if (!milestone) throw apiError("NOT_FOUND", "Milestone not found");
-  await assertPostgresMilestoneAccess(persistence, viewer, milestone.project_id);
+  await assertPostgresMilestoneAccess(persistence, viewer, milestone.project_id, context);
   const project = await getPostgresProject(persistence, milestone.project_id, context);
   if (!project) throw apiError("NOT_FOUND", "Project not found");
   const reference = `${project.name}/${milestone.name}`;
