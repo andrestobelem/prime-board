@@ -637,6 +637,84 @@ describe("cycles", () => {
     });
   });
 
+  it("archiva el nuevo ciclo CADENCE cuando el horizonte está lleno de MANUAL", async () => {
+    const teamResult = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "PRB-625 manual full", key: "P625M",
+          cyclesEnabled: true, cycleUpcomingCount: 2
+        }) { team { id } }
+      }`,
+    );
+    expect(teamResult.errors).toBeUndefined();
+    const teamId = teamResult.data!.teamCreate.team.id as string;
+    const manualOne = await createCycleForTeam(
+      teamId,
+      "Manual one",
+      "2040-01-01T00:00:00.000Z",
+      "2040-01-14T23:59:59.000Z",
+    );
+    const manualTwo = await createCycleForTeam(
+      teamId,
+      "Manual two",
+      "2041-01-01T00:00:00.000Z",
+      "2041-01-14T23:59:59.000Z",
+    );
+    const before = await gql(
+      app,
+      `query($teamId: ID!) {
+        cycles(teamId: $teamId) { id name state cadenceSource archivedAt }
+      }`,
+      { teamId },
+    );
+    expect(before.errors).toBeUndefined();
+    expect(before.data!.cycles).toHaveLength(4);
+    expect(before.data!.cycles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: manualOne.id, cadenceSource: "MANUAL", archivedAt: null }),
+        expect.objectContaining({ id: manualTwo.id, cadenceSource: "MANUAL", archivedAt: null }),
+      ]),
+    );
+
+    const generatedResult = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreateFromCadence(input: { teamId: $teamId, name: "Archived cadence" }) {
+          cycle { id number state cadenceSource archivedAt }
+        }
+      }`,
+      { teamId },
+    );
+    expect(generatedResult.errors).toBeUndefined();
+    const generated = generatedResult.data!.cycleCreateFromCadence.cycle;
+    expect(generated).toMatchObject({
+      id: expect.any(String),
+      state: "UPCOMING",
+      cadenceSource: "CADENCE",
+      archivedAt: expect.any(String),
+    });
+
+    const after = await gql(
+      app,
+      `query($teamId: ID!) {
+        cycles(teamId: $teamId) { id cadenceSource archivedAt }
+      }`,
+      { teamId },
+    );
+    expect(after.errors).toBeUndefined();
+    expect(after.data!.cycles).toHaveLength(2);
+    expect(after.data!.cycles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: manualOne.id, cadenceSource: "MANUAL", archivedAt: null }),
+        expect.objectContaining({ id: manualTwo.id, cadenceSource: "MANUAL", archivedAt: null }),
+      ]),
+    );
+    expect(
+      after.data!.cycles.map((cycle: { cadenceSource: string }) => cycle.cadenceSource),
+    ).toEqual(["MANUAL", "MANUAL"]);
+  });
+
   it("rechaza fechas pasadas sin mutar un ciclo UPCOMING", async () => {
     const team = await gql(
       app,

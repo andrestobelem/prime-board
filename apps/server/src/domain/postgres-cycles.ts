@@ -618,9 +618,10 @@ export async function ensureUpcomingPostgresCadenceCyclesInTransaction(
   const updatedCadence = updatedUpcoming.filter((cycle) => cycle.cadence_source === "cadence");
   const settings = mapTeamPlanningSettings(team);
   const keepCadence = Math.max(0, settings.cycleUpcomingCount - manual.length);
-  const preserved = preserveCycleId
-    ? updatedCadence.find((cycle) => cycle.id === preserveCycleId)
-    : undefined;
+  const preserved =
+    preserveCycleId && keepCadence > 0
+      ? updatedCadence.find((cycle) => cycle.id === preserveCycleId)
+      : undefined;
   const candidateSlots = Math.max(0, keepCadence - (preserved ? 1 : 0));
   const candidates = updatedCadence.filter((cycle) => cycle.id !== preserveCycleId);
   const kept = preserved
