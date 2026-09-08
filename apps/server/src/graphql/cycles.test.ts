@@ -577,6 +577,66 @@ describe("cycles", () => {
     }
   });
 
+  it("preserva el ciclo de cadencia recién creado en un horizonte lleno", async () => {
+    const teamResult = await gql(
+      app,
+      `mutation {
+        teamCreate(input: {
+          name: "PRB-625 cadence horizon", key: "P625H",
+          cyclesEnabled: true, cycleUpcomingCount: 2
+        }) { team { id } }
+      }`,
+    );
+    expect(teamResult.errors).toBeUndefined();
+    const teamId = teamResult.data!.teamCreate.team.id as string;
+    const initial = await gql(
+      app,
+      `query($teamId: ID!) {
+        cycles(teamId: $teamId) { id number state cadenceSource archivedAt }
+      }`,
+      { teamId },
+    );
+    expect(initial.errors).toBeUndefined();
+    expect(initial.data!.cycles).toHaveLength(2);
+
+    const createdResult = await gql(
+      app,
+      `mutation($teamId: ID!) {
+        cycleCreateFromCadence(input: { teamId: $teamId, name: "New cadence cycle" }) {
+          cycle { id number name state cadenceSource archivedAt }
+        }
+      }`,
+      { teamId },
+    );
+    expect(createdResult.errors).toBeUndefined();
+    const created = createdResult.data!.cycleCreateFromCadence.cycle;
+    expect(created).toMatchObject({
+      id: expect.any(String),
+      number: 3,
+      name: "New cadence cycle",
+      state: "UPCOMING",
+      cadenceSource: "CADENCE",
+      archivedAt: null,
+    });
+
+    const visible = await gql(
+      app,
+      `query($teamId: ID!) {
+        cycles(teamId: $teamId) { id number state cadenceSource archivedAt }
+      }`,
+      { teamId },
+    );
+    expect(visible.errors).toBeUndefined();
+    expect(visible.data!.cycles).toHaveLength(2);
+    expect(visible.data!.cycles).toContainEqual({
+      id: created.id,
+      number: 3,
+      state: "UPCOMING",
+      cadenceSource: "CADENCE",
+      archivedAt: null,
+    });
+  });
+
   it("rechaza fechas pasadas sin mutar un ciclo UPCOMING", async () => {
     const team = await gql(
       app,

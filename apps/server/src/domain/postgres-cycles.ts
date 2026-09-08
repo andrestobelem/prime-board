@@ -341,7 +341,11 @@ export async function createPostgresCycle(
       (requestedCadence || state !== "upcoming") &&
       (Number(lockedTeam.cycle_upcoming_count ?? 0) > 0 || state !== "upcoming")
     ) {
-      await ensureUpcomingPostgresCadenceCyclesInTransaction(tx, lockedTeam);
+      await ensureUpcomingPostgresCadenceCyclesInTransaction(
+        tx,
+        lockedTeam,
+        state === "upcoming" && cadenceSource === "cadence" ? id : undefined,
+      );
     }
     const row = await getPostgresCycle(tx, id);
     if (!row) throw new Error("PostgreSQL cycle insert returned no row");
@@ -539,6 +543,7 @@ async function insertPostgresCadenceCycle(
 export async function ensureUpcomingPostgresCadenceCyclesInTransaction(
   tx: PersistenceTransaction,
   team: TeamRow,
+  preserveCycleId?: string,
 ): Promise<readonly PostgresCycleRow[]> {
   const locked = await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [
     team.id,
@@ -613,14 +618,25 @@ export async function ensureUpcomingPostgresCadenceCyclesInTransaction(
   const updatedCadence = updatedUpcoming.filter((cycle) => cycle.cadence_source === "cadence");
   const settings = mapTeamPlanningSettings(team);
   const keepCadence = Math.max(0, settings.cycleUpcomingCount - manual.length);
+  const preserved = preserveCycleId
+    ? updatedCadence.find((cycle) => cycle.id === preserveCycleId)
+    : undefined;
+  const candidateSlots = Math.max(0, keepCadence - (preserved ? 1 : 0));
+  const candidates = updatedCadence.filter((cycle) => cycle.id !== preserveCycleId);
+  const kept = preserved
+    ? [...(candidateSlots > 0 ? candidates.slice(-candidateSlots) : []), preserved].sort(
+        (a, b) => a.number - b.number || Date.parse(a.starts_at) - Date.parse(b.starts_at),
+      )
+    : updatedCadence.slice(0, keepCadence);
+  const keptIds = new Set(kept.map((cycle) => cycle.id));
   const timestamp = now();
-  for (const cycle of updatedCadence.slice(keepCadence)) {
+  for (const cycle of updatedCadence) {
+    if (keptIds.has(cycle.id)) continue;
     await tx.execute("UPDATE cycles SET archived_at = $1, updated_at = $1 WHERE id = $2", [
       timestamp,
       cycle.id,
     ]);
   }
-  const kept = updatedCadence.slice(0, keepCadence);
   previousEndsAt = [...all]
     .filter((cycle) => cycle.state !== "upcoming" || cycle.cadence_source === "manual")
     .sort((a, b) => Date.parse(b.ends_at) - Date.parse(a.ends_at))[0]?.ends_at;

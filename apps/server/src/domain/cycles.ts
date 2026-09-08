@@ -405,7 +405,12 @@ export function createCycle(
       (requestedCadence || state !== "upcoming") &&
       (team.cycle_upcoming_count > 0 || state !== "upcoming")
     ) {
-      ensureUpcomingCadenceCycles(db, input.teamId, workspaceId);
+      ensureUpcomingCadenceCycles(
+        db,
+        input.teamId,
+        workspaceId,
+        state === "upcoming" && cadenceSource === "cadence" ? id : undefined,
+      );
     }
     result = getCycle(db, id, workspaceId)!;
     if (actorId && state === "active" && databaseBoolean(team.cycle_auto_add_enabled)) {
@@ -786,6 +791,7 @@ export function ensureUpcomingCadenceCycles(
   db: Database,
   teamId: string,
   workspaceId?: string,
+  preserveCycleId?: string,
 ): CycleRow[] {
   const team = getTeamSettings(db, teamId, workspaceId);
   assertCyclesEnabled(team);
@@ -874,16 +880,29 @@ export function ensureUpcomingCadenceCycles(
   );
   const updatedCadence = updatedUpcoming.filter((cycle) => cycle.cadence_source === "cadence");
   const keepCadence = Math.max(0, settings.cycleUpcomingCount - manual.length);
+  const preserved = preserveCycleId
+    ? updatedCadence.find((cycle) => cycle.id === preserveCycleId)
+    : undefined;
+  const candidateSlots = Math.max(0, keepCadence - (preserved ? 1 : 0));
+  const candidates = updatedCadence.filter((cycle) => cycle.id !== preserveCycleId);
+  const kept = preserved
+    ? [...(candidateSlots > 0 ? candidates.slice(-candidateSlots) : []), preserved].sort(
+        (a, b) =>
+          a.number - b.number ||
+          parseDateTime(a.starts_at, "Cycle startsAt") -
+            parseDateTime(b.starts_at, "Cycle startsAt"),
+      )
+    : updatedCadence.slice(0, keepCadence);
+  const keptIds = new Set(kept.map((cycle) => cycle.id));
   const timestamp = now();
-  for (const cycle of updatedCadence.slice(keepCadence)) {
+  for (const cycle of updatedCadence) {
+    if (keptIds.has(cycle.id)) continue;
     const query = workspaceId
       ? `UPDATE cycles SET archived_at = ?1, updated_at = ?1 WHERE id = ?2 AND ${workspaceClause("workspace_id", "?3")}`
       : "UPDATE cycles SET archived_at = ?1, updated_at = ?1 WHERE id = ?2";
     if (workspaceId) db.query(query).run(timestamp, cycle.id, workspaceId);
     else db.query(query).run(timestamp, cycle.id);
   }
-
-  const kept = updatedCadence.slice(0, keepCadence);
   // When there is no completed/active anchor, append after the latest existing
   // future boundary. This also handles a manually adjusted final cycle.
   previousEndsAt = [...all]
