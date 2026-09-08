@@ -8,97 +8,129 @@ import { exportBoard } from "./exporter.ts";
 import { writeLinearExportToRepo, type LinearExport } from "./linear-repo-export.ts";
 
 const source: LinearExport = {
-  workspace: { id: "workspace-1", name: "Workspace", urlKey: "workspace" },
+  workspace: { id: "00000000-0000-4000-8000-000000000001", name: "Workspace", urlKey: "workspace" },
   actors: [
-    { id: "actor-1", name: "Andrés", email: "andres@example.com", type: "human" },
-    { id: "actor-2", name: "agent", type: "agent" },
+    {
+      id: "00000000-0000-4000-8000-000000000002",
+      name: "Andrés",
+      email: "andres@example.com",
+      type: "human",
+    },
+    { id: "00000000-0000-4000-8000-000000000003", name: "agent", type: "agent" },
   ],
   teams: [
     {
-      id: "team-1",
+      id: "00000000-0000-4000-8000-000000000004",
       key: "AT",
       name: "Andrestobelem",
       description: "Equipo",
       states: [
-        { id: "state-1", name: "Backlog", type: "backlog", color: "#aaa", position: 0 },
-        { id: "state-2", name: "Done", type: "completed", color: "#555", position: 1 },
+        {
+          id: "00000000-0000-4000-8000-000000000005",
+          name: "Backlog",
+          type: "backlog",
+          color: "#aaa",
+          position: 0,
+        },
+        {
+          id: "00000000-0000-4000-8000-000000000006",
+          name: "Done",
+          type: "completed",
+          color: "#555",
+          position: 1,
+        },
       ],
     },
   ],
-  labels: [{ id: "label-1", name: "Feature", color: "#fff", teamId: "team-1" }],
+  labels: [
+    {
+      id: "00000000-0000-4000-8000-000000000007",
+      name: "Feature",
+      color: "#fff",
+      teamId: "00000000-0000-4000-8000-000000000004",
+    },
+  ],
   projects: [
     {
-      id: "project-1",
+      id: "00000000-0000-4000-8000-000000000008",
       name: "Proyecto",
       description: "Descripción",
       state: "started",
-      leadId: "actor-1",
+      leadId: "00000000-0000-4000-8000-000000000002",
       targetDate: null,
       archivedAt: null,
-      teamIds: ["team-1"],
+      teamIds: ["00000000-0000-4000-8000-000000000004"],
       milestones: [
-        { id: "milestone-1", name: "M1", description: null, targetDate: null, position: 0 },
+        {
+          id: "00000000-0000-4000-8000-000000000009",
+          name: "M1",
+          description: null,
+          targetDate: null,
+          position: 0,
+        },
       ],
     },
   ],
   issues: [
     {
-      id: "issue-1",
+      id: "00000000-0000-4000-8000-00000000000a",
       identifier: "AT-1",
       number: 1,
       title: "Padre",
       description: "desc",
-      teamId: "team-1",
-      stateId: "state-1",
+      teamId: "00000000-0000-4000-8000-000000000004",
+      stateId: "00000000-0000-4000-8000-000000000005",
       priority: 2,
-      assigneeId: "actor-2",
-      creatorId: "actor-1",
+      assigneeId: "00000000-0000-4000-8000-000000000003",
+      creatorId: "00000000-0000-4000-8000-000000000002",
       parentId: null,
-      projectId: "project-1",
-      milestoneId: "milestone-1",
-      labelIds: ["label-1"],
+      projectId: "00000000-0000-4000-8000-000000000008",
+      milestoneId: "00000000-0000-4000-8000-000000000009",
+      labelIds: ["00000000-0000-4000-8000-000000000007"],
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
       archivedAt: null,
-      stateHistory: [{ stateId: "state-1", startedAt: "2026-01-01T00:00:00.000Z" }],
+      stateHistory: [
+        { stateId: "00000000-0000-4000-8000-000000000005", startedAt: "2026-01-01T00:00:00.000Z" },
+      ],
     },
     {
-      id: "issue-2",
+      id: "00000000-0000-4000-8000-00000000000b",
       identifier: "AT-2",
       number: 2,
       title: "Hijo",
       description: null,
-      teamId: "team-1",
-      stateId: "state-2",
+      teamId: "00000000-0000-4000-8000-000000000004",
+      stateId: "00000000-0000-4000-8000-000000000006",
       priority: 0,
       assigneeId: null,
-      creatorId: "actor-1",
-      parentId: "issue-1",
-      projectId: "project-1",
+      creatorId: "00000000-0000-4000-8000-000000000002",
+      parentId: "00000000-0000-4000-8000-00000000000a",
+      projectId: "00000000-0000-4000-8000-000000000008",
       milestoneId: null,
       labelIds: [],
       createdAt: "2026-01-02T00:00:00.000Z",
       updatedAt: "2026-01-03T00:00:00.000Z",
       archivedAt: null,
       stateHistory: [
-        { stateId: "state-1", startedAt: "2026-01-02T00:00:00.000Z" },
-        { stateId: "state-2", startedAt: "2026-01-03T00:00:00.000Z" },
+        { stateId: "00000000-0000-4000-8000-000000000005", startedAt: "2026-01-02T00:00:00.000Z" },
+        { stateId: "00000000-0000-4000-8000-000000000006", startedAt: "2026-01-03T00:00:00.000Z" },
       ],
     },
   ],
   comments: [
     {
-      id: "comment-1",
-      issueId: "issue-1",
-      authorId: "actor-2",
+      id: "00000000-0000-4000-8000-00000000000c",
+      issueId: "00000000-0000-4000-8000-00000000000a",
+      authorId: "00000000-0000-4000-8000-000000000003",
       body: "evidencia",
       createdAt: "2026-01-02T00:00:00.000Z",
     },
   ],
   relations: [
     {
-      issueId: "issue-2",
-      relatedIssueId: "issue-1",
+      issueId: "00000000-0000-4000-8000-00000000000b",
+      relatedIssueId: "00000000-0000-4000-8000-00000000000a",
       type: "blocked_by",
       createdAt: "2026-01-02T00:00:00.000Z",
     },
@@ -190,6 +222,26 @@ describe("writeLinearExportToRepo", () => {
 });
 
 describe("validación del plan Linear", () => {
+  it("rechaza IDs que no son UUID antes de escribir, también en la entrada directa", () => {
+    const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-invalid-id-"));
+    try {
+      const invalid: LinearExport = {
+        ...source,
+        workspace: { ...source.workspace, id: "workspace-invalid" },
+      };
+      const result = writeLinearExportToRepo(invalid, root, { dryRun: true });
+      expect(result.conflicts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "NON_UUID_SOURCE_ID" })]),
+      );
+      expect(result.files).toBe(0);
+      expect(existsSync(join(root, ".prime-board"))).toBe(false);
+      expect(() => writeLinearExportToRepo(invalid, root)).toThrow(/conflict/);
+      expect(existsSync(join(root, ".prime-board"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rechaza referencias desconocidas y no escribe durante el dry-run", () => {
     const root = mkdtempSync(join(process.cwd(), "scratchpad-linear-invalid-ref-"));
     try {
@@ -218,9 +270,21 @@ describe("validación del plan Linear", () => {
       const invalid: LinearExport = {
         ...source,
         relations: [
-          { issueId: "issue-1", relatedIssueId: "issue-1", type: "related" },
-          { issueId: "issue-1", relatedIssueId: "issue-2", type: "blocks" },
-          { issueId: "issue-2", relatedIssueId: "issue-1", type: "blocks" },
+          {
+            issueId: "00000000-0000-4000-8000-00000000000a",
+            relatedIssueId: "00000000-0000-4000-8000-00000000000a",
+            type: "related",
+          },
+          {
+            issueId: "00000000-0000-4000-8000-00000000000a",
+            relatedIssueId: "00000000-0000-4000-8000-00000000000b",
+            type: "blocks",
+          },
+          {
+            issueId: "00000000-0000-4000-8000-00000000000b",
+            relatedIssueId: "00000000-0000-4000-8000-00000000000a",
+            type: "blocks",
+          },
         ],
       };
       const result = writeLinearExportToRepo(invalid, root, { dryRun: true });
@@ -247,11 +311,22 @@ describe("validación del plan Linear", () => {
             ...source.teams[0]!,
             states: [
               ...source.teams[0]!.states,
-              { id: "state-3", name: "Canceled", type: "canceled", position: 2 },
+              {
+                id: "00000000-0000-4000-8000-00000000000d",
+                name: "Canceled",
+                type: "canceled",
+                position: 2,
+              },
             ],
           },
         ],
-        relations: [{ issueId: "issue-1", relatedIssueId: "issue-2", type: "duplicate_of" }],
+        relations: [
+          {
+            issueId: "00000000-0000-4000-8000-00000000000a",
+            relatedIssueId: "00000000-0000-4000-8000-00000000000b",
+            type: "duplicate_of",
+          },
+        ],
       };
       const result = writeLinearExportToRepo(duplicate, root);
       expect(result.conflicts).toEqual([]);
@@ -341,7 +416,7 @@ describe("validación del plan Linear", () => {
             stateId: "state-b",
             parentId: "issue-b",
             projectId: "project-b",
-            milestoneId: "milestone-1",
+            milestoneId: "00000000-0000-4000-8000-000000000009",
             labelIds: ["label-b"],
           },
           {

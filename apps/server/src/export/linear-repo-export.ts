@@ -498,6 +498,7 @@ export function writeLinearExportToRepo(
   const losses: MigrationFinding[] = [];
   const warnings: MigrationFinding[] = [];
   assertLinearExportShape(source);
+  conflicts.push(...validateLinearExportUuidIds(source));
   const comments = Array.isArray(source.comments) ? source.comments : [];
   const relations = Array.isArray(source.relations) ? source.relations : [];
   if (source.comments != null && !Array.isArray(source.comments))

@@ -8,10 +8,15 @@ import { mergeLinearExportWithRepo } from "./linear-merge.ts";
 import type { LinearExport } from "./linear-repo-export.ts";
 
 const source: LinearExport = {
-  workspace: { id: "w", name: "W" },
-  actors: [{ id: "a", name: "admin", type: "human" }],
+  workspace: { id: "00000000-0000-4000-8000-000000000031", name: "W" },
+  actors: [{ id: "00000000-0000-4000-8000-000000000032", name: "admin", type: "human" }],
   teams: [
-    { id: "t", key: "AT", name: "Linear", states: [{ id: "s", name: "Todo", type: "unstarted" }] },
+    {
+      id: "00000000-0000-4000-8000-000000000033",
+      key: "AT",
+      name: "Linear",
+      states: [{ id: "00000000-0000-4000-8000-000000000034", name: "Todo", type: "unstarted" }],
+    },
   ],
   labels: [],
   projects: [],
@@ -19,13 +24,13 @@ const source: LinearExport = {
   relations: [],
   issues: [
     {
-      id: "linear-1",
+      id: "00000000-0000-4000-8000-000000000035",
       identifier: "AT-1",
       number: 1,
       title: "Linear",
-      teamId: "t",
-      stateId: "s",
-      creatorId: "a",
+      teamId: "00000000-0000-4000-8000-000000000033",
+      stateId: "00000000-0000-4000-8000-000000000034",
+      creatorId: "00000000-0000-4000-8000-000000000032",
       createdAt: "2026-01-01",
       updatedAt: "2026-01-01",
     },
@@ -36,7 +41,10 @@ function writeLocalRepo(root: string): void {
   const base = join(root, ".prime-board");
   for (const folder of ["meta", "issues", "log"])
     mkdirSync(join(base, folder), { recursive: true });
-  writeFileSync(join(base, "meta", "workspace.json"), JSON.stringify({ name: "W", urlKey: "w" }));
+  writeFileSync(
+    join(base, "meta", "workspace.json"),
+    JSON.stringify({ name: "W", urlKey: "00000000-0000-4000-8000-000000000031" }),
+  );
   writeFileSync(
     join(base, "meta", "actors.json"),
     JSON.stringify([
