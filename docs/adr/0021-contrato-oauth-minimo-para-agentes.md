@@ -97,7 +97,8 @@ El registro aplica estos límites:
 - Debe existir al menos una URI y como máximo diez URIs por aplicación.
 - Cada URI tiene como máximo 2048 bytes.
 - No se aceptan URI con fragmento, comodines, `userinfo` ni redirecciones a una
-  URI construida por el caller.
+  URI construida por el caller. Una URI de loopback se registra como plantilla sin
+  puerto; el cliente aporta un puerto efímero en cada solicitud.
 - `allowedScopes` solo acepta `read` y `write`, sin valores desconocidos ni
   duplicados.
 - Cada Team de `teamIds` debe pertenecer al Workspace de la aplicación. Una
@@ -111,25 +112,40 @@ y el Grant vigente.
 ### Redirect URI
 
 La aplicación debe enviar `redirect_uri` tanto a `/oauth/authorize` como a
-`/oauth/token`. El servidor compara la cadena completa con una URI registrada.
-No acepta prefijos, comodines, coincidencia por dominio, redirecciones abiertas,
-fragmentos ni cambios de esquema, host, puerto, path o query.
+`/oauth/token`. Para una URI HTTPS, el servidor compara la cadena completa con
+una URI registrada. Para una URI de loopback, compara exactamente esquema, host,
+path y query, y permite variar solo el puerto según la regla de esta sección. No
+acepta prefijos, comodines, coincidencia por dominio, redirecciones abiertas ni
+fragmentos.
 
 El primer perfil admite:
 
 - URI HTTPS con una URI completa registrada.
-- URI HTTP solo para loopback con puerto fijo registrado. El host debe ser
-  `127.0.0.1` o `[::1]`.
+- URI HTTP de loopback. La entrada registrada fija `http`, el literal de host
+  (`127.0.0.1` o `[::1]`), el path y el query. El puerto se elige de forma
+  dinámica por el cliente y puede variar en cada solicitud, según RFC 8252.
 
-No admite `localhost`, URI de esquema privado ni puertos dinámicos en este corte.
-El puerto dinámico de loopback de RFC 8252 requiere una regla de registro distinta
-a la comparación exacta. Se deja para otra decisión para no mezclar dos políticas.
+No admite `localhost`, URI de esquema privado ni hosts de red local. Para un
+redirect de loopback, el servidor compara exactamente esquema, host, path y query
+con la entrada registrada y valida que el puerto solicitado sea numérico y válido.
+El puerto es la única parte variable. El `redirect_uri` que vuelve en el callback
+queda ligado al código y debe repetirse exactamente en `/oauth/token`.
 
 Si `redirect_uri` falta o no coincide, el servidor responde `400` sin redirigir al
-user-agent. Nunca envía un código o un error a una URI no validada. El endpoint
-solo se publica sobre HTTPS, aun si el redirect de loopback usa HTTP.
+user-agent. Nunca envía un código o un error a una URI no validada. Los endpoints
+OAuth solo se publican sobre HTTPS, aun si el redirect de loopback usa HTTP.
 
 ### Flujo de autorización
+
+Todos los endpoints OAuth ignoran los parámetros de request que no reconocen. No
+los reflejan ni los escriben en logs. La omisión de un parámetro obligatorio, un
+parámetro repetido con valores incompatibles o un valor con sintaxis inválida
+sigue siendo `invalid_request`.
+
+El cliente debe abrir la solicitud en un user-agent externo. El cliente y el
+servidor **MUST NOT** usar un embedded user-agent, webview o navegador incrustado
+para obtener el consentimiento. El servidor puede rechazar una solicitud que no
+provenga de una sesión de navegador externo que cumpla esta política.
 
 El cliente abre el navegador externo con una solicitud como esta:
 
@@ -171,9 +187,19 @@ crea un `OAuthGrant` asociado a un único Actor, Workspace y aplicación. El Gra
 conserva los scopes efectivos y los `team_ids` de la aplicación. Un Grant nunca
 hereda acceso de otro Workspace.
 
-El `state` se devuelve sin cambios en una respuesta válida o en una denegación.
-El servidor solo lo incluye después de validar `redirect_uri`. El cliente debe
-comparar el `state` antes de procesar el código.
+El cliente genera `state` con un CSPRNG, lo liga a la transacción y lo conserva
+fuera de la URI de redirect hasta comparar la respuesta. El `state` se devuelve
+sin cambios en una respuesta válida o en una denegación. El servidor solo lo
+incluye después de validar `redirect_uri`. El cliente **MUST** comparar el
+`state` recibido con el valor de la transacción y debe rechazar la respuesta antes
+de enviar el código si no coincide. PKCE evita la intercepción del código, pero
+`state` sigue siendo obligatorio para proteger el flujo del cliente contra CSRF y
+respuestas inyectadas.
+
+La página de consentimiento no cambia estado por un `GET`. La confirmación y la
+denegación se envían con una acción explícita protegida por CSRF, una cookie de
+sesión `SameSite` y una comprobación de `Origin` o mecanismo equivalente. El
+servidor no usa una API key en una URL para simular esa sesión.
 
 El código de autorización es opaco, aleatorio y válido durante 60 segundos. Se
 almacena solo su hash y queda ligado a:
@@ -293,13 +319,25 @@ Content-Type: application/x-www-form-urlencoded
 ```
 
 Acepta `token` y el `token_type_hint` opcional con `access_token` o
-`refresh_token`. El cliente público envía también `client_id`. La revocación debe
-ser inmediata para el API y debe invalidar toda la familia y el Grant asociado,
-no solo el string presentado. Esto incluye access tokens emitidos por la familia.
+`refresh_token`. El cliente público envía también `client_id`. Un hint ausente,
+desconocido o que no encuentra el token en el almacén indicado se ignora. El
+servidor busca en ambos tipos de token y no devuelve `unsupported_token_type` por
+un hint inválido.
+
+Cada token y familia conserva el `client_id` que la emitió. Antes de revocar, el
+servidor valida que el `client_id` recibido corresponda a la aplicación del token.
+Si el client es válido pero no coincide, no revoca ese token y responde `200`,
+para no permitir revocación cross-client ni enumerar tokens. Un `client_id`
+desconocido produce `invalid_client`. El `client_id` se valida aunque el token
+no se encuentre, pero la respuesta sigue siendo `200` para un client_id válido.
+
+La revocación debe ser inmediata para el API y debe invalidar toda la familia y el
+Grant asociado, no solo el string presentado. Esto incluye access tokens emitidos
+por la familia.
 
 El endpoint responde `200` tanto para un token válido como para uno desconocido,
 expirado o ya revocado. No revela si el token existió. Un error de formato,
-client_id inexistente o fallo temporal puede usar los errores estándar de OAuth,
+`client_id` inexistente o fallo temporal puede usar los errores estándar de OAuth,
 pero no debe incluir secretos ni datos del Grant.
 
 La operación GraphQL `oauthGrantRevoke` permite revocar un Grant al Actor dueño
@@ -342,9 +380,10 @@ El perfil usa estos límites de lifecycle:
 La implementación debe aplicar rate limits separados para autorización, token y
 revocación por client, Actor e IP. Los valores de capacidad y de despliegue no
 forman parte de este contrato, pero el servidor debe fallar de forma segura si
-ese control no está disponible. Todas las rutas OAuth rechazan métodos, medios,
-parámetros desconocidos o cuerpos por encima del límite configurado sin registrar
-su contenido.
+ese control no está disponible. Todas las rutas OAuth rechazan métodos o medios
+no soportados y cuerpos por encima del límite configurado, sin registrar su
+contenido. Los parámetros desconocidos se ignoran según la regla del flujo de
+autorización.
 
 ### Errores estables
 
@@ -370,7 +409,8 @@ Los códigos de este perfil son:
 | `invalid_scope`             | scope desconocido, no permitido por la aplicación o sin capacidad efectiva |
 | `access_denied`             | el Actor rechazó el consentimiento                                         |
 | `invalid_grant`             | código, PKCE, redirect, refresh, Grant o familia inválidos                 |
-| `unsupported_token_type`    | `token_type_hint` no soportado                                             |
+| `server_error`              | fallo inesperado del Authorization Server                                  |
+| `temporarily_unavailable`   | servicio sobrecargado o en mantenimiento; puede incluir `Retry-After`      |
 
 Un error de autorización se redirige solo a la URI previamente validada y lleva
 `error` y el `state` exacto. Un redirect inválido, un client desconocido o un
@@ -397,6 +437,7 @@ un bypass de los guards existentes.
 | Usar una Membership revocada                 | comprobación del estado del Actor y Membership en cada request                                  |
 | Filtrar credenciales por logs o réplica      | hashes en DB, `no-store`, exclusión de logs, fixtures, exports y `.prime-board`                 |
 | Enumerar códigos, tokens o Grants            | `invalid_grant` genérico, revocación idempotente con `200` y `NOT_FOUND` scoped                 |
+| Revocar un token de otra aplicación          | vínculo token/familia-`client_id`; mismatch es no-op con `200`                                  |
 | Registrar un callback peligroso              | validación al crear y actualizar la aplicación, con límites de URI y host                       |
 
 ## Regresiones requeridas para una implementación futura
@@ -417,10 +458,40 @@ La implementación de PRB-387 no puede considerarse lista sin cubrir, como míni
    suspendido y Membership terminada;
 8. rechazo de una selección de Workspace que no coincide con el Grant;
 9. enforcement de Team limits en lecturas, mutaciones y recursos multi-Team;
-10. ausencia de secretos en logs, errores, fixtures, exports y snapshots.
+10. ausencia de secretos en logs, errores, fixtures, exports y snapshots;
+11. ignorar parámetros desconocidos y `token_type_hint` inválidos, sin omitir la
+    validación de parámetros obligatorios;
+12. no-op `200` cuando un token válido pertenece a otro `client_id`, sin revocar
+    la familia ajena;
+13. métodos `GET`/`POST`, estados `400`/`401`/`405`/`500`/`503`, TLS obligatorio
+    y rechazo de embedded user-agents;
+14. `state` aleatorio, comparación previa al intercambio y protección CSRF de la
+    confirmación de consentimiento.
 
 Estas regresiones son criterios de implementación posterior. PRB-603 entrega el
 contrato, no las tablas ni sus pruebas de runtime.
+
+## Métodos, transporte y estados HTTP
+
+El Authorization Server publica estas rutas solo mediante HTTPS. TLS protege
+credenciales aunque el cliente use un redirect HTTP de loopback. El servidor no
+acepta credenciales OAuth en una URL de token o revocación.
+
+| Ruta               | Método                                         | Éxito                                                  | Errores de protocolo                                                                                                                                          |
+| ------------------ | ---------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/oauth/authorize` | `GET`                                          | `200` para consentimiento o `302` al redirect validado | `400` sin redirect si no se puede validar la solicitud; `401` si falta una sesión Actor activa; `500` con `server_error`; `503` con `temporarily_unavailable` |
+| `/oauth/token`     | `POST` con `application/x-www-form-urlencoded` | `200` JSON sin cache                                   | `400` con error OAuth; `401` solo cuando corresponda a `invalid_client`; `500` con `server_error`; `503` con `temporarily_unavailable`                        |
+| `/oauth/revoke`    | `POST` con `application/x-www-form-urlencoded` | `200` para token válido, desconocido o ya revocado     | `400` por request malformado; `500` con `server_error`; `503` con `temporarily_unavailable`                                                                   |
+
+Un método no soportado responde `405` con `Allow` y no procesa el cuerpo. La
+respuesta `302` de `/oauth/authorize` solo apunta a una URI validada y lleva el
+código o el error OAuth en la query. Un error `400`, `401`, `500` o `503` no
+redirige a una URI no validada. `temporarily_unavailable` puede incluir
+`Retry-After`; `server_error` no debe revelar detalles internos.
+
+La respuesta OAuth usa `Content-Type` correcto, `Cache-Control: no-store` y
+`Pragma: no-cache` cuando contiene credenciales. El Authorization Server no ofrece
+una alternativa HTTP pública.
 
 ## Consecuencias
 
@@ -452,7 +523,7 @@ modelo de despliegue hosteado en otro ADR.
   secciones 3.1.2.3, 4.1.2 a 4.1.4 y 5.2.
 - [RFC 7636, PKCE](https://www.rfc-editor.org/rfc/rfc7636), secciones 4.3, 4.5 y 4.6.
 - [RFC 8252, OAuth 2.0 for Native Apps](https://www.rfc-editor.org/rfc/rfc8252),
-  secciones 6, 7.3 y 8.1.
+  secciones 5, 6, 7.3, 8.1 y 8.12.
 - [RFC 7009, Token Revocation](https://www.rfc-editor.org/rfc/rfc7009), secciones 2.1 y 2.2.
 - [RFC 9700, OAuth 2.0 Security Best Current Practice](https://www.rfc-editor.org/rfc/rfc9700),
-  secciones 2.1.1, 2.2.2 y 4.14.
+  secciones 2.1.1, 2.2.2, 4.7, 4.8, 4.11 y 4.14.
