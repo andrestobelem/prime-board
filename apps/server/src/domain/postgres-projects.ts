@@ -11,7 +11,7 @@ import {
 } from "./postgres-teams.ts";
 import { newId, now } from "../db/util.ts";
 import { PROJECT_STATES } from "./projects.ts";
-import type { ActorRow } from "../auth/viewer.ts";
+import type { ActorRow, AuthScopeContext, PlanningAuthorizationHooks } from "../auth/viewer.ts";
 
 export interface PostgresProjectRow {
   id: string;
@@ -251,6 +251,93 @@ export async function listPostgresProjectDependencyRows(
   );
 }
 
+/** Bloquea Teams en un orden estable para serializar cambios de alcance. */
+export async function lockPostgresTeamIds(
+  tx: PersistenceTransaction,
+  teamIds: readonly string[],
+): Promise<void> {
+  for (const teamId of [...new Set(teamIds)].sort()) {
+    const team = await tx.one<{ id: string }>("SELECT id FROM teams WHERE id = $1 FOR UPDATE", [
+      teamId,
+    ]);
+    if (!team) throw apiError("NOT_FOUND", "Team not found");
+  }
+}
+
+/**
+ * Bloquea Projects y sus relaciones con Teams antes de autorizar una mutación.
+ * Las mutaciones de Projects bloquean la fila raíz antes de reemplazar esas relaciones.
+ */
+export async function lockPostgresProjectScope(
+  tx: PersistenceTransaction,
+  projectIds: readonly string[],
+): Promise<string[]> {
+  const ids = [...new Set(projectIds)].sort();
+  for (const projectId of ids) {
+    await tx.one<{ id: string }>("SELECT id FROM projects WHERE id = $1 FOR UPDATE", [projectId]);
+  }
+
+  const teamIds = new Set<string>();
+  for (const projectId of ids) {
+    const rows = await tx.many<{ team_id: string }>(
+      "SELECT team_id FROM project_teams WHERE project_id = $1 ORDER BY team_id FOR UPDATE",
+      [projectId],
+    );
+    for (const row of rows) teamIds.add(row.team_id);
+  }
+  await lockPostgresTeamIds(tx, [...teamIds]);
+  return [...teamIds].sort();
+}
+
+/**
+ * Releeva el límite del grant dentro de la misma transacción que la mutación.
+ * El keyId identifica la credencial; nunca se persiste el bearer secreto.
+ */
+export async function readPostgresAuthScope(
+  tx: PersistenceTransaction,
+  auth: AuthScopeContext | null | undefined,
+  workspaceId?: string,
+): Promise<AuthScopeContext | null | undefined> {
+  if (!auth || auth.keyId === "local") return auth;
+  const key = await tx.one<{ id: string; revoked_at: string | null; expires_at: string | null }>(
+    "SELECT id, revoked_at, expires_at FROM api_keys WHERE id = $1 FOR UPDATE",
+    [auth.keyId],
+  );
+  if (!key || key.revoked_at || (key.expires_at && Date.parse(key.expires_at) <= Date.now())) {
+    throw apiError("UNAUTHORIZED", "API key authorization changed");
+  }
+  const rows = await tx.many<{ team_id: string }>(
+    workspaceId
+      ? "SELECT team_id FROM api_key_team_limits WHERE api_key_id = $1 AND workspace_id = $2 ORDER BY team_id FOR UPDATE"
+      : "SELECT team_id FROM api_key_team_limits WHERE api_key_id = $1 ORDER BY team_id FOR UPDATE",
+    workspaceId ? [auth.keyId, workspaceId] : [auth.keyId],
+  );
+  const currentTeamIds = rows.length ? rows.map((row) => row.team_id) : null;
+  const capturedTeamIds = auth.teamIds ? [...auth.teamIds].sort() : null;
+  const currentSorted = currentTeamIds ? [...currentTeamIds].sort() : null;
+  if (
+    capturedTeamIds === null
+      ? currentSorted !== null
+      : currentSorted === null ||
+        capturedTeamIds.length !== currentSorted.length ||
+        capturedTeamIds.some((teamId, index) => teamId !== currentSorted[index])
+  ) {
+    throw apiError("UNAUTHORIZED", "API key authorization changed");
+  }
+  return { keyId: auth.keyId, teamIds: currentTeamIds };
+}
+
+function assertPostgresProjectTeamLimit(
+  auth: AuthScopeContext | null | undefined,
+  teamIds: readonly string[],
+): void {
+  if (!auth?.teamIds) return;
+  const allowed = new Set(auth.teamIds);
+  if (teamIds.length === 0 || teamIds.some((teamId) => !allowed.has(teamId))) {
+    throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
+  }
+}
+
 function resolvePostgresProjectDependencyType(
   type: string | null | undefined,
 ): PostgresProjectDependencyType {
@@ -316,6 +403,8 @@ export async function createPostgresProjectDependency(
   input: { projectId: string; dependsOnProjectId: string; type?: string | null },
   workspaceId?: string,
   viewer?: ActorRow,
+  auth?: AuthScopeContext | null,
+  hooks?: PlanningAuthorizationHooks,
 ): Promise<PostgresProjectDependencyRow> {
   return persistence.transaction(async (tx) => {
     await assertPostgresWorkspace(tx, workspaceId);
@@ -323,21 +412,25 @@ export async function createPostgresProjectDependency(
     if (input.projectId === input.dependsOnProjectId) {
       throw apiError("VALIDATION_FAILED", "A project cannot depend on itself");
     }
+    await hooks?.beforeAuthorization?.();
+    const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
+    await hooks?.afterAuthorization?.();
 
-    const source = await tx.one<PostgresProjectRow>(
-      "SELECT * FROM projects WHERE id = $1 FOR UPDATE",
-      [input.projectId],
-    );
+    // Lock both Projects, their project_teams rows and every referenced Team.
+    const teamIds = await lockPostgresProjectScope(tx, [input.projectId, input.dependsOnProjectId]);
+    const source = await tx.one<PostgresProjectRow>("SELECT * FROM projects WHERE id = $1", [
+      input.projectId,
+    ]);
     if (!source) throw apiError("NOT_FOUND", "Project not found");
-    const target = await tx.one<PostgresProjectRow>(
-      "SELECT * FROM projects WHERE id = $1 FOR SHARE",
-      [input.dependsOnProjectId],
-    );
+    const target = await tx.one<PostgresProjectRow>("SELECT * FROM projects WHERE id = $1", [
+      input.dependsOnProjectId,
+    ]);
     if (!target) throw apiError("NOT_FOUND", "Dependency project not found");
     if (viewer) {
       await assertCanManagePostgresProject(tx, viewer, source.id);
       await assertCanManagePostgresProject(tx, viewer, target.id);
     }
+    assertPostgresProjectTeamLimit(effectiveAuth, teamIds);
 
     const id = newId();
     const timestamp = now();
@@ -358,17 +451,28 @@ export async function deletePostgresProjectDependency(
   id: string,
   workspaceId?: string,
   viewer?: ActorRow,
+  auth?: AuthScopeContext | null,
+  hooks?: PlanningAuthorizationHooks,
 ): Promise<boolean> {
   return persistence.transaction(async (tx) => {
     const dependency = await getPostgresProjectDependencyInWorkspace(tx, id, workspaceId, true);
     if (!dependency) throw apiError("NOT_FOUND", "Project dependency not found");
+    await hooks?.beforeAuthorization?.();
+    const effectiveAuth = await readPostgresAuthScope(tx, auth, workspaceId);
+    await hooks?.afterAuthorization?.();
+    // The dependency and both project scopes stay locked until DELETE commits.
+    const teamIds = await lockPostgresProjectScope(tx, [
+      dependency.project_id,
+      dependency.depends_on_project_id,
+    ]);
+    const source = await getPostgresProject(tx, dependency.project_id);
+    const target = await getPostgresProject(tx, dependency.depends_on_project_id);
+    if (!source || !target) throw apiError("NOT_FOUND", "Project dependency not found");
     if (viewer) {
-      const source = await getPostgresProject(tx, dependency.project_id);
-      const target = await getPostgresProject(tx, dependency.depends_on_project_id);
-      if (!source || !target) throw apiError("NOT_FOUND", "Project dependency not found");
       await assertCanManagePostgresProject(tx, viewer, source.id);
       await assertCanManagePostgresProject(tx, viewer, target.id);
     }
+    assertPostgresProjectTeamLimit(effectiveAuth, teamIds);
 
     const result = await tx.execute<PostgresProjectDependencyRow>(
       `DELETE FROM project_dependencies WHERE id = $1
@@ -503,6 +607,12 @@ export async function updatePostgresProject(
   if (input.targetDate !== undefined) push("target_date", input.targetDate);
   if (input.startDate !== undefined) push("start_date", input.startDate);
   await persistence.transaction(async (tx) => {
+    // Dependency/status transactions lock this root before reading project_teams.
+    const locked = await tx.one<{ id: string }>(
+      "SELECT id FROM projects WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+    if (!locked) throw apiError("NOT_FOUND", "Project not found");
     if (teamIds) {
       await tx.execute("DELETE FROM project_teams WHERE project_id = $1", [id]);
       for (const teamId of teamIds) {

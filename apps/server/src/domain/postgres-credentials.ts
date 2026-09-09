@@ -317,6 +317,12 @@ export async function deletePostgresApiKey(
   await assertApiKeyWorkspaceAccess(persistence, existing, workspaceId);
   const timestamp = now();
   await persistence.transaction(async (tx) => {
+    // Las mutaciones de planificación bloquean esta fila estable antes de leer límites de Team.
+    const locked = await tx.one<{ id: string }>(
+      "SELECT id FROM api_keys WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+    if (!locked) throw apiError("NOT_FOUND", "API key not found");
     await assertApiKeyWorkspaceAccess(tx, existing, workspaceId);
     await tx.execute(
       "DELETE FROM api_key_team_limits WHERE api_key_id = $1 AND workspace_id = $2",
@@ -363,6 +369,12 @@ export async function rotatePostgresApiKey(
   if (!actor) throw apiError("NOT_FOUND", "Actor not found");
   const key = generateApiKey();
   const result = await persistence.transaction(async (tx) => {
+    // Las mutaciones de planificación bloquean esta fila estable antes de leer límites de Team.
+    const locked = await tx.one<{ id: string }>(
+      "SELECT id FROM api_keys WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+    if (!locked) throw apiError("NOT_FOUND", "API key not found");
     await assertApiKeyWorkspaceAccess(tx, existing, workspaceId);
     const replacement = await insertApiKey(
       tx,

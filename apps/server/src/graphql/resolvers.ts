@@ -115,7 +115,6 @@ import {
   assertCanManageActor,
   assertCanManageApiKey,
   assertApiKeyScope,
-  assertApiKeyTeams,
   apiKeyTeamsWithinLimit,
   hasApiKeyTeamLimit,
   assertChildApiKey,
@@ -234,8 +233,6 @@ import {
   listInitiativeProjectIds,
   listInitiativeTeamIds,
   listInitiativeUpdateRows,
-  getInitiativeUpdate,
-  listInitiativeScopeTeamIds,
   createInitiativeUpdate,
   deleteInitiativeUpdate,
   listInitiatives,
@@ -248,7 +245,6 @@ import {
   createPostgresInitiativeUpdate,
   deletePostgresInitiative,
   deletePostgresInitiativeUpdate,
-  getPostgresInitiativeUpdate,
   getPostgresInitiative,
   listPostgresInitiativeLabelIds,
   listPostgresInitiativeProjectIds,
@@ -413,17 +409,6 @@ async function assertPostgresInitiativeKeyLimit(
   if (!apiKeyTeamsWithinLimit(context.auth, [...scope])) {
     throw apiError("UNAUTHORIZED", "API key is limited to different Teams");
   }
-}
-
-function assertInitiativeKeyLimit(context: Context, initiativeId: string): void {
-  const initiative = getInitiative(context.db, initiativeId, context.workspace.workspaceId);
-  if (!initiative) throw apiError("NOT_FOUND", "Initiative not found");
-  const teamIds = listInitiativeScopeTeamIds(
-    context.db,
-    initiative.id,
-    context.workspace.workspaceId,
-  );
-  assertApiKeyTeams(context, teamIds.length > 0 ? teamIds : ["__workspace__"]);
 }
 
 async function requirePostgresReviewIssue(
@@ -3186,13 +3171,13 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           if (context.persistence) {
-            await assertPostgresInitiativeKeyLimit(context, args.input.initiativeId);
             const update = await createPostgresInitiativeUpdate(
               context.persistence,
               viewer,
               args.input.initiativeId,
               { health: args.input.health, body: args.input.body },
               context.workspace.workspaceId,
+              context.auth,
             );
             return {
               success: true,
@@ -3207,7 +3192,6 @@ export const resolvers = {
               },
             };
           }
-          assertInitiativeKeyLimit(context, args.input.initiativeId);
           const updateInput = { body: args.input.body, health: args.input.health.toLowerCase() };
           const row = createInitiativeUpdate(
             context.db,
@@ -3216,6 +3200,7 @@ export const resolvers = {
             updateInput,
             context.workspace.workspaceId,
             viewer,
+            context.auth,
           );
           return {
             success: true,
@@ -3237,34 +3222,27 @@ export const resolvers = {
         ) => {
           const viewer = requireViewer(context);
           if (context.persistence) {
-            const update = await getPostgresInitiativeUpdate(
-              context.persistence,
-              args.id,
-              context.workspace.workspaceId,
-            );
-            if (!update) throw apiError("NOT_FOUND", "Initiative update not found");
-            await assertPostgresInitiativeKeyLimit(context, update.initiative_id);
             return {
               success: await deletePostgresInitiativeUpdate(
                 context.persistence,
                 viewer,
                 args.id,
                 context.workspace.workspaceId,
+                context.auth,
               ),
             };
           }
-          const update = getInitiativeUpdate(context.db, args.id, context.workspace.workspaceId);
-          if (!update) throw apiError("NOT_FOUND", "Initiative update not found");
-          assertInitiativeKeyLimit(context, update.initiative_id);
           return {
             success: deleteInitiativeUpdate(
               context.db,
               args.id,
               context.workspace.workspaceId,
               viewer,
+              context.auth,
             ),
           };
         },
+
         initiativeDelete: async (_parent: unknown, args: { id: string }, context: Context) => {
           const viewer = requireViewer(context);
           if (context.persistence) {
