@@ -69,6 +69,7 @@ anteriores indican su carácter histórico.
 - [Harness de PostgreSQL](research/postgres-harness.md): entorno de integración.
 - [Migraciones de PostgreSQL](research/postgres-migrations.md): plan y estado de migraciones.
 - [Runbook PostgreSQL con Podman](research/postgres-podman-runbook.md): ejecución operativa local.
+- [Runbook de ensayo PRB-449](research/prb-449-runbook.md): medición segura y decisión go/no-go.
 - [PostgreSQL y credenciales](research/postgres-credentials.md): manejo operativo de credenciales.
 - [PostgreSQL y Workspaces/Actors](research/postgres-workspace-actors.md): modelo de identidad.
 - [PostgreSQL y Teams](research/postgres-teams.md): modelo de Teams.
