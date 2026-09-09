@@ -520,6 +520,159 @@ describe("pb project / team / webhook", () => {
     expect(pb(["team", "list", "--include-archived", "--json"]).out).not.toContain("DCLI");
   });
 
+  it("lee y modifica automation de auto-close y descripción de workflow", () => {
+    const created = pb([
+      "team",
+      "create",
+      "--name",
+      "CLI workflow contract",
+      "--key",
+      "CWCF",
+      "--auto-close-period",
+      "0",
+      "--json",
+    ]);
+    expect(created.code).toBe(0);
+    const createdTeam = JSON.parse(created.out);
+    expect(createdTeam).toMatchObject({
+      autoClosePeriod: null,
+      autoCloseStateId: null,
+      autoCloseParentIssues: null,
+      autoCloseChildIssues: null,
+    });
+    const team = JSON.parse(pb(["team", "list", "--json"]).out).find(
+      (item: any) => item.key === "CWCF",
+    );
+    const completed = team.states.find((state: any) => state.type === "COMPLETED");
+    const started = team.states.find((state: any) => state.type === "STARTED");
+    expect(completed?.id).toBeTruthy();
+    expect(started?.id).toBeTruthy();
+
+    const updated = pb([
+      "team",
+      "update",
+      "CWCF",
+      "--auto-close-period",
+      "3.5",
+      "--auto-close-state-id",
+      completed.id,
+      "--auto-close-parent-issues",
+      "false",
+      "--auto-close-child-issues",
+      "true",
+      "--json",
+    ]);
+    expect(updated.code).toBe(0);
+    expect(JSON.parse(updated.out)).toMatchObject({
+      autoClosePeriod: 3.5,
+      autoCloseStateId: completed.id,
+      autoCloseParentIssues: false,
+      autoCloseChildIssues: true,
+    });
+
+    const listed = JSON.parse(pb(["team", "list", "--json"]).out).find(
+      (item: any) => item.key === "CWCF",
+    );
+    expect(listed).toMatchObject({
+      autoClosePeriod: 3.5,
+      autoCloseStateId: completed.id,
+      autoCloseParentIssues: false,
+      autoCloseChildIssues: true,
+    });
+
+    const invalidState = pb(["team", "update", "CWCF", "--auto-close-state-id", started.id]);
+    expect(invalidState.code).toBe(1);
+    expect(invalidState.err).toContain("Auto-close state must be completed");
+
+    const invalidPeriod = pb(["team", "update", "CWCF", "--auto-close-period=-1"]);
+    expect(invalidPeriod.code).toBe(2);
+    expect(invalidPeriod.err).toContain("Invalid auto-close period");
+    const invalidBoolean = pb(["team", "update", "CWCF", "--auto-close-parent-issues", "maybe"]);
+    expect(invalidBoolean.code).toBe(2);
+    expect(invalidBoolean.err).toContain("must be true, false or none");
+
+    const disabled = pb([
+      "team",
+      "update",
+      "CWCF",
+      "--auto-close-period",
+      "0",
+      "--auto-close-state-id",
+      "none",
+      "--auto-close-parent-issues",
+      "false",
+      "--auto-close-child-issues",
+      "false",
+      "--json",
+    ]);
+    expect(disabled.code).toBe(0);
+    expect(JSON.parse(disabled.out)).toMatchObject({
+      autoClosePeriod: null,
+      autoCloseStateId: null,
+      autoCloseParentIssues: false,
+      autoCloseChildIssues: false,
+    });
+    const nullable = pb([
+      "team",
+      "update",
+      "CWCF",
+      "--auto-close-period",
+      "none",
+      "--auto-close-parent-issues",
+      "none",
+      "--auto-close-child-issues",
+      "none",
+      "--json",
+    ]);
+    expect(nullable.code).toBe(0);
+    expect(JSON.parse(nullable.out)).toMatchObject({
+      autoClosePeriod: null,
+      autoCloseParentIssues: null,
+      autoCloseChildIssues: null,
+    });
+
+    const state = pb([
+      "team",
+      "workflow-state-create",
+      "--team",
+      "CWCF",
+      "--name",
+      "Needs context",
+      "--type",
+      "backlog",
+      "--description",
+      "Explain the missing context",
+      "--json",
+    ]);
+    expect(state.code).toBe(0);
+    const statePayload = JSON.parse(state.out);
+    expect(statePayload.description).toBe("Explain the missing context");
+    const stateUpdated = pb([
+      "team",
+      "workflow-state-update",
+      statePayload.id,
+      "--description",
+      "Updated context",
+      "--json",
+    ]);
+    expect(stateUpdated.code).toBe(0);
+    expect(JSON.parse(stateUpdated.out).description).toBe("Updated context");
+    const listedState = JSON.parse(pb(["team", "list", "--json"]).out)
+      .find((item: any) => item.key === "CWCF")
+      .states.find((item: any) => item.id === statePayload.id);
+    expect(listedState.description).toBe("Updated context");
+    const stateCleared = pb([
+      "team",
+      "workflow-state-update",
+      statePayload.id,
+      "--description",
+      "none",
+      "--json",
+    ]);
+    expect(stateCleared.code).toBe(0);
+    expect(JSON.parse(stateCleared.out).description).toBeNull();
+  });
+
   it("administra teams, actors, memberships, estados, labels y API keys", () => {
     const team = pb(["team", "create", "--name", "CLI admin team", "--key", "ADM", "--json"]);
     expect(team.code).toBe(0);

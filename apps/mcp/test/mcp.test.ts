@@ -227,6 +227,131 @@ describe("mcp tools", () => {
     expect(history.map((item: any) => item.key)).not.toContain("MDL");
   });
 
+  it("lee y modifica automation de auto-close y descripción de workflow", async () => {
+    const created = parseResult(
+      await client.callTool({
+        name: "save_team",
+        arguments: { name: "MCP workflow contract", key: "MWCF", autoClosePeriod: 0 },
+      }),
+    );
+    expect(created).toMatchObject({
+      autoClosePeriod: null,
+      autoCloseStateId: null,
+      autoCloseParentIssues: null,
+      autoCloseChildIssues: null,
+    });
+    const resolved = parseResult(
+      await client.callTool({ name: "get_team", arguments: { team: created.id } }),
+    );
+    expect(resolved).toMatchObject({
+      autoClosePeriod: null,
+      autoCloseStateId: null,
+      autoCloseParentIssues: null,
+      autoCloseChildIssues: null,
+    });
+    const completed = created.states.find((state: any) => state.type === "COMPLETED");
+    const started = created.states.find((state: any) => state.type === "STARTED");
+    expect(completed?.id).toBeTruthy();
+    expect(started?.id).toBeTruthy();
+
+    const updated = parseResult(
+      await client.callTool({
+        name: "save_team",
+        arguments: {
+          id: created.id,
+          autoClosePeriod: 3.5,
+          autoCloseStateId: completed.id,
+          autoCloseParentIssues: false,
+          autoCloseChildIssues: true,
+        },
+      }),
+    );
+    expect(updated).toMatchObject({
+      autoClosePeriod: 3.5,
+      autoCloseStateId: completed.id,
+      autoCloseParentIssues: false,
+      autoCloseChildIssues: true,
+    });
+
+    const listed = parseResult(await client.callTool({ name: "list_teams", arguments: {} }));
+    expect(listed.find((item: any) => item.key === "MWCF")).toMatchObject({
+      autoClosePeriod: 3.5,
+      autoCloseStateId: completed.id,
+      autoCloseParentIssues: false,
+      autoCloseChildIssues: true,
+    });
+
+    const invalidState = await client.callTool({
+      name: "save_team",
+      arguments: { id: created.id, autoCloseStateId: started.id },
+    });
+    expect(invalidState.isError).toBe(true);
+    expect(JSON.stringify(invalidState)).toContain("Auto-close state must be completed");
+
+    const disabled = parseResult(
+      await client.callTool({
+        name: "save_team",
+        arguments: {
+          id: created.id,
+          autoClosePeriod: 0,
+          autoCloseStateId: null,
+          autoCloseParentIssues: false,
+          autoCloseChildIssues: false,
+        },
+      }),
+    );
+    expect(disabled).toMatchObject({
+      autoClosePeriod: null,
+      autoCloseStateId: null,
+      autoCloseParentIssues: false,
+      autoCloseChildIssues: false,
+    });
+    const nullable = parseResult(
+      await client.callTool({
+        name: "save_team",
+        arguments: { id: created.id, autoCloseParentIssues: null, autoCloseChildIssues: null },
+      }),
+    );
+    expect(nullable).toMatchObject({ autoCloseParentIssues: null, autoCloseChildIssues: null });
+
+    const state = parseResult(
+      await client.callTool({
+        name: "save_issue_status",
+        arguments: {
+          team: "MWCF",
+          name: "Needs context",
+          type: "backlog",
+          description: "Explain the missing context",
+        },
+      }),
+    );
+    expect(state.description).toBe("Explain the missing context");
+    const stateUpdated = parseResult(
+      await client.callTool({
+        name: "save_issue_status",
+        arguments: { id: state.id, description: "Updated context" },
+      }),
+    );
+    expect(stateUpdated.description).toBe("Updated context");
+    const statuses = parseResult(
+      await client.callTool({ name: "list_issue_statuses", arguments: { team: "MWCF" } }),
+    );
+    expect(statuses.find((item: any) => item.id === state.id).description).toBe("Updated context");
+    const stateCleared = parseResult(
+      await client.callTool({
+        name: "save_issue_status",
+        arguments: { id: state.id, description: null },
+      }),
+    );
+    expect(stateCleared.description).toBeNull();
+
+    const invalidPeriod = await client.callTool({
+      name: "save_team",
+      arguments: { id: created.id, autoClosePeriod: -1 },
+    });
+    expect(invalidPeriod.isError).toBe(true);
+  });
+
   it("administra teams, actores, memberships, estados, labels y API keys", async () => {
     const team = parseResult(
       await client.callTool({

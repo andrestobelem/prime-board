@@ -78,7 +78,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         (
           await gqlRequest(
             sessionConfig,
-            "query($includeArchived: Boolean) { teams(includeArchived: $includeArchived) { id key name description visibility accessPolicy archivedAt } }",
+            "query($includeArchived: Boolean) { teams(includeArchived: $includeArchived) { id key name description visibility accessPolicy autoClosePeriod autoCloseStateId autoCloseParentIssues autoCloseChildIssues archivedAt } }",
             { includeArchived: Boolean(includeArchived) },
           )
         ).teams,
@@ -113,7 +113,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         const mutation = archived ? "teamArchive" : "teamUnarchive";
         const data = await gqlRequest(
           sessionConfig,
-          `mutation($id: ID!) { ${mutation}(id: $id) { team { id key name description visibility accessPolicy createdAt archivedAt } } }`,
+          `mutation($id: ID!) { ${mutation}(id: $id) { team { id key name description visibility accessPolicy autoClosePeriod autoCloseStateId autoCloseParentIssues autoCloseChildIssues createdAt archivedAt states { id name type color position description } } } }`,
           { id: resolved.id },
         );
         return json(data[mutation].team);
@@ -154,6 +154,10 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         key: z.string().optional(),
         description: z.string().optional(),
         defaultState: z.string().optional().describe("Workflow state ID"),
+        autoClosePeriod: z.number().finite().nonnegative().nullable().optional(),
+        autoCloseStateId: z.string().nullable().optional().describe("Completed workflow state ID"),
+        autoCloseParentIssues: z.boolean().nullable().optional(),
+        autoCloseChildIssues: z.boolean().nullable().optional(),
         visibility: z.enum(["public", "private"]).optional(),
         accessPolicy: z.enum(["workspace_members", "team_members"]).optional(),
       },
@@ -167,12 +171,18 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         if (args.name !== undefined) input.name = args.name;
         if (args.description !== undefined) input.description = args.description;
         if (args.defaultState !== undefined) input.defaultStateId = args.defaultState;
+        if (args.autoClosePeriod !== undefined) input.autoClosePeriod = args.autoClosePeriod;
+        if (args.autoCloseStateId !== undefined) input.autoCloseStateId = args.autoCloseStateId;
+        if (args.autoCloseParentIssues !== undefined)
+          input.autoCloseParentIssues = args.autoCloseParentIssues;
+        if (args.autoCloseChildIssues !== undefined)
+          input.autoCloseChildIssues = args.autoCloseChildIssues;
         if (args.visibility !== undefined) input.visibility = args.visibility.toUpperCase();
         if (args.accessPolicy !== undefined) input.accessPolicy = args.accessPolicy.toUpperCase();
         const data = await gqlRequest(
           sessionConfig,
           `mutation($id: ID!, $input: TeamUpdateInput!) {
-        teamUpdate(id: $id, input: $input) { team { id key name description visibility accessPolicy createdAt archivedAt states { id name type color position } } }
+        teamUpdate(id: $id, input: $input) { team { id key name description visibility accessPolicy autoClosePeriod autoCloseStateId autoCloseParentIssues autoCloseChildIssues createdAt archivedAt states { id name type color position description } } }
       }`,
           { id: args.id, input },
         );
@@ -180,16 +190,28 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       }
       if (!args.name || !args.key)
         throw new Error("VALIDATION_FAILED: `name` and `key` are required to create a team");
+      if (
+        args.autoCloseStateId !== undefined ||
+        args.autoCloseParentIssues !== undefined ||
+        args.autoCloseChildIssues !== undefined
+      ) {
+        throw new Error(
+          "VALIDATION_FAILED: autoCloseStateId, autoCloseParentIssues and autoCloseChildIssues require an existing team",
+        );
+      }
       const data = await gqlRequest(
         sessionConfig,
         `mutation($input: TeamCreateInput!) {
-      teamCreate(input: $input) { team { id key name description visibility accessPolicy createdAt archivedAt states { id name type color position } } }
+      teamCreate(input: $input) { team { id key name description visibility accessPolicy autoClosePeriod autoCloseStateId autoCloseParentIssues autoCloseChildIssues createdAt archivedAt states { id name type color position description } } }
     }`,
         {
           input: {
             name: args.name,
             key: args.key,
             ...(args.description === undefined ? {} : { description: args.description }),
+            ...(args.autoClosePeriod === undefined
+              ? {}
+              : { autoClosePeriod: args.autoClosePeriod }),
             ...(args.visibility === undefined ? {} : { visibility: args.visibility.toUpperCase() }),
             ...(args.accessPolicy === undefined
               ? {}
@@ -285,6 +307,7 @@ export function createServer(config: McpConfig | McpSession): McpServer {
           .optional(),
         color: z.string().optional(),
         position: z.number().optional(),
+        description: z.string().nullable().optional(),
       },
     },
     async (args) => {
@@ -294,12 +317,13 @@ export function createServer(config: McpConfig | McpSession): McpServer {
         if (args.type !== undefined) input.type = args.type.toUpperCase();
         if (args.color !== undefined) input.color = args.color;
         if (args.position !== undefined) input.position = args.position;
+        if (args.description !== undefined) input.description = args.description;
         if (!Object.keys(input).length)
           throw new Error("VALIDATION_FAILED: provide at least one field to update");
         const data = await gqlRequest(
           sessionConfig,
           `mutation($id: ID!, $input: WorkflowStateUpdateInput!) { workflowStateUpdate(id: $id, input: $input) {
-        workflowState { id name type color position }
+        workflowState { id name type color position description }
       } }`,
           { id: args.id, input },
         );
@@ -316,10 +340,11 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       };
       if (args.color !== undefined) input.color = args.color;
       if (args.position !== undefined) input.position = args.position;
+      if (args.description !== undefined) input.description = args.description;
       const data = await gqlRequest(
         sessionConfig,
         `mutation($input: WorkflowStateCreateInput!) { workflowStateCreate(input: $input) {
-      workflowState { id name type color position }
+      workflowState { id name type color position description }
     } }`,
         { input },
       );
@@ -1035,7 +1060,6 @@ export function createServer(config: McpConfig | McpSession): McpServer {
       },
     );
   }
-
 
   server.registerTool(
     "list_cycles",

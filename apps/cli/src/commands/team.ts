@@ -6,23 +6,24 @@ import { UsageError } from "../errors.ts";
 import { printJson } from "../format.ts";
 import { resolveActor, resolveTeam } from "../resolve.ts";
 
-const TEAM_FIELDS = `id key name description visibility accessPolicy createdAt archivedAt`;
+const TEAM_FIELDS = `id key name description visibility accessPolicy
+  autoClosePeriod autoCloseStateId autoCloseParentIssues autoCloseChildIssues createdAt archivedAt`;
 const MEMBERSHIP_FIELDS = `id teamId actorId role createdAt
   team { id key name } actor { id name email type workspaceRole }`;
-const STATE_FIELDS = `id name type color position`;
+const STATE_FIELDS = `id name type color position description`;
 const LABEL_FIELDS = `id name color teamId`;
 const USAGE = `Usage:
   pb team list [--include-archived] [--json]
-  pb team create --name TEXT --key KEY [--description TEXT] [--visibility public|private] [--access-policy workspace-members|team-members] [--json]
-  pb team update <KEY|ID> [--name TEXT] [--description TEXT] [--default-state ID] [--visibility public|private] [--access-policy workspace-members|team-members] [--json]
+  pb team create --name TEXT --key KEY [--description TEXT] [--auto-close-period DAYS] [--visibility public|private] [--access-policy workspace-members|team-members] [--json]
+  pb team update <KEY|ID> [--name TEXT] [--description TEXT] [--default-state ID] [--auto-close-period DAYS|0|none] [--auto-close-state-id ID|none] [--auto-close-parent-issues true|false|none] [--auto-close-child-issues true|false|none] [--visibility public|private] [--access-policy workspace-members|team-members] [--json]
   pb team archive <KEY|ID> [--json]
   pb team unarchive <KEY|ID> [--json]
   pb team delete <KEY|ID> --confirm KEY [--json]
   pb team membership-list <KEY|ID> [--json]
   pb team membership-create --team <KEY|ID> --actor <ID|NAME|me> [--role member|owner] [--json]
   pb team membership-delete <ID> [--json]
-  pb team workflow-state-create --team <KEY|ID> --name TEXT --type TYPE [--color COLOR] [--position N] [--json]
-  pb team workflow-state-update <ID> [--name TEXT] [--type TYPE] [--color COLOR] [--position N] [--json]
+  pb team workflow-state-create --team <KEY|ID> --name TEXT --type TYPE [--color COLOR] [--position N] [--description TEXT|none] [--json]
+  pb team workflow-state-update <ID> [--name TEXT] [--type TYPE] [--color COLOR] [--position N] [--description TEXT|none] [--json]
   pb team workflow-state-delete <ID> [--move-to ID] [--json]
   pb team label-create --name TEXT [--team <KEY|ID>] [--color COLOR] [--json]
   pb team label-update <ID> [--name TEXT] [--color COLOR] [--json]
@@ -32,6 +33,30 @@ function position(value: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new UsageError(`Invalid position: ${value}`);
   return parsed;
+}
+
+function autoClosePeriod(value: string): number | null {
+  if (value === "none") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new UsageError(`Invalid auto-close period: ${value}`);
+  }
+  return parsed;
+}
+
+function autoCloseState(value: string): string | null {
+  return value === "none" ? null : value;
+}
+
+function booleanValue(value: string, flag: string): boolean | null {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value === "none") return null;
+  throw new UsageError(`${flag} must be true, false or none`);
+}
+
+function stateDescription(value: string): string | null {
+  return value === "none" ? null : value;
 }
 
 function jsonFlag(argv: string[]) {
@@ -77,6 +102,7 @@ export async function teamCommand(argv: string[]): Promise<void> {
         name: { type: "string" },
         key: { type: "string" },
         description: { type: "string" },
+        "auto-close-period": { type: "string" },
         visibility: { type: "string" },
         "access-policy": { type: "string" },
         json: { type: "boolean" },
@@ -85,6 +111,8 @@ export async function teamCommand(argv: string[]): Promise<void> {
     if (!values.name || !values.key) throw new UsageError(USAGE);
     const input: Record<string, unknown> = { name: values.name, key: values.key };
     if (values.description !== undefined) input.description = values.description;
+    if (values["auto-close-period"] !== undefined)
+      input.autoClosePeriod = autoClosePeriod(values["auto-close-period"]);
     if (values.visibility !== undefined)
       input.visibility = enumValue(values.visibility, "visibility");
     if (values["access-policy"] !== undefined) {
@@ -155,6 +183,10 @@ export async function teamCommand(argv: string[]): Promise<void> {
         name: { type: "string" },
         description: { type: "string" },
         "default-state": { type: "string" },
+        "auto-close-period": { type: "string" },
+        "auto-close-state-id": { type: "string" },
+        "auto-close-parent-issues": { type: "string" },
+        "auto-close-child-issues": { type: "string" },
         visibility: { type: "string" },
         "access-policy": { type: "string" },
         json: { type: "boolean" },
@@ -164,6 +196,20 @@ export async function teamCommand(argv: string[]): Promise<void> {
     if (values.name !== undefined) input.name = values.name;
     if (values.description !== undefined) input.description = values.description;
     if (values["default-state"] !== undefined) input.defaultStateId = values["default-state"];
+    if (values["auto-close-period"] !== undefined)
+      input.autoClosePeriod = autoClosePeriod(values["auto-close-period"]);
+    if (values["auto-close-state-id"] !== undefined)
+      input.autoCloseStateId = autoCloseState(values["auto-close-state-id"]);
+    if (values["auto-close-parent-issues"] !== undefined)
+      input.autoCloseParentIssues = booleanValue(
+        values["auto-close-parent-issues"],
+        "--auto-close-parent-issues",
+      );
+    if (values["auto-close-child-issues"] !== undefined)
+      input.autoCloseChildIssues = booleanValue(
+        values["auto-close-child-issues"],
+        "--auto-close-child-issues",
+      );
     if (values.visibility !== undefined)
       input.visibility = enumValue(values.visibility, "visibility");
     if (values["access-policy"] !== undefined) {
@@ -252,6 +298,7 @@ export async function teamCommand(argv: string[]): Promise<void> {
         type: { type: "string" },
         color: { type: "string" },
         position: { type: "string" },
+        description: { type: "string" },
         json: { type: "boolean" },
       },
     });
@@ -263,6 +310,7 @@ export async function teamCommand(argv: string[]): Promise<void> {
     };
     if (values.color !== undefined) input.color = values.color;
     if (values.position !== undefined) input.position = position(values.position);
+    if (values.description !== undefined) input.description = stateDescription(values.description);
     const data = await gqlRequest(
       config,
       `mutation($input: WorkflowStateCreateInput!) {
@@ -287,6 +335,7 @@ export async function teamCommand(argv: string[]): Promise<void> {
         type: { type: "string" },
         color: { type: "string" },
         position: { type: "string" },
+        description: { type: "string" },
         json: { type: "boolean" },
       },
     });
@@ -295,6 +344,7 @@ export async function teamCommand(argv: string[]): Promise<void> {
     if (values.type !== undefined) input.type = values.type.toUpperCase();
     if (values.color !== undefined) input.color = values.color;
     if (values.position !== undefined) input.position = position(values.position);
+    if (values.description !== undefined) input.description = stateDescription(values.description);
     if (!Object.keys(input).length) throw new UsageError(USAGE);
     const data = await gqlRequest(
       config,

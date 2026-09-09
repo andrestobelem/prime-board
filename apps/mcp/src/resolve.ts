@@ -13,7 +13,8 @@ export async function resolveTeam(
     config,
     `query($id: ID, $key: String, $includeArchived: Boolean) {
     team(id: $id, key: $key, includeArchived: $includeArchived) {
-      id key name visibility accessPolicy archivedAt states { id name type color position }
+      id key name description visibility accessPolicy autoClosePeriod autoCloseStateId autoCloseParentIssues autoCloseChildIssues archivedAt
+      states { id name type color position description }
     }
   }`,
     byId ? { id: ref, includeArchived } : { key: ref, includeArchived },
