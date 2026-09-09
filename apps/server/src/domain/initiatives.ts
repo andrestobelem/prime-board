@@ -166,8 +166,11 @@ export function canViewInitiative(
     for (const teamId of listProjectTeamIds(db, projectId)) teamIds.add(teamId);
     if (!canAccessProject(db, viewer, projectId)) return false;
   }
-  return [...teamIds].every(
-    (teamId) => viewer.workspace_role === "admin" || isTeamMember(db, teamId, viewer.id),
+  return (
+    teamIds.size === 0 ||
+    [...teamIds].some(
+      (teamId) => viewer.workspace_role === "admin" || isTeamMember(db, teamId, viewer.id),
+    )
   );
 }
 

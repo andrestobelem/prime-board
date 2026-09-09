@@ -95,16 +95,18 @@ export async function canAccessPostgresInitiative(
   for (const projectId of projectIds) {
     if (!(await canAccessPostgresProject(persistence, viewer, projectId))) return false;
   }
-  for (const teamId of await listPostgresInitiativeScopeTeamIds(persistence, initiativeId)) {
+  const teamIds = await listPostgresInitiativeScopeTeamIds(persistence, initiativeId);
+  if (teamIds.length === 0) return true;
+  for (const teamId of teamIds) {
     const team = await getPostgresTeam(persistence, { id: teamId });
     if (
-      !team ||
-      (viewer.workspace_role !== "admin" &&
-        !(await isPostgresTeamMember(persistence, team.id, viewer.id)))
+      team &&
+      (viewer.workspace_role === "admin" ||
+        (await isPostgresTeamMember(persistence, team.id, viewer.id)))
     )
-      return false;
+      return true;
   }
-  return true;
+  return false;
 }
 
 async function assertCanMutatePostgresInitiative(
