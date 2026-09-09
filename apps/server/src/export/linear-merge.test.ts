@@ -40,6 +40,41 @@ const source: LinearExport = {
   ],
 };
 
+const validSource: LinearExport = {
+  ...source,
+  workspace: { id: "00000000-0000-4000-8000-000000000001", name: "W" },
+  actors: [
+    {
+      id: "00000000-0000-4000-8000-000000000002",
+      name: "admin",
+      type: "human",
+    },
+  ],
+  teams: [
+    {
+      id: "00000000-0000-4000-8000-000000000003",
+      key: "AT",
+      name: "Linear",
+      states: [
+        {
+          id: "00000000-0000-4000-8000-000000000004",
+          name: "Todo",
+          type: "unstarted",
+        },
+      ],
+    },
+  ],
+  issues: [
+    {
+      ...source.issues[0]!,
+      id: "00000000-0000-4000-8000-000000000005",
+      teamId: "00000000-0000-4000-8000-000000000003",
+      stateId: "00000000-0000-4000-8000-000000000004",
+      creatorId: "00000000-0000-4000-8000-000000000002",
+    },
+  ],
+};
+
 function writeLocalRepo(root: string): void {
   const base = join(root, ".prime-board");
   for (const folder of ["meta", "issues", "log"])
@@ -321,6 +356,88 @@ describe("mergeLinearExportWithRepo", () => {
     } finally {
       rmSync(local, { recursive: true, force: true });
       rmSync(output, { recursive: true, force: true });
+    }
+  });
+
+  it("limpia el staging si falla el rebuild y permite repetir el apply", () => {
+    const local = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-local-"));
+    const parent = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-atomic-"));
+    const output = join(parent, "output");
+    const sourcePath = join(output, "linear.json");
+    const databasePath = join(output, "sentinel.db");
+    const teamsPath = join(local, ".prime-board", "meta", "teams.json");
+    const workspaceId = "00000000-0000-4000-8000-000000000001";
+    const stagePrefix = ".output-linear-apply-";
+    try {
+      writeLocalRepo(local);
+      mkdirSync(output, { recursive: true });
+      writeFileSync(sourcePath, JSON.stringify(validSource));
+      const teamsSnapshot = readFileSync(teamsPath, "utf8");
+      rmSync(teamsPath);
+
+      const db = new Database(databasePath, { strict: true });
+      db.exec("PRAGMA foreign_keys = ON;");
+      migrate(db);
+      db.query(
+        "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+      ).run(workspaceId, "Sentinel", "sentinel", "2026-01-01");
+      db.close();
+
+      const serverRoot = join(import.meta.dir, "..", "..");
+      const environment = {
+        ...(process.env as Record<string, string>),
+        PRIME_BOARD_DB: databasePath,
+      };
+      const runImport = () =>
+        Bun.spawnSync(
+          [
+            "bun",
+            "src/scripts/import-linear.ts",
+            "--from",
+            sourcePath,
+            "--merge-local",
+            local,
+            "--out",
+            output,
+            "--apply",
+            "--json",
+          ],
+          { cwd: serverRoot, env: environment, stdout: "pipe", stderr: "pipe" },
+        );
+
+      const failed = runImport();
+      expect(failed.exitCode).toBe(1);
+      expect(existsSync(join(output, ".prime-board"))).toBe(false);
+      expect(readdirSync(parent).filter((entry) => entry.startsWith(stagePrefix))).toEqual([]);
+
+      const afterFailure = new Database(databasePath, { strict: true });
+      expect(
+        (
+          afterFailure.query("SELECT name FROM workspace WHERE id = ?1").get(workspaceId) as {
+            name: string;
+          }
+        ).name,
+      ).toBe("Sentinel");
+      afterFailure.close();
+
+      writeFileSync(teamsPath, teamsSnapshot);
+      const retried = runImport();
+      expect(retried.exitCode).toBe(0);
+      expect(existsSync(join(output, ".prime-board"))).toBe(true);
+      expect(readdirSync(parent).filter((entry) => entry.startsWith(stagePrefix))).toEqual([]);
+
+      const afterRetry = new Database(databasePath, { strict: true });
+      expect(
+        (
+          afterRetry.query("SELECT name FROM workspace WHERE id = ?1").get(workspaceId) as {
+            name: string;
+          }
+        ).name,
+      ).toBe("W");
+      afterRetry.close();
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 });
