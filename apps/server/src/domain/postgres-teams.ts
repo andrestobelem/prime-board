@@ -403,6 +403,21 @@ export async function updatePostgresWorkflowState(
   }
 }
 
+async function recordPostgresActivity(
+  persistence: PersistenceTransaction,
+  issueId: string,
+  actorId: string,
+  type: string,
+  payload: Record<string, unknown>,
+  createdAt: string,
+): Promise<void> {
+  await persistence.execute(
+    `INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [newId(), issueId, actorId, type, JSON.stringify(payload), createdAt],
+  );
+}
+
 async function preservePostgresStateActivityReferences(
   tx: PersistenceTransaction,
   stateId: string,
@@ -471,25 +486,49 @@ export async function deletePostgresWorkflowState(
   if (!team) throw apiError("NOT_FOUND", "Team not found");
   return persistence.transaction(async (tx) => {
     if (target) {
-      const issues = await tx.many<{ id: string }>("SELECT id FROM issues WHERE state_id = $1", [
-        id,
-      ]);
-      await tx.execute("UPDATE issues SET state_id = $1, updated_at = $2 WHERE state_id = $3", [
-        target.id,
-        now(),
-        id,
-      ]);
+      const issues = await tx.many<{
+        id: string;
+        completed_at: string | null;
+        canceled_at: string | null;
+      }>("SELECT id, completed_at, canceled_at FROM issues WHERE state_id = $1", [id]);
+      const transitionAt = now();
       for (const issue of issues) {
+        // El borrado de un estado es una transición real. Mantiene las mismas
+        // invariantes que issueUpdate para las fechas terminales.
+        const completedAt = target.type === "completed" ? transitionAt : null;
+        const canceledAt = target.type === "canceled" ? transitionAt : null;
         await tx.execute(
-          "INSERT INTO activity (id, issue_id, actor_id, type, payload, created_at) VALUES ($1, $2, $3, 'state_changed', $4, $5)",
-          [
-            newId(),
+          "UPDATE issues SET state_id = $1, completed_at = $2, canceled_at = $3, updated_at = $4 WHERE id = $5",
+          [target.id, completedAt, canceledAt, transitionAt, issue.id],
+        );
+        await recordPostgresActivity(
+          tx,
+          issue.id,
+          actorId,
+          "state_changed",
+          { from: id, to: target.id, reason: "state_deleted" },
+          transitionAt,
+        );
+        if (issue.completed_at !== completedAt) {
+          await recordPostgresActivity(
+            tx,
             issue.id,
             actorId,
-            JSON.stringify({ from: id, to: target.id, reason: "state_deleted" }),
-            now(),
-          ],
-        );
+            "completed_at_changed",
+            { from: issue.completed_at, to: completedAt },
+            transitionAt,
+          );
+        }
+        if (issue.canceled_at !== canceledAt) {
+          await recordPostgresActivity(
+            tx,
+            issue.id,
+            actorId,
+            "canceled_at_changed",
+            { from: issue.canceled_at, to: canceledAt },
+            transitionAt,
+          );
+        }
       }
     }
     const current = await tx.one<{ default_state_id: string | null }>(

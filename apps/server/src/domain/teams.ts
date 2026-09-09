@@ -410,24 +410,54 @@ export function deleteWorkflowState(
   db.transaction(() => {
     if (target) {
       const issues = db
-        .query("SELECT id, workspace_id FROM issues WHERE state_id = ?1")
-        .all(id) as Array<{ id: string; workspace_id?: string | null }>;
-      db.query("UPDATE issues SET state_id = ?1, updated_at = ?2 WHERE state_id = ?3").run(
-        target.id,
-        now(),
-        id,
-      );
-      // Cada migración queda en el historial, como cualquier cambio de estado.
+        .query("SELECT id, workspace_id, completed_at, canceled_at FROM issues WHERE state_id = ?1")
+        .all(id) as Array<{
+        id: string;
+        workspace_id?: string | null;
+        completed_at: string | null;
+        canceled_at: string | null;
+      }>;
+      const transitionAt = now();
       for (const issue of issues) {
+        // El borrado de un estado es una transición real. Mantiene las mismas
+        // invariantes que issueUpdate para las fechas terminales.
+        const completedAt = target.type === "completed" ? transitionAt : null;
+        const canceledAt = target.type === "canceled" ? transitionAt : null;
+        db.query(
+          "UPDATE issues SET state_id = ?1, completed_at = ?2, canceled_at = ?3, updated_at = ?4 WHERE id = ?5",
+        ).run(target.id, completedAt, canceledAt, transitionAt, issue.id);
+        // Cada migración queda en el historial, como cualquier cambio de estado.
         recordActivity(
           db,
           issue.id,
           actorId,
           "state_changed",
           { from: id, to: target.id, reason: "state_deleted" },
-          undefined,
+          transitionAt,
           issue.workspace_id ?? undefined,
         );
+        if (issue.completed_at !== completedAt) {
+          recordActivity(
+            db,
+            issue.id,
+            actorId,
+            "completed_at_changed",
+            { from: issue.completed_at, to: completedAt },
+            transitionAt,
+            issue.workspace_id ?? undefined,
+          );
+        }
+        if (issue.canceled_at !== canceledAt) {
+          recordActivity(
+            db,
+            issue.id,
+            actorId,
+            "canceled_at_changed",
+            { from: issue.canceled_at, to: canceledAt },
+            transitionAt,
+            issue.workspace_id ?? undefined,
+          );
+        }
       }
     }
     // Si se borra el estado default, se reasigna: al destino de la migración o

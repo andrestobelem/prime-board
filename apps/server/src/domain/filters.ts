@@ -333,7 +333,7 @@ export function issueCursorClause(
   if (orderValue === null) {
     return direction === "ASC"
       ? `(${column} IS NOT NULL OR (${column} IS NULL AND issues.id > ${idParameter}))`
-      : "1 = 0";
+      : `(${column} IS NULL AND issues.id < ${idParameter})`;
   }
   const valueParameter = params.add(orderValue);
   return direction === "ASC"
