@@ -481,7 +481,7 @@ acepta credenciales OAuth en una URL de token o revocación.
 | ------------------ | ---------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/oauth/authorize` | `GET`                                          | `200` para consentimiento o `302` al redirect validado | `400` sin redirect si no se puede validar la solicitud; `401` si falta una sesión Actor activa; `500` con `server_error`; `503` con `temporarily_unavailable` |
 | `/oauth/token`     | `POST` con `application/x-www-form-urlencoded` | `200` JSON sin cache                                   | `400` con error OAuth; `401` solo cuando corresponda a `invalid_client`; `500` con `server_error`; `503` con `temporarily_unavailable`                        |
-| `/oauth/revoke`    | `POST` con `application/x-www-form-urlencoded` | `200` para token válido, desconocido o ya revocado     | `400` por request malformado; `500` con `server_error`; `503` con `temporarily_unavailable`                                                                   |
+| `/oauth/revoke`    | `POST` con `application/x-www-form-urlencoded` | `200` para token válido, desconocido o ya revocado     | `400` por request malformado o `invalid_client` de un cliente público; `500` con `server_error`; `503` con `temporarily_unavailable`                          |
 
 Un método no soportado responde `405` con `Allow` y no procesa el cuerpo. La
 respuesta `302` de `/oauth/authorize` solo apunta a una URI validada y lleva el
