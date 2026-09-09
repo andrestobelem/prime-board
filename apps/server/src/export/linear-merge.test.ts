@@ -1,6 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { migrate } from "../db/database.ts";
 import { rebuildFromRepo } from "./importer.ts";
@@ -162,6 +170,154 @@ describe("mergeLinearExportWithRepo", () => {
       migrate(db);
       expect(rebuildFromRepo(db, output).issues).toBe(3);
       db.close();
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+      rmSync(output, { recursive: true, force: true });
+    }
+  });
+
+  it("calcula REKEY_TEAM_EXISTS antes de publicar el destino", () => {
+    const local = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-local-"));
+    const output = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-out-"));
+    try {
+      writeLocalRepo(local);
+      const result = mergeLinearExportWithRepo(
+        {
+          ...source,
+          teams: [{ ...source.teams[0]!, key: "PRB" }],
+        },
+        local,
+        output,
+      );
+      expect(result.conflicts).toEqual([
+        { code: "REKEY_TEAM_EXISTS", message: "Team PRB already exists" },
+      ]);
+      expect(existsSync(join(output, ".prime-board"))).toBe(false);
+      expect(readdirSync(output)).toEqual([]);
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+      rmSync(output, { recursive: true, force: true });
+    }
+  });
+
+  it("calcula PROJECT_NAME_COLLISION antes de publicar el destino", () => {
+    const local = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-local-"));
+    const output = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-out-"));
+    try {
+      writeLocalRepo(local);
+      const result = mergeLinearExportWithRepo(
+        {
+          ...source,
+          projects: [
+            {
+              id: "project-1",
+              name: "Local",
+              state: "started",
+              teamIds: ["t"],
+            },
+          ],
+        },
+        local,
+        output,
+      );
+      expect(result.conflicts).toEqual([
+        {
+          code: "PROJECT_NAME_COLLISION",
+          message: "Project Local exists in both exports",
+        },
+      ]);
+      expect(existsSync(join(output, ".prime-board"))).toBe(false);
+      expect(readdirSync(output)).toEqual([]);
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+      rmSync(output, { recursive: true, force: true });
+    }
+  });
+
+  it("sale 1 y conserva SQLite cuando --apply encuentra un conflicto", () => {
+    const local = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-local-"));
+    const output = mkdtempSync(join(process.cwd(), "scratchpad-linear-merge-out-"));
+    const sourcePath = join(output, "linear.json");
+    const databasePath = join(output, "sentinel.db");
+    const workspaceId = "00000000-0000-4000-8000-000000000001";
+    try {
+      writeLocalRepo(local);
+      const cliSource: LinearExport = {
+        ...source,
+        workspace: { id: workspaceId, name: "W" },
+        actors: [
+          {
+            id: "00000000-0000-4000-8000-000000000002",
+            name: "admin",
+            type: "human",
+          },
+        ],
+        teams: [
+          {
+            id: "00000000-0000-4000-8000-000000000003",
+            key: "PRB",
+            name: "Linear",
+            states: [
+              {
+                id: "00000000-0000-4000-8000-000000000004",
+                name: "Todo",
+                type: "unstarted",
+              },
+            ],
+          },
+        ],
+        issues: [
+          {
+            ...source.issues[0]!,
+            id: "00000000-0000-4000-8000-000000000005",
+            teamId: "00000000-0000-4000-8000-000000000003",
+            stateId: "00000000-0000-4000-8000-000000000004",
+            creatorId: "00000000-0000-4000-8000-000000000002",
+          },
+        ],
+      };
+      writeFileSync(sourcePath, JSON.stringify(cliSource));
+
+      const db = new Database(databasePath, { strict: true });
+      db.exec("PRAGMA foreign_keys = ON;");
+      migrate(db);
+      db.query(
+        "INSERT INTO workspace (id, name, url_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+      ).run(workspaceId, "Sentinel", "sentinel", "2026-01-01");
+      db.close();
+
+      const serverRoot = join(import.meta.dir, "..", "..");
+      const environment = {
+        ...(process.env as Record<string, string>),
+        PRIME_BOARD_DB: databasePath,
+      };
+      const command = Bun.spawnSync(
+        [
+          "bun",
+          "src/scripts/import-linear.ts",
+          "--from",
+          sourcePath,
+          "--merge-local",
+          local,
+          "--out",
+          output,
+          "--apply",
+          "--json",
+        ],
+        { cwd: serverRoot, env: environment, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(command.exitCode).toBe(1);
+      expect(existsSync(join(output, ".prime-board"))).toBe(false);
+
+      const reopened = new Database(databasePath, { strict: true });
+      expect(
+        (
+          reopened.query("SELECT name FROM workspace WHERE id = ?1").get(workspaceId) as {
+            name: string;
+          }
+        ).name,
+      ).toBe("Sentinel");
+      reopened.close();
     } finally {
       rmSync(local, { recursive: true, force: true });
       rmSync(output, { recursive: true, force: true });

@@ -106,8 +106,16 @@ if (values["merge-local"]) {
     );
     for (const finding of merged.conflicts)
       console.log(`CONFLICT ${finding.code}: ${finding.message}`);
-    console.log(`Output: ${values.out}/.prime-board/`);
   }
+  const blocked =
+    merged.conflicts.length > 0 || (merged.source.losses.length > 0 && !values["allow-losses"]);
+  // El merge ya calculó todos sus conflictos y solo publicó un snapshot limpio.
+  // Nunca abras el camino destructivo de rebuild mientras el plan esté bloqueado.
+  if (blocked) {
+    if (!values.json) console.log("Output not written because the merge has blocking findings");
+    process.exit(1);
+  }
+  if (!values.json) console.log(`Output: ${values.out}/.prime-board/`);
   if (values.apply) {
     const config = loadConfig();
     const db = openDatabase(config.dbPath);
@@ -116,8 +124,6 @@ if (values["merge-local"]) {
       `Rebuilt ${rebuilt.issues} issues, ${rebuilt.comments} comments and ${rebuilt.events} events`,
     );
   }
-  if (merged.conflicts.length > 0 || (merged.source.losses.length > 0 && !values["allow-losses"]))
-    process.exit(1);
   process.exit(0);
 }
 const result = writeLinearExportToRepo(source, outDir, {
