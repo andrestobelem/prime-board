@@ -246,12 +246,24 @@ describe("PostgreSQL cycles disabled", () => {
     expect(mixedCadence).toHaveLength(2);
 
     const scenarios = [
-      { id: manualTeam.id, count: 0, future: [manual.id] },
-      { id: cadenceTeam.id, count: 2, future: cadence.map((cycle) => cycle.id) },
+      {
+        id: manualTeam.id,
+        count: 0,
+        future: [manual.id],
+        expectedArchivedBySource: { MANUAL: 1, CADENCE: 0 },
+      },
+      {
+        id: cadenceTeam.id,
+        count: 2,
+        future: cadence.map((cycle) => cycle.id),
+        expectedArchivedBySource: { MANUAL: 0, CADENCE: 3 },
+      },
       {
         id: mixedTeam.id,
         count: 2,
         future: [mixedManual.id, ...mixedCadence.map((cycle) => cycle.id)],
+        // Manual slots remain distinct from the replenished CADENCE horizon.
+        expectedArchivedBySource: { MANUAL: 1, CADENCE: 4 },
       },
     ];
     const beforeDisable = new Map<string, CycleSnapshot[]>();
@@ -277,9 +289,20 @@ describe("PostgreSQL cycles disabled", () => {
       expect(
         allCycles.filter((cycle) => cycle.state === "UPCOMING" && cycle.archivedAt === null),
       ).toEqual([]);
-      expect(
-        allCycles.filter((cycle) => cycle.state === "UPCOMING" && cycle.archivedAt !== null),
-      ).toHaveLength(scenario.future.length);
+      const archivedUpcoming = allCycles.filter(
+        (cycle) => cycle.state === "UPCOMING" && cycle.archivedAt !== null,
+      );
+      for (const source of ["MANUAL", "CADENCE"] as const) {
+        expect(archivedUpcoming.filter((cycle) => cycle.cadenceSource === source)).toHaveLength(
+          scenario.expectedArchivedBySource[source],
+        );
+      }
+      for (const id of scenario.future) {
+        expect(archivedUpcoming.find((cycle) => cycle.id === id)).toMatchObject({
+          id,
+          archivedAt: expect.any(String),
+        });
+      }
     }
 
     const disabledUpdates = [

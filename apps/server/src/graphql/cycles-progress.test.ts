@@ -207,7 +207,7 @@ describe("cycle progress and carry-over", () => {
     expect(advanced.errors).toBeUndefined();
     expect(advanced.data!.cycleAdvance).toMatchObject({
       success: true,
-      movedIssues: 2,
+      movedIssues: 1,
       cycle: { id: target.id, state: "ACTIVE" },
     });
 
@@ -225,7 +225,11 @@ describe("cycle progress and carry-over", () => {
     expect(assigned.data!.issue.cycle).toEqual({ id: target.id, number: target.number });
     expect(assigned.data!.issue.activity).toContainEqual({
       type: "cycle_changed",
-      payload: { from: null, to: `AUA/${target.number}`, reason: "cycle_auto_add" },
+      payload: {
+        from: `AUA/${source.number}`,
+        to: `AUA/${target.number}`,
+        reason: "cycle_rollover",
+      },
     });
 
     const completedAssigned = await gql(

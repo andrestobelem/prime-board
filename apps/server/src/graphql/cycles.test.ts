@@ -280,7 +280,7 @@ describe("cycles", () => {
       app,
       `mutation($stateId: ID!) {
         issueCreate(input: { teamKey: "AUT", title: "Auto-add direct issue", stateId: $stateId }) {
-          issue { id cycle { id } }
+          issue { id cycle { id number } }
         }
       }`,
       { stateId: startedState.id },
@@ -296,7 +296,8 @@ describe("cycles", () => {
     );
     expect(issue.errors).toBeUndefined();
     expect(completedIssue.errors).toBeUndefined();
-    expect(issue.data!.issueCreate.issue.cycle).toBeNull();
+    const initialCycle = issue.data!.issueCreate.issue.cycle;
+    expect(initialCycle).not.toBeNull();
     expect(completedIssue.data!.issueCreate.issue.cycle).toBeNull();
 
     const cycle = await gql(
@@ -338,15 +339,12 @@ describe("cycles", () => {
       { id: issue.data!.issueCreate.issue.id },
     );
     expect(assigned.errors).toBeUndefined();
-    expect(assigned.data!.issue.cycle).toEqual({
-      id: cycle.data!.cycleCreate.cycle.id,
-      number: cycle.data!.cycleCreate.cycle.number,
-    });
+    expect(assigned.data!.issue.cycle).toEqual(initialCycle);
     expect(assigned.data!.issue.activity).toContainEqual({
       type: "cycle_changed",
       payload: {
         from: null,
-        to: `AUT/${cycle.data!.cycleCreate.cycle.number}`,
+        to: `AUT/${initialCycle.number}`,
         reason: "cycle_auto_add",
       },
     });

@@ -197,7 +197,7 @@ describe("PostgreSQL cycle auto-add", () => {
       });
       const advanced = await advancePostgresCycle(persistence, viewer, source.id);
       expect(advanced.cycle).toMatchObject({ id: target.id, state: "active" });
-      expect(advanced.movedIssues).toBe(2);
+      expect(advanced.movedIssues).toBe(1);
       expect((await getPostgresIssue(persistence, advanceIssue.id))?.cycle_id).toBe(target.id);
       expect((await getPostgresIssue(persistence, completedIssue.id))?.cycle_id).toBe(source.id);
 

@@ -18,6 +18,7 @@ type Scenario = {
   cycleUpcomingCount: number;
   manualId: string;
   cadenceIds: string[];
+  expectedArchivedBySource: Record<"MANUAL" | "CADENCE", number>;
 };
 
 async function createTeam(key: string, cycleUpcomingCount: number) {
@@ -134,18 +135,23 @@ describe("cycles disabled", () => {
         cycleUpcomingCount: 0,
         manualId: manual.id,
         cadenceIds: [],
+        expectedArchivedBySource: { MANUAL: 1, CADENCE: 0 },
       },
       {
         id: cadenceTeam.id,
         cycleUpcomingCount: 2,
         manualId: "",
         cadenceIds: cadence.map((cycle) => cycle.id),
+        // A count of two leaves three visible CADENCE slots after disable.
+        expectedArchivedBySource: { MANUAL: 0, CADENCE: 3 },
       },
       {
         id: mixedTeam.id,
         cycleUpcomingCount: 2,
         manualId: mixedManual.id,
         cadenceIds: mixedCadence.map((cycle) => cycle.id),
+        // Manual slots remain distinct from the replenished CADENCE horizon.
+        expectedArchivedBySource: { MANUAL: 1, CADENCE: 4 },
       },
     ];
 
@@ -173,9 +179,23 @@ describe("cycles disabled", () => {
       expect(
         allCycles.filter((cycle) => cycle.state === "UPCOMING" && cycle.archivedAt === null),
       ).toEqual([]);
-      expect(
-        allCycles.filter((cycle) => cycle.state === "UPCOMING" && cycle.archivedAt !== null),
-      ).toHaveLength(scenario.cadenceIds.length + (scenario.manualId ? 1 : 0));
+      const archivedUpcoming = allCycles.filter(
+        (cycle) => cycle.state === "UPCOMING" && cycle.archivedAt !== null,
+      );
+      for (const source of ["MANUAL", "CADENCE"] as const) {
+        expect(archivedUpcoming.filter((cycle) => cycle.cadenceSource === source)).toHaveLength(
+          scenario.expectedArchivedBySource[source],
+        );
+      }
+      for (const id of [
+        ...scenario.cadenceIds,
+        ...(scenario.manualId ? [scenario.manualId] : []),
+      ]) {
+        expect(archivedUpcoming.find((cycle) => cycle.id === id)).toMatchObject({
+          id,
+          archivedAt: expect.any(String),
+        });
+      }
     }
 
     const mixedAfterDisable = await listCycles(mixedTeam.id, true);
