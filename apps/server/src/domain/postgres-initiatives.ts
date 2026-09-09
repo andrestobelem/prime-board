@@ -26,6 +26,12 @@ function parseResources(value: string | null | undefined): unknown[] {
   }
 }
 
+function validateResources(resources: readonly unknown[] | null | undefined): void {
+  if (resources === undefined || resources === null) return;
+  if (!Array.isArray(resources))
+    throw apiError("VALIDATION_FAILED", "Initiative resources must be a list");
+}
+
 export interface PostgresInitiativeRow {
   id: string;
   name: string;
@@ -270,6 +276,7 @@ export async function createPostgresInitiative(
   if (!name) throw apiError("VALIDATION_FAILED", "Initiative name cannot be empty");
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
   validateInitiativePriority(input.priority);
+  validateResources(input.resources);
   const labelIds = await validateInitiativeLabels(persistence, input.labelIds ?? []);
   if (input.leadTeamId != null) await assertPostgresTeamActive(persistence, input.leadTeamId);
   const projectIds = await validateProjectIds(persistence, viewer, input.projectIds ?? []);
@@ -329,6 +336,7 @@ export async function updatePostgresInitiative(
   await assertCanMutatePostgresInitiative(persistence, viewer, existing);
   if (input.targetDate != null) parseDateTime(input.targetDate, "targetDate");
   validateInitiativePriority(input.priority);
+  validateResources(input.resources);
   const labelIds =
     input.labelIds === undefined || input.labelIds === null
       ? null
