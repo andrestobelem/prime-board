@@ -16,6 +16,7 @@ import { readReplicaMetadata, type ReadReplicaMetadata } from "./replica-metadat
 import { readEventLog } from "./event-log.ts";
 import { archiveDocumentSnapshot } from "./documents-archive.ts";
 import { normalizeAvatarUrl } from "../domain/actors.ts";
+import { validateProjectDateRange } from "../domain/projects.ts";
 
 export interface RebuildResult {
   issues: number;
@@ -275,6 +276,13 @@ export function rebuildFromRepo(
       throw new Error(`Ambiguous project reference in repo: ${name}`);
     }
     seenProjectNames.add(name);
+    try {
+      // Validate snapshots before opening the destructive rebuild transaction.
+      // Date-only values remain unchanged while comparison uses parsed instants.
+      validateProjectDateRange(project.startDate ?? null, project.targetDate ?? null);
+    } catch (error) {
+      throw new Error(`Project "${name}" has invalid dates: ${(error as Error).message}`);
+    }
   }
 
   // Valida también el snapshot del Workspace antes de entrar en la transacción
@@ -583,9 +591,7 @@ export function rebuildFromRepo(
       dependency: any;
     }> = [];
     const milestoneIds = new Map<string, string>();
-    for (const project of readJson(join(base, "meta", "projects.json")) as Array<
-      Record<string, any>
-    >) {
+    for (const project of projectSnapshot) {
       const projectId = newId();
       projectIds.set(project.name, projectId);
       db.query(

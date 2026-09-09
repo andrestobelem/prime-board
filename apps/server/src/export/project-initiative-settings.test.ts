@@ -1,6 +1,6 @@
 // PRB-391: relaciones nuevas sobreviven al snapshot local-first.
 import { afterAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { exportBoard } from "./exporter.ts";
@@ -29,7 +29,7 @@ describe("planning settings export", () => {
     const source = (
       await gql(
         app,
-        `mutation($team: ID!, $actor: ID!) { projectCreate(input: { name: "Roundtrip source", teamIds: [$team], memberIds: [$actor], startDate: "2026-09-01" }) { project { id } } }`,
+        `mutation($team: ID!, $actor: ID!) { projectCreate(input: { name: "Roundtrip source", teamIds: [$team], memberIds: [$actor], startDate: "2026-09-01T02:00:00+02:00", targetDate: "2026-09-01T01:00:00Z" }) { project { id } } }`,
         { team, actor },
       )
     ).data!.projectCreate.project.id as string;
@@ -40,6 +40,16 @@ describe("planning settings export", () => {
         { team },
       )
     ).data!.projectCreate.project.id as string;
+    await gql(
+      app,
+      `mutation($team: ID!) { projectCreate(input: { name: "Roundtrip null start", teamIds: [$team], startDate: null, targetDate: "2026-10-01" }) { project { id } } }`,
+      { team },
+    );
+    await gql(
+      app,
+      `mutation($team: ID!) { projectCreate(input: { name: "Roundtrip day start", teamIds: [$team], startDate: "2026-11-01", targetDate: "2026-11-30" }) { project { id } } }`,
+      { team },
+    );
     await gql(
       app,
       `mutation($id: ID!, $target: ID!) { projectUpdate(id: $id, input: { dependencyIds: [$target] }) { success } }`,
@@ -56,6 +66,28 @@ describe("planning settings export", () => {
     migrate(rebuilt);
     try {
       exportBoard(app.db, dir);
+      const exportedProjects = JSON.parse(
+        readFileSync(join(dir, ".prime-board", "meta", "projects.json"), "utf8"),
+      ) as Array<{ name: string; startDate: string | null; targetDate: string | null }>;
+      expect(exportedProjects).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "Roundtrip source",
+            startDate: "2026-09-01T02:00:00+02:00",
+            targetDate: "2026-09-01T01:00:00Z",
+          }),
+          expect.objectContaining({
+            name: "Roundtrip null start",
+            startDate: null,
+            targetDate: "2026-10-01",
+          }),
+          expect.objectContaining({
+            name: "Roundtrip day start",
+            startDate: "2026-11-01",
+            targetDate: "2026-11-30",
+          }),
+        ]),
+      );
       rebuildFromRepo(rebuilt, dir);
       expect(
         (rebuilt.query("SELECT count(*) AS count FROM project_members").get() as { count: number })
@@ -84,6 +116,22 @@ describe("planning settings export", () => {
           }
         ).count,
       ).toBe(1);
+      expect(
+        rebuilt
+          .query(
+            "SELECT name, start_date AS startDate, target_date AS targetDate FROM projects WHERE name LIKE 'Roundtrip %' ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "Roundtrip day start", startDate: "2026-11-01", targetDate: "2026-11-30" },
+        { name: "Roundtrip null start", startDate: null, targetDate: "2026-10-01" },
+        {
+          name: "Roundtrip source",
+          startDate: "2026-09-01T02:00:00+02:00",
+          targetDate: "2026-09-01T01:00:00Z",
+        },
+        { name: "Roundtrip target", startDate: null, targetDate: null },
+      ]);
     } finally {
       rebuilt.close();
       rmSync(dir, { recursive: true, force: true });

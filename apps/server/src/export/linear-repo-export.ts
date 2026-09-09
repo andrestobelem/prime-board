@@ -55,6 +55,7 @@ export interface LinearProject {
   description?: string | null;
   state: string;
   leadId?: string | null;
+  startDate?: string | null;
   targetDate?: string | null;
   archivedAt?: string | null;
   teamIds: string[];
@@ -749,6 +750,7 @@ export function writeLinearExportToRepo(
           description: projectDescription(project),
           state: project.state,
           lead: project.leadId ? (actorNameById.get(project.leadId) ?? null) : null,
+          startDate: project.startDate ?? null,
           targetDate: project.targetDate ?? null,
           archived: Boolean(project.archivedAt),
           teams: (project.teamIds.length ? project.teamIds : source.teams.map((team) => team.id))

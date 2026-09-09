@@ -517,6 +517,36 @@ describe("rebuildFromRepo", () => {
     }
   });
 
+  it("valida fechas de Project antes de borrar la DB", () => {
+    const snapshot = mkdtempSync(join(tmpdir(), "pb-project-dates-preflight-"));
+    const fresh = new Database(":memory:", { strict: true });
+    try {
+      exportBoard(app.db, snapshot);
+      fresh.exec("PRAGMA foreign_keys = ON;");
+      migrate(fresh);
+      rebuildFromRepo(fresh, snapshot);
+      const before = fresh.query("SELECT count(*) AS count FROM projects").get() as {
+        count: number;
+      };
+      const projectsPath = join(snapshot, ".prime-board", "meta", "projects.json");
+      const projects = JSON.parse(readFileSync(projectsPath, "utf8")) as Array<
+        Record<string, unknown>
+      >;
+      const project = projects[0]!;
+      for (const dates of [
+        { startDate: "not-a-date", targetDate: "2026-09-01" },
+        { startDate: "2026-09-02", targetDate: "2026-09-01" },
+      ]) {
+        writeFileSync(projectsPath, JSON.stringify([{ ...project, ...dates }]) + "\n");
+        expect(() => rebuildFromRepo(fresh, snapshot)).toThrow(/invalid dates/);
+        expect(fresh.query("SELECT count(*) AS count FROM projects").get()).toEqual(before);
+      }
+    } finally {
+      fresh.close();
+      rmSync(snapshot, { recursive: true, force: true });
+    }
+  });
+
   it("falla claramente si no hay .prime-board", () => {
     const empty = mkdtempSync(join(tmpdir(), "pb-empty-"));
     try {

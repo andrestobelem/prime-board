@@ -32,7 +32,8 @@ const source: LinearExport = {
       description: "Descripción",
       state: "started",
       leadId: "actor-1",
-      targetDate: null,
+      startDate: "2026-01-01",
+      targetDate: "2026-02-01",
       archivedAt: null,
       teamIds: ["team-1"],
       milestones: [
@@ -117,6 +118,17 @@ describe("writeLinearExportToRepo", () => {
       expect(readFileSync(join(root, ".prime-board", "issues", "AT-1.md"), "utf8")).toContain(
         "assignee: agent",
       );
+      expect(
+        JSON.parse(readFileSync(join(root, ".prime-board", "meta", "projects.json"), "utf8")),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "Proyecto",
+            startDate: "2026-01-01",
+            targetDate: "2026-02-01",
+          }),
+        ]),
+      );
       expect(readFileSync(join(root, ".prime-board", "log", "AT-2.jsonl"), "utf8")).toContain(
         '"type":"state_changed"',
       );
@@ -135,6 +147,13 @@ describe("writeLinearExportToRepo", () => {
       ).toEqual({ n: 2 });
       expect(db.query("SELECT count(*) AS n FROM issue_relations").get()).toEqual({ n: 1 });
       expect(db.query("SELECT count(*) AS n FROM comments").get()).toEqual({ n: 1 });
+      expect(
+        db
+          .query(
+            "SELECT start_date AS startDate, target_date AS targetDate FROM projects WHERE name = ?1",
+          )
+          .get("Proyecto"),
+      ).toEqual({ startDate: "2026-01-01", targetDate: "2026-02-01" });
       db.close();
     } finally {
       rmSync(root, { recursive: true, force: true });
