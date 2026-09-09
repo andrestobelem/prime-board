@@ -225,6 +225,10 @@ describe("cycle progress and carry-over", () => {
     expect(assigned.data!.issue.cycle).toEqual({ id: target.id, number: target.number });
     expect(assigned.data!.issue.activity).toContainEqual({
       type: "cycle_changed",
+      payload: { from: null, to: `AUA/${source.number}`, reason: "cycle_auto_add" },
+    });
+    expect(assigned.data!.issue.activity).toContainEqual({
+      type: "cycle_changed",
       payload: {
         from: `AUA/${source.number}`,
         to: `AUA/${target.number}`,

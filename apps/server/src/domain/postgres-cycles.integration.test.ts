@@ -425,7 +425,6 @@ describe("Horizonte de Cycles en PostgreSQL", () => {
   });
 });
 
-
 function assertNoOverlaps(cycles: readonly { starts_at: string; ends_at: string }[]): void {
   const ordered = [...cycles].sort(
     (left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at),
