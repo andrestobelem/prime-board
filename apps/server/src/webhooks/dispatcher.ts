@@ -113,6 +113,17 @@ function issueEventIssueId(event: WebhookEventName, data: Record<string, unknown
   return null;
 }
 
+/** Un Team explícito vacío no puede convertirse en un alcance global. */
+function hasInvalidIssueEventTeamId(
+  event: WebhookEventName,
+  data: Record<string, unknown>,
+): boolean {
+  if (!event.startsWith("issue.") || !Object.prototype.hasOwnProperty.call(data, "teamId")) {
+    return false;
+  }
+  return typeof data.teamId !== "string" || data.teamId.trim().length === 0;
+}
+
 function sqliteSingleWorkspaceId(db: Database): string | null {
   const rows = db.query("SELECT id FROM workspace ORDER BY created_at, id").all() as Array<{
     id: string;
@@ -587,6 +598,9 @@ export class WebhookDispatcher implements WebhookEventSink {
     data: Record<string, unknown>,
     changes?: Record<string, { from: unknown; to: unknown }>,
   ): Promise<void> {
+    // Valida antes de derivar el Workspace, listar hooks o calcular permisos.
+    if (hasInvalidIssueEventTeamId(event, data)) return;
+
     const workspaceId = this.persistence
       ? await postgresEventWorkspaceId(this.persistence, data)
       : sqliteEventWorkspaceId(this.db, event, data);

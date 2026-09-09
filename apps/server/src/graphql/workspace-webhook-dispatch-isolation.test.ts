@@ -237,6 +237,54 @@ describe("workspace scope for webhook dispatch", () => {
     expect(bodies).toHaveLength(0);
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace", " \t\n"],
+  ])("falla cerrado para teamId %s en SQLite", async (caseName: string, teamId: string) => {
+    const hook = await gql(
+      app,
+      `mutation($url: String!, $teamId: ID!) {
+          webhookCreate(input: { url: $url, events: ["issue.created"], teamId: $teamId }) {
+            webhook { id }
+          }
+        }`,
+      { url: `https://hooks.example/a-invalid-team-${caseName}`, teamId: teamAId },
+      app.apiKey,
+      workspaceAKey,
+    );
+    expect(hook.errors).toBeUndefined();
+
+    try {
+      for (const dispatch of ["implicit", "explicit"]) {
+        delivered.length = 0;
+        bodies.length = 0;
+        const dispatcher = new WebhookDispatcher(app.db, {
+          retryDelays: [],
+          fetchFn: makeFetch(),
+        });
+        const data = { id: issueAId, teamId };
+        if (dispatch === "implicit") {
+          dispatcher.emit("issue.created", { id: viewerId, name: "admin", type: "HUMAN" }, data);
+        } else {
+          dispatcher.emitForWorkspace(
+            workspaceAId,
+            "issue.created",
+            { id: viewerId, name: "admin", type: "HUMAN" },
+            data,
+          );
+        }
+        await dispatcher.idle();
+
+        expect(delivered).toHaveLength(0);
+        expect(bodies).toHaveLength(0);
+      }
+    } finally {
+      await gql(app, `mutation($id: ID!) { webhookDelete(id: $id) { success } }`, {
+        id: hook.data!.webhookCreate.webhook.id,
+      });
+    }
+  });
+
   it("falla cerrado para Teams y Projects de otro Workspace", async () => {
     delivered.length = 0;
     bodies.length = 0;

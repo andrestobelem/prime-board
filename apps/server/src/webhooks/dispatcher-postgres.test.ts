@@ -159,6 +159,63 @@ describe("PostgreSQL webhook dispatcher", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace", " \t\n"],
+  ])(
+    "falla cerrado para teamId %s en el seam de PostgreSQL",
+    async (_caseName: string, teamId: string) => {
+      const globalHook: WebhookRow = {
+        id: "hook-global-invalid-team",
+        url: "https://example.test/global-invalid-team",
+        secret: "fixture-secret-global",
+        events: '["issue.created"]',
+        enabled: true,
+        created_at: "2026-01-01T00:00:00.000Z",
+        owner_id: "admin-1",
+        team_id: null,
+      };
+      const limitedHook: WebhookRow = {
+        id: "hook-limited-invalid-team",
+        url: "https://example.test/limited-invalid-team",
+        secret: "fixture-secret-limited",
+        events: '["issue.created"]',
+        enabled: true,
+        created_at: "2026-01-01T00:00:01.000Z",
+        owner_id: "admin-1",
+        team_id: "team-1",
+      };
+      const requests: Request[] = [];
+      const fetchFn = (async (input: URL | RequestInfo, init?: RequestInit) => {
+        requests.push(new Request(input, init));
+        return new Response("ok");
+      }) as typeof fetch;
+      const dispatcher = new WebhookDispatcher(
+        new Database(":memory:"),
+        { fetchFn, retryDelays: [] },
+        fakePersistence([globalHook, limitedHook]),
+      );
+
+      for (const dispatch of ["implicit", "explicit"]) {
+        requests.length = 0;
+        const data = { id: "issue-1", teamId };
+        if (dispatch === "implicit") {
+          dispatcher.emit("issue.created", { id: "admin-1", name: "admin", type: "human" }, data);
+        } else {
+          dispatcher.emitForWorkspace(
+            "workspace-1",
+            "issue.created",
+            { id: "admin-1", name: "admin", type: "human" },
+            data,
+          );
+        }
+        await dispatcher.idle();
+
+        expect(requests).toHaveLength(0);
+      }
+    },
+  );
+
   it("falla cerrado para un Workspace explícito ajeno en PostgreSQL", async () => {
     const hook: WebhookRow = {
       id: "hook-foreign-workspace",
