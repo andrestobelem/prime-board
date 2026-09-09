@@ -7,6 +7,8 @@ import {
   type IssueColumn,
   type IssueOrder,
 } from "../components/DisplayOptions.tsx";
+import { Avatar, LabelChip, PriorityIcon, StateIcon } from "../components/bits.tsx";
+import { getVisibleBoardMetadata } from "../board-columns.ts";
 import { gql, GqlError, mutate, useQuery } from "../api.ts";
 import {
   defaultViewPreferences,
@@ -61,6 +63,141 @@ const ISSUES_QUERY = `query($filter: IssueFilter, $orderBy: IssueOrder, $after: 
 }`;
 
 const GROUP_OPTIONS: GroupBy[] = ["state", "milestone", "assignee", "priority"];
+const PRIORITY_LABELS = ["No priority", "Urgent", "High", "Medium", "Low"];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isIssueOrder(value: string): value is IssueOrder {
+  return (
+    value === "CREATED_ASC" ||
+    value === "CREATED_DESC" ||
+    value === "UPDATED_ASC" ||
+    value === "UPDATED_DESC"
+  );
+}
+
+function isGroupBy(value: string): value is GroupBy {
+  return GROUP_OPTIONS.some((option) => option === value);
+}
+
+interface SavedViewBoardGroup {
+  key: string;
+  label: string;
+  order: number;
+  state?: IssueListItem["state"];
+  issues: IssueListItem[];
+}
+
+function boardGroupOf(issue: IssueListItem, groupBy: GroupBy): Omit<SavedViewBoardGroup, "issues"> {
+  if (groupBy === "milestone") {
+    return issue.milestone
+      ? { key: issue.milestone.id, label: issue.milestone.name, order: 0 }
+      : { key: "none", label: "No milestone", order: 1 };
+  }
+  if (groupBy === "assignee") {
+    return issue.assignee
+      ? { key: issue.assignee.id, label: issue.assignee.name, order: 0 }
+      : { key: "none", label: "No assignee", order: 1 };
+  }
+  if (groupBy === "priority") {
+    return {
+      key: String(issue.priority),
+      label: PRIORITY_LABELS[issue.priority] ?? "No priority",
+      order: issue.priority === 0 ? 5 : issue.priority,
+    };
+  }
+  return {
+    key: issue.state.id,
+    label: issue.state.name,
+    order: issue.state.position,
+    state: issue.state,
+  };
+}
+
+function SavedViewBoard({
+  issues,
+  groupBy,
+  visibleColumns,
+}: {
+  issues: IssueListItem[];
+  groupBy: GroupBy;
+  visibleColumns: IssueColumn[];
+}) {
+  const groups = new Map<string, SavedViewBoardGroup>();
+  for (const issue of issues) {
+    const descriptor = boardGroupOf(issue, groupBy);
+    const group = groups.get(descriptor.key) ?? { ...descriptor, issues: [] };
+    group.issues.push(issue);
+    groups.set(descriptor.key, group);
+  }
+  const orderedGroups = [...groups.values()].sort(
+    (left, right) => left.order - right.order || left.label.localeCompare(right.label),
+  );
+
+  return (
+    <div className="board" data-saved-view-layout="board" aria-label="Saved view board">
+      {orderedGroups.length === 0 ? (
+        <div className="empty">No issues yet</div>
+      ) : (
+        orderedGroups.map((group) => (
+          <div className="board-column" key={group.key} aria-label={group.label}>
+            <div className="col-header">
+              {group.state && <StateIcon state={group.state} />}
+              {group.label}
+              <span className="count" style={{ color: "var(--text-faint)", fontWeight: 400 }}>
+                {group.issues.length}
+              </span>
+            </div>
+            {group.issues
+              .slice()
+              .sort(
+                (left, right) =>
+                  (left.priority === 0 ? 5 : left.priority) -
+                  (right.priority === 0 ? 5 : right.priority),
+              )
+              .map((issue) => {
+                const metadata = getVisibleBoardMetadata(issue, visibleColumns);
+                return (
+                  <div
+                    className="board-card"
+                    key={issue.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigate(`/issue/${issue.identifier}`)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        navigate(`/issue/${issue.identifier}`);
+                      }
+                    }}
+                  >
+                    <span className="board-card-topline">
+                      <span className="identifier">{issue.identifier}</span>
+                    </span>
+                    <span className="card-title">{issue.title}</span>
+                    <span className="card-footer">
+                      {visibleColumns.includes("priority") && (
+                        <PriorityIcon priority={issue.priority} />
+                      )}
+                      {visibleColumns.includes("labels") &&
+                        issue.labels.map((label) => <LabelChip key={label.id} label={label} />)}
+                      {metadata.project && <span className="label-chip">{metadata.project}</span>}
+                      {metadata.cycle && <span className="label-chip">{metadata.cycle}</span>}
+                      <span style={{ marginLeft: "auto" }}>
+                        {visibleColumns.includes("assignee") && <Avatar actor={issue.assignee} />}
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
 
 export function SavedViewPage({ viewId }: { viewId: string }) {
   const [editing, setEditing] = useState(false);
@@ -104,9 +241,12 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
   const [extraIssues, setExtraIssues] = useState<IssueListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
-  const [pageInfo, setPageInfo] = useState({
+  const [pageInfo, setPageInfo] = useState<{
+    hasNextPage: boolean;
+    endCursor: string | null;
+  }>({
     hasNextPage: false,
-    endCursor: null as string | null,
+    endCursor: null,
   });
   const list = useQuery<{
     issues: {
@@ -176,7 +316,9 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
     try {
       let parsedFilter: Record<string, unknown>;
       try {
-        parsedFilter = JSON.parse(filterText) as Record<string, unknown>;
+        const parsed: unknown = JSON.parse(filterText);
+        if (!isRecord(parsed)) throw new Error("Filter must be an object.");
+        parsedFilter = parsed;
       } catch {
         throw new Error("Filter must be valid JSON.");
       }
@@ -267,7 +409,10 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
             />
             <select
               value={orderBy}
-              onChange={(event) => setOrderBy(event.target.value as IssueOrder)}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (isIssueOrder(value)) setOrderBy(value);
+              }}
             >
               <option value="UPDATED_DESC">Recently updated</option>
               <option value="CREATED_DESC">Recently created</option>
@@ -276,7 +421,10 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
             </select>
             <select
               value={groupByDraft}
-              onChange={(event) => setGroupByDraft(event.target.value as GroupBy)}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (isGroupBy(value)) setGroupByDraft(value);
+              }}
             >
               {GROUP_OPTIONS.map((value) => (
                 <option key={value} value={value}>
@@ -321,9 +469,13 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
               {effectivePreferences.layout.toLowerCase()}
             </span>
             <DisplayOptions
+              layout={effectivePreferences.layout}
               groupBy={effectivePreferences.groupBy}
               orderBy={effectivePreferences.orderBy}
               columns={effectivePreferences.columns}
+              onLayout={(value) =>
+                void saveDisplayPreferences({ ...effectivePreferences, layout: value })
+              }
               onGroupBy={(value) =>
                 void saveDisplayPreferences({ ...effectivePreferences, groupBy: value })
               }
@@ -397,11 +549,19 @@ export function SavedViewPage({ viewId }: { viewId: string }) {
             loading={loadingMore}
             onLoadMore={() => void loadMore()}
           />
-          <IssueList
-            issues={appendUniqueById(list.data?.issues.nodes ?? [], extraIssues)}
-            groupBy={effectivePreferences.groupBy}
-            visibleColumns={effectivePreferences.columns}
-          />
+          {effectivePreferences.layout === "BOARD" ? (
+            <SavedViewBoard
+              issues={appendUniqueById(list.data?.issues.nodes ?? [], extraIssues)}
+              groupBy={effectivePreferences.groupBy}
+              visibleColumns={effectivePreferences.columns}
+            />
+          ) : (
+            <IssueList
+              issues={appendUniqueById(list.data?.issues.nodes ?? [], extraIssues)}
+              groupBy={effectivePreferences.groupBy}
+              visibleColumns={effectivePreferences.columns}
+            />
+          )}
         </>
       )}
       {archiveOpen && (

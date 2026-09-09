@@ -12,20 +12,25 @@ import { rebuildFromRepo } from "./importer.ts";
 const app = createTestApp();
 afterAll(() => app.stop());
 
+function requireValue<T>(value: T | null | undefined, label: string): T {
+  if (value === null || value === undefined) throw new Error(`${label} is missing.`);
+  return value;
+}
+
 describe("favorites export/import", () => {
   it("conserva proyectos, vistas y orden por actor usando claves naturales", async () => {
     const team = await gql(app, `{ team(key: "PB") { id } }`);
     const project = await gql(
       app,
       `mutation($team: ID!) { projectCreate(input: { name: "Export favorite project", teamIds: [$team] }) { project { id } } }`,
-      { team: team.data!.team.id },
+      { team: requireValue(team.data?.team?.id, "team id") },
     );
-    const projectId = project.data!.projectCreate.project.id;
+    const projectId = requireValue(project.data?.projectCreate?.project?.id, "project id");
     const view = await gql(
       app,
       `mutation { savedViewCreate(input: { name: "Export favorite view", scope: WORKSPACE }) { savedView { id } } }`,
     );
-    const viewId = view.data!.savedViewCreate.savedView.id;
+    const viewId = requireValue(view.data?.savedViewCreate?.savedView?.id, "view id");
     await gql(
       app,
       `mutation($project: ID!, $view: ID!) {
@@ -73,11 +78,7 @@ describe("favorites export/import", () => {
            LEFT JOIN saved_views sv ON sv.id = f.saved_view_id
            ORDER BY f.position`,
         )
-        .all() as Array<{
-        position: number;
-        project_name: string | null;
-        view_name: string | null;
-      }>;
+        .all();
       expect(restored).toEqual([
         { position: 0, project_name: "Export favorite project", view_name: null },
         { position: 1, project_name: null, view_name: "Export favorite view" },
@@ -90,7 +91,7 @@ describe("favorites export/import", () => {
 
   it("conserva favoritos de vistas con alcance Project e Initiative", async () => {
     const team = await gql(app, `{ team(key: "PB") { id } }`);
-    const teamId = team.data!.team.id as string;
+    const teamId = requireValue(team.data?.team?.id, "team id");
     const project = await gql(
       app,
       `mutation($teamId: ID!) {
@@ -100,7 +101,7 @@ describe("favorites export/import", () => {
       }`,
       { teamId },
     );
-    const projectId = project.data!.projectCreate.project.id as string;
+    const projectId = requireValue(project.data?.projectCreate?.project?.id, "project id");
     const initiative = await gql(
       app,
       `mutation($teamId: ID!, $projectId: ID!) {
@@ -112,7 +113,10 @@ describe("favorites export/import", () => {
       }`,
       { teamId, projectId },
     );
-    const initiativeId = initiative.data!.initiativeCreate.initiative.id as string;
+    const initiativeId = requireValue(
+      initiative.data?.initiativeCreate?.initiative?.id,
+      "initiative id",
+    );
     const views = await gql(
       app,
       `mutation($projectId: ID!, $initiativeId: ID!) {
@@ -138,8 +142,11 @@ describe("favorites export/import", () => {
       { projectId, initiativeId },
     );
     expect(views.errors).toBeUndefined();
-    const projectViewId = views.data!.projectView.savedView.id as string;
-    const initiativeViewId = views.data!.initiativeView.savedView.id as string;
+    const projectViewId = requireValue(views.data?.projectView?.savedView?.id, "project view id");
+    const initiativeViewId = requireValue(
+      views.data?.initiativeView?.savedView?.id,
+      "initiative view id",
+    );
     const favoriteAndSubscriptions = await gql(
       app,
       `mutation($projectViewId: ID!, $initiativeViewId: ID!) {
@@ -167,7 +174,7 @@ describe("favorites export/import", () => {
       exportBoard(app.db, dir);
       const exportedViews = JSON.parse(
         readFileSync(join(dir, ".prime-board", "meta", "saved-views.json"), "utf8"),
-      ) as Array<Record<string, unknown>>;
+      );
       expect(exportedViews).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -201,7 +208,7 @@ describe("favorites export/import", () => {
            WHERE sv.name IN ('Project favorite view', 'Initiative favorite view')
            ORDER BY sv.name`,
         )
-        .all() as Array<Record<string, unknown>>;
+        .all();
       expect(restored).toHaveLength(2);
       expect(restored).toEqual([
         {
