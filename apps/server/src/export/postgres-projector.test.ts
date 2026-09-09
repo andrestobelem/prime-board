@@ -11,6 +11,8 @@ import type {
 } from "../db/persistence.ts";
 import { EventLogWriter, type DomainEvent, type JsonObject } from "./event-log.ts";
 import { activityToDomainEvent } from "./activity-stream.ts";
+import { createPostgresPersistence } from "../db/postgres/persistence.ts";
+import { createPostgresHarness } from "../db/postgres/test-harness.ts";
 import {
   canonicalEventFromMutation,
   canonicalEventFromWebhook,
@@ -19,6 +21,7 @@ import {
 import { applyCanonicalEvent } from "./postgres-projector.ts";
 
 const actor = { id: "actor-1", name: "Agent", type: "agent" };
+const integration = process.env.PRIME_BOARD_POSTGRES_URL ? it : it.skip;
 const base = (overrides: Partial<DomainEvent> = {}): DomainEvent => ({
   schemaVersion: 1,
   eventId: "event-1",
@@ -1127,6 +1130,137 @@ it("conserva Activity legacy enriquecida con issueId en PostgreSQL vacío", asyn
     { id: "issue-uuid", title: "issue-uuid" },
   ]);
   await fake.persistence.close();
+});
+
+it("reemplaza el contenido del placeholder Activity con el snapshot canónico completo", async () => {
+  const fake = sqliteProjectionPersistence();
+  const legacyActivity: DomainEvent = {
+    schemaVersion: 1,
+    eventId: "activity-created",
+    aggregate: "issue",
+    aggregateKey: "PB-1",
+    type: "created",
+    actor,
+    workspaceId: "workspace-1",
+    occurredAt: "2025-01-01T00:00:01.000Z",
+    payload: { __source: "activity", title: "Issue" },
+  };
+  const canonical = base({
+    eventId: "issue-created",
+    occurredAt: "2025-01-01T00:00:02.000Z",
+    payload: {
+      ...base().payload,
+      id: "issue-canonical",
+      title: "Issue",
+      number: 1,
+      updatedAt: "2025-01-01T00:00:00.000Z",
+    },
+  });
+  await applyCanonicalEvent(fake.persistence, legacyActivity);
+  await applyCanonicalEvent(fake.persistence, canonical);
+
+  expect(
+    fake.db
+      .query("SELECT id, team_id, number, title, state_id, creator_id, sort_order FROM issues")
+      .all(),
+  ).toEqual([
+    {
+      id: "issue-canonical",
+      team_id: "team-1",
+      number: 1,
+      title: "Issue",
+      state_id: "state-1",
+      creator_id: "actor-1",
+      sort_order: 2,
+    },
+  ]);
+  expect(fake.db.query("SELECT issue_id, type FROM activity ORDER BY id").all()).toEqual([
+    { issue_id: "issue-canonical", type: "created" },
+    { issue_id: "issue-canonical", type: "issue.created" },
+  ]);
+  expect(fake.db.query("SELECT id FROM teams ORDER BY id").all()).toEqual([{ id: "team-1" }]);
+  expect(fake.db.query("SELECT id FROM workflow_states ORDER BY id").all()).toEqual([
+    { id: "state-1" },
+  ]);
+  await fake.persistence.close();
+});
+
+integration("reproduce Activity-before-snapshot promotion on PostgreSQL constraints", async () => {
+  const harness = await createPostgresHarness({
+    url: process.env.PRIME_BOARD_POSTGRES_URL!,
+    schemaPrefix: "prb599_activity_replay",
+  });
+  const persistence = createPostgresPersistence(harness.sql as unknown as Bun.SQL, {
+    close: false,
+  });
+  try {
+    const workspace = base({
+      eventId: "workspace-created",
+      aggregate: "workspace",
+      aggregateKey: "workspace-1",
+      type: "workspace.created",
+      payload: { id: "workspace-1", name: "Workspace", urlKey: "workspace" },
+    });
+    const legacyActivity: DomainEvent = {
+      schemaVersion: 1,
+      eventId: "activity-created",
+      aggregate: "issue",
+      aggregateKey: "PB-1",
+      type: "created",
+      actor,
+      workspaceId: "workspace-1",
+      occurredAt: "2025-01-01T00:00:01.000Z",
+      payload: { __source: "activity", title: "Issue" },
+    };
+    const canonical = base({
+      eventId: "issue-created",
+      occurredAt: "2025-01-01T00:00:02.000Z",
+      payload: {
+        ...base().payload,
+        id: "issue-canonical",
+        title: "Issue",
+        teamId: "team-canonical",
+        team: "PB",
+        stateId: "state-canonical",
+        creatorId: actor.id,
+        number: 1,
+        sortOrder: 2,
+        updatedAt: "2025-01-01T00:00:00.000Z",
+      },
+    });
+    await persistence.transaction((tx) => applyCanonicalEvent(tx, workspace));
+    await persistence.transaction((tx) => applyCanonicalEvent(tx, legacyActivity));
+    await persistence.transaction((tx) => applyCanonicalEvent(tx, canonical));
+
+    expect(
+      await persistence.many(
+        "SELECT id, team_id, number, title, state_id, creator_id, sort_order FROM issues",
+      ),
+    ).toEqual([
+      {
+        id: "issue-canonical",
+        team_id: "team-canonical",
+        number: 1,
+        title: "Issue",
+        state_id: "state-canonical",
+        creator_id: actor.id,
+        sort_order: 2,
+      },
+    ]);
+    expect(await persistence.many("SELECT issue_id, type FROM activity ORDER BY id")).toEqual([
+      { issue_id: "issue-canonical", type: "created" },
+      { issue_id: "issue-canonical", type: "issue.created" },
+    ]);
+    expect(await persistence.many("SELECT id FROM teams ORDER BY id")).toEqual([
+      { id: "team-canonical" },
+    ]);
+    expect(await persistence.many("SELECT id FROM workflow_states ORDER BY id")).toEqual([
+      { id: "state-canonical" },
+    ]);
+  } finally {
+    await persistence.close();
+    await harness.close();
+  }
 });
 
 describe("PostgresRepoSync", () => {

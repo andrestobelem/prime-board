@@ -157,6 +157,15 @@ function historicalIssuePlaceholder(event: DomainEvent, identifier: string): str
   return `historical-issue:${event.workspaceId ?? "workspace"}:${normalizedIdentifier}`;
 }
 
+function isHistoricalIssuePlaceholder(event: DomainEvent, payload: Row, issueId: string): boolean {
+  // Unscoped legacy events may use the fallback "workspace" in their
+  // deterministic ID, but they must never be rebound across Workspace scopes.
+  return (
+    Boolean(event.workspaceId) &&
+    issueId === historicalIssuePlaceholder(event, issueIdentifier(event, payload))
+  );
+}
+
 function isActivityPayload(payload: Row): boolean {
   return value(payload, "__source") === "activity";
 }
@@ -658,19 +667,22 @@ async function projectIssue(tx: PersistenceTransaction, event: DomainEvent): Pro
     if (!existing)
       existing = await tx.one<IssueRecord>("SELECT * FROM issues WHERE id = $1", [sourceId]);
     const canonicalId = stringValue(value(payload, "id", "issueId"));
+    let placeholderSource = false;
     if (existing && canonicalId && canonicalId !== sourceId && hasCompleteIssuePayload(payload)) {
       if (!event.workspaceId)
         throw new Error(
           `Cannot promote Issue ${issueIdentifier(event, payload)} without Workspace`,
         );
-      const promotionInput = shouldApplyIssueState(event, payload, existing)
-        ? payload
-        : promotionPayload(payload, existing);
+      placeholderSource = isHistoricalIssuePlaceholder(event, payload, sourceId);
+      const promotionInput =
+        placeholderSource || shouldApplyIssueState(event, payload, existing)
+          ? payload
+          : promotionPayload(payload, existing);
       await promoteIssueId(tx, event, sourceId, canonicalId, promotionInput);
       sourceId = canonicalId;
       existing = await tx.one<IssueRecord>("SELECT * FROM issues WHERE id = $1", [sourceId]);
     }
-    if (existing && shouldApplyIssueState(event, payload, existing))
+    if (existing && (placeholderSource || shouldApplyIssueState(event, payload, existing)))
       await updateIssue(tx, event, sourceId, existing, payload);
     if (isCanonicalIssueStateEvent(event)) {
       await cleanupIssueReferencePlaceholders(tx, sourceId);
@@ -714,15 +726,17 @@ async function projectIssue(tx: PersistenceTransaction, event: DomainEvent): Pro
         throw new Error(
           `Cannot promote Issue ${issueIdentifier(event, payload)} without Workspace`,
         );
-      const promotionInput = shouldApplyIssueState(event, payload, existing)
-        ? payload
-        : promotionPayload(payload, existing);
+      const placeholderSource = isHistoricalIssuePlaceholder(event, payload, sourceId);
+      const promotionInput =
+        placeholderSource || shouldApplyIssueState(event, payload, existing)
+          ? payload
+          : promotionPayload(payload, existing);
       await promoteIssueId(tx, event, sourceId, canonicalId, promotionInput);
       sourceId = canonicalId;
       // La fila canónica puede existir antes que el placeholder histórico.
       // Actualízala con este snapshot completo antes de eliminar el origen duplicado.
       existing = await tx.one<IssueRecord>("SELECT * FROM issues WHERE id = $1", [sourceId]);
-      if (existing && shouldApplyIssueState(event, payload, existing)) {
+      if (existing && (placeholderSource || shouldApplyIssueState(event, payload, existing))) {
         await updateIssue(tx, event, sourceId, existing, payload);
       }
     } else if (
